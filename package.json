@@ -10,7 +10,7 @@
     "deploy": "npm run build && npx wrangler deploy",
     "db:init": "npx wrangler d1 execute nexus-office --remote --file migrations/0001_init.sql",
     "db:init:local": "npx wrangler d1 execute nexus-office --local --file migrations/0001_init.sql",
-    "test": "node --test tests/"
+    "test": "node --test tests/*.test.js && python3 -m unittest discover -s tests -p 'test_*.py'"
   },
   "dependencies": {
     "three": "0.185.1"

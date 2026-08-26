@@ -11,6 +11,11 @@ import { toon, facePlate, face, tagSprite, bubbleSprite, blobShadow } from "./ki
  */
 
 export const STATES = {
+  // A gate is its own state and outranks everything, including "needs you". Both
+  // mean a human must act, but a gate has an agent SITTING THERE BLOCKED with a
+  // clock running against it, and it must never be mistaken for an issue that can
+  // wait until morning. Different pose, different glyph, different colour.
+  gated:   { mood: "alert",   glyph: "!", color: "#c07c2c", screen: "#f7d9a8", pose: "hand",  label: "asking permission" },
   waiting: { mood: "alert",   glyph: "?", color: "#d1495b", screen: "#f2b8c0", pose: "stand", label: "needs you" },
   refused: { mood: "worried", glyph: "!", color: "#e07a3f", screen: "#f3cba6", pose: "stand", label: "refused" },
   parked:  { mood: "sleepy",  glyph: "z", color: "#8d99ae", screen: "#5c6672", pose: "slump", label: "parked" },
@@ -29,7 +34,11 @@ const STROLL_WALK = 11;
 const BODY = new THREE.CapsuleGeometry(0.26, 0.2, 4, 12);
 const HEAD = new THREE.SphereGeometry(0.34, 22, 16);
 const EAR = new THREE.SphereGeometry(0.11, 10, 8);
+// The arm hangs from its TOP, not its middle. A capsule centred on its own
+// origin spins in place when you rotate it, which is why the raised hand read as
+// a shrug: the geometry is shifted down so rotation pivots at the shoulder.
 const ARM = new THREE.CapsuleGeometry(0.075, 0.16, 3, 8);
+ARM.translate(0, -0.155, 0);
 
 export class Villager {
   constructor(station) {
@@ -72,10 +81,11 @@ export class Villager {
     }
 
     this.arms = [];
-    for (const s of [-1, 1]) {
+    for (const side of [-1, 1]) {
       const arm = new THREE.Mesh(ARM, coat);
-      arm.position.set(s * 0.29, 0.5, 0.06);
-      arm.rotation.z = s * 0.35;
+      arm.position.set(side * 0.28, 0.62, 0.02);
+      arm.rotation.z = side * 0.3;
+      arm.userData.rest = side * 0.3;
       this.root.add(arm);
       this.arms.push(arm);
     }
@@ -202,6 +212,12 @@ export class Villager {
     } else if (pose === "slump") {
       bob = Math.sin(p * 0.45) * 0.008;
       lean = 0.5;
+    } else if (pose === "hand") {
+      // One arm straight up and held there. Waving reads as a greeting; a raised
+      // hand reads as a question, and from across the room that difference is the
+      // entire feature.
+      bob = Math.sin(p * 1.1) * 0.02;
+      armSwing = -2.15;
     } else if (pose === "walk") {
       bob = Math.abs(Math.sin(p * 3.4)) * 0.06;
       armSwing = Math.sin(p * 3.4) * 0.7;
@@ -215,8 +231,19 @@ export class Villager {
     this.body.rotation.x = lean * 0.5;
     this.headPivot.position.y = 0.78 - lean * 0.12;
     this.headPivot.rotation.x = lean * 0.35;
-    this.arms[0].rotation.x = -armSwing;
-    this.arms[1].rotation.x = -armSwing * (pose === "type" ? -1 : 1);
+    // A raised hand is ONE arm swung out sideways past vertical. Both arms up is
+    // a cheer, which is the opposite message, so the second arm stays down.
+    if (pose === "hand") {
+      this.arms[0].rotation.x = 0;
+      this.arms[0].rotation.z = -2.5 + Math.sin(p * 1.4) * 0.12;
+      this.arms[1].rotation.x = 0;
+      this.arms[1].rotation.z = this.arms[1].userData.rest;
+    } else {
+      for (const [i, arm] of this.arms.entries()) {
+        arm.rotation.z = arm.userData.rest + (pose === "cheer" ? -arm.userData.rest * 4 : 0);
+        arm.rotation.x = -armSwing * (pose === "type" && i === 1 ? -1 : 1);
+      }
+    }
 
     if (this.bubble) this.bubble.position.y = 1.98 + Math.sin(p * 1.6) * 0.05;
 

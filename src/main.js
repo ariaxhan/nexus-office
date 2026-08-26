@@ -75,13 +75,27 @@ function paintStats() {
   s.lastChild.firstChild.remove();
 
   const btn = $("needs");
-  btn.hidden = waiting === 0;
-  btn.textContent = `${waiting} waiting on you`;
+  const gated = world.runtime?.gate?.state === "pending";
+  btn.hidden = waiting === 0 && !gated;
+  btn.textContent = gated
+    ? "an agent is asking permission"
+    : `${waiting} waiting on you`;
+  btn.classList.toggle("pill-gate", gated);
+
+  // The runtime's own health is a fact about the room, not an absence.
+  const board = world.runtime?.board;
+  if (board && board.state !== "up" && board.state !== "unconfigured") {
+    s.append(bit("", board.state === "down" ? "runtime not running" : `runtime ${board.state}`, "stale"));
+    s.lastChild.firstChild.remove();
+  }
 }
 
 function stateOf(st) {
   // One ordering, written once. A repo that both landed a PR and is blocked on a
-  // question is blocked: the thing a person has to do always wins the desk.
+  // question is blocked: the thing a person has to do always wins the desk. A
+  // GATE outranks even that, because an agent is sitting there with a clock
+  // running while an unanswered issue simply waits.
+  if (st.gate) return "gated";
   if ((st.issues || []).some(needsHuman)) return "waiting";
   if (st.access === false) return "locked";
   if (st.outcome === "parked") return "parked";
@@ -135,6 +149,23 @@ function setView(next) {
 
 function applyWorld(next, { rebuild = false } = {}) {
   world = next;
+
+  // The runtime is not a repo, so an open gate has to be given a desk to stand
+  // at. It attaches to the station whose repo matches the runtime's root when
+  // there is one, and otherwise gets a desk of its own rather than being dropped.
+  const gate = world.runtime?.gate?.state === "pending" ? world.runtime.gate : null;
+  const rootRepo = (world.runtime?.root || "").split("/").pop();
+  let host = gate && world.stations.find((s) => s.repo.split("/").pop() === rootRepo);
+  if (gate && !host) {
+    host = {
+      repo: rootRepo ? `runtime/${rootRepo}` : "runtime/agent",
+      access: true, outcome: "", detail: "the local agent runtime",
+      at: "", runs: [], issues: [], synthetic: true,
+    };
+    world.stations = [...world.stations, host];
+  }
+  for (const st of world.stations) st.gate = st === host ? gate : null;
+
   for (const st of world.stations) {
     st.state = stateOf(st);
     st.resident = resident(st.repo);
@@ -142,6 +173,11 @@ function applyWorld(next, { rebuild = false } = {}) {
   world.stations.sort((a, b) => a.repo.localeCompare(b.repo));
 
   const split = view.apply(world.stations, currentView, needsHuman);
+  // A gate is never hidden, by any filter, by any hand. Losing a blocked agent
+  // behind a view is the one failure this surface cannot be allowed to have.
+  for (const s of [...split.hiddenByHand, ...split.hiddenByMode]) {
+    if (s.gate) split.shown.push(s);
+  }
   lastSplit = split;
   const shown = split.shown;
   const changed = shown.length !== shownRepos.size ||
@@ -252,12 +288,26 @@ function boot() {
     panel.close();
     office.frameAll();
   };
+  $("talk").onclick = () => {
+    office.selected = null;
+    panel.showChat(world || {});
+  };
   $("refresh").onclick = () => pull();
   $("unhide").onclick = () => {
     setView(view.showEverything(currentView));
     toast("everything is back.");
   };
   $("needs").onclick = () => {
+    // A gate jumps straight to the agent asking. Making someone hunt for a
+    // blocked agent through a list defeats the point of it standing up.
+    const gate = world?.runtime?.gate?.state === "pending";
+    if (gate) {
+      const host = world.stations.find((s) => s.gate);
+      if (host) {
+        office.focus(host.repo);
+        return panel.showStation(host, world);
+      }
+    }
     office.selected = null;
     // The tray shows everything waiting, including desks the filter hid. Being
     // able to lose a blocked issue behind a view is exactly the failure this

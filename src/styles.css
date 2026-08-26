@@ -352,3 +352,48 @@ html, body {
   display: none; z-index: 15;
 }
 body.is-demo #demo-flag { display: block; }
+
+/* ------------------------------------------------------- permission gate -- */
+/* Loud on purpose. This is the one thing in the room with a clock running. */
+
+.pill-gate { background: #c07c2c; box-shadow: 0 4px 0 #8a571b; }
+.pill-gate:active { box-shadow: 0 2px 0 #8a571b; }
+
+.gate-box {
+  border: 3px solid #c07c2c;
+  background: #fff6e9;
+  border-radius: var(--round);
+  padding: 13px 14px;
+  margin: 0 0 14px;
+}
+.gate-kicker {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.08em;
+  text-transform: uppercase; color: #a8641c;
+}
+.gate-perm {
+  font-size: 17px; font-weight: 800; margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.gate-box h3 { margin: 12px 0 5px; }
+
+/* The literal thing being asked about. It wraps rather than truncating, because
+   a command you can only half see is a command you cannot judge. */
+.gate-target {
+  margin: 0;
+  background: rgba(74, 59, 51, 0.08);
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 220px; overflow-y: auto;
+}
+.gate-clock { margin: 9px 0 0; font-size: 12px; font-weight: 700; color: #a8641c; }
+
+/* Heavier than "allow once", because it writes a standing rule. */
+.act-heavy {
+  background: transparent;
+  color: #a8641c;
+  border: 2px solid rgba(192, 124, 44, 0.5);
+}
+.act-heavy:hover { background: rgba(192, 124, 44, 0.12); }

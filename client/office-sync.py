@@ -31,6 +31,8 @@ Configuration, all from the environment so nothing personal lives in this file:
   OFFICE_MARKER     the comment marker your bot leaves    (default: pipeline-bot)
   OFFICE_WAITING    the label meaning a human must look   (default: waiting on human)
   OFFICE_KEYCHAIN   keychain service holding the tokens   (default: nexus-office)
+  OFFICE_RUNTIME_ROOT  a local agent runtime's repo root   (optional; enables gates)
+  OFFICE_RUNTIME_URL   that runtime's dashboard            (default 127.0.0.1:8787)
 
 A receipt is one JSON object per line:
 
@@ -55,6 +57,9 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import runtime as rt  # noqa: E402  (needs the path above)
 
 def _env_path(name):
     v = os.environ.get(name, "").strip()
@@ -329,12 +334,18 @@ def build_snapshot(access: Access):
 
     log(f"{len(stations)} desks, "
         f"{sum(len(s['issues']) for s in stations)} open issues, {waiting} waiting on you")
+    run = rt.snapshot()
+    gate = run.get("gate") or {}
+    if gate.get("state") == "pending":
+        log(f"A GATE IS OPEN: {gate.get('permission')} {gate.get('target', '')[:60]}")
+
     return {
         "generated": NOW.strftime(ISO),
         "heartbeat": hb,
         "killed": bool(KILLSWITCH and KILLSWITCH.exists()),
         "today": counts,
         "stations": stations,
+        "runtime": run,
     }
 
 
@@ -364,6 +375,73 @@ class Office:
 
 # ── applying what was clicked ────────────────────────────────────────────────
 
+RUNTIME_KINDS = {"permit", "chat", "run", "stop"}
+
+
+def apply_runtime_decision(d, dry: bool):
+    """Route a decision at the local runtime rather than at GitHub.
+
+    Nothing here trusts the Worker for anything but the words that were typed and
+    the id of the question being answered. A permit in particular is re-checked
+    against the gate on disk before a single byte is written.
+    """
+    kind = d.get("kind")
+    payload = d.get("payload") or {}
+
+    if kind == "permit":
+        root = rt._root()
+        if root is None:
+            return False, "no runtime root configured (OFFICE_RUNTIME_ROOT)"
+        qid = str(payload.get("question_id") or "")
+        answer = payload.get("answer")
+        if answer not in ("allow", "deny"):
+            return False, "a permit must answer allow or deny"
+        if dry:
+            live = rt.read_gate()
+            if live.get("state") != "pending":
+                return False, "nothing is waiting on a gate right now"
+            same = live.get("id") == qid
+            return same, ("would " + answer) if same else "the agent has moved on"
+        return rt.answer_gate(root, qid, answer, bool(payload.get("always")))
+
+    if kind == "chat":
+        text = (payload.get("body") or "").strip()
+        if not text:
+            return False, "nothing to say"
+        if dry:
+            return True, f"would say {text[:60]!r}"
+        try:
+            rt.post("/api/chat", {"message": text})
+        except Exception as exc:
+            return False, f"the runtime did not take it: {exc}"
+        return True, f"said {text[:60]!r}"
+
+    if kind == "run":
+        task = (payload.get("body") or "").strip()
+        repo = d.get("repo") or ""
+        issue = d.get("issue")
+        if not task:
+            task = f"Work {repo}#{issue}" if issue else f"Work on {repo}"
+        if dry:
+            return True, f"would run {task[:70]!r}"
+        try:
+            rt.post("/api/run", {"task": task})
+        except Exception as exc:
+            return False, f"the runtime refused the run: {exc}"
+        return True, f"started {task[:70]!r}"
+
+    if kind == "stop":
+        if dry:
+            return True, "would stop the current run"
+        try:
+            rt.post("/api/run/stop", {"run_id": payload.get("run_id") or ""})
+        except Exception as exc:
+            return False, f"could not stop it: {exc}"
+        return True, "asked the runtime to stop at the next step boundary"
+
+    return False, f"unknown runtime kind {kind}"
+
+
 def apply_decision(d, access: Access, dry: bool):
     """Re-derive everything from the decision's own fields, trusting the Worker
     for nothing but the words that were typed. The repo is re-probed for push, so a
@@ -373,6 +451,9 @@ def apply_decision(d, access: Access, dry: bool):
     issue = d.get("issue")
     payload = d.get("payload") or {}
     body = (payload.get("body") or "").strip()
+
+    if kind in RUNTIME_KINDS:
+        return apply_runtime_decision(d, dry)
 
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         return False, f"refusing a malformed repo {repo!r}"
@@ -459,10 +540,49 @@ def apply_decision(d, access: Access, dry: bool):
     return True, f"as {who}: " + "; ".join(done)
 
 
+# While a gate is open the drain interval is the answer latency, and a two minute
+# loop against a gate that fails closed is a gate that fails closed. So the job
+# stays alive and polls fast, but only while somebody is actually being asked
+# something, and only inside its own bounded window.
+GATE_POLL_S = 8
+GATE_WATCH_S = 150
+
+
+def watch_gate(office: Office, access: Access, dry: bool):
+    """Hold the run open while an agent is blocked, polling for the answer.
+
+    Returns as soon as the gate clears, by any route: answered from here,
+    answered at the terminal, or the runtime giving up and failing closed. It
+    never outlives GATE_WATCH_S, because a job that does not exit is a job that
+    collides with its own next firing.
+    """
+    deadline = time.monotonic() + GATE_WATCH_S
+    served = 0
+    while time.monotonic() < deadline:
+        gate = rt.read_gate()
+        if gate.get("state") != "pending":
+            log("the gate cleared")
+            return served
+        time.sleep(GATE_POLL_S)
+        served += drain_once(office, access, dry, quiet=True)
+    log(f"still waiting on a gate after {GATE_WATCH_S}s; the next run picks it up")
+    return served
+
+
 def drain(office: Office, access: Access, dry: bool):
+    n = drain_once(office, access, dry)
+    gate = rt.read_gate()
+    if gate.get("state") == "pending":
+        log(f"a gate is open ({gate.get('permission')}); watching for an answer")
+        n += watch_gate(office, access, dry)
+    return n
+
+
+def drain_once(office: Office, access: Access, dry: bool, quiet: bool = False):
     pending = office.call("/api/inbox").get("pending", [])
     if not pending:
-        log("inbox empty")
+        if not quiet:
+            log("inbox empty")
         return 0
     log(f"{len(pending)} decision(s) waiting")
     n = 0
