@@ -1,0 +1,24 @@
+{
+  // Pinned to the personal "aria" Cloudflare account (tiredlillies@gmail.com),
+  // the same isolation nexus-cloud declares. Never the matra/blinkbuild account.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nexus-office",
+  "account_id": "efe6d9809df58b0c911aa80e484564af",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-25",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nexus-office",
+      "database_id": "b67d8203-ae33-4aa4-afe9-19115732b003",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
