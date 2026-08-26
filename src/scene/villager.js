@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { toon, face, tagSprite, bubbleSprite, blobShadow } from "./kit.js";
+import { toon, facePlate, face, tagSprite, bubbleSprite, blobShadow } from "./kit.js";
 
 /**
  * One villager per repo.
@@ -45,14 +45,18 @@ export class Villager {
     this.headPivot.position.y = 0.78;
     this.root.add(this.headPivot);
 
-    this.head = new THREE.Mesh(HEAD, new THREE.MeshToonMaterial({
-      color: new THREE.Color(shade(resident.coat, 1.08)),
-      map: face("calm"),
-    }));
-    // SphereGeometry puts u=0.5 on +X, so the painted face starts out looking
-    // sideways. Turn the head once here rather than repainting every texture.
-    this.head.rotation.y = -Math.PI / 2;
+    this.head = new THREE.Mesh(HEAD, toon(shade(resident.coat, 1.08)));
     this.headPivot.add(this.head);
+
+    this.face = facePlate("calm");
+    // Every number here is load bearing. The head is a sphere of radius 0.34, so
+    // a plate any closer than that is INSIDE it and the sphere wins the depth
+    // test: the villagers came out faceless. Tilt trades the same way, because
+    // tipping the plate back swings its lower edge into the skull and eats the
+    // mouth. 0.36 out and 0.3 back is the pair that clears at both ends.
+    this.face.position.set(0, 0.03, 0.36);
+    this.face.rotation.x = -0.3;
+    this.headPivot.add(this.face);
 
     for (const s of [-1, 1]) {
       const ear = new THREE.Mesh(EAR, lighter);
@@ -76,23 +80,15 @@ export class Villager {
     this.shadow = blobShadow(0.5);
     this.root.add(this.shadow);
 
-    this.nameTag = tagSprite(resident.name, { scale: 0.95 });
-    this.nameTag.position.y = 1.42;
+    this.nameTag = tagSprite(resident.name, { scale: 0.62 });
+    // Down at knee height and well forward, like a plaque on the floor. Overhead
+    // it lands on its own head from above; at chest height it lands on the face.
+    // There is no altitude that works, so the tag leaves the head alone entirely.
+    this.nameTag.position.set(0, 0.2, 1.15);
     this.root.add(this.nameTag);
 
     this.bubble = null;
     this.phase = (resident.seed % 1000) / 1000 * Math.PI * 2;
-
-    // Raycasting against every limb is wasteful and picks up misses on the gaps
-    // between them. One invisible capsule is the click target for the whole
-    // character, and it is the only thing the picker ever sees.
-    this.hit = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.44, 1.0, 3, 8),
-      new THREE.MeshBasicMaterial({ visible: false })
-    );
-    this.hit.position.y = 0.72;
-    this.hit.userData.station = station;
-    this.root.add(this.hit);
 
     this.setState(station.state);
   }
@@ -101,8 +97,8 @@ export class Villager {
     const s = STATES[name] || STATES.idle;
     this.stateName = name;
     this.spec = s;
-    this.head.material.map = face(s.mood);
-    this.head.material.needsUpdate = true;
+    this.face.material.map = face(s.mood);
+    this.face.material.needsUpdate = true;
 
     if (this.bubble) {
       this.root.remove(this.bubble);
@@ -112,7 +108,7 @@ export class Villager {
     }
     if (s.glyph) {
       this.bubble = bubbleSprite(s.glyph, s.color);
-      this.bubble.position.set(0.34, 1.72, 0);
+      this.bubble.position.set(0.36, 1.98, 0);
       this.root.add(this.bubble);
     }
 
@@ -155,7 +151,7 @@ export class Villager {
     this.arms[0].rotation.x = -armSwing;
     this.arms[1].rotation.x = -armSwing * (pose === "type" ? -1 : 1);
 
-    if (this.bubble) this.bubble.position.y = 1.72 + Math.sin(p * 1.6) * 0.05;
+    if (this.bubble) this.bubble.position.y = 1.98 + Math.sin(p * 1.6) * 0.05;
 
     const wantTag = selected || this.stateName === "waiting";
     this.nameTag.material.opacity = wantTag ? 1 : 0.72;

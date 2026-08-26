@@ -173,6 +173,11 @@ async function boot() {
     panel.showInbox(world);
   };
 
+  // Reachable from the console on purpose. A 3D surface that can only be
+  // inspected by squinting at screenshots is a surface nobody can debug.
+  window.office = office;
+  window.panel = panel;
+
   if (!token) return gate();
   pull();
   setInterval(() => pull({ quiet: true }), POLL_MS);

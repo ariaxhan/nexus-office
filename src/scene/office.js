@@ -98,8 +98,11 @@ function deskGeometry() {
 function chairGeometry() {
   const seat = new THREE.BoxGeometry(0.6, 0.09, 0.58);
   seat.translate(0, 0.44, 0);
-  const back = new THREE.BoxGeometry(0.6, 0.62, 0.09);
-  back.translate(0, 0.75, 0.28);
+  // The villagers face the camera, so their backs are toward the desk and the
+  // chair back belongs on the far side. Put it on the near side and it reads as a
+  // grey slab bolted across their chest, which is exactly how it shipped once.
+  const back = new THREE.BoxGeometry(0.58, 0.3, 0.09);
+  back.translate(0, 0.62, -0.34);
   const post = new THREE.CylinderGeometry(0.06, 0.09, 0.42, 8);
   post.translate(0, 0.22, 0);
   return BGU.mergeGeometries([seat, back, post]);
@@ -246,14 +249,22 @@ export class Office {
       const m = new THREE.Matrix4().makeTranslation(st.x, 0, st.z);
       deskGeo.push(dg.clone().applyMatrix4(m));
       monGeo.push(mg.clone().applyMatrix4(m));
-      chairGeo.push(cg.clone().applyMatrix4(
-        new THREE.Matrix4().makeTranslation(st.x, 0, st.z + 0.95)
-      ));
+      // A chair only appears where nobody sits. Behind an occupied villager it is
+      // invisible anyway, and its seat slices straight through the belly at every
+      // height that does not float the character off the floor. An empty chair at
+      // an empty desk earns its draw call; a hidden one under a villager does not.
+      if (st.state === "locked") {
+        chairGeo.push(cg.clone().applyMatrix4(
+          new THREE.Matrix4().makeTranslation(st.x, 0, st.z + 1.0)
+        ));
+      }
     }
     if (deskGeo.length) {
       this.staticRoot.add(new THREE.Mesh(BGU.mergeGeometries(deskGeo), toon("#d9a273")));
-      this.staticRoot.add(new THREE.Mesh(BGU.mergeGeometries(chairGeo), toon("#8fa8bf")));
       this.staticRoot.add(new THREE.Mesh(BGU.mergeGeometries(monGeo), toon("#4a4f57")));
+    }
+    if (chairGeo.length) {
+      this.staticRoot.add(new THREE.Mesh(BGU.mergeGeometries(chairGeo), toon("#8fa8bf")));
     }
 
     // Screens stay individual: their colour is the per-repo state readout, and it
@@ -269,14 +280,23 @@ export class Office {
       this.screens.set(st.repo, scr);
     }
 
+    // The whole workstation is the click target, not the villager.
+    // Zoomed out to the full room a character is about six pixels tall, and a
+    // dashboard whose primary interaction needs a steady hand is not a dashboard.
+    const padGeo = new THREE.BoxGeometry(PITCH_X - 0.15, 2.4, PITCH_Z - 0.15);
+    const padMat = new THREE.MeshBasicMaterial({ visible: false });
     for (const st of placed) {
       st.resident = resident(st.repo);
       const v = new Villager({ ...st, z: st.z + 0.95 });
       v.station = st;
-      v.hit.userData.station = st;
       this.scene.add(v.root);
       this.villagers.set(st.repo, v);
-      this.pickables.push(v.hit);
+
+      const pad = new THREE.Mesh(padGeo, padMat);
+      pad.position.set(st.x, 1.2, st.z + 0.45);
+      pad.userData.station = st;
+      this.staticRoot.add(pad);
+      this.pickables.push(pad);
     }
 
     const wallH = 2.6;
@@ -354,7 +374,9 @@ export class Office {
     this.selected = repo;
     const p = v.root.position;
     this.controls.target.set(p.x, 1.0, p.z - 0.6);
-    this.camera.position.set(p.x + 2.6, 3.0, p.z + 4.2);
+    // Lower and further out than feels right on paper. Steeper, and you are
+    // looking at the top of a head instead of at a face.
+    this.camera.position.set(p.x + 2.4, 2.4, p.z + 6.0);
     this.controls.update();
   }
 
@@ -374,6 +396,12 @@ export class Office {
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
       -((e.clientY - rect.top) / rect.height) * 2 + 1
     );
+    // Raycasting reads matrixWorld, which only the renderer refreshes. A pick
+    // taken between frames, or against a station added after the last one, tests
+    // against stale matrices and silently finds nothing: every click on a desk
+    // did nothing at all until this line existed.
+    this.scene.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
     this.raycaster.setFromCamera(ndc, this.camera);
     const hit = this.raycaster.intersectObjects(this.pickables, false)[0];
     this.onPick(hit ? hit.object.userData.station : null);

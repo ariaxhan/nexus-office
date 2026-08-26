@@ -43,12 +43,12 @@ function drawFace(mood) {
   const g = c.getContext("2d");
   g.clearRect(0, 0, FACE_SIZE, FACE_SIZE);
 
-  // The sphere's UV wraps the full 360 degrees across the width, so the face has
-  // to be painted in the middle third or it smears around the back of the head.
+  // Drawn to fill a small plane that floats just off the front of the head, so
+  // one texture serves every coat colour and nothing multiplies into the skin.
   const cx = FACE_SIZE * 0.5;
-  const cy = FACE_SIZE * 0.46;
-  const eyeDX = FACE_SIZE * 0.062;
-  const eyeR = FACE_SIZE * 0.026;
+  const cy = FACE_SIZE * 0.44;
+  const eyeDX = FACE_SIZE * 0.155;
+  const eyeR = FACE_SIZE * 0.062;
 
   g.fillStyle = "#ffb3ba";
   g.globalAlpha = 0.75;
@@ -61,15 +61,17 @@ function drawFace(mood) {
 
   g.fillStyle = "#3a2f2b";
   g.strokeStyle = "#3a2f2b";
-  g.lineWidth = FACE_SIZE * 0.014;
+  g.lineWidth = FACE_SIZE * 0.02;
   g.lineCap = "round";
 
   const eye = (s, kind) => {
     const x = cx + s * eyeDX;
     if (kind === "closed") {
+      g.lineWidth = FACE_SIZE * 0.026;
       g.beginPath();
-      g.arc(x, cy, eyeR * 1.3, Math.PI * 0.15, Math.PI * 0.85);
+      g.arc(x, cy, eyeR * 1.15, Math.PI * 0.12, Math.PI * 0.88);
       g.stroke();
+      g.lineWidth = FACE_SIZE * 0.02;
       return;
     }
     if (kind === "wide") {
@@ -89,7 +91,7 @@ function drawFace(mood) {
   };
 
   const mouth = (kind) => {
-    const my = cy + FACE_SIZE * 0.075;
+    const my = cy + FACE_SIZE * 0.2;
     g.beginPath();
     if (kind === "smile") g.arc(cx, my - eyeR, eyeR * 1.5, Math.PI * 0.15, Math.PI * 0.85);
     else if (kind === "flat") g.moveTo(cx - eyeR, my), g.lineTo(cx + eyeR, my);
@@ -117,6 +119,17 @@ const FACES = {};
 export function face(mood) {
   if (!FACES[mood]) FACES[mood] = drawFace(mood);
   return FACES[mood];
+}
+
+const FACE_GEO = new THREE.PlaneGeometry(0.46, 0.46);
+
+/** A flat decal hovering just off the head. Unlit, so a face never falls into shadow. */
+export function facePlate(mood) {
+  const m = new THREE.Mesh(FACE_GEO, new THREE.MeshBasicMaterial({
+    map: face(mood), transparent: true, depthWrite: false,
+  }));
+  m.renderOrder = 2;
+  return m;
 }
 
 /* ---------------------------------------------------------------- sprites -- */
