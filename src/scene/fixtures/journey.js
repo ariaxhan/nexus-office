@@ -135,21 +135,6 @@ function phaseOf(s) {
   return ((h >>> 0) % 1000) / 1000;
 }
 
-function pathLine(hop, color, opacity) {
-  const pts = [];
-  for (let i = 0; i <= 14; i++) {
-    const u = i / 14;
-    pts.push(new THREE.Vector3(
-      hop.from.x + (hop.to.x - hop.from.x) * u,
-      0.03,
-      hop.from.z + (hop.to.z - hop.from.z) * u
-    ));
-  }
-  return new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineBasicMaterial({ color, transparent: true, opacity })
-  );
-}
 
 function marker(x, z, label, color) {
   const g = new THREE.Group();
@@ -223,10 +208,13 @@ export function build(ctx) {
   g.add(marker(ends.door.x, ends.door.z, "you", "#e0b28a"));
   g.add(marker(ends.exit.x, ends.exit.z, "PR", "#9fd6b3"));
 
+  // No route lines. One faint line per hop drew a cat's cradle across the floor
+  // the moment the room held more than a handful of desks: seventy-two repos
+  // converging on one `you` pad is a web, not a diagram, and Aria said so.
+  // The tokens carry the same information by moving, and the two pads anchor
+  // where they are moving between.
   for (const hop of hops) {
     const color = DIR_COLOR[hop.dir];
-    g.add(pathLine(hop, color, hop.moving ? 0.42 : 0.16));
-
     const base = hop.moving ? 1 : 0.5;
     const mesh = new THREE.Mesh(TOKEN, new THREE.MeshBasicMaterial({
       color, transparent: true, opacity: base,
