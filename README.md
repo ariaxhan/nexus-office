@@ -38,6 +38,17 @@ re-probes push access before acting. Someone who steals a browser session can
 Failed logins are rate limited per IP. Nothing is stored in the repo, and
 `wrangler.jsonc` (which carries your database id) is gitignored by design.
 
+## See it without setting anything up
+
+Append `?demo=1` and the room runs on a fabricated floor: no account, no session,
+no pipeline. Twelve desks across three owners, and every state below appears at
+least once, because a demo that only shows the happy path lets the ugly cases rot.
+
+```sh
+npm install && npm run dev
+# then open http://127.0.0.1:5173/?demo=1
+```
+
 ## Reading the room
 
 | villager | means |

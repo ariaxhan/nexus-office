@@ -20,6 +20,12 @@ export const STATES = {
   locked:  { mood: "sleepy",  glyph: "-", color: "#8d99ae", screen: "#3d4650", pose: "gone",  label: "no access" },
 };
 
+// Seconds. A villager walks for STROLL_WALK of every STROLL_CYCLE, so at any
+// moment roughly a third of the idle desks are empty, which is what an office
+// looks like.
+const STROLL_CYCLE = 34;
+const STROLL_WALK = 11;
+
 const BODY = new THREE.CapsuleGeometry(0.26, 0.2, 4, 12);
 const HEAD = new THREE.SphereGeometry(0.34, 22, 16);
 const EAR = new THREE.SphereGeometry(0.11, 10, 8);
@@ -80,7 +86,14 @@ export class Villager {
     this.shadow = blobShadow(0.5);
     this.root.add(this.shadow);
 
-    this.nameTag = tagSprite(resident.name, { scale: 0.62 });
+    // The PLAQUE CARRIES THE REPO, not the villager's name. A character you
+    // recognise is easier to track across visits than a string, so the villager
+    // keeps its name in the panel; but the thing you are scanning the room for is
+    // always a repo, and "Pumpkin" does not help you find our4cuts.
+    //
+    // Short name only. The owner is already the wing you are standing in, so
+    // repeating it on seventy plaques is noise.
+    this.nameTag = tagSprite(shortName(station.repo), { scale: 0.62 });
     // Down at knee height and well forward, like a plaque on the floor. Overhead
     // it lands on its own head from above; at chest height it lands on the face.
     // There is no altitude that works, so the tag leaves the head alone entirely.
@@ -89,6 +102,12 @@ export class Villager {
 
     this.bubble = null;
     this.phase = (resident.seed % 1000) / 1000 * Math.PI * 2;
+    // Where this villager belongs. A stroll is an offset from here and always
+    // returns, so nobody drifts across the floor over an afternoon.
+    this.home = this.root.position.clone();
+    // Each villager strolls on its own clock. Without the offset the whole floor
+    // stands up at once, which reads as a fire drill rather than an office.
+    this.strollOffset = (resident.seed % STROLL_CYCLE);
 
     this.setState(station.state);
   }
@@ -117,11 +136,54 @@ export class Villager {
     this.baseY = s.pose === "stand" || s.pose === "cheer" ? 0 : -0.18;
   }
 
+  /**
+   * Can this one leave its desk? Only if nothing is waiting on it.
+   *
+   * A villager with its hand up or a question over its head must stay put and
+   * stay findable. Movement is for the ones with nothing to report.
+   */
+  get canStroll() {
+    return this.stateName === "idle" || this.stateName === "landed";
+  }
+
   /** t is seconds since load. Everything here is a cheap sine; nothing accumulates. */
   update(t, selected) {
     if (!this.root.visible) return;
     const p = t * 2 + this.phase;
-    const pose = this.spec.pose;
+    let pose = this.spec.pose;
+
+    // ── strolling ────────────────────────────────────────────────────────────
+    // A lap around the desk on a fixed cycle: out, around, back to the chair.
+    // Deliberately not pathfinding. Seventy characters have to hold 60fps, and a
+    // sine loop that never leaves its own square metre cannot collide with
+    // anything or get lost.
+    let sx = 0;
+    let sz = 0;
+    let strolling = false;
+    if (this.canStroll && !selected) {
+      const local = (t + this.strollOffset) % STROLL_CYCLE;
+      if (local < STROLL_WALK) {
+        const u = local / STROLL_WALK;
+        const ease = Math.sin(u * Math.PI);
+        sx = Math.sin(u * Math.PI * 2) * 1.15;
+        sz = ease * 1.25;
+        strolling = ease > 0.06;
+      }
+    }
+
+    if (strolling) {
+      pose = "walk";
+      // Face where you are going. Differentiating the sine gives the heading
+      // without storing a previous position and drifting out of sync with it.
+      const u = ((t + this.strollOffset) % STROLL_CYCLE) / STROLL_WALK;
+      const dx = Math.cos(u * Math.PI * 2) * Math.PI * 2 * 1.15;
+      const dz = Math.cos(u * Math.PI) * Math.PI * 1.25;
+      this.root.rotation.y = Math.atan2(dx, dz);
+    } else {
+      this.root.rotation.y = this.station.facing || 0;
+    }
+    this.root.position.x = this.home.x + sx;
+    this.root.position.z = this.home.z + sz;
 
     let bob = 0;
     let armSwing = 0;
@@ -140,11 +202,16 @@ export class Villager {
     } else if (pose === "slump") {
       bob = Math.sin(p * 0.45) * 0.008;
       lean = 0.5;
+    } else if (pose === "walk") {
+      bob = Math.abs(Math.sin(p * 3.4)) * 0.06;
+      armSwing = Math.sin(p * 3.4) * 0.7;
+      lean = 0.1;
     } else {
       bob = Math.sin(p * 0.9) * 0.016;
     }
 
-    this.root.position.y = this.baseY + bob;
+    // Standing up to walk means standing up: the sitting offset is dropped.
+    this.root.position.y = (strolling ? 0 : this.baseY) + bob;
     this.body.rotation.x = lean * 0.5;
     this.headPivot.position.y = 0.78 - lean * 0.12;
     this.headPivot.rotation.x = lean * 0.35;
@@ -159,6 +226,12 @@ export class Villager {
       (this.station.resident.tall ? 1.06 : 0.93) * (selected ? 1.16 : 1)
     );
   }
+}
+
+/** `owner/name` -> `name`. A bare repo with no owner is left alone. */
+function shortName(repo) {
+  const parts = String(repo || "").split("/");
+  return parts[parts.length - 1] || repo;
 }
 
 function shade(hex, mul) {

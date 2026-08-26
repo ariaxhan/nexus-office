@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>markdown fixture</title>
+<link rel="stylesheet" href="/src/styles.css" />
+<style>
+  /* Stand the panel up on its own, outside the 3D page, so styling the issue
+     viewer never requires being logged in to production. */
+  html, body { overflow: auto; height: auto; }
+  body { background: var(--sky); padding: 24px; }
+  .frame {
+    max-width: 440px; margin: 0 auto;
+    background: var(--cream); border-radius: 18px; padding: 18px;
+    box-shadow: 0 6px 24px rgba(74, 59, 51, 0.18);
+  }
+</style>
+</head>
+<body>
+<div class="frame">
+  <h3>the runner's last word</h3>
+  <div id="last" class="issue-body md last-word"></div>
+  <h3>the issue</h3>
+  <div id="body" class="issue-body md"></div>
+</div>
+<script type="module">
+import { renderInto } from "/src/ui/markdown.js";
+
+renderInto(document.getElementById("last"), `Automated pass complete. Comment here to send this back through review.
+
+\x3C!-- pipeline-bot -->`);
+
+renderInto(document.getElementById("body"), `## What this covers
+
+The pipeline should **not** wait for \`ready\` labels. It continuously checks and
+never blocks on anything *except* human input.
+
+- [x] marker-based selection replaces label gating
+- [x] every stage runs, always
+- [ ] surface refusals with a reason
+- [ ] a longer item that wraps onto a second line so line height and the hanging
+  indent under a checkbox can be judged properly
+
+### Capability table
+
+| capability | may comment | may push | may merge |
+| --- | --- | --- | --- |
+| \`issue_only\` | yes | no | never |
+| \`draft_only\` | yes | branch only | never |
+| \`commit_and_pr\` | yes | yes | never |
+
+\`\`\`bash
+dispatch.sh --repo CodingVault/our4cuts --dry-run
+\`\`\`
+
+> A green check proves only what it ran.
+
+See [the runbook](https://example.com/runbook) or <https://example.com/raw> for the rest.
+Wait 5 minutes, then \`retry\` up to 12 times.
+
+---
+
+Nothing below here should be able to run: \x3Cscript>alert(1)\x3C/script> and
+\x3Cimg src=x onerror=alert(1)> and [a bad link](javascript:alert(1)).`);
+</script>
+</body>
+</html>
