@@ -32,6 +32,7 @@
  * and office.js picks it up.
  */
 import * as board from "./board.js";
+import * as ci from "./ci.js";
 import * as clock from "./clock.js";
 import * as cost from "./cost.js";
 import * as intray from "./intray.js";
@@ -40,6 +41,6 @@ import * as library from "./library.js";
 import * as mail from "./mail.js";
 import * as orders from "./orders.js";
 
-export const FIXTURES = [intray, journey, orders, mail, board, cost, library, clock];
+export const FIXTURES = [intray, ci, journey, orders, mail, board, cost, library, clock];
 
 export const byId = (id) => FIXTURES.find((f) => f.id === id);

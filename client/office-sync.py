@@ -347,7 +347,7 @@ def build_snapshot(access: Access):
         "today": counts,
         "stations": stations,
         "runtime": run,
-        "sections": sections_mod.read_all(),
+        "sections": sections_mod.read_all([s["repo"] for s in stations]),
     }
 
 
