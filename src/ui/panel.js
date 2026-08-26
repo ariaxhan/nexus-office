@@ -277,6 +277,122 @@ export class Panel {
     return box;
   }
 
+  /**
+   * Every finished-but-unmerged PR in the whole office, in one tray.
+   *
+   * This is the backlog view. Forty-one issues had landed and forty were still
+   * open, and nothing on any screen said that a merge was the only thing left
+   * between them and done.
+   */
+  showMerges(world) {
+    this.station = null;
+    const rows = [];
+    for (const st of world.stations || []) {
+      for (const pr of st.prs || []) rows.push({ st, pr });
+    }
+    const ready = rows.filter(({ pr }) => !pr.draft && pr.mergeable !== "CONFLICTING");
+    rows.sort((a, b) => (b.pr.updatedAt || "").localeCompare(a.pr.updatedAt || ""));
+
+    this._frame({
+      title: "Ready to merge",
+      sub: ready.length
+        ? `${ready.length} finished, waiting only on you`
+        : "nothing is waiting to be merged",
+      color: ready.length ? "#3f9e6a" : "#8a8178",
+    });
+    const body = this.node.querySelector(".p-body");
+    if (!rows.length) {
+      body.append(el("p", "empty",
+        "No pipeline PRs are open. When a lane finishes an issue it opens one here, " +
+        "and merging it is what closes the issue."));
+      return;
+    }
+    for (const { st, pr } of rows) {
+      const card = el("div", "issue");
+      const top = el("div", "issue-top");
+      top.append(el("span", "issue-num", `PR #${pr.number}`));
+      top.append(el("span", "issue-title", pr.title || "(no title)"));
+      card.append(top);
+      card.append(el("p", "issue-repo", st.repo));
+      if (pr.closes && pr.closes.length) {
+        card.append(el("p", "p-detail",
+          `Merging this closes ${pr.closes.map((n) => "#" + n).join(", ")}.`));
+      } else {
+        card.append(el("p", "log stale",
+          "This PR names no issue to close, so merging it leaves the issue open."));
+      }
+      const blocked = pr.draft || pr.mergeable === "CONFLICTING";
+      if (blocked) {
+        card.append(el("p", "log stale",
+          pr.draft ? "Cannot merge: it is still a draft."
+            : "Cannot merge: it conflicts with its base branch."));
+      } else {
+        const acts = el("div", "acts");
+        acts.append(this._button("Merge it", "act act-go", (b) =>
+          this._queue({ kind: "merge", repo: st.repo, pr: pr.number }, b)));
+        card.append(acts);
+      }
+      body.append(card);
+    }
+  }
+
+  /**
+   * Pipeline PRs waiting to be merged, and the button that merges one.
+   *
+   * The browser never merges anything. It queues an intent, and the laptop
+   * re-reads the PR from GitHub and refuses any branch that is not the
+   * pipeline's own. That check lives in `client/office-sync.py` and is the whole
+   * safety boundary; nothing here is load bearing for it.
+   */
+  _merges(station) {
+    const out = [];
+    const prs = station.prs || [];
+    if (station.prs_error) {
+      // Could not ask is not the same as none waiting.
+      out.push(el("p", "log stale", `Could not read this repo's PRs: ${station.prs_error}`));
+    }
+    if (!prs.length) return out;
+
+    out.push(el("h3", null, `ready to merge (${prs.length})`));
+    for (const pr of prs) {
+      const card = el("div", "issue");
+      const top = el("div", "issue-top");
+      top.append(el("span", "issue-num", `PR #${pr.number}`));
+      top.append(el("span", "issue-title", pr.title || "(no title)"));
+      card.append(top);
+
+      if (pr.closes && pr.closes.length) {
+        card.append(el("p", "p-detail",
+          `Merging this closes ${pr.closes.map((n) => "#" + n).join(", ")}.`));
+      } else {
+        // A pipeline PR with no closing keyword will merge and leave its issue
+        // open, which is the exact bug this whole feature exists to end.
+        card.append(el("p", "log stale",
+          "This PR names no issue to close, so merging it will leave the issue open."));
+      }
+
+      const blocked = pr.draft || pr.mergeable === "CONFLICTING";
+      const why = pr.draft ? "it is still a draft"
+        : pr.mergeable === "CONFLICTING" ? "it conflicts with its base branch"
+          : "";
+      if (blocked) card.append(el("p", "log stale", `Cannot merge: ${why}.`));
+
+      const acts = el("div", "acts");
+      if (!blocked) {
+        acts.append(this._button("Merge it", "act act-go", (b) =>
+          this._queue({ kind: "merge", repo: station.repo, pr: pr.number }, b)));
+      }
+      if (pr.url) {
+        const a = el("a", "link", "open on GitHub");
+        a.href = pr.url; a.target = "_blank"; a.rel = "noreferrer";
+        acts.append(a);
+      }
+      card.append(acts);
+      out.push(card);
+    }
+    return out;
+  }
+
   showStation(station, world) {
     this.station = station;
     const spec = STATES[station.state] || STATES.idle;
@@ -300,6 +416,11 @@ export class Panel {
     // The gate goes FIRST, above everything, always. An agent is stopped and a
     // clock is running against it; nothing else on this panel is more urgent.
     if (station.gate) body.append(this._gate(station.gate));
+
+    // Finished work comes BEFORE open work. A PR sitting unmerged is the state
+    // that used to strand everything: forty-one issues landed and forty stayed
+    // open, because nothing on any screen said a merge was the only thing left.
+    body.append(...this._merges(station));
 
     const issues = station.issues || [];
     const hot = issues.filter(needsHuman);

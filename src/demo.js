@@ -30,7 +30,19 @@ const issue = (number, title, body, opts = {}) => ({
     : "",
 });
 
-const station = (repo, outcome, detail, issues, runs) => ({
+const pr = (number, title, opts = {}) => ({
+  number, title,
+  head: opts.head || `pipeline/auto-issue-${opts.closes?.[0] ?? number}`,
+  base: "main",
+  url: `https://github.com/${opts.repo || "acme/demo"}/pull/${number}`,
+  draft: !!opts.draft,
+  mergeable: opts.mergeable || "MERGEABLE",
+  state: opts.state || "CLEAN",
+  closes: opts.closes || [],
+  updatedAt: ago(opts.age ?? 20),
+});
+
+const station = (repo, outcome, detail, issues, runs, prs) => ({
   repo,
   identity: "demo",
   access: outcome !== "no-access",
@@ -45,6 +57,10 @@ const station = (repo, outcome, detail, issues, runs) => ({
   })),
   issues: issues || [],
   issues_error: outcome === "no-access" ? "no account holds push here" : null,
+  // Finished work waiting only on a merge. One of them conflicts, because a
+  // demo where every button is live never shows what a blocked one looks like.
+  prs: prs || [],
+  prs_error: null,
 });
 
 /**
@@ -162,6 +178,11 @@ export function demoWorld() {
       ], [
         { mins: 22, outcome: "landed", issue: "213", detail: "pipeline/auto/push" },
         { mins: 84, outcome: "survey", detail: "3 open: 2 to work, 1 waiting on a human" },
+      ], [
+        pr(215, "#213: stop the checkout serialiser dropping host_name",
+           { repo: "acme/storefront", closes: [213], age: 21 }),
+        pr(212, "#209: retry the webhook once before giving up",
+           { repo: "acme/storefront", closes: [209], mergeable: "CONFLICTING", age: 320 }),
       ]),
 
       station("acme/billing", "refused", "no commit", [
@@ -191,6 +212,9 @@ export function demoWorld() {
           "Stack trace attached. Happens once per install.", { repo: "acme/mobile", age: 8 }),
       ], [
         { mins: 8, outcome: "landed", issue: "30", detail: "pipeline/auto/push" },
+      ], [
+        pr(33, "#30: guard the cold-start cache read",
+           { repo: "acme/mobile", closes: [30], age: 7 }),
       ]),
 
       station("acme/legacy-import", "parked",

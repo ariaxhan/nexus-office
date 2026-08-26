@@ -173,6 +173,18 @@ const SHOTS = {
     },
   },
 
+  // Finished work waiting only on a merge, including one that cannot merge.
+  // This is the state that stranded forty-one landed issues.
+  merges: {
+    viewport: { width: 1600, height: 900 },
+    async run(page) {
+      await ready(page);
+      await page.click("#tomerge");
+      await page.waitForSelector("#panel:not([hidden])", { timeout: 5000 });
+      await page.waitForTimeout(300);
+    },
+  },
+
   // What you asked for, and what became of it. The state that used to be
   // invisible: a queued order, and one that failed with its reason.
   orders: {

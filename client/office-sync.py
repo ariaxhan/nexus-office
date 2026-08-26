@@ -79,6 +79,16 @@ ACCESS_TTL = 6 * 3600
 
 BOT_MARKER = os.environ.get("OFFICE_MARKER", "pipeline-bot")
 WAITING_LABEL = os.environ.get("OFFICE_WAITING", "waiting on human")
+
+# THE SAFETY BOUNDARY FOR MERGING.
+#
+# The office may merge a PR the PIPELINE opened, and nothing else. A stolen view
+# token can queue any intent it likes; this is the line that decides which of
+# them can touch code. Every branch the runner creates starts with this prefix,
+# so a PR whose head does not is somebody's own work and is refused here, on the
+# laptop, after re-reading the PR from GitHub. The browser's claim about a PR is
+# never trusted: only this check counts.
+PR_PREFIX = os.environ.get("OFFICE_PR_PREFIX", "pipeline/")
 DEFAULT_URL = os.environ.get("OFFICE_URL", "")
 
 NOW = datetime.now(timezone.utc)
@@ -291,6 +301,52 @@ def fetch_issues(nwo, token):
     return issues, None
 
 
+PR_FIELDS = "number,title,headRefName,baseRefName,mergeable,mergeStateStatus,isDraft,url,body,updatedAt"
+
+
+def fetch_prs(nwo, token):
+    """The pipeline's own open PRs on this repo, and whether they can merge.
+
+    Only pipeline PRs. A human's branch is none of the office's business, and
+    listing it here would invite a merge button over work nobody asked the
+    office to touch.
+    """
+    rc, out, err = sh(["gh", "pr", "list", "--repo", nwo, "--state", "open",
+                       "--limit", "40", "--json", PR_FIELDS],
+                      timeout=60, env={"GH_TOKEN": token})
+    if rc != 0 or not out.strip():
+        return None, (err.strip().splitlines() or ["empty response"])[0][:140]
+    try:
+        raw = json.loads(out)
+    except Exception as e:
+        return None, str(e)[:140]
+
+    prs = []
+    for pr in raw:
+        head = pr.get("headRefName") or ""
+        if not head.startswith(PR_PREFIX):
+            continue
+        body = pr.get("body") or ""
+        prs.append({
+            "number": pr.get("number"),
+            "title": pr.get("title") or "",
+            "head": head,
+            "base": pr.get("baseRefName") or "",
+            "url": pr.get("url") or "",
+            "draft": bool(pr.get("isDraft")),
+            # GitHub's own words, not a guess: MERGEABLE / CONFLICTING / UNKNOWN,
+            # and CLEAN / BLOCKED / BEHIND / DIRTY. "UNKNOWN" means GitHub has not
+            # finished computing it, which is not the same as "cannot merge".
+            "mergeable": pr.get("mergeable") or "UNKNOWN",
+            "state": pr.get("mergeStateStatus") or "UNKNOWN",
+            "closes": [int(n) for n in re.findall(r"(?:closes|fixes|resolves)\s+#(\d+)",
+                                                  body, re.I)],
+            "updatedAt": pr.get("updatedAt") or "",
+        })
+    prs.sort(key=lambda x: -(x["number"] or 0))
+    return prs, None
+
+
 def build_snapshot(access: Access):
     by_repo, counts = receipts()
     log(f"{len(by_repo)} repos in the receipts; fetching issues")
@@ -309,6 +365,8 @@ def build_snapshot(access: Access):
             "runs": runs[:10],
             "issues": [],
             "issues_error": None,
+            "prs": [],
+            "prs_error": None,
         }
         if not tok:
             st["issues_error"] = "no account holds push here"
@@ -318,6 +376,11 @@ def build_snapshot(access: Access):
             st["issues_error"] = err
         else:
             st["issues"] = issues
+        prs, perr = fetch_prs(repo, tok)
+        # An error fetching PRs is its own field. A desk with no pipeline PRs and
+        # a desk whose PR list failed must never render the same.
+        st["prs"] = prs or []
+        st["prs_error"] = perr
         return st
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -378,6 +441,63 @@ class Office:
 # ── applying what was clicked ────────────────────────────────────────────────
 
 RUNTIME_KINDS = {"permit", "chat", "run", "stop"}
+
+
+def apply_merge(repo, who, tok, payload, dry: bool):
+    """Merge a PR the PIPELINE opened, and refuse everything else.
+
+    The browser holds a view token and can queue any intent at all, so nothing it
+    claims about a PR is trusted. The PR is re-read from GitHub here and checked
+    on this machine:
+
+      * the head branch must start with PR_PREFIX, so the office can never merge
+        a human's own branch. This is the whole safety boundary.
+      * a draft is never merged, because a draft is a statement that it is not
+        ready.
+      * GitHub's own mergeable verdict must not be CONFLICTING. UNKNOWN means
+        GitHub has not finished computing it, which is not permission: it is
+        "ask again in a moment".
+
+    Squash and delete the branch: one issue, one branch, one commit on main, and
+    nothing left behind to drift.
+    """
+    num = str(payload.get("pr") or "").strip()
+    if not num.isdigit():
+        return False, "a merge needs a PR number"
+
+    env = {"GH_TOKEN": tok}
+    rc, out, err = sh(["gh", "pr", "view", num, "--repo", repo, "--json",
+                       "headRefName,isDraft,mergeable,state,title"],
+                      timeout=60, env=env)
+    if rc != 0:
+        return False, f"could not read PR #{num}: {(err.strip().splitlines() or ['failed'])[0][:120]}"
+    try:
+        pr = json.loads(out or "{}")
+    except Exception as exc:
+        return False, f"could not read PR #{num}: {exc}"
+
+    head = pr.get("headRefName") or ""
+    if not head.startswith(PR_PREFIX):
+        # The refusal names the branch on purpose. A silent no here would look
+        # exactly like a failure to reach GitHub.
+        return False, (f"refusing: PR #{num} is on {head!r}, which is not a pipeline "
+                       f"branch. The office only merges branches starting {PR_PREFIX!r}.")
+    if (pr.get("state") or "").upper() != "OPEN":
+        return False, f"PR #{num} is {pr.get('state', 'not open').lower()}"
+    if pr.get("isDraft"):
+        return False, f"PR #{num} is a draft; a draft says it is not ready"
+    if (pr.get("mergeable") or "").upper() == "CONFLICTING":
+        return False, f"PR #{num} conflicts with its base and needs a human"
+
+    if dry:
+        return True, f"would squash-merge #{num} ({head})"
+
+    rc, _, err = sh(["gh", "pr", "merge", num, "--repo", repo,
+                     "--squash", "--delete-branch"], timeout=120, env=env)
+    if rc != 0:
+        msg = (err.strip().splitlines() or ["failed"])[0][:160]
+        return False, f"merge refused by GitHub: {msg}"
+    return True, f"as {who}: squash-merged #{num} ({head}); its Closes line shuts the issue"
 
 
 def apply_runtime_decision(d, dry: bool):
@@ -462,6 +582,11 @@ def apply_decision(d, access: Access, dry: bool):
     who, tok = access.token_for(repo)
     if not tok:
         return False, f"no account can push to {repo}"
+
+    # Merging is the only intent that puts code on a default branch, so it is
+    # re-derived from GitHub here rather than from anything the browser said.
+    if kind == "merge":
+        return apply_merge(repo, who, tok, payload, dry)
     if kind != "nudge" and not (issue and str(issue).isdigit()):
         return False, f"{kind} needs an issue number"
 
