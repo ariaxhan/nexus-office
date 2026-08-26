@@ -6,12 +6,9 @@
   "engine": "claude",
   "capability": "commit_and_pr",
   "enabled": true,
-
   "_cap_minutes": "25 rather than the vault's 12, because these issues are room-building rather than bug-fixing and a lane needs time to build, shoot, LOOK at the pictures, and fix what it sees. Not higher: run_budget_minutes is 45 across all 71 repos, and a lane that eats most of a run starves everyone else.",
   "cap_minutes": 25,
-
   "_max_issues_per_run": "One. Each remaining issue is a substantial piece of the room, and a lane that rushes three of them produces three PRs nobody wants to review.",
   "max_issues_per_run": 1,
-
-  "note": "Unparked 2026-08-26 once the repo could be SEEN: `npm run shot` renders the demo floor headless and writes PNGs a lane can read. Before that, a lane could only prove a build passed, which proves nothing about a room. CLAUDE.md carries the rule. Every remaining issue splits into a read half (unit-testable) and a draw half (needs the pictures); a lane that fails at drawing should still land the adapter."
+  "note": "Unparked 2026-08-26 once the repo could be SEEN: `npm run shot` renders the demo floor headless and writes PNGs a lane can read, and CLAUDE.md tells a lane to read them. Milestone 2 (#9 to #15) was then built by hand across seven lanes and merged, so the repo was briefly parked again while that was in flight. What is left is #18, which is ready, and #17, which needs a decision and should be refused rather than guessed at."
 }
