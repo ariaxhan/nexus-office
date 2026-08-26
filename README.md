@@ -117,6 +117,16 @@ be inspected by squinting at screenshots is a surface nobody can debug.
 Three.js, Vite, a Cloudflare Worker, and D1. No framework, no CDN, no build step
 you have to understand. The whole front end is about 1,500 lines.
 
+## Where this is going
+
+[`docs/architecture.md`](docs/architecture.md) is the map, and
+[issue #16](https://github.com/ariaxhan/nexus-office/issues/16) is the index.
+
+The short version: the office is a face for machinery that already runs and is
+currently invisible. It adapts an issue pipeline, a local agent runtime, a memory
+store and a scheduler rather than building any of them, and every feature has to
+survive a Worker that holds no credentials.
+
 ## License
 
 MIT.
