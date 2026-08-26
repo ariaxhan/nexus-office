@@ -90,6 +90,15 @@ function paintStats() {
     ? "waiting for home to pick them up"
     : "something you asked for did not work";
 
+  // Finished work nobody has merged. This is its own number, never folded into
+  // "waiting on you": an unanswered question and an unmerged PR need different
+  // things from you, and the second one is thirty seconds of work.
+  const mergeable = world.stations.reduce(
+    (n, st) => n + (st.prs || []).filter((p) => !p.draft && p.mergeable !== "CONFLICTING").length, 0);
+  const merge = $("tomerge");
+  merge.hidden = mergeable === 0;
+  merge.textContent = `${mergeable} ready to merge`;
+
   const btn = $("needs");
   const gated = world.runtime?.gate?.state === "pending";
   btn.hidden = waiting === 0 && !gated;
@@ -310,6 +319,10 @@ function boot() {
     office.selected = null;
     panel.close();
     office.frameAll();
+  };
+  $("tomerge").onclick = () => {
+    office.selected = null;
+    panel.showMerges(world || {});
   };
   $("orders").onclick = () => {
     office.selected = null;

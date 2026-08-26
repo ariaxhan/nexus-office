@@ -14,7 +14,7 @@
 // Two families, because they validate differently and route differently. A
 // GitHub decision is always about a repo; a runtime decision is about the agent
 // running on this machine and often has no repo at all.
-const GITHUB_KINDS = new Set(["comment", "unblock", "close", "reopen", "label", "nudge"]);
+const GITHUB_KINDS = new Set(["comment", "unblock", "close", "reopen", "label", "nudge", "merge"]);
 const RUNTIME_KINDS = new Set(["permit", "chat", "run", "stop"]);
 
 const LOCKOUT_MS = 15 * 60 * 1000;
@@ -111,8 +111,14 @@ export default {
 
         const issue = body.issue == null ? null : String(body.issue);
         if (issue !== null && !/^\d+$/.test(issue)) return json({ error: "bad issue" }, 400);
-        if (!isRuntime && kind !== "nudge" && issue === null) {
+        // A merge is about a PR, not an issue: the issue it closes is written in
+        // the PR body and is GitHub's job to act on, not something the browser
+        // should be restating.
+        if (!isRuntime && kind !== "nudge" && kind !== "merge" && issue === null) {
           return json({ error: `${kind} needs an issue` }, 400);
+        }
+        if (kind === "merge" && !/^\d+$/.test(String(body.pr ?? ""))) {
+          return json({ error: "a merge needs a numeric pr" }, 400);
         }
 
         // A permit answers ONE specific question. The id travels with it so the
@@ -135,6 +141,11 @@ export default {
           answer: body.answer === "allow" || body.answer === "deny" ? body.answer : "",
           always: body.always === true,
           run_id: typeof body.run_id === "string" ? body.run_id.slice(0, 128) : "",
+          // Carried as a number so nothing downstream has to parse a string that
+          // was already validated. The laptop re-reads the PR from GitHub anyway
+          // and refuses any branch that is not the pipeline's; this is a
+          // convenience, never the safety check.
+          pr: /^\d+$/.test(String(body.pr ?? "")) ? Number(body.pr) : null,
         });
         const res = await env.DB.prepare(
           "INSERT INTO decision (at, kind, repo, issue, payload) VALUES (?, ?, ?, ?, ?)"
