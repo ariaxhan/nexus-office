@@ -185,6 +185,21 @@ const SHOTS = {
     },
   },
 
+  // The working light's other two states. The room shot covers "running",
+  // because that is the demo floor's default; these are the ones that used to
+  // have no picture at all, and "unknown" is the one that must never be mistaken
+  // for a quiet office.
+  "light-idle": {
+    viewport: { width: 1600, height: 900 },
+    query: "&pipeline=idle",
+    async run(page) { await ready(page); },
+  },
+  "light-unknown": {
+    viewport: { width: 1600, height: 900 },
+    query: "&pipeline=unknown",
+    async run(page) { await ready(page); },
+  },
+
   // It has to work on a phone, which is most of why it is on the internet.
   phone: {
     viewport: { width: 390, height: 844 },
@@ -249,7 +264,7 @@ for (const name of names) {
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 
   try {
-    await page.goto(`${base}/?demo=1`, { waitUntil: "load" });
+    await page.goto(`${base}/?demo=1${shot.query || ""}`, { waitUntil: "load" });
     await shot.run(page);
     await page.evaluate(FREEZE, 6.0);
     const file = path.join(OUT, `${String(i + 1).padStart(2, "0")}-${name}.png`);
