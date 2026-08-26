@@ -1,6 +1,8 @@
 import { token, clearToken, login, getWorld } from "./api.js";
 import { Office } from "./scene/office.js";
 import { Panel, needsHuman } from "./ui/panel.js";
+import * as view from "./ui/filters.js";
+import { demoWorld } from "./demo.js";
 import { resident } from "./names.js";
 
 /**
@@ -16,6 +18,8 @@ let office;
 let panel;
 let world = null;
 let toastTimer;
+let currentView = view.load();
+let shownRepos = new Set();
 
 function toast(msg, bad = false) {
   const t = $("toast");
@@ -34,6 +38,13 @@ function ago(iso) {
   return { text, stale: mins > 25 };
 }
 
+/**
+ * The top bar always describes the WHOLE world, never the filtered view.
+ *
+ * A filter that also filters the count is how you convince yourself there are
+ * three things waiting when there are thirty. Only the desk count says
+ * "shown/total", and it says so explicitly.
+ */
 function paintStats() {
   const s = $("stats");
   s.replaceChildren();
@@ -53,7 +64,9 @@ function paintStats() {
   };
   const age = ago(world.at);
   s.append(
-    bit("desks", world.stations.length),
+    bit("desks", shownRepos.size === world.stations.length
+      ? world.stations.length
+      : `${shownRepos.size}/${world.stations.length}`),
     bit("open", open),
     bit("landed 24h", t.landed || 0),
     bit(`synced ${age.text}`, "", age.stale ? "stale" : "")
@@ -78,7 +91,49 @@ function stateOf(st) {
   return "idle";
 }
 
-function applyWorld(next) {
+function paintFilters() {
+  const modes = $("modes");
+  modes.replaceChildren();
+  for (const m of view.MODES) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = m.label;
+    b.setAttribute("aria-pressed", String(currentView.mode === m.id));
+    b.onclick = () => setView({ ...currentView, mode: m.id });
+    modes.append(b);
+  }
+
+  const un = $("unhide");
+  const hand = currentView.repos.length + currentView.owners.length;
+  const { hiddenByHand, hiddenByMode, waitingButHidden } = lastSplit;
+  const total = hiddenByHand.length + hiddenByMode.length;
+  un.hidden = total === 0;
+  un.replaceChildren();
+  if (total) {
+    // Never a bare "12 hidden". If something you put away has started needing
+    // you, that is the only number on this pill that matters.
+    if (waitingButHidden) {
+      const b = document.createElement("b");
+      b.textContent = `${waitingButHidden} hidden need you`;
+      un.append(b, " · show all");
+    } else {
+      un.append(`${total} hidden · show all`);
+    }
+    un.title = hand
+      ? `${hand} put away by hand, ${hiddenByMode.length} filtered out`
+      : `${hiddenByMode.length} filtered out`;
+  }
+}
+
+let lastSplit = { hiddenByHand: [], hiddenByMode: [], waitingButHidden: 0 };
+
+function setView(next) {
+  currentView = next;
+  view.save(currentView);
+  if (world) applyWorld(world, { rebuild: true });
+}
+
+function applyWorld(next, { rebuild = false } = {}) {
   world = next;
   for (const st of world.stations) {
     st.state = stateOf(st);
@@ -86,19 +141,39 @@ function applyWorld(next) {
   }
   world.stations.sort((a, b) => a.repo.localeCompare(b.repo));
 
-  if (!office.villagers.size) office.build(world.stations);
-  else office.update(world.stations);
+  const split = view.apply(world.stations, currentView, needsHuman);
+  lastSplit = split;
+  const shown = split.shown;
+  const changed = shown.length !== shownRepos.size ||
+    shown.some((s) => !shownRepos.has(s.repo));
+  shownRepos = new Set(shown.map((s) => s.repo));
+
+  if (rebuild || changed || !office.villagers.size) office.build(shown);
+  else office.update(shown);
 
   paintStats();
+  paintFilters();
 
-  // Keep whatever the panel was showing pointed at the fresh object.
+  // Keep whatever the panel was showing pointed at the fresh object, unless the
+  // filter just took that desk out of the room.
   if (panel.station) {
     const again = world.stations.find((s) => s.repo === panel.station.repo);
-    if (again) panel.showStation(again, world);
+    if (again && shownRepos.has(again.repo)) panel.showStation(again, world);
+    else if (!shownRepos.has(panel.station.repo)) panel.close();
   }
 }
 
+// `?demo=1` runs the room on a fabricated floor: no account, no session, no
+// pipeline. It is how a stranger sees what this is before setting anything up,
+// and how the room itself gets worked on without a live snapshot.
+const DEMO = new URLSearchParams(location.search).has("demo");
+
 async function pull({ quiet = false } = {}) {
+  if (DEMO) {
+    $("boot").hidden = true;
+    applyWorld(demoWorld());
+    return;
+  }
   try {
     const res = await getWorld();
     if (!res.world) {
@@ -152,7 +227,19 @@ function boot() {
   office = new Office($("stage"));
   office.start();
 
-  panel = new Panel($("panel"), { onToast: toast, onRefresh: () => pull({ quiet: true }) });
+  panel = new Panel($("panel"), {
+    onToast: toast,
+    onRefresh: () => pull({ quiet: true }),
+    onHideRepo: (repo) => {
+      setView(view.hideRepo(currentView, repo));
+      toast(`${repo} put away. "show all" in the top bar brings it back.`);
+    },
+    onHideOwner: (repo) => {
+      const owner = view.ownerOf(repo);
+      setView(view.hideOwner(currentView, repo));
+      toast(`the whole ${owner} wing is put away.`);
+    },
+  });
 
   office.onPick = (station) => {
     if (!station) { office.selected = null; return panel.close(); }
@@ -166,8 +253,15 @@ function boot() {
     office.frameAll();
   };
   $("refresh").onclick = () => pull();
+  $("unhide").onclick = () => {
+    setView(view.showEverything(currentView));
+    toast("everything is back.");
+  };
   $("needs").onclick = () => {
     office.selected = null;
+    // The tray shows everything waiting, including desks the filter hid. Being
+    // able to lose a blocked issue behind a view is exactly the failure this
+    // whole surface exists to prevent.
     panel.showInbox(world);
   };
 
@@ -175,6 +269,12 @@ function boot() {
   // inspected by squinting at screenshots is a surface nobody can debug.
   window.office = office;
   window.panel = panel;
+
+  if (DEMO) {
+    document.body.classList.add("is-demo");
+    pull();
+    return;
+  }
 
   if (!token()) return gate();
   pull();

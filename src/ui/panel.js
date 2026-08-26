@@ -1,5 +1,6 @@
 import { STATES } from "../scene/villager.js";
 import { sendDecision } from "../api.js";
+import { renderInto } from "./markdown.js";
 
 /**
  * The panel is the half of this thing that does work.
@@ -77,10 +78,12 @@ function relative(iso) {
 }
 
 export class Panel {
-  constructor(node, { onToast, onRefresh }) {
+  constructor(node, { onToast, onRefresh, onHideRepo, onHideOwner }) {
     this.node = node;
     this.onToast = onToast;
     this.onRefresh = onRefresh;
+    this.onHideRepo = onHideRepo;
+    this.onHideOwner = onHideOwner;
     this.openIssue = null;
   }
 
@@ -115,10 +118,12 @@ export class Panel {
     const spec = STATES[station.state] || STATES.idle;
     const res = station.resident;
 
+    // The repo leads. The villager's name is how you recognise the character
+    // across visits, not how you identify the work, so it sits underneath.
     this._frame({
-      title: res.name,
+      title: station.repo.split("/").pop(),
       repo: station.repo,
-      sub: null,
+      sub: `${res.name} sits here`,
       color: spec.color,
       state: spec.label,
       avatarFor: res,
@@ -160,12 +165,16 @@ export class Panel {
       body.append(line);
     }
 
+    const acts = el("div", "acts");
     if (station.state !== "locked") {
-      const acts = el("div", "acts");
       acts.append(this._button("Work this repo next", "act act-go", () =>
         this._queue({ kind: "nudge", repo: station.repo })));
-      body.append(acts);
     }
+    acts.append(this._button("Put this desk away", "act", () =>
+      this.onHideRepo?.(station.repo)));
+    acts.append(this._button(`Put away all of ${station.repo.split("/")[0]}`, "act", () =>
+      this.onHideOwner?.(station.repo)));
+    body.append(acts);
     void world;
   }
 
@@ -237,10 +246,13 @@ export class Panel {
     // above the issue description rather than behind another click.
     if (issue.last_word) {
       wrap.append(el("h3", null, "the runner's last word"));
-      wrap.append(el("div", "issue-body last-word", stripMarker(issue.last_word)));
+      wrap.append(renderInto(el("div", "issue-body md last-word"), stripMarker(issue.last_word)));
       wrap.append(el("h3", null, "the issue"));
     }
-    wrap.append(el("div", "issue-body", (issue.body || "").trim() || "No description on this issue."));
+    const body = (issue.body || "").trim();
+    wrap.append(body
+      ? renderInto(el("div", "issue-body md"), body)
+      : el("div", "issue-body", "No description on this issue."));
 
     const reply = el("textarea", "reply");
     reply.placeholder = needsHuman(issue)
