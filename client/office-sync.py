@@ -655,6 +655,16 @@ def check(url):
     log(f"  {len(stations)} desks | {len(issues)} open issues | "
         f"{len(waiting)} waiting on you | {len(locked)} locked")
     log(f"  today: {w.get('today')}")
+
+    # The runtime's own health is part of the surface being proved. A room that
+    # cannot say "the runtime is down" will happily show an empty floor instead.
+    run = w.get("runtime") or {}
+    gate = (run.get("gate") or {}).get("state", "unconfigured")
+    board = (run.get("board") or {}).get("state", "unconfigured")
+    log(f"  runtime: gate {gate}, board {board}")
+    if gate == "pending":
+        g = run["gate"]
+        log(f"  AN AGENT IS BLOCKED: {g.get('permission')} -> {g.get('target', '')[:70]}")
     for i in waiting[:5]:
         log(f"  waiting: #{i['number']} {i['title'][:60]}")
 
