@@ -280,7 +280,8 @@ function boot() {
   office.onPick = (data) => {
     if (!data) { office.selected = null; return panel.close(); }
     if (data.fixture) {
-      office.selected = null;
+      // Frame it, or the panel covers the thing you just clicked.
+      office.focusPoint(data.point);
       return panel.showFixture(data.fixture, world || {});
     }
     const station = data.station;

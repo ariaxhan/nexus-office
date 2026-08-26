@@ -95,15 +95,9 @@ export function build(ctx) {
   const trayGeo = [];
   const paperGeo = [];
   const hotGeo = [];
-  const picks = [];
 
   const trayBox = new THREE.BoxGeometry(TRAY_W, TRAY_H, TRAY_D);
   const sheetBox = new THREE.BoxGeometry(SHEET_W, SHEET_H, SHEET_D);
-  // An invisible click volume per desk, the same trick office.js uses for the
-  // workstation pad: real geometry stays merged and cheap, and the thing that
-  // carries the repo is a box nobody has to render.
-  const pickBox = new THREE.BoxGeometry(TRAY_W + 0.06, 0.4, TRAY_D + 0.06);
-  const pickMat = new THREE.MeshBasicMaterial({ visible: false });
 
   for (const st of stations) {
     const issues = st.issues || [];
@@ -131,10 +125,6 @@ export function build(ctx) {
       (isHot ? hotGeo : paperGeo).push(sheetBox.clone().applyMatrix4(m));
     }
 
-    const pick = new THREE.Mesh(pickBox, pickMat);
-    pick.position.set(st.x + TRAY_X, TOP + 0.2, st.z + TRAY_Z);
-    pick.userData.fixture = { id, payload: { repo: st.repo } };
-    picks.push(pick);
   }
 
   if (!trayGeo.length) return null;
@@ -143,69 +133,27 @@ export function build(ctx) {
   group.add(new THREE.Mesh(BGU.mergeGeometries(trayGeo), toon(TRAY_COLOR)));
   if (paperGeo.length) group.add(new THREE.Mesh(BGU.mergeGeometries(paperGeo), toon(PAPER)));
   if (hotGeo.length) group.add(new THREE.Mesh(BGU.mergeGeometries(hotGeo), toon(PAPER_HOT)));
-  for (const p of picks) group.add(p);
   return group;
 }
 
 /* --------------------------------------------------------------- the panel -- */
 
-export function panel(payload, world, api) {
-  const { el } = api;
-  const wrap = el("div");
-  const repo = payload?.repo;
-  const st = (world?.stations || []).find((s) => s.repo === repo);
-
-  if (!st) return el("p", "empty", `No desk for ${repo || "that tray"} in this room.`);
-
-  const issues = st.issues || [];
-  const hot = issues.filter(needsHuman);
-  const drawn = sheetCount(issues.length);
-
-  wrap.append(el("div", "p-repo", st.repo));
-  wrap.append(el("p", "log",
-    `${issues.length} open, ${hot.length} waiting on you.`));
-  // A capped stack must never make the true count unknowable, so the panel says
-  // out loud when the drawing is smaller than the pile.
-  if (drawn < issues.length) {
-    wrap.append(el("p", "log",
-      `The tray draws ${drawn} sheets. The real number is ${issues.length}.`));
-  }
-
-  const list = (rows, heading) => {
-    if (!rows.length) return;
-    wrap.append(el("h3", null, `${heading} (${rows.length})`));
-    for (const i of rows) {
-      const card = el("div", `issue${needsHuman(i) ? " hot" : ""}`);
-      const top = el("div", "issue-top");
-      top.append(el("span", "issue-num", `#${i.number}`));
-      top.append(el("span", "issue-title", i.title || "(no title)"));
-      card.append(top);
-      if (i.url) {
-        const a = el("a", "link", "open on GitHub");
-        a.href = i.url;
-        a.target = "_blank";
-        a.rel = "noreferrer";
-        card.append(a);
-      }
-      wrap.append(card);
-    }
-  };
-  list(hot, "needs you");
-  list(issues.filter((i) => !needsHuman(i)), "open");
-
-  if (!issues.length) wrap.append(el("p", "empty", "This desk is clear."));
-  wrap.append(el("p", "p-detail",
-    "Click the desk itself to reply, run one, or close it."));
-  return wrap;
-}
-
 /**
- * Null on purpose, and it is not a stub.
+ * The tray has no panel, and no click target, on purpose.
  *
- * The in-tray reads `ctx.stations`, which the demo floor already fills with real
- * issue lists. It owns no `world.sections` entry, so there is nothing for it to
- * fake.
+ * It sits inside the desk's own pick pad, a 3m box that encloses the whole
+ * workstation, so a ray reaching the paper has already passed through the pad
+ * and the desk wins every time. Distance cannot separate two things when one
+ * contains the other, and preferring fixtures over the pad was tried and
+ * reverted within the hour because it handed every central desk click to the
+ * paper.
+ *
+ * That is the right outcome anyway. The station panel already lists this desk's
+ * issues with their true counts, plus the reply, run and close actions a tray
+ * panel could never offer. A second panel showing a subset of the same thing is
+ * a worse answer wearing a nicer hat.
  */
-export function demo() {
-  return null;
+export function panel(payload, world, api) {
+  return api.el("p", "empty",
+    "The tray belongs to its desk. Click the desk for its issues.");
 }

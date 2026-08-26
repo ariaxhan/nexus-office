@@ -371,12 +371,16 @@ export class Office {
   }
 
   update(stations, world) {
-    // A fixture reads world.sections, so a snapshot whose sections moved has to
-    // rebuild the room even when the desks are identical. Cheaper to compare the
-    // sections than to redraw a chart every twenty seconds.
-    const before = JSON.stringify(this.world?.sections ?? null);
+    // Rebuild when anything a FIXTURE reads has moved, not only when the desks
+    // have. The first version of this compared `world.sections` alone, which was
+    // wrong twice over and both lanes that hit it said so: the in-tray reads
+    // station issue counts and the commissions board reads `world.runtime`, so a
+    // desk going from three open issues to eight, or a commission finishing,
+    // left the room drawing yesterday. Comparing a signature is far cheaper than
+    // redrawing every chart every twenty seconds.
+    const before = this._signature(stations);
     if (world) this.world = world;
-    if (JSON.stringify(world?.sections ?? null) !== before) return this.build(stations, world);
+    if (this._signature(stations) !== before) return this.build(stations, world);
     for (const st of stations) {
       const v = this.villagers.get(st.repo);
       if (!v) return this.build(stations);
@@ -387,6 +391,36 @@ export class Office {
       }
       Object.assign(v.station, st);
     }
+  }
+
+  /** Everything the fixtures draw from, in one comparable string. */
+  _signature(stations) {
+    const w = this.world || {};
+    return JSON.stringify([
+      w.sections ?? null,
+      w.runtime ?? null,
+      w.today ?? null,
+      stations.map((s) => [s.repo, s.state, (s.issues || []).length,
+        (s.issues || []).filter((i) => i.bot_last).length, s.at]),
+    ]);
+  }
+
+  /**
+   * Look at one thing, rather than at the whole room.
+   *
+   * The panel covers the right quarter of the window, so a fixture standing at
+   * the right-hand end of the back wall was hidden by its own panel: two lanes
+   * independently reported photographing a picture of the panel with the object
+   * missing. Framing the thing you clicked fixes it for every fixture at once,
+   * and it is what clicking a desk already does.
+   */
+  focusPoint(p, size = 6) {
+    if (!p) return;
+    this.selected = null;
+    this.controls.target.copy(p);
+    const dir = new THREE.Vector3(0, 0.45, 1).normalize();
+    this.camera.position.copy(p).addScaledVector(dir, Math.max(size * 1.6, 6));
+    this.controls.update();
   }
 
   /**
@@ -457,10 +491,19 @@ export class Office {
     this.scene.updateMatrixWorld(true);
     this.camera.updateMatrixWorld(true);
     this.raycaster.setFromCamera(ndc, this.camera);
+    // Nearest wins, and the desk pad therefore wins anything standing on that
+    // desk. That is deliberate. Preferring fixtures over the pad was tried and
+    // reverted the same hour: the pad is a 3m box that ENCLOSES the desk top, so
+    // the in-tray is always inside it and the rule handed every central desk
+    // click to the paper instead of the desk. Distance cannot separate two
+    // things when one contains the other. The desk is the primary object here
+    // and its panel already lists the issues, so anything sitting on a desk gets
+    // its data through the desk.
     const hit = this.raycaster.intersectObjects(this.pickables, false)[0];
     // userData carries either .station (a desk) or .fixture (everything else);
-    // the caller decides which panel that opens.
-    this.onPick(hit ? hit.object.userData : null);
+    // the caller decides which panel that opens. The hit point travels too, so
+    // the camera can frame what was clicked.
+    this.onPick(hit ? { ...hit.object.userData, point: hit.point } : null);
   }
 
   start() {
