@@ -1,4 +1,10 @@
 {
-  "_note": "PARKED 2026-08-25. The sixteen issues in this repo are a MAP, not a queue. They were written to be argued with and re-cut, and several of them (#5, #9, #12) explicitly say the first job is to find out what is actually true before drawing anything. An automated pass would produce sixteen confident PRs against a plan nobody has agreed to yet. Unpark by deleting this file, once milestone 0 is settled.",
-  "enabled": false
+  "version": 1,
+  "control_repo": "ariaxhan/nexus-office",
+  "allowed_actor": "ariaxhan",
+  "identity": "ariaxhan",
+  "engine": "claude",
+  "capability": "issue_only",
+  "enabled": false,
+  "note": "PARKED 2026-08-25. The sixteen open issues here are a MAP, not a queue. They were written to be argued with and re-cut, and three of them (#5, #9, #12) say outright that the first job is finding out what is actually true before drawing anything. An automated pass would produce sixteen confident PRs against a plan nobody has agreed to. Unpark by setting enabled true, once milestone 0 is settled."
 }
