@@ -16,9 +16,9 @@ unreadable ledger must not cost you the whole snapshot.
 
 from __future__ import annotations
 
-from sources import clock, cost, library, mail
+from sources import clock, cost, library, mail, pipeline
 
-SOURCES = [clock, cost, library, mail]
+SOURCES = [clock, cost, library, mail, pipeline]
 
 
 def read_all() -> dict:

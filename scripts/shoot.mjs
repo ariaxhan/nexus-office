@@ -173,6 +173,18 @@ const SHOTS = {
     },
   },
 
+  // What you asked for, and what became of it. The state that used to be
+  // invisible: a queued order, and one that failed with its reason.
+  orders: {
+    viewport: { width: 1600, height: 900 },
+    async run(page) {
+      await ready(page);
+      await page.click("#orders");
+      await page.waitForSelector("#panel:not([hidden])", { timeout: 5000 });
+      await page.waitForTimeout(300);
+    },
+  },
+
   // It has to work on a phone, which is most of why it is on the internet.
   phone: {
     viewport: { width: 390, height: 844 },

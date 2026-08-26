@@ -74,6 +74,22 @@ function paintStats() {
   // The trailing bit has an empty value; drop its stray leading space.
   s.lastChild.firstChild.remove();
 
+  // Every intent you have queued, and what became of it. The Worker has always
+  // returned this and the browser used to throw it away, so a click produced a
+  // toast and then silence: a FAILED order looked exactly like a working one.
+  const orders = $("orders");
+  const queued = (world.decisions || []).filter((d) => d.status === "pending");
+  const failed = (world.decisions || []).filter((d) => d.status === "failed");
+  const recent = failed.filter((d) => Date.now() - Date.parse(d.at) < 6 * 3600 * 1000);
+  orders.hidden = !queued.length && !recent.length;
+  orders.textContent = recent.length
+    ? `${recent.length} order${recent.length === 1 ? "" : "s"} failed`
+    : `${queued.length} queued`;
+  orders.classList.toggle("pill-alert", recent.length > 0);
+  orders.title = queued.length
+    ? "waiting for home to pick them up"
+    : "something you asked for did not work";
+
   const btn = $("needs");
   const gated = world.runtime?.gate?.state === "pending";
   btn.hidden = waiting === 0 && !gated;
@@ -218,7 +234,8 @@ async function pull({ quiet = false } = {}) {
       return;
     }
     $("boot").hidden = true;
-    applyWorld({ ...res.world, at: res.at });
+    applyWorld({ ...res.world, at: res.at, decisions: res.decisions || [],
+                server_time: res.server_time });
   } catch (err) {
     if (err.unauthorized) { clearToken(); return gate("Your session expired. Password again?"); }
     if (!quiet) toast(err.message || "could not reach the office", true);
@@ -293,6 +310,10 @@ function boot() {
     office.selected = null;
     panel.close();
     office.frameAll();
+  };
+  $("orders").onclick = () => {
+    office.selected = null;
+    panel.showOrders(world || {});
   };
   $("talk").onclick = () => {
     office.selected = null;

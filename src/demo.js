@@ -56,6 +56,21 @@ export function demoWorld() {
       FIXTURES.filter((f) => f.demo).map((f) => [f.id, f.demo()])
         .filter(([, v]) => v != null)
     ),
+    // Three orders, one of each fate. The failed one matters most: a decision
+    // that failed used to look exactly like one that worked, because its reason
+    // was written to the queue and never shown to anybody.
+    decisions: [
+      { id: 31, at: ago(1), kind: "nudge", repo: "northwind/api", issue: null,
+        payload: {}, status: "pending", applied_at: null, result: null },
+      { id: 30, at: ago(9), kind: "chat", repo: "", issue: null,
+        payload: { body: "What is actually blocking the storefront checkout fix?" },
+        status: "failed", applied_at: ago(8),
+        result: "the runtime did not take it: <urlopen error [Errno 61] Connection refused>" },
+      { id: 29, at: ago(46), kind: "unblock", repo: "acme/billing", issue: "58",
+        payload: { body: "Refunds follow the 30 day policy. Build against that." },
+        status: "done", applied_at: ago(45),
+        result: "as ariaxhan: issue comment; issue edit: label was not set" },
+    ],
     generated: ago(3),
     heartbeat: ago(3),
     killed: false,

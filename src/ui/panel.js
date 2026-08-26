@@ -18,6 +18,16 @@ const el = (tag, cls, text) => {
   return n;
 };
 
+const rel = (iso) => {
+  if (!iso) return "at an unknown time";
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (!Number.isFinite(m)) return "at an unknown time";
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+};
+
 const NEEDS_HUMAN = /waiting on|needs.?(human|you|decision)|blocked|question/i;
 
 /**
@@ -140,6 +150,113 @@ export class Panel {
       console.error(`fixture "${id}" panel failed`, err);
       body.append(el("p", "empty", "That panel could not be drawn. The console has the reason."));
     }
+  }
+
+  /**
+   * What you asked for, and what became of it.
+   *
+   * The Worker has always returned this queue and the browser used to drop it on
+   * the floor, so pressing a button produced a toast and then silence. That is
+   * the worst version of the failure, because a decision that FAILED looked
+   * exactly like one that worked: the reason was already written to
+   * `decision.result` and simply never shown to anyone.
+   */
+  showOrders(world) {
+    this.station = null;
+    const all = world.decisions || [];
+    const pending = all.filter((d) => d.status === "pending");
+    const done = all.filter((d) => d.status !== "pending");
+    const failed = all.filter((d) => d.status === "failed");
+
+    this._frame({
+      title: "What you asked for",
+      sub: pending.length
+        ? `${pending.length} waiting for home to pick ${pending.length === 1 ? "it" : "them"} up`
+        : "nothing is waiting",
+      color: failed.length ? "#d1495b" : pending.length ? "#c98a2e" : "#3f9e6a",
+    });
+    const body = this.node.querySelector(".p-body");
+
+    // The one fact that says whether the other end is alive at all. A queue that
+    // is not moving because home is asleep must never look like a queue that is
+    // not moving because the work is slow.
+    const beat = world.heartbeat || world.at;
+    const mins = beat ? Math.round((Date.now() - Date.parse(beat)) / 60000) : null;
+    const line = el("p", mins != null && mins > 25 ? "log stale" : "log");
+    line.textContent = mins == null
+      ? "This office has never heard from home."
+      : mins <= 1
+        ? "Home checked in just now, so the queue is moving."
+        : `Home last checked in ${mins}m ago.` +
+          (mins > 25 ? " That is longer than it should be; the drain job may be down." : "");
+    body.append(line);
+
+    const pipe = world.sections?.pipeline;
+    if (pipe) body.append(this._pipeline(pipe));
+
+    if (!all.length) {
+      body.append(el("p", "empty",
+        "You have not asked for anything yet. Buttons on a desk queue an intent here, " +
+        "and this is where you watch it happen."));
+      return;
+    }
+
+    const card = (d) => {
+      const box = el("div", `issue${d.status === "failed" ? " hot" : ""}`);
+      const top = el("div", "issue-top");
+      top.append(el("span", "issue-num", d.status === "pending" ? "queued"
+        : d.status === "failed" ? "failed" : "done"));
+      top.append(el("span", "issue-title",
+        `${d.kind}${d.repo ? ` · ${d.repo}` : ""}${d.issue ? `#${d.issue}` : ""}`));
+      box.append(top);
+
+      const said = (d.payload && d.payload.body || "").trim();
+      if (said) box.append(el("p", "p-detail", said.length > 220 ? said.slice(0, 220) + "…" : said));
+
+      const when = el("p", "log");
+      when.textContent = d.status === "pending"
+        ? `asked ${rel(d.at)}, not picked up yet`
+        : `asked ${rel(d.at)}, ${d.status} ${rel(d.applied_at)}`;
+      box.append(when);
+
+      // Verbatim, never summarised. This is the only place the reason a thing
+      // did not happen is ever visible.
+      if (d.result) box.append(el("pre", "gate-target", d.result));
+      return box;
+    };
+
+    if (pending.length) {
+      body.append(el("h3", null, `waiting to be picked up (${pending.length})`));
+      for (const d of pending) body.append(card(d));
+    }
+    if (done.length) {
+      body.append(el("h3", null, `already handled (${done.length})`));
+      for (const d of done.slice(0, 20)) body.append(card(d));
+    }
+  }
+
+  /** Is the pipeline actually working right now, and when does it next look. */
+  _pipeline(pipe) {
+    const box = el("div");
+    if (pipe.state !== "ok") {
+      box.append(el("p", "log stale",
+        pipe.state === "unconfigured"
+          ? "No pipeline is configured for this office."
+          : `Cannot tell what the pipeline is doing: ${pipe.detail || pipe.state}.`));
+      return box;
+    }
+    if (pipe.running) {
+      const p = el("p", "log");
+      p.append(el("b", null, "A run is in flight right now"),
+        pipe.running_for ? ` · started ${pipe.running_for} ago` : "");
+      box.append(p);
+      if (pipe.doing) box.append(el("pre", "gate-target", pipe.doing));
+    } else {
+      box.append(el("p", "log", pipe.next_in
+        ? `Nothing running. The pipeline next looks in ${pipe.next_in}.`
+        : "Nothing running."));
+    }
+    return box;
   }
 
   showStation(station, world) {
@@ -449,7 +566,9 @@ export class Panel {
     if (btn) { btn.disabled = true; btn.textContent = "queueing…"; }
     try {
       await sendDecision(decision);
-      this.onToast("Queued. Home picks it up within the minute.");
+      // Points at the tray rather than making a promise. "Within the minute" was
+      // a claim the browser had no way to keep or to check.
+      this.onToast("Queued. Watch it in \u201cqueued\u201d, top right.");
       if (btn) btn.textContent = "queued";
       this.onRefresh?.();
     } catch (err) {
