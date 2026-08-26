@@ -1,0 +1,22 @@
+{
+  "name": "nexus-office",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "deploy": "npm run build && npx wrangler deploy",
+    "db:init": "npx wrangler d1 execute nexus-office --remote --file migrations/0001_init.sql",
+    "db:init:local": "npx wrangler d1 execute nexus-office --local --file migrations/0001_init.sql",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2",
+    "wrangler": "^4.126.0"
+  }
+}

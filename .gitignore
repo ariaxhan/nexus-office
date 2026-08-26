@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env*
+
+# Your deployment, not the framework. scripts/setup.sh writes this.
+wrangler.jsonc
