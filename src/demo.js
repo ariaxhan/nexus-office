@@ -10,6 +10,8 @@
  * the happy path is a demo that lets the ugly cases rot.
  */
 
+import { FIXTURES } from "./scene/fixtures/all.js";
+
 const now = Date.now();
 const ago = (mins) => new Date(now - mins * 60000).toISOString().replace(/\.\d+Z$/, "Z");
 
@@ -48,6 +50,12 @@ const station = (repo, outcome, detail, issues, runs) => ({
 export function demoWorld() {
   return {
     at: ago(3),
+    // Each fixture supplies its own fake section. Keeping the fake beside the
+    // thing it feeds is what stops the demo floor drifting out of date.
+    sections: Object.fromEntries(
+      FIXTURES.filter((f) => f.demo).map((f) => [f.id, f.demo()])
+        .filter(([, v]) => v != null)
+    ),
     generated: ago(3),
     heartbeat: ago(3),
     killed: false,

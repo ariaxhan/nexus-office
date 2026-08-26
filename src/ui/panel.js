@@ -1,6 +1,7 @@
 import { STATES } from "../scene/villager.js";
 import { sendDecision } from "../api.js";
 import { renderInto } from "./markdown.js";
+import { byId } from "../scene/fixtures/all.js";
 
 /**
  * The panel is the half of this thing that does work.
@@ -111,6 +112,34 @@ export class Panel {
       return;
     }
     for (const { st, i } of rows) body.append(this._issueCard(st, i, { showRepo: true }));
+  }
+
+  /**
+   * The panel for something that is not a desk: the clock, the chart, the
+   * mailroom. The fixture renders its own body; the frame and the plumbing are
+   * shared so a fixture never has to touch this file.
+   */
+  showFixture({ id, payload }, world) {
+    const f = byId(id);
+    this.station = null;
+    this._frame({ title: f?.title || id, sub: "", color: "#5b8dd9" });
+    const body = this.node.querySelector(".p-body");
+    if (!f) return body.append(el("p", "empty", `No fixture called "${id}".`));
+    const api = {
+      el,
+      md: (node, text) => renderInto(node, text),
+      queue: (decision, btn) => this._queue(decision, btn),
+      button: (label, cls, fn) => this._button(label, cls, fn),
+      toast: (msg, bad) => this.onToast(msg, bad),
+      refresh: () => this.onRefresh?.(),
+    };
+    try {
+      const node = f.panel(payload, world, api);
+      if (node) body.append(node);
+    } catch (err) {
+      console.error(`fixture "${id}" panel failed`, err);
+      body.append(el("p", "empty", "That panel could not be drawn. The console has the reason."));
+    }
   }
 
   showStation(station, world) {

@@ -184,8 +184,8 @@ function applyWorld(next, { rebuild = false } = {}) {
     shown.some((s) => !shownRepos.has(s.repo));
   shownRepos = new Set(shown.map((s) => s.repo));
 
-  if (rebuild || changed || !office.villagers.size) office.build(shown);
-  else office.update(shown);
+  if (rebuild || changed || !office.villagers.size) office.build(shown, world);
+  else office.update(shown, world);
 
   paintStats();
   paintFilters();
@@ -277,8 +277,13 @@ function boot() {
     },
   });
 
-  office.onPick = (station) => {
-    if (!station) { office.selected = null; return panel.close(); }
+  office.onPick = (data) => {
+    if (!data) { office.selected = null; return panel.close(); }
+    if (data.fixture) {
+      office.selected = null;
+      return panel.showFixture(data.fixture, world || {});
+    }
+    const station = data.station;
     office.focus(station.repo);
     panel.showStation(world.stations.find((s) => s.repo === station.repo) || station, world);
   };
