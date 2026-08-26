@@ -47,15 +47,49 @@ const station = (repo, outcome, detail, issues, runs) => ({
   issues_error: outcome === "no-access" ? "no account holds push here" : null,
 });
 
+/**
+ * Sections belonging to a SOURCE rather than to a fixture.
+ *
+ * `sections` is otherwise built from the fixtures themselves, which works right
+ * up until a fixture reads somebody else's data. The working light reads
+ * `sections.pipeline`, which comes from `client/sources/pipeline.py` and has no
+ * fixture module, so the demo floor could only ever render one of its three
+ * states and the two that matter most had no picture in CI.
+ *
+ * `?demo=1&pipeline=idle` picks another. The default is a run in flight, to
+ * match the rest of this floor: it fabricates a live gate and a running
+ * commission too, and being coy about only this one would be inconsistent.
+ */
+const PIPELINES = {
+  running: {
+    state: "ok", running: true, running_for: "12m",
+    doing: "acme/storefront #214 · writing the regression test", next_in: null,
+  },
+  idle: { state: "ok", running: false, doing: "", next_in: "18m" },
+  off: {
+    state: "off", running: false,
+    detail: "the kill switch is on, so nothing will run at all",
+  },
+  // Deliberately absent, which is how a real office with no pipeline configured
+  // looks, and the state the light has to shout about rather than swallow.
+  unknown: null,
+};
+
 export function demoWorld() {
+  const want = new URLSearchParams(location.search).get("pipeline") || "running";
+  const pipeline = PIPELINES[want] !== undefined ? PIPELINES[want] : PIPELINES.running;
+
   return {
     at: ago(3),
     // Each fixture supplies its own fake section. Keeping the fake beside the
     // thing it feeds is what stops the demo floor drifting out of date.
-    sections: Object.fromEntries(
-      FIXTURES.filter((f) => f.demo).map((f) => [f.id, f.demo()])
-        .filter(([, v]) => v != null)
-    ),
+    sections: {
+      ...Object.fromEntries(
+        FIXTURES.filter((f) => f.demo).map((f) => [f.id, f.demo()])
+          .filter(([, v]) => v != null)
+      ),
+      ...(pipeline ? { pipeline } : {}),
+    },
     // Three orders, one of each fate. The failed one matters most: a decision
     // that failed used to look exactly like one that worked, because its reason
     // was written to the queue and never shown to anybody.
