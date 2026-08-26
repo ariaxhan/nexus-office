@@ -38,7 +38,8 @@ import * as intray from "./intray.js";
 import * as journey from "./journey.js";
 import * as library from "./library.js";
 import * as mail from "./mail.js";
+import * as orders from "./orders.js";
 
-export const FIXTURES = [intray, journey, mail, board, cost, library, clock];
+export const FIXTURES = [intray, journey, orders, mail, board, cost, library, clock];
 
 export const byId = (id) => FIXTURES.find((f) => f.id === id);
