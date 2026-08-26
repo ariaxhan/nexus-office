@@ -96,7 +96,11 @@ const clickFixture = (id) => {
   const o = window.office;
   o.scene.updateMatrixWorld(true);
   const hit = o.pickables.find((p) => p.userData.fixture?.id === id);
-  if (!hit) throw new Error(`no "${id}" in the room`);
+  // Not every fixture is clickable. The in-tray sits inside the desk's own pick
+  // pad and deliberately owns no target, so its picture is the room it changed
+  // rather than a panel. Returning false says "nothing to click", which is not
+  // the same as the fixture being missing, and the caller reports which it was.
+  if (!hit) return false;
   const v = new (hit.position.constructor)().setFromMatrixPosition(hit.matrixWorld).project(o.camera);
   const r = o.canvas.getBoundingClientRect();
   const x = Math.round((v.x * 0.5 + 0.5) * r.width);
@@ -108,6 +112,7 @@ const clickFixture = (id) => {
   });
   o.canvas.dispatchEvent(mk("pointerdown"));
   o.canvas.dispatchEvent(mk("pointerup"));
+  return true;
 };
 
 const SHOTS = {
@@ -189,8 +194,9 @@ for (const f of await readdir(path.join(ROOT, "src/scene/fixtures"))) {
     viewport: { width: 1600, height: 900 },
     async run(page) {
       await ready(page);
-      await page.evaluate(clickFixture, id);
-      await page.waitForSelector("#panel:not([hidden])", { timeout: 5000 });
+      const clicked = await page.evaluate(clickFixture, id);
+      if (clicked) await page.waitForSelector("#panel:not([hidden])", { timeout: 5000 });
+      else console.log(`  ${id} has no click target; framing the room instead`);
       await page.waitForTimeout(300);
     },
   };

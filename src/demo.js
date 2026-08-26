@@ -77,9 +77,22 @@ export function demoWorld() {
       board: {
         state: "up",
         root: "/demo/acme/storefront",
-        runs: [{ id: "run-9f2", slug: "checkout-host-name", state: "running" }],
-        active: [{ slug: "checkout-host-name", state: "active", title: "Capture host_name on iOS" }],
-        complete: [],
+        runs: [{ id: "run-9f2", slug: "checkout-host-name", state: "running",
+                 started: ago(8), step: "writing the test" }],
+        active: [{ slug: "checkout-host-name", state: "active",
+                   title: "Capture host_name on iOS", updated: ago(8) }],
+        // Three of the twenty-two, and one of them never wrote a chronicle. The
+        // done column was empty here until the board fixture pointed out that a
+        // demo floor which cannot show a missing chronicle cannot photograph the
+        // one thing that issue is about.
+        complete: [
+          { slug: "gate-answer-by-id", title: "Answer a gate by its id, never its position",
+            updated: ago(90), has_chronicle: true, has_transcript: true },
+          { slug: "shot-harness", title: "Give the runner eyes",
+            updated: ago(240), has_chronicle: true, has_transcript: false },
+          { slug: "hotfix-poll-loop", title: "Stop the poll loop hammering a dead runtime",
+            updated: ago(700), has_chronicle: false, has_transcript: false },
+        ],
         archived_count: 14,
         metrics: {
           active: 1, complete: 22, archived: 14, runs: 61,
