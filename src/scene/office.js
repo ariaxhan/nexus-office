@@ -4,6 +4,7 @@ import * as BGU from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { toon, tagSprite, blobShadow } from "./kit.js";
 import { Villager, STATES } from "./villager.js";
 import { resident } from "../names.js";
+import { FIXTURES } from "./fixtures/all.js";
 
 /**
  * The room, and the rule that decides where everything stands.
@@ -194,7 +195,8 @@ export class Office {
    *  only honest way to apply it: a partial patch would leave a desk standing for
    *  a repo that no longer exists, which is exactly the stale-green failure the
    *  whole pipeline is built to avoid. */
-  build(stations) {
+  build(stations, world) {
+    if (world) this.world = world;
     for (const v of this.villagers.values()) this.scene.remove(v.root);
     this.villagers.clear();
     this.screens.clear();
@@ -319,10 +321,62 @@ export class Office {
       this.staticRoot.add(p);
     }
 
+    this._fixtures(stations, placed, { minX, maxX, minZ, maxZ, floorW, floorD });
+
     this.frameAll();
   }
 
-  update(stations) {
+  /**
+   * Everything in the room that is not a desk: the clock, the chart, the
+   * mailroom. Each one owns its own file and gets told where it may stand.
+   *
+   * A fixture that throws is caught and skipped. One broken chart must not take
+   * the whole office down, and a room missing its clock with a console error is
+   * a far better failure than a blank canvas.
+   */
+  _fixtures(stations, placed, box) {
+    // Back wall, divided evenly among the fixtures that asked for a slot. Even
+    // shares rather than a negotiation: nothing here is worth a layout engine.
+    const onWall = FIXTURES.filter((f) => f.wall);
+    const left = box.minX - 4, right = box.maxX + 4;
+    const each = (right - left) / Math.max(onWall.length, 1);
+
+    for (const f of FIXTURES) {
+      const i = onWall.indexOf(f);
+      const ctx = {
+        world: this.world,
+        section: this.world?.sections?.[f.id],
+        stations: placed,
+        room: {
+          ...box,
+          centre: this.centre,
+          wall: i < 0 ? null : {
+            x: left + each * (i + 0.5),
+            z: this.centre.z - box.floorD / 2 + 0.2,
+            w: each - 0.6,
+            h: 2.2,
+          },
+        },
+      };
+      let obj = null;
+      try {
+        obj = f.build(ctx);
+      } catch (err) {
+        console.error(`fixture "${f.id}" failed to build`, err);
+      }
+      if (!obj) continue;
+      this.staticRoot.add(obj);
+      obj.traverse((o) => { if (o.userData.fixture) this.pickables.push(o); });
+    }
+  }
+
+  update(stations, world) {
+    // A fixture reads world.sections, so a snapshot whose sections moved has to
+    // rebuild the room even when the desks are identical. Cheaper to compare the
+    // sections than to redraw a chart every twenty seconds.
+    const before = JSON.stringify(this.world?.sections ?? null);
+    if (world) this.world = world;
+    if (JSON.stringify(world?.sections ?? null) !== before) return this.build(stations, world);
     for (const st of stations) {
       const v = this.villagers.get(st.repo);
       if (!v) return this.build(stations);
@@ -404,7 +458,9 @@ export class Office {
     this.camera.updateMatrixWorld(true);
     this.raycaster.setFromCamera(ndc, this.camera);
     const hit = this.raycaster.intersectObjects(this.pickables, false)[0];
-    this.onPick(hit ? hit.object.userData.station : null);
+    // userData carries either .station (a desk) or .fixture (everything else);
+    // the caller decides which panel that opens.
+    this.onPick(hit ? hit.object.userData : null);
   }
 
   start() {

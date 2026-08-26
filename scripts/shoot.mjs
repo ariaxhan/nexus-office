@@ -88,6 +88,25 @@ const clickDesk = (repo) => {
   o.canvas.dispatchEvent(mk("pointerup"));
 };
 
+/** Click a fixture (the clock, the chart, the mailroom) the same way. */
+const clickFixture = (id) => {
+  const o = window.office;
+  o.scene.updateMatrixWorld(true);
+  const hit = o.pickables.find((p) => p.userData.fixture?.id === id);
+  if (!hit) throw new Error(`no "${id}" in the room`);
+  const v = new (hit.position.constructor)().setFromMatrixPosition(hit.matrixWorld).project(o.camera);
+  const r = o.canvas.getBoundingClientRect();
+  const x = Math.round((v.x * 0.5 + 0.5) * r.width);
+  const y = Math.round((-v.y * 0.5 + 0.5) * r.height);
+  const mk = (type) => new PointerEvent(type, {
+    clientX: x, clientY: y, bubbles: true,
+    pointerId: 1, pointerType: "mouse", isPrimary: true,
+    button: 0, buttons: type === "pointerdown" ? 1 : 0,
+  });
+  o.canvas.dispatchEvent(mk("pointerdown"));
+  o.canvas.dispatchEvent(mk("pointerup"));
+};
+
 const SHOTS = {
   // The whole floor. Layout, pods, plaques, who is standing and who is not.
   room: {
@@ -156,6 +175,23 @@ const SHOTS = {
     },
   },
 };
+
+// One framing per fixture, discovered from the directory rather than listed, so
+// a new fixture cannot ship without a picture of it. Each fails until its
+// fixture is built, which is the point: red means not done.
+for (const f of await readdir(path.join(ROOT, "src/scene/fixtures"))) {
+  if (!f.endsWith(".js") || f === "all.js") continue;
+  const id = f.replace(/\.js$/, "");
+  SHOTS[id] = {
+    viewport: { width: 1600, height: 900 },
+    async run(page) {
+      await ready(page);
+      await page.evaluate(clickFixture, id);
+      await page.waitForSelector("#panel:not([hidden])", { timeout: 5000 });
+      await page.waitForTimeout(300);
+    },
+  };
+}
 
 const wanted = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const names = wanted.length ? wanted : Object.keys(SHOTS);

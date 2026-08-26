@@ -60,6 +60,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import runtime as rt  # noqa: E402  (needs the path above)
+import sections as sections_mod  # noqa: E402  (needs the path above)
 
 def _env_path(name):
     v = os.environ.get(name, "").strip()
@@ -346,6 +347,7 @@ def build_snapshot(access: Access):
         "today": counts,
         "stations": stations,
         "runtime": run,
+        "sections": sections_mod.read_all(),
     }
 
 

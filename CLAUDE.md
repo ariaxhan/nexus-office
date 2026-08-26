@@ -62,6 +62,26 @@ Do not weaken them to make a change pass.
 - **Escaping before markup** in `ui/markdown.js`. Issue bodies are written by
   anyone who can open an issue and render into a page holding a session token.
 
+## Adding something to the room
+
+Anything that is not a desk is a **fixture**: the clock, the cost chart, the
+mailroom. One fixture, one file, so several can be built at once without anyone
+stepping on anyone.
+
+```
+src/scene/fixtures/<id>.js   the 3D object and its panel      (the contract is in all.js)
+client/sources/<id>.py       the local data, if it needs any  (listed in client/sections.py)
+tests/<id>.test.js           or tests/test_<id>.py
+```
+
+The data lands in the snapshot at `world.sections.<id>`. `scripts/shoot.mjs`
+discovers fixtures from the directory and takes a picture of each, so a new
+fixture cannot ship without one, and its shot stays red until it is built.
+
+Nothing else needs editing. If a fixture makes you want to change `office.js`,
+`panel.js` or `styles.css`, say so rather than doing it quietly: that is a seam
+being wrong, and it is worth fixing once for everyone.
+
 ## Shape of the thing
 
 ```
