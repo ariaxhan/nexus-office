@@ -59,12 +59,40 @@ npm install && npm run dev
 | arms up, green screen | landed a PR in the last day |
 | slumped, eyes shut, `z` | parked by its own config |
 | empty chair | no account you hold a token for can push here |
+| **hand up, amber `!`** | **an agent is blocked on a permission gate and a clock is running** |
 
 "Waiting on you" is not a label lookup. It is recomputed from the comments:
 **did the bot have the last word?** That is also why answering re-queues the
 issue automatically, since a reply without the bot's marker is exactly what makes
 a marker-based runner pick it up again. The dashboard and the runner cannot
 disagree, because they are running the same sentence.
+
+## The raised hand
+
+The highest-value thing in here. When an agent hits a permission gate it stops
+and waits for a person. Normally that is a line in a log nobody is watching, or a
+prompt in a terminal that is not on screen: work silently stops and you find out
+later.
+
+In the room that agent **stands up and puts its hand up.** You see it from across
+the floor, or from a phone. Tap it, read the literal command it wants to run, and
+answer allow once, allow always, or deny.
+
+Three properties this has to hold, and does:
+
+- **The target is shown verbatim.** Never summarised, never truncated into
+  ambiguity. A gate you approve without reading the command is a rubber stamp.
+- **The answer carries the question's id.** Between seeing a gate and answering
+  it, the agent can time out and a *different* gate can open. Answering by
+  position rather than by id would approve a command nobody ever saw, so a
+  mismatched answer is refused out loud.
+- **A gate is never hidden.** No filter, no "put this away", nothing removes a
+  raised hand from the room.
+
+The gate is read from a **file** rather than an API, so a blocked agent is visible
+whether or not the runtime's dashboard happens to be running. And while a gate is
+open the sync client polls fast instead of on its usual minutes-long cycle,
+because against a gate that fails closed the poll interval *is* the answer window.
 
 ## Setup
 
@@ -114,12 +142,13 @@ Full configuration is documented at the top of `client/office-sync.py`.
 ## Building on it
 
 ```
-worker/index.js      the whole API. Two tables, no credentials, ~200 lines.
+worker/index.js      the whole API. Two tables, no credentials, ~250 lines.
 src/scene/office.js  the room: layout, furniture, camera, picking
 src/scene/villager.js one character, and the state to body mapping
 src/scene/kit.js     shared art supplies: toon materials, faces, sprites
 src/ui/panel.js      the inline issue viewer and every button that acts
 client/office-sync.py the only thing that holds credentials
+client/runtime.py    the local agent runtime adapter: gates, runs, cost
 ```
 
 `window.office` is exposed in the browser on purpose. A 3D surface that can only

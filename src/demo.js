@@ -51,6 +51,34 @@ export function demoWorld() {
     generated: ago(3),
     heartbeat: ago(3),
     killed: false,
+    // A gate is in the demo on purpose. It is the highest-value state in the room
+    // and the easiest to leave untested, because it only shows up when something
+    // is genuinely stuck.
+    runtime: {
+      url: "http://127.0.0.1:8787",
+      root: "/demo/acme/storefront",
+      gate: {
+        state: "pending",
+        id: "a1b2c3d4e5f60718",
+        permission: "run_bash",
+        target: "npx playwright install --with-deps chromium",
+        detail: "The lane wants a browser it can drive before it reproduces the bug.",
+        asked_at: (now - 47000) / 1000,
+        waiting_s: 47,
+      },
+      board: {
+        state: "up",
+        root: "/demo/acme/storefront",
+        runs: [{ id: "run-9f2", slug: "checkout-host-name", state: "running" }],
+        active: [{ slug: "checkout-host-name", state: "active", title: "Capture host_name on iOS" }],
+        complete: [],
+        archived_count: 14,
+        metrics: {
+          active: 1, complete: 22, archived: 14, runs: 61,
+          total_cost: 18.42, average_cache_read_ratio: 0.71,
+        },
+      },
+    },
     today: {
       survey: 41, deferred: 22, landed: 6, refused: 4,
       "caught-up": 9, "report-only": 3, parked: 2, "no-issues": 2,

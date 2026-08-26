@@ -132,6 +132,11 @@ export class Panel {
     });
 
     const body = this.node.querySelector(".p-body");
+
+    // The gate goes FIRST, above everything, always. An agent is stopped and a
+    // clock is running against it; nothing else on this panel is more urgent.
+    if (station.gate) body.append(this._gate(station.gate));
+
     const issues = station.issues || [];
     const hot = issues.filter(needsHuman);
     const rest = issues.filter((i) => !needsHuman(i));
@@ -209,6 +214,109 @@ export class Panel {
     this.node.append(head, el("div", "p-body"));
   }
 
+  /**
+   * The permission gate.
+   *
+   * Rules that are not negotiable:
+   *   - the target is shown VERBATIM, never summarised. A gate you approve
+   *     without reading the literal command is not a gate, it is a rubber stamp
+   *   - the question's id travels with the answer, so an approval can never land
+   *     on a different question than the one displayed
+   *   - "allow always" is visibly heavier than "allow once", because it writes a
+   *     standing rule and the next one will not ask
+   */
+  _gate(gate) {
+    const box = el("div", "gate-box");
+    box.append(el("div", "gate-kicker", "an agent is waiting on you"));
+    box.append(el("div", "gate-perm", gate.permission || "permission"));
+
+    box.append(el("h3", null, "it wants to run"));
+    box.append(el("pre", "gate-target", gate.target || "(no target given)"));
+    if (gate.detail) box.append(el("p", "p-detail", gate.detail));
+
+    if (gate.waiting_s != null) {
+      box.append(el("p", "gate-clock",
+        `waiting ${gate.waiting_s}s. Unanswered, it fails closed.`));
+    }
+
+    const acts = el("div", "acts");
+    const send = (answer, always, btn) => this._queue({
+      kind: "permit",
+      question_id: gate.id,
+      answer,
+      always,
+    }, btn);
+
+    acts.append(this._button("Allow once", "act act-go", (b) => send("allow", false, b)));
+    acts.append(this._button("Deny", "act act-warn", (b) => send("deny", false, b)));
+    box.append(acts);
+
+    const always = el("div", "acts");
+    always.append(this._button("Allow always, stop asking", "act act-heavy",
+      (b) => send("allow", true, b)));
+    box.append(always);
+    return box;
+  }
+
+  /** Say something to the floor. Deliberately asynchronous, and it says so. */
+  showChat(world) {
+    this._frame({
+      title: "Talk to the floor",
+      sub: "goes to the local runtime",
+      color: "#5b8dd9",
+    });
+    const body = this.node.querySelector(".p-body");
+    const board = world.runtime?.board;
+
+    if (!board || board.state !== "up") {
+      body.append(el("p", "empty",
+        board?.state === "down"
+          ? "The runtime is not running, so there is nobody to talk to. Start it and this comes alive."
+          : "No runtime is configured for this office yet."));
+      return;
+    }
+
+    const box = el("textarea", "reply");
+    box.placeholder = "Ask the floor for something.";
+    body.append(box);
+
+    const acts = el("div", "acts");
+    acts.append(this._button("Send", "act act-go", (b) => {
+      const text = box.value.trim();
+      if (!text) return this.onToast("Write something first", true);
+      this._queue({ kind: "chat", body: text }, b);
+      box.value = "";
+    }));
+    body.append(acts);
+
+    // Never fake responsiveness. The push cycle is minutes, and pretending
+    // otherwise makes a working system look broken.
+    body.append(el("p", "p-detail",
+      "This is queued, not live. Home picks it up within a minute or two and the " +
+      "reply appears on the next snapshot."));
+
+    const runs = board.runs || [];
+    body.append(el("h3", null, `running now (${runs.length})`));
+    if (!runs.length) body.append(el("p", "empty", "Nothing is running."));
+    for (const r of runs.slice(0, 6)) {
+      const line = el("p", "log");
+      line.append(el("b", null, r.slug || r.id || "run"), " ", r.state || r.status || "");
+      body.append(line);
+    }
+    if (runs.length) {
+      const acts2 = el("div", "acts");
+      acts2.append(this._button("Stop the current run", "act act-warn", (b) =>
+        this._queue({ kind: "stop", run_id: runs[0].id || runs[0].slug || "" }, b)));
+      body.append(acts2);
+    }
+
+    const m = board.metrics || {};
+    if (m.total_cost != null) {
+      body.append(el("h3", null, "ledger"));
+      body.append(el("p", "log", `${m.runs ?? 0} runs, $${Number(m.total_cost).toFixed(2)} total`));
+    }
+  }
+
   _issueCard(station, issue, { showRepo = false } = {}) {
     const hot = needsHuman(issue);
     const card = el("div", `issue${hot ? " hot" : ""}`);
@@ -275,6 +383,13 @@ export class Panel {
     }));
     acts.append(this._button("Work this next", "act", (btn) =>
       this._queue({ kind: "nudge", repo: station.repo, issue: issue.number }, btn)));
+    acts.append(this._button("Run it now", "act", (btn) =>
+      this._queue({
+        kind: "run",
+        repo: station.repo,
+        issue: issue.number,
+        body: `Work ${station.repo}#${issue.number}: ${issue.title}`,
+      }, btn)));
     acts.append(this._button("Close it", "act act-warn", (btn) =>
       this._queue({
         kind: "close",

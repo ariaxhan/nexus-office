@@ -11,7 +11,11 @@
  * before touching it.
  */
 
-const KINDS = new Set(["comment", "unblock", "close", "reopen", "label", "nudge"]);
+// Two families, because they validate differently and route differently. A
+// GitHub decision is always about a repo; a runtime decision is about the agent
+// running on this machine and often has no repo at all.
+const GITHUB_KINDS = new Set(["comment", "unblock", "close", "reopen", "label", "nudge"]);
+const RUNTIME_KINDS = new Set(["permit", "chat", "run", "stop"]);
 
 const LOCKOUT_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 8;
@@ -92,16 +96,45 @@ export default {
         if (!auth(req, env, "view")) return json({ error: "unauthorized" }, 401);
         const body = await readJson(req);
         const kind = String(body.kind || "");
+        const isRuntime = RUNTIME_KINDS.has(kind);
+        if (!isRuntime && !GITHUB_KINDS.has(kind)) {
+          return json({ error: `unknown kind ${kind}` }, 400);
+        }
+
         const repo = String(body.repo || "");
-        if (!KINDS.has(kind)) return json({ error: `unknown kind ${kind}` }, 400);
-        if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return json({ error: "bad repo" }, 400);
+        if (!isRuntime && !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+          return json({ error: "bad repo" }, 400);
+        }
+        if (isRuntime && repo && !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+          return json({ error: "bad repo" }, 400);
+        }
+
         const issue = body.issue == null ? null : String(body.issue);
         if (issue !== null && !/^\d+$/.test(issue)) return json({ error: "bad issue" }, 400);
-        if (kind !== "nudge" && issue === null) return json({ error: `${kind} needs an issue` }, 400);
+        if (!isRuntime && kind !== "nudge" && issue === null) {
+          return json({ error: `${kind} needs an issue` }, 400);
+        }
+
+        // A permit answers ONE specific question. The id travels with it so the
+        // runner can refuse to answer a different question than the one that was
+        // shown: between seeing a gate and answering it, the agent may have moved
+        // on, and approving a command nobody looked at is the sharpest edge here.
+        if (kind === "permit") {
+          if (!/^[0-9a-f]{8,64}$/.test(String(body.question_id || ""))) {
+            return json({ error: "permit needs the question id it is answering" }, 400);
+          }
+          if (body.answer !== "allow" && body.answer !== "deny") {
+            return json({ error: "permit answer must be allow or deny" }, 400);
+          }
+        }
 
         const payload = JSON.stringify({
           body: typeof body.body === "string" ? body.body.slice(0, 20000) : "",
           label: typeof body.label === "string" ? body.label.slice(0, 100) : "",
+          question_id: typeof body.question_id === "string" ? body.question_id.slice(0, 64) : "",
+          answer: body.answer === "allow" || body.answer === "deny" ? body.answer : "",
+          always: body.always === true,
+          run_id: typeof body.run_id === "string" ? body.run_id.slice(0, 128) : "",
         });
         const res = await env.DB.prepare(
           "INSERT INTO decision (at, kind, repo, issue, payload) VALUES (?, ?, ?, ?, ?)"
