@@ -24,7 +24,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DIST = path.join(ROOT, "dist");
+// SHOT_DIST lets several lanes build and shoot at once without fighting over dist/.
+const DIST = process.env.SHOT_DIST
+  ? path.resolve(ROOT, process.env.SHOT_DIST)
+  : path.join(ROOT, "dist");
 const OUT = path.join(ROOT, "shots");
 
 const TYPES = {
