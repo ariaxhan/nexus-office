@@ -238,12 +238,26 @@ export class Panel {
   /** Is the pipeline actually working right now, and when does it next look. */
   _pipeline(pipe) {
     const box = el("div");
+    // "Switched off" is NOT "cannot tell". The office knows perfectly well; it is
+    // a decision somebody made. Reporting a deliberate stop as an unknown is the
+    // same conflation the wall clock had to undo between OFF and STALE.
+    if (pipe.state === "off") {
+      box.append(el("p", "log stale",
+        `The pipeline is switched off, so nothing will run: ${pipe.detail || "no reason given"}.`));
+      return box;
+    }
     if (pipe.state !== "ok") {
       box.append(el("p", "log stale",
         pipe.state === "unconfigured"
           ? "No pipeline is configured for this office."
           : `Cannot tell what the pipeline is doing: ${pipe.detail || pipe.state}.`));
       return box;
+    }
+    // A pid file left behind by a killed run is a claim that a run is alive.
+    // Saying so is the difference between a quiet office and a lying one.
+    if (pipe.stale_pid) {
+      box.append(el("p", "log stale",
+        `A run left its pid behind: ${pipe.stale_pid.why || "the process is gone"}.`));
     }
     if (pipe.running) {
       const p = el("p", "log");
@@ -252,9 +266,13 @@ export class Panel {
       box.append(p);
       if (pipe.doing) box.append(el("pre", "gate-target", pipe.doing));
     } else {
-      box.append(el("p", "log", pipe.next_in
-        ? `Nothing running. The pipeline next looks in ${pipe.next_in}.`
-        : "Nothing running."));
+      // Past its own schedule is its own sentence. launchd coalesces timers, so a
+      // few late minutes are normal and a fake "0m" would hide a real stall.
+      box.append(el("p", pipe.overdue ? "log stale" : "log", pipe.overdue
+        ? `Nothing running, and the next look is ${pipe.late_by || "a while"} overdue.`
+        : pipe.next_in
+          ? `Nothing running. The pipeline next looks in ${pipe.next_in}.`
+          : "Nothing running."));
     }
     return box;
   }
