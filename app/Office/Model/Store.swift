@@ -88,6 +88,15 @@ public final class Store {
     /// Sending clears its own key and nothing else.
     public var drafts: [String: String] = [:]
 
+    /// The picture picked for a message not yet sent, under the same key as the
+    /// message itself.
+    ///
+    /// Same reasoning as the draft and the same key on purpose: choosing a
+    /// screenshot, going to look at what it was about, and coming back to an
+    /// empty composer is the draft bug wearing a different hat. Sending clears
+    /// this key and nobody else's.
+    public var pendingAttachments: [String: PreparedImage] = [:]
+
     /// A message being written to a bot.
     public static func draftKey(bot id: String) -> String { "bot:\(id)" }
 
@@ -356,7 +365,7 @@ public final class Store {
 
     public func loadChat(_ id: String) async {
         do {
-            chats[id] = try await api.chat(bot: id)
+            chats[id] = marked(try await api.chat(bot: id), bot: id)
         } catch let error as ApiError where error.isMissing {
             chats[id] = []
         } catch {
@@ -374,24 +383,62 @@ public final class Store {
         }
     }
 
-    public func send(to id: String, message: String) async {
+    /// Say something, with or without a picture.
+    ///
+    /// An empty message is allowed when a picture is going with it, because a
+    /// screenshot on its own is a whole thing to say. Whether the door on the
+    /// other end agrees is the door's business, and its refusal arrives as its
+    /// own words in the notice line rather than as a rule guessed at here.
+    public func send(to id: String, message: String,
+                     attachment: PreparedImage? = nil) async {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || attachment != nil else { return }
         // The box empties because the message moved into the transcript on the
         // line below, not because it went anywhere yet. Only this bot's draft
         // is cleared: a sentence half written to somebody else is untouched.
-        drafts[Self.draftKey(bot: id)] = nil
+        let key = Self.draftKey(bot: id)
+        drafts[key] = nil
+        pendingAttachments[key] = nil
         // Show it immediately. The turn takes a whole agent run, and a message
         // that vanishes for ninety seconds reads as a message that was lost.
-        chats[id, default: []].append(ChatTurn(role: "user", content: trimmed, at: nowISO()))
+        chats[id, default: []].append(ChatTurn(role: "user", content: trimmed,
+                                               at: nowISO(),
+                                               hasPhoto: attachment != nil))
+        if attachment != nil { remember(photoFor: id, message: trimmed) }
         do {
-            try await api.send(bot: id, message: trimmed)
+            try await api.send(bot: id, message: trimmed, attachment: attachment)
             await refreshBots()
             await loadChat(id)
         } catch let error as ApiError {
             toast = error.message
         } catch {
             toast = error.localizedDescription
+        }
+    }
+
+    /// What this app sent a picture with, this run.
+    ///
+    /// The harness may echo `attachments` back on the turn, and when it does the
+    /// mark is a fact off the wire and this is never consulted. When it echoes
+    /// nothing, the mark comes from here instead: a weaker claim, because it is
+    /// this app's own memory of what it sent and it does not survive a restart.
+    /// Matching on the message text is what a transcript that has no turn ids
+    /// allows; two identical messages one of which carried a photo will both be
+    /// marked, which is the known cost of the weaker claim and the reason the
+    /// mark says "with a photo" and never offers to show one.
+    private var sentWithPhoto: [String: Set<String>] = [:]
+
+    private func remember(photoFor bot: String, message: String) {
+        sentWithPhoto[bot, default: []].insert(message)
+    }
+
+    private func marked(_ turns: [ChatTurn], bot: String) -> [ChatTurn] {
+        guard let mine = sentWithPhoto[bot], !mine.isEmpty else { return turns }
+        return turns.map { turn in
+            guard turn.isUser, !turn.hasPhoto, mine.contains(turn.content) else { return turn }
+            var out = turn
+            out.hasPhoto = true
+            return out
         }
     }
 

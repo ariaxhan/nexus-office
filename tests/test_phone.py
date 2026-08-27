@@ -245,6 +245,88 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class PhotoTest(unittest.TestCase):
+    """A picture, from a pocket, through the same door.
+
+    The page has no build step and no test runner, so these are grep-level: they
+    hold down the four things about this that would be silent if they broke. It
+    posts `attachments` rather than some other shape. It offers the camera and
+    the library rather than an accept nothing matches. It shrinks before it
+    sends, because the door refuses half a megabyte. And it still writes to the
+    DOM with textContent, because a page that grows an `innerHTML` is a page
+    whose content policy has to be loosened to keep working.
+    """
+
+    def js(self):
+        return JS.read_text(encoding="utf-8")
+
+    def test_a_photo_rides_the_message_as_attachments(self):
+        js = self.js()
+        at = js.index("async function sayTo(")
+        body = js[at:at + 1400]
+        self.assertIn("turn.attachments = [{", body)
+        self.assertIn("mime_type", body)
+        self.assertIn("data_base64", body)
+        # Through the one writer, which is what carries this page's Host and
+        # Origin to the door. A photo posted any other way is a photo posted
+        # past every check the door makes.
+        self.assertIn('write("/api/chat", turn)', body)
+
+    def test_the_picker_takes_a_picture_from_the_library_or_the_camera(self):
+        js = self.js()
+        self.assertIn('input.accept = "image/*"', js)
+        self.assertIn('input.capture = "environment"', js)
+        self.assertIn('input.type = "file"', js)
+        # Created in script, not sitting in the markup, because it belongs to
+        # whichever thread is open.
+        self.assertIn('document.createElement("input")', js)
+
+    def test_the_picture_is_shrunk_before_it_is_sent(self):
+        js = self.js()
+        # The door's ceiling is 512 KB for the whole request; the page aims
+        # under that and measures the base64, not the bytes it encodes.
+        self.assertIn("const PHOTO_CEILING = 480 * 1024", js)
+        self.assertIn("const PHOTO_LONGEST = 1200", js)
+        self.assertIn("function base64Length(bytes)", js)
+        self.assertIn('canvas.toBlob(', js)
+        self.assertIn('"image/jpeg"', js)
+        # And it comes down a rung at a time rather than giving up at 0.8.
+        self.assertGreaterEqual(js.count("quality:"), 5)
+
+    def test_a_format_the_page_cannot_read_is_said_out_loud(self):
+        """Safari hands over the photo library's own HEIC and no browser will
+        decode one. A picture that silently did not go is worse than one that
+        refused where a person can see it."""
+        js = self.js()
+        self.assertIn("take the photo with the camera option", js)
+        at = js.index("createImageBitmap")
+        self.assertIn("catch", js[at:at + 200])
+        self.assertIn("CANNOT_READ", js[at:at + 400])
+
+    def test_the_page_still_never_writes_markup(self):
+        js = self.js()
+        html = HTML.read_text(encoding="utf-8")
+        self.assertNotIn("innerHTML", js)
+        self.assertNotIn("innerHTML", html)
+        self.assertNotIn("outerHTML", js)
+        self.assertNotIn("insertAdjacentHTML", js)
+        # And no handler written into the markup, which is the other half of the
+        # same policy: the page's only script is the file the door serves.
+        self.assertNotIn("<input", html)
+        for handler in ("onclick", "onchange", "onload", "oninput", "onerror"):
+            self.assertNotIn(handler + "=", html)
+
+    def test_a_turn_that_carried_a_photo_is_marked_in_the_thread(self):
+        """The bytes are ephemeral by design, so the mark is all there is. It
+        comes off the wire when the harness echoes anything, and off this page's
+        own record of what it sent when the harness echoes nothing."""
+        js = self.js()
+        self.assertIn("function carriedPhoto(turn, botId)", js)
+        self.assertIn("turn.attachments", js)
+        self.assertIn("state.sentPhotos", js)
+        self.assertIn('"with a photo"', js)
+
+
 class DriftAndNoiseTest(unittest.TestCase):
     def test_a_swapped_question_disarms_the_buttons_for_a_beat(self):
         js = (PHONE / "phone.js").read_text()

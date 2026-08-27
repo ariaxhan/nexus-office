@@ -86,6 +86,22 @@ enum ShotHarness {
         store.select(.desk(deskShowingOldData(store)))
         await frame(store, window, directory, "putaway")
 
+        // A picture picked and not yet sent. The composer is the one part of
+        // this app whose state nothing else photographs: the chip, the size
+        // after the downscale and the way out of it all live for the seconds
+        // between choosing a screenshot and sending it, and the mark on the
+        // turn above it is what that send leaves behind.
+        store.putAwayOpen = false
+        if let bot = preferredBot(store) {
+            store.select(.bot(bot))
+            let key = Store.draftKey(bot: bot)
+            store.drafts[key] = "and this is the one from staging"
+            store.pendingAttachments[key] = PreparedImage(
+                name: "checkout-staging.jpg", mimeType: "image/jpeg",
+                base64: "", bytes: 188_416, width: 1200, height: 780)
+            await frame(store, window, directory, "attach", settling: 1.4)
+        }
+
         NSApp.terminate(nil)
     }
 

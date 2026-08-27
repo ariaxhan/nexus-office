@@ -80,6 +80,77 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.chats["chief"]?.count ?? 0, before)
     }
 
+    // MARK: - a picture riding with the message
+
+    /// A picture picked and not yet sent is work in the same way a half-written
+    /// sentence is, and it is kept under the same key for the same reason: going
+    /// to look at something else and coming back to an empty composer is the
+    /// draft bug wearing a different hat.
+    func testAPickedPictureSurvivesGoingToLookAtSomethingElse() throws {
+        let store = try floor()
+        let key = Store.draftKey(bot: "chief")
+        store.drafts[key] = "does this look right"
+        store.pendingAttachments[key] = Self.picture
+
+        store.select(.bot("release"))
+        XCTAssertNil(store.pendingAttachments[Store.draftKey(bot: "release")])
+        store.select(.bot("chief"))
+        XCTAssertEqual(store.pendingAttachments[key], Self.picture)
+        XCTAssertEqual(store.drafts[key], "does this look right")
+    }
+
+    func testSendingCarriesThePictureAndMarksTheTurnItRodeWith() async throws {
+        let store = try floor()
+        await store.refreshBots()
+        let key = Store.draftKey(bot: "chief")
+        store.drafts[key] = "does this look right"
+        store.pendingAttachments[key] = Self.picture
+
+        await store.send(to: "chief", message: "does this look right",
+                         attachment: Self.picture)
+
+        // The composer is empty of both, and only this composer.
+        XCTAssertNil(store.drafts[key])
+        XCTAssertNil(store.pendingAttachments[key])
+
+        let sent = try XCTUnwrap(store.chats["chief"]?.first {
+            $0.isUser && $0.content == "does this look right"
+        })
+        XCTAssertTrue(sent.hasPhoto, "the turn says a photo went with it")
+    }
+
+    /// The demo floor's transcript is re-read after a send, exactly as the live
+    /// one is. A mark that only exists until the next poll is a mark nobody sees.
+    func testTheMarkSurvivesTheTranscriptBeingReadBackFromTheFloor() async throws {
+        let store = try floor()
+        await store.refreshBots()
+        await store.send(to: "chief", message: "look at this", attachment: Self.picture)
+        await store.loadChat("chief")
+
+        let sent = try XCTUnwrap(store.chats["chief"]?.first {
+            $0.isUser && $0.content == "look at this"
+        })
+        XCTAssertTrue(sent.hasPhoto)
+        XCTAssertFalse(store.chats["chief"]?.contains { !$0.isUser && $0.hasPhoto } == true,
+                       "nothing marks a reply nobody attached anything to")
+    }
+
+    /// A picture on its own is a whole thing to say, so the empty-box rule does
+    /// not apply to it. What the door on the other end makes of that is the
+    /// door's business, and it says so in its own words.
+    func testAPictureWithNoWordsIsStillSomethingToSend() async throws {
+        let store = try floor()
+        await store.refreshBots()
+        let before = store.chats["chief"]?.count ?? 0
+        await store.send(to: "chief", message: "", attachment: Self.picture)
+        XCTAssertGreaterThan(store.chats["chief"]?.count ?? 0, before)
+        XCTAssertTrue(store.chats["chief"]?.contains { $0.isUser && $0.hasPhoto } == true)
+    }
+
+    private static let picture = PreparedImage(
+        name: "desk.jpg", mimeType: "image/jpeg", base64: "QUJD",
+        bytes: 3, width: 1200, height: 900)
+
     // MARK: - put away, and brought back
 
     func testPuttingADeskAwayMovesTheRowOnTheClick() async throws {

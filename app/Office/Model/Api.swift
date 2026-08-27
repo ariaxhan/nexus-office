@@ -122,12 +122,25 @@ public final class Api {
     /// Returns as soon as the server has taken the message. A turn is a whole
     /// agent run, so the reply arrives by the roster changing under the poll
     /// loop, not by this call finishing.
-    public func send(bot: String, message: String) async throws {
+    ///
+    /// A picture rides as `attachments`, and only ever as a list of one: the
+    /// door refuses two rather than trimming to one, because a quietly dropped
+    /// attachment is a turn about a screenshot nobody sent. A turn without a
+    /// picture grows no new key at all, so nothing already talking to the
+    /// harness has to learn a shape to keep working.
+    public func send(bot: String, message: String,
+                     attachment: PreparedImage? = nil) async throws {
         if let demo {
-            try demo.send(bot: bot, message: message)
+            try demo.send(bot: bot, message: message, attachment: attachment)
             return
         }
-        _ = try await post("/api/chat", ["bot": bot, "message": message])
+        var payload: [String: Any] = ["bot": bot, "message": message]
+        if let attachment {
+            payload["attachments"] = [["name": attachment.name,
+                                       "mime_type": attachment.mimeType,
+                                       "data_base64": attachment.base64]]
+        }
+        _ = try await post("/api/chat", payload)
     }
 
     /// Answer the raised hand, always by the id of the question that was shown.
@@ -360,10 +373,11 @@ private final class DemoFloor {
         }
     }
 
-    func send(bot: String, message: String) throws {
+    func send(bot: String, message: String, attachment: PreparedImage? = nil) throws {
         lock.withLock {
             var turns = fixture.chats[bot] ?? []
-            turns.append(ChatTurn(role: "user", content: message, at: Self.now()))
+            turns.append(ChatTurn(role: "user", content: message, at: Self.now(),
+                                  hasPhoto: attachment != nil))
             turns.append(ChatTurn(role: "assistant",
                                   content: "Demo floor: nothing is actually running, so this is the "
                                          + "only answer there is. Point the app at a live office to talk properly.",

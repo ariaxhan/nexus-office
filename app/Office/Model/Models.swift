@@ -49,23 +49,58 @@ public struct ChatTurn: Decodable, Hashable {
     public var role: String
     public var content: String
     public var at: String?
+    /// Whether a picture rode with this turn.
+    ///
+    /// The bytes are ephemeral: the office is a courier for them and the harness
+    /// never writes them down, so a turn that comes back from the transcript can
+    /// say a photo went with it and can never show it again. That is the whole
+    /// claim this flag makes, and the mark in the thread says exactly that much.
+    ///
+    /// Decoded from whatever the harness echoes: an `attachments` list, or a
+    /// plain `has_photo`. When it echoes neither, the store marks the turn from
+    /// its own record of what it sent, which is a weaker fact and is why that
+    /// path is spelled out in `Store.remember(photoFor:message:)` rather than
+    /// hidden here.
+    public var hasPhoto: Bool
 
-    public init(role: String, content: String, at: String? = nil) {
+    public init(role: String, content: String, at: String? = nil, hasPhoto: Bool = false) {
         self.role = role
         self.content = content
         self.at = at
+        self.hasPhoto = hasPhoto
     }
 
-    enum CodingKeys: String, CodingKey { case role, content, text, at }
+    enum CodingKeys: String, CodingKey {
+        case role, content, text, at, attachments, has_photo, photo
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         role = c.str(.role) ?? "assistant"
         content = c.str(.content) ?? c.str(.text) ?? ""
         at = c.str(.at)
+        let carried = c.list(.attachments, Lenient<TurnAttachment>.self).compactMap(\.value)
+        hasPhoto = !carried.isEmpty || (c.bool(.has_photo) ?? false) || (c.bool(.photo) ?? false)
     }
 
     public var isUser: Bool { role == "user" }
+}
+
+/// What the harness says about a picture that rode with a turn, if it says
+/// anything at all. Only its existence is ever used: the bytes are gone by the
+/// time anything here could read them, and a decoder that insisted on the whole
+/// shape would drop the mark whenever the harness added a field.
+public struct TurnAttachment: Decodable, Hashable {
+    public var name: String
+    public var mimeType: String
+
+    enum CodingKeys: String, CodingKey { case name, mime_type }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = c.str(.name) ?? ""
+        mimeType = c.str(.mime_type) ?? ""
+    }
 }
 
 public struct Bot: Decodable, Identifiable, Hashable {

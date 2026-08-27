@@ -46,6 +46,10 @@ targets:
       - path: OfficeTests
       - path: Office/Model/StateRules.swift
       - path: Office/Model/Models.swift
+      # Shrinking a picture to fit the door is arithmetic on bytes, and the
+      # failure is a payload a hundred kilobytes too big that only says so on a
+      # real send. ImageIO and CoreGraphics, no AppKit, so it stays provable here.
+      - path: Office/Model/Attachment.swift
       - path: Office/Model/GateAnswer.swift
       - path: Office/Model/Store.swift
       - path: Office/Model/Api.swift
