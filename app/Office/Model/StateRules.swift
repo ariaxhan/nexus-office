@@ -125,19 +125,22 @@ public enum StateRules {
     /// Which desks show the raised hand.
     ///
     /// A gate carries a command, not a repo, so where it belongs has to be read
-    /// off what it does say. In order: a desk the gate names outright, then the
-    /// desk the runtime root put it at, then, when neither answers, **every**
-    /// desk. The last one is the whole point. A gate the app cannot place is
-    /// shown everywhere rather than nowhere, because a raised hand nobody can
-    /// find is the one failure this surface is not allowed to have.
+    /// off what the runtime knows first and what the command says second. In
+    /// order: the desk the runtime root put it at (where the agent actually is),
+    /// then a desk the command names outright (a path argument is a guess, and
+    /// `cp ~/acme/docs/x ~/acme/website/` must not move the hand off the desk
+    /// the agent is working at), then, when neither answers, **every** desk.
+    /// The last one is the whole point. A gate the app cannot place is shown
+    /// everywhere rather than nowhere, because a raised hand nobody can find is
+    /// the one failure this surface is not allowed to have.
     public static func gateDesks(gate: Gate?, stations: [Station]) -> Set<String> {
         guard let gate, gate.isPending else { return [] }
 
-        let named = stations.filter { names(gate, station: $0) }
-        if !named.isEmpty { return Set(named.map(\.repo)) }
-
         let hosts = stations.filter { $0.gate?.id == gate.id }
         if !hosts.isEmpty { return Set(hosts.map(\.repo)) }
+
+        let named = stations.filter { names(gate, station: $0) }
+        if !named.isEmpty { return Set(named.map(\.repo)) }
 
         return Set(stations.map(\.repo))
     }
