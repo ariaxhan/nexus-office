@@ -21,6 +21,21 @@ extension KeyedDecodingContainer {
     func list<T: Decodable>(_ key: Key, _: T.Type) -> [T] {
         ((try? decodeIfPresent([T].self, forKey: key)) ?? nil) ?? []
     }
+
+    /// A value a source wrote as whatever it had to hand, read as the one thing
+    /// a label can be drawn next to: text.
+    ///
+    /// Six python files write these and each one decides on its own whether a
+    /// count is `32` or `"32"`. Insisting on a string here would blank a fact
+    /// because of a missing pair of quotes somewhere else, which is a whole
+    /// number turning into nothing on screen for no reason a person can see.
+    func loose(_ key: Key) -> String? {
+        if let text = str(key) { return text }
+        if let whole = int(key) { return String(whole) }
+        if let number = dbl(key) { return String(number) }
+        if let flag = bool(key) { return flag ? "yes" : "no" }
+        return nil
+    }
 }
 
 // MARK: - the chatroom
@@ -476,27 +491,174 @@ public struct RuntimeInfo: Decodable, Hashable {
     }
 }
 
+// MARK: - the wall
+
+/// One measured thing, with a label on it.
+///
+/// `tone` is the source saying whether the number is good news, and it is a
+/// hint rather than a vocabulary: an unknown word reads as no tone at all
+/// rather than as a crash or as a wrong colour.
+public struct SectionFact: Decodable, Hashable, Identifiable {
+    public var label: String
+    public var value: String
+    public var tone: String
+
+    /// Stable enough for a list, because two facts with the same label and the
+    /// same value are the same fact twice and would draw identically anyway.
+    public var id: String { label + "\u{001f}" + value }
+
+    public init(label: String, value: String, tone: String = "") {
+        self.label = label
+        self.value = value
+        self.tone = tone
+    }
+
+    enum CodingKeys: String, CodingKey { case label, value, tone }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        label = c.loose(.label) ?? ""
+        value = c.loose(.value) ?? ""
+        tone = c.str(.tone) ?? ""
+    }
+}
+
+/// What a source wants said about itself, in the one shape every source shares.
+///
+/// This is the whole interface between the six python files that fill
+/// `world.sections` and the app that draws them. Nothing above this line knows
+/// what a shelf or a job or a ledger row is, and that is the point: a new
+/// source is a new python file and no Swift at all.
+public struct SectionCard: Decodable, Hashable {
+    public var title: String
+    /// One sentence. For a state that is not `ok`, it says what is wrong.
+    public var headline: String
+    /// How many things in here want a person. `0` when nothing does.
+    public var needs: Int
+    /// When the source last looked, ISO Z, or empty when it declined to say.
+    public var asOf: String
+    public var facts: [SectionFact]
+
+    public init(title: String = "", headline: String = "", needs: Int = 0,
+                asOf: String = "", facts: [SectionFact] = []) {
+        self.title = title
+        self.headline = headline
+        self.needs = needs
+        self.asOf = asOf
+        self.facts = facts
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case title, headline, needs, facts
+        case asOf = "as_of"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = c.str(.title) ?? ""
+        headline = c.str(.headline) ?? ""
+        // A negative count is a source with a bug, not a request for a badge
+        // reading minus one.
+        needs = max(0, c.int(.needs) ?? 0)
+        asOf = c.str(.asOf) ?? ""
+        facts = c.list(.facts, SectionFact.self)
+    }
+}
+
+/// One thing on the wall: a local source, its state, and its card.
+///
+/// The bag of source-specific keys that sits beside these is deliberately not
+/// decoded. Any of it the app should draw belongs in `card.facts`, where the
+/// source itself decided what a person needs to read.
+public struct Section: Decodable, Hashable, Identifiable {
+    /// The key it arrived under. Attached on this side: a value in a dictionary
+    /// cannot see its own key.
+    public var id: String = ""
+    /// `ok`, and whatever else the source says: stale, error, missing,
+    /// unconfigured, unreadable. Only `ok` is ever read as fine.
+    public var state: String
+    public var detail: String
+    public var card: SectionCard
+
+    public var isOK: Bool { state == "ok" }
+    public var title: String { card.title }
+    public var headline: String { card.headline }
+    public var needs: Int { card.needs }
+
+    public init(id: String = "", state: String = "ok", detail: String = "",
+                card: SectionCard = SectionCard()) {
+        self.state = state
+        self.detail = detail
+        self.card = card
+        self.adopt(id: id)
+    }
+
+    enum CodingKeys: String, CodingKey { case state, detail, card }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = c.str(.state) ?? "ok"
+        detail = c.str(.detail) ?? ""
+        card = ((try? c.decodeIfPresent(SectionCard.self, forKey: .card)) ?? nil) ?? SectionCard()
+    }
+
+    /// Take the key, and fill in whatever the card did not say.
+    ///
+    /// A source that ships before its card does still gets a row with a name on
+    /// it and a sentence under it. A blank row on the wall is a source a person
+    /// stops believing is there.
+    public mutating func adopt(id key: String) {
+        id = key
+        if card.title.isEmpty { card.title = Self.name(from: key) }
+        if card.headline.isEmpty {
+            card.headline = detail.isEmpty ? state : detail
+        }
+    }
+
+    /// `cost-ledger` reads as "Cost ledger". Not clever, just never blank.
+    private static func name(from key: String) -> String {
+        let words = key.split(whereSeparator: { $0 == "-" || $0 == "_" || $0 == "." })
+        guard let first = words.first else { return key }
+        return ([first.capitalized] + words.dropFirst().map(String.init)).joined(separator: " ")
+    }
+}
+
+/// A section slot that swallows its own decode failure, so `[String: MaybeSection]`
+/// survives one bad value where `[String: Section]` would throw the lot away.
+struct MaybeSection: Decodable {
+    let section: Section?
+    init(from decoder: Decoder) throws { section = try? Section(from: decoder) }
+}
+
 public struct World: Decodable {
     public var generated: String
     public var heartbeat: String
     public var killed: Bool
     public var stations: [Station]
+    /// The wall: one entry per local source, in a stable order.
+    ///
+    /// It arrives as an object keyed by source id, and a JSON object has no
+    /// order, so the roster would otherwise shuffle its own rows under a person
+    /// every ten seconds. Sorted by title here, once, where the key is still in
+    /// hand to attach.
+    public var sections: [Section]
     public var runtime: RuntimeInfo?
     public var github: GitHubBudget?
 
     public init(generated: String = "", heartbeat: String = "", killed: Bool = false,
-                stations: [Station] = [], runtime: RuntimeInfo? = nil,
-                github: GitHubBudget? = nil) {
+                stations: [Station] = [], sections: [Section] = [],
+                runtime: RuntimeInfo? = nil, github: GitHubBudget? = nil) {
         self.generated = generated
         self.heartbeat = heartbeat
         self.killed = killed
         self.stations = stations
+        self.sections = World.ordered(sections)
         self.runtime = runtime
         self.github = github
     }
 
     enum CodingKeys: String, CodingKey {
-        case generated, heartbeat, killed, stations, runtime, github
+        case generated, heartbeat, killed, stations, sections, runtime, github
     }
 
     public init(from decoder: Decoder) throws {
@@ -505,8 +667,24 @@ public struct World: Decodable {
         heartbeat = c.str(.heartbeat) ?? ""
         killed = c.bool(.killed) ?? false
         stations = c.list(.stations, Station.self)
+        // Decoded one section at a time: a source that wrote nonsense loses its
+        // own card, never the whole wall.
+        let keyed = ((try? c.decodeIfPresent([String: MaybeSection].self, forKey: .sections)) ?? nil) ?? [:]
+        sections = World.ordered(keyed.compactMap { key, maybe -> Section? in
+            guard var section = maybe.section else { return nil }
+            section.adopt(id: key)
+            return section
+        })
         runtime = (try? c.decodeIfPresent(RuntimeInfo.self, forKey: .runtime)) ?? nil
         github = (try? c.decodeIfPresent(GitHubBudget.self, forKey: .github)) ?? nil
+    }
+
+    /// By title, then by id, so two sources that chose the same title still
+    /// land in the same place on every poll.
+    static func ordered(_ sections: [Section]) -> [Section] {
+        sections.sorted {
+            ($0.title.lowercased(), $0.id) < ($1.title.lowercased(), $1.id)
+        }
     }
 }
 

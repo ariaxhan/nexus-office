@@ -19,7 +19,7 @@ So: **after any change that could alter what the app looks like, take pictures
 and look at them.**
 
 ```sh
-npm run shot        # builds the app, runs it on the fixture, five framings into shots/
+npm run shot        # builds the app, runs it on the fixture, six framings into shots/
 ```
 
 `shots/app-*.png` are real images. Open them. If you are an agent, **read the PNG
@@ -30,7 +30,7 @@ or network: a check that needs credentials is a check that stops running. It doe
 need a screen that is awake, which is why it caffeinates. `screencapture` returns
 a black frame from a sleeping display and no error.
 
-Add a framing to `scripts/shoot.sh` when you add something the existing five
+Add a framing to `scripts/shoot.sh` when you add something the existing six
 would not reveal. A framing nobody looks at is a framing that rots.
 
 ## Verify gates
@@ -72,13 +72,27 @@ Do not weaken them to make a change pass.
 One thing, one file, so several can be built at once without collisions.
 
 ```
-client/sources/<id>.py       the local data                  (listed in client/sections.py)
-app/Office/Views/<Id>.swift  what it looks like
-scripts/shoot.sh             a framing, if the five would not reveal it
-tests/test_<id>.py           or app/OfficeTests/<Id>Tests.swift
+client/sources/<id>.py       the local data, plus card(data)  (listed in client/sections.py)
+scripts/shoot.sh             a framing, if the six would not reveal it
+tests/test_<id>.py           the data and the card
+app/Office/Views/<Id>.swift  only if the generic card is not enough
 ```
 
-The data lands in the snapshot at `world.sections.<id>`.
+The data lands in the snapshot at `world.sections.<id>`, and the app draws it
+with no Swift at all from the section's `card`, which every source builds with
+a pure `card(data)` through `sources/_card.py`:
+
+```
+card: { title, headline, needs, as_of, facts: [{label, value, tone}] }
+```
+
+`headline` is the one thing that matters, under 80 characters, and for a bad
+state it says what is wrong. `needs` is how many things need a person: it draws
+the badge and lights the menu-bar dot, so a deliberate absence (off, unconfigured,
+empty) is 0 and a break is at least 1. `as_of` is the data's own freshness. Facts
+are 3 to 8 rows, most important first, values already formatted for a human,
+tone one of `ok` `warn` `bad` `dim` or plain. An estimate is never a fact without
+"estimated" in its label. The same card feeds the phone page.
 
 If a new thing makes you want to change `Model/Store.swift`, `Views/RosterView.swift`
 or `Model/Api.swift`, say so rather than doing it quietly: that is a seam being

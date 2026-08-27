@@ -6,7 +6,7 @@ import SwiftUI
 /// A build passing proves nothing about a room. Every defect this project has
 /// had was invisible in source and obvious on screen, so the app can photograph
 /// itself: `--demo <fixture> --shot-mode` opens the window at a fixed size,
-/// walks five framings, and writes each one to `shots/app-<framing>.png`.
+/// walks six framings, and writes each one to `shots/app-<framing>.png`.
 ///
 /// The capture is a region rather than `screencapture -l <windowid>` for one
 /// reason: a sheet is its own window, so a window capture of the gate framing
@@ -70,11 +70,18 @@ enum ShotHarness {
         store.select(.desk(deskNeedingAPerson(store)))
         await frame(store, window, directory, "needs")
 
-        // The two things the other four framings cannot show at once: the
+        // The wall: the local sources, which are not repos and not colleagues,
+        // and the pane one of them opens into. Photographed with the source
+        // that says something needs a person, because a wall of quiet rows
+        // proves the group renders and proves nothing about the badge.
+        store.needsOnly = false
+        store.select(.section(sectionNeedingAPerson(store)))
+        await frame(store, window, directory, "wall", settling: 1.4)
+
+        // The two things the other five framings cannot show at once: the
         // desks a person put away, which live in a section that is shut by
         // default, and a desk saying out loud that what you are reading is the
         // last thing it managed to pull.
-        store.needsOnly = false
         store.putAwayOpen = true
         store.select(.desk(deskShowingOldData(store)))
         await frame(store, window, directory, "putaway")
@@ -190,6 +197,14 @@ enum ShotHarness {
             ?? store.stations.first { !$0.issues.isEmpty && !$0.prs.isEmpty }
             ?? store.stations.first { !$0.issues.isEmpty }
         return best?.repo ?? store.stations.first?.repo ?? ""
+    }
+
+    /// A source with a count on it. A framing of a wall row whose badge is
+    /// absent photographs the one case the badge was built for not happening.
+    private static func sectionNeedingAPerson(_ store: Store) -> String {
+        let wanted = store.sections.first { $0.needs > 0 }
+            ?? store.sections.first { !$0.isOK }
+        return wanted?.id ?? store.sections.first?.id ?? ""
     }
 
     private static func deskNeedingAPerson(_ store: Store) -> String {

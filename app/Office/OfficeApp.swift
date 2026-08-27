@@ -124,6 +124,12 @@ struct RootView: View {
             } else {
                 Empty(text: "That desk is not in the snapshot any more.")
             }
+        case .section(let id):
+            if let section = store.section(id) {
+                SectionView(section: section)
+            } else {
+                Empty(text: "That is not on the wall any more.")
+            }
         case nil:
             Empty(text: "Pick someone on the left.")
         }
@@ -187,6 +193,9 @@ struct MenuBarContents: View {
         }
         if store.waitingCount > 0 {
             Text("\(store.waitingCount) issues waiting on you")
+        }
+        if store.wallNeeds > 0 {
+            Text(store.wallLine)
         }
         Divider()
         Button("Open the office") {

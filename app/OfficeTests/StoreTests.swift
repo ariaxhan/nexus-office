@@ -121,6 +121,64 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(notice.contains("showing what we had at "))
     }
 
+    // MARK: - the wall
+
+    func testTheWallArrivesWithTheWorldPollInAStableOrder() async throws {
+        let store = try floor()
+        XCTAssertTrue(store.sections.isEmpty, "nothing on the wall before the first poll")
+
+        await store.refreshWorld()
+        XCTAssertEqual(store.sections.map(\.id), ["clock", "cost", "pipeline"])
+        XCTAssertEqual(store.section("clock")?.needs, 5)
+        XCTAssertNil(store.section("nothing-called-this"))
+
+        // Polling again must not shuffle it, however the object came off the wire.
+        await store.refreshWorld()
+        XCTAssertEqual(store.sections.map(\.id), ["clock", "cost", "pipeline"])
+    }
+
+    /// A source saying five things want a person is the same claim as a desk
+    /// waiting on you, so it lights the same dot. Anything else means a person
+    /// has to open the window to find out, which is the one job the dot has.
+    func testTheWallLightsTheMenuBarDot() async throws {
+        let store = try floor()
+        await store.refreshBots()
+        await store.refreshWorld()
+
+        XCTAssertEqual(store.wallNeeds, 5)
+        XCTAssertEqual(store.wallLine, "the wall needs 5")
+        XCTAssertEqual(store.dot, .needsYou)
+    }
+
+    func testTheNeedsFilterAndTheSearchReachTheWall() async throws {
+        let store = try floor()
+        await store.refreshWorld()
+
+        // Ordering first: what wants a person, then what is broken, then quiet.
+        XCTAssertEqual(store.visibleSections.map(\.id), ["clock", "pipeline", "cost"])
+
+        store.needsOnly = true
+        XCTAssertEqual(store.visibleSections.map(\.id), ["clock"])
+
+        store.needsOnly = false
+        store.query = "ledger"
+        XCTAssertEqual(store.visibleSections.map(\.id), ["cost"],
+                       "the sentence under the row is searchable")
+        store.query = ""
+        XCTAssertEqual(store.visibleSections.count, 3)
+    }
+
+    func testASectionCanBeSelectedAndIsNotADesk() async throws {
+        let store = try floor()
+        await store.refreshWorld()
+
+        store.select(.section("clock"))
+        XCTAssertEqual(store.selection, .section("clock"))
+        XCTAssertNotEqual(store.selection, .desk("clock"),
+                          "a source and a repo with the same name are different rows")
+        XCTAssertEqual(store.section("clock")?.card.facts.first?.label, "ok")
+    }
+
     // MARK: - the floor
 
     /// A three desk office on disk, small enough to assert against exactly.
@@ -151,6 +209,20 @@ final class StoreTests: XCTestCase {
         "killed": false,
         "github": {"limit": 5000, "remaining": 0, "reset_at": "2026-08-26T18:48:00Z",
                    "cost": 4983, "paused_until": "2026-08-26T18:48:00Z", "error": "spent"},
+        "sections": {
+          "cost": {"state": "ok", "rows": 91,
+                   "card": {"title": "Cost", "headline": "the ledger says $18.42 today",
+                            "needs": 0, "as_of": "2026-08-26T18:38:00Z",
+                            "facts": [{"label": "today", "value": "$18.42", "tone": ""},
+                                      {"label": "estimated (not measured)", "value": "$2.10",
+                                       "tone": "warn"}]}},
+          "clock": {"state": "ok",
+                    "card": {"title": "Clock", "headline": "5 jobs need a look",
+                             "needs": 5, "as_of": "2026-08-26T18:39:00Z",
+                             "facts": [{"label": "ok", "value": "32", "tone": "ok"},
+                                       {"label": "failing", "value": "3", "tone": "bad"}]}},
+          "pipeline": {"state": "unconfigured", "detail": "nothing is installed here"}
+        },
         "stations": [
           {"repo": "acme/storefront", "access": true, "at": "2026-08-26T18:18:00Z",
            "fetched_at": "2026-08-26T18:18:00Z", "hidden": false,

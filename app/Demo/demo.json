@@ -120,6 +120,158 @@
         "bot": "release"
       }
     },
+    "sections": {
+      "clock": {
+        "state": "ok",
+        "checked": 45,
+        "alarm": 5,
+        "card": {
+          "title": "Clock",
+          "headline": "5 jobs need a look: 1 stale, 3 failing, 1 never ran",
+          "needs": 5,
+          "as_of": "2026-08-26T18:39:12Z",
+          "facts": [
+            {
+              "label": "ok",
+              "value": "32",
+              "tone": "ok"
+            },
+            {
+              "label": "stale",
+              "value": "1",
+              "tone": "warn"
+            },
+            {
+              "label": "failing",
+              "value": "3",
+              "tone": "bad"
+            },
+            {
+              "label": "never ran",
+              "value": "1",
+              "tone": "warn"
+            },
+            {
+              "label": "switched off",
+              "value": "8",
+              "tone": "dim"
+            },
+            {
+              "label": "watched",
+              "value": "45",
+              "tone": ""
+            }
+          ]
+        }
+      },
+      "cost": {
+        "state": "ok",
+        "currency": "USD",
+        "card": {
+          "title": "Cost",
+          "headline": "$18.42 today, $186.31 measured in 30 days",
+          "needs": 0,
+          "as_of": "2026-08-26T18:38:40Z",
+          "facts": [
+            {
+              "label": "today",
+              "value": "$18.42",
+              "tone": ""
+            },
+            {
+              "label": "30 days, measured",
+              "value": "$186.31",
+              "tone": "ok"
+            },
+            {
+              "label": "estimated (not measured)",
+              "value": "$28.59",
+              "tone": "warn"
+            },
+            {
+              "label": "rows with no price",
+              "value": "14",
+              "tone": "dim"
+            },
+            {
+              "label": "lifetime",
+              "value": "$1,904.77",
+              "tone": "dim"
+            }
+          ]
+        }
+      },
+      "library": {
+        "state": "stale",
+        "detail": "the shelf index was last rebuilt 9 days ago; searches answer from it anyway",
+        "card": {
+          "title": "Library",
+          "headline": "The index is 9 days behind the shelves",
+          "needs": 0,
+          "as_of": "2026-08-17T09:14:00Z",
+          "facts": [
+            {
+              "label": "shelves",
+              "value": "12",
+              "tone": ""
+            },
+            {
+              "label": "documents",
+              "value": "3,418",
+              "tone": ""
+            },
+            {
+              "label": "indexed",
+              "value": "3,102",
+              "tone": "warn"
+            },
+            {
+              "label": "waiting for review",
+              "value": "7",
+              "tone": "dim"
+            }
+          ]
+        }
+      },
+      "mail": {
+        "state": "error",
+        "detail": "the token was refused by the mail host at 6:12 PM. Nothing has been filed since; the counts below are the last good read.",
+        "card": {
+          "title": "Mail",
+          "headline": "The mail host refused the token, so nothing has been filed since 6:12 PM",
+          "needs": 0,
+          "as_of": "2026-08-26T18:12:00Z",
+          "facts": [
+            {
+              "label": "filed today",
+              "value": "41",
+              "tone": "dim"
+            },
+            {
+              "label": "held back",
+              "value": "3",
+              "tone": "warn"
+            },
+            {
+              "label": "last clean run",
+              "value": "6:12 PM",
+              "tone": "dim"
+            }
+          ]
+        }
+      },
+      "pipeline": {
+        "state": "unconfigured",
+        "detail": "no pipeline is installed on this machine",
+        "card": {
+          "title": "Pipeline",
+          "headline": "Nothing is installed here, so there is nothing to run",
+          "needs": 0,
+          "as_of": "",
+          "facts": []
+        }
+      }
+    },
     "stations": [
       {
         "repo": "acme/checkout-api",

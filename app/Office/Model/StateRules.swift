@@ -244,6 +244,110 @@ public enum StateRules {
         return "\(polled) of \(all.count) polled"
     }
 
+    // MARK: - the wall
+
+    /// How a wall row is drawn, in the same three-way language as a desk.
+    ///
+    /// Needing a person outranks being broken, exactly as it does on a desk: a
+    /// source that is stale AND has five things waiting is a source you have to
+    /// go and look at, and the reason it is stale can wait until you are there.
+    public enum SectionMood: String {
+        case needs, off, quiet
+
+        public var hex: String {
+            switch self {
+            case .needs: return "#ffb020"
+            case .off: return "#4a4a52"
+            case .quiet: return "#3a3a42"
+            }
+        }
+    }
+
+    public static func mood(_ section: Section) -> SectionMood {
+        if section.needs > 0 { return .needs }
+        return section.isOK ? .quiet : .off
+    }
+
+    /// The tone a source put on one fact.
+    ///
+    /// A closed set on purpose. Anything else the source writes reads as
+    /// `plain`, because a tone nobody defined must not be able to paint a
+    /// number a colour that means something it does not.
+    public enum SectionTone: String {
+        case ok, warn, bad, dim, plain
+
+        public static func read(_ raw: String) -> SectionTone {
+            SectionTone(rawValue: raw.trimmingCharacters(in: .whitespaces).lowercased()) ?? .plain
+        }
+    }
+
+    public static func tone(_ fact: SectionFact) -> SectionTone {
+        SectionTone.read(fact.tone)
+    }
+
+    /// The wall's order: what wants a person, then what is not ok, then the
+    /// quiet ones. Ties by title, so the list never shuffles under a person.
+    ///
+    /// The same shape as the desk ordering and for the same reason. A wall
+    /// sorted alphabetically buries the one source that needed you behind four
+    /// that did not.
+    public static func sectionOrder(_ sections: [Section]) -> [Section] {
+        sections.enumerated().sorted { left, right in
+            let a = rank(left.element), b = rank(right.element)
+            if a != b { return a < b }
+            let titles = (left.element.title.lowercased(), right.element.title.lowercased())
+            if titles.0 != titles.1 { return titles.0 < titles.1 }
+            return left.offset < right.offset
+        }.map(\.element)
+    }
+
+    private static func rank(_ section: Section) -> Int {
+        if section.needs > 0 { return 0 }
+        return section.isOK ? 2 : 1
+    }
+
+    /// What is on the wall right now.
+    ///
+    /// Search reads the two things a wall row actually shows: its name and its
+    /// sentence. "needs me" keeps a source exactly when it says a person is
+    /// wanted, which is the same question the filter asks of a desk.
+    public static func visibleSections(_ sections: [Section],
+                                       query: String = "",
+                                       needsOnly: Bool = false) -> [Section] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return sectionOrder(sections).filter { section in
+            if needsOnly && section.needs == 0 { return false }
+            if needle.isEmpty { return true }
+            return section.title.lowercased().contains(needle)
+                || section.headline.lowercased().contains(needle)
+        }
+    }
+
+    /// The one line under a wall row: the source's own sentence, flattened.
+    public static func sectionSubtitle(_ section: Section, limit: Int = 64) -> String {
+        line(section.headline, limit: limit)
+    }
+
+    /// The badge on the right of a wall row, or nothing at all.
+    ///
+    /// Nothing at all rather than a zero: a column of noughts is a roster
+    /// shouting that nothing is happening.
+    public static func sectionBadge(_ section: Section) -> String? {
+        section.needs > 0 ? String(section.needs) : nil
+    }
+
+    /// How much of the wall wants a person. Drives the menu bar dot and the
+    /// "needs me" filter, exactly as an issue waiting on you does.
+    public static func wallNeeds(_ sections: [Section]) -> Int {
+        sections.reduce(0) { $0 + $1.needs }
+    }
+
+    /// The line beside the wall header, or nothing when nothing is wanted.
+    public static func wallLine(_ sections: [Section]) -> String {
+        let total = wallNeeds(sections)
+        return total == 0 ? "" : "the wall needs \(total)"
+    }
+
     public static func visibleBots(_ bots: [Bot], query: String = "") -> [Bot] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if needle.isEmpty { return bots }

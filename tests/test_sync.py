@@ -25,7 +25,10 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "client"))
 sys.path.insert(0, str(HERE))  # the shim, when this file is run on its own
 
-RESET = "2026-08-27T05:58:31Z"
+# An hour from now, computed: a literal stamp is a test that starts failing the
+# morning the wall clock walks past it.
+from datetime import datetime, timedelta, timezone  # noqa: E402
+RESET = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def issue_node(number, body="hello", comment="pipeline-bot: answer this?"):

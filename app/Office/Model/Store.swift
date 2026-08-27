@@ -16,6 +16,9 @@ import UserNotifications
 public enum Selection: Hashable {
     case bot(String)
     case desk(String)
+    /// One thing on the wall, by its source id. A section is not a repo and not
+    /// a colleague, so it gets its own case rather than borrowing a desk's.
+    case section(String)
 }
 
 public enum DotState {
@@ -45,6 +48,9 @@ public final class Store {
     public private(set) var runtimeUp = false
     public private(set) var botsNotice: String?
     public private(set) var stations: [Station] = []
+    /// The wall, as the world poll last reported it. Already in a stable order:
+    /// the key order of a JSON object is not one.
+    public private(set) var sections: [Section] = []
     public private(set) var worldNotice: String?
     /// When the snapshot on screen was built. A desk whose own `fetched_at` is
     /// older than this is showing last-good data, which is a thing the desk has
@@ -112,6 +118,11 @@ public final class Store {
     public var dot: DotState {
         if gate.isPending { return .needsYou }
         if stations.contains(where: { StateRules.deskState($0) == .waiting }) { return .needsYou }
+        // A source on the wall saying five things want a person is the same
+        // claim as a desk waiting on you, so it lights the same dot. Anything
+        // else means a person has to open the window to find out, which is the
+        // one job this dot has.
+        if wallNeeds > 0 { return .needsYou }
         if bots.contains(where: { $0.busy }) { return .working }
         if stations.contains(where: { StateRules.deskState($0) == .working }) { return .working }
         return .idle
@@ -139,6 +150,19 @@ public final class Store {
     }
 
     public var polledLine: String { StateRules.polledLine(stations, isHidden: isHidden) }
+
+    // MARK: - the wall
+
+    public var visibleSections: [Section] {
+        StateRules.visibleSections(sections, query: query, needsOnly: needsOnly)
+    }
+
+    /// How many things on the wall want a person right now.
+    public var wallNeeds: Int { StateRules.wallNeeds(sections) }
+
+    public var wallLine: String { StateRules.wallLine(sections) }
+
+    public func section(_ id: String) -> Section? { sections.first { $0.id == id } }
 
     /// What the server says, unless this person has just said otherwise and the
     /// server has not caught up yet.
@@ -260,6 +284,8 @@ public final class Store {
             runtime = world.runtime
             worldGenerated = world.generated
             github = world.github
+            // Already ordered by the decode, where the keys were still in hand.
+            sections = world.sections
             // The gate comes from the gate poll. `world.runtime.gate` is a
             // cached snapshot of it and is never read: it has been up to ten
             // seconds behind the truth, which is long enough for the question

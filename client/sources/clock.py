@@ -35,7 +35,12 @@ import os
 import pathlib
 import subprocess
 
+from sources import _card
+
 KEY = "clock"
+# The human name of the fixture, fixed. A card whose title moves is a
+# card the eye has to find again every time it is drawn.
+TITLE = "Clock"
 
 JOBCTL = "_meta/services/jobs/jobctl"
 REGISTRY = "_meta/services/jobs/registry.jsonl"
@@ -228,3 +233,65 @@ def read() -> dict:
         "unregistered": [j["id"] for j in jobs if not j["in_registry"]],
         "jobs": jobs,
     }
+
+
+# What to say when the clock could not be read at all, and how many people it
+# wants. `unconfigured` is a deliberate absence, so it wants nobody; everything
+# else here is something that used to work.
+TROUBLE = {
+    "unconfigured": ("not configured", 0),
+    "missing-root": ("the vault root is not there", 1),
+    "missing": ("jobctl is not installed", 1),
+    "timeout": ("jobctl did not answer", 1),
+    "unreadable": ("jobctl printed nothing that parsed", 1),
+    "error": ("could not run jobctl", 1),
+}
+
+
+def card(data: dict) -> dict:
+    """The wall clock in one line: how many jobs want a person, and why.
+
+    `off` is counted, shown, and never leads. It is a decision, and a card that
+    alarms about a deliberately paused job is a card people stop reading. The
+    alarm is stale + failing + never, which is what the source already computed
+    rather than a second opinion about it.
+    """
+    if data.get("state") != "ok":
+        return _card.trouble(TITLE, data.get("state"), data.get("detail"), TROUBLE)
+
+    counts = data.get("counts") or {}
+    checked = int(data.get("checked") or 0)
+    alarm = int(data.get("alarm") or 0)
+    unwatched = int(data.get("unwatched") or 0)
+
+    def n(key):
+        return int(counts.get(key) or 0)
+
+    if not checked:
+        headline = "nothing is scheduled"
+    elif alarm:
+        headline = f"{alarm} of {checked} jobs {'needs' if alarm == 1 else 'need'} a look"
+    else:
+        headline = f"{checked} {_card.plural(checked, 'job')}, all fine"
+
+    facts = [
+        _card.fact("ok", _card.count(n("ok")), "ok" if n("ok") else "dim"),
+        _card.fact("stale", _card.count(n("stale")), "bad" if n("stale") else "dim"),
+        _card.fact("failing", _card.count(n("failing")), "bad" if n("failing") else "dim"),
+        _card.fact("never ran", _card.count(n("never")), "warn" if n("never") else "dim"),
+        _card.fact("off", _card.count(n("off")), "dim"),
+        _card.fact("unwatched", _card.count(unwatched), "warn" if unwatched else "dim"),
+    ]
+    if n("unknown"):
+        facts.append(_card.fact("unknown", _card.count(n("unknown")), "warn"))
+    # A registry line nobody can parse and a job nobody declared are the same
+    # kind of hole: something is running that the paperwork does not cover.
+    holes = len(data.get("registry_bad") or []) + len(data.get("unregistered") or [])
+    if holes:
+        facts.append(_card.fact("unaccounted for", _card.count(holes), "warn"))
+
+    # The freshest thing any job actually attempted. Normalised one at a time so
+    # a stamp in another shape sorts last instead of winning the comparison.
+    as_of = max((_card.zulu(j.get("last_attempt"))
+                 for j in (data.get("jobs") or [])), default="")
+    return _card.build(TITLE, headline, alarm, as_of, facts)
