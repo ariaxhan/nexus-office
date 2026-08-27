@@ -7,9 +7,22 @@ thread on the right. You message a bot like a colleague, and you open a desk to
 read that repo's issues with buttons that act. It runs on your own machine, and a
 click is applied the moment you make it.
 
-Built for [issue-to-PR pipelines](#what-feeds-it): automation that files issues,
-works them, opens PRs, and periodically gets stuck and needs a person. Those
-pipelines are invisible by nature. This gives them a face.
+It looks like a chat app on purpose, and it is not one. It is the face of two
+things that already run on this machine without a screen: an
+[issue-to-PR pipeline](#what-feeds-it) that files issues, works them and opens
+PRs, and an agent runtime (the harness) that runs bots on a schedule and stops
+at permission gates. Both are invisible by nature. This gives them a face.
+
+## Three words, for a stranger
+
+| word | what it is |
+|---|---|
+| **desk** | one row per repo you can push to. Open it and you get that repo's live issues and PRs with buttons that comment, close and merge for real, applied the moment you click. Desks are a pure function of the repos you own, never a hand-kept list. |
+| **gate** | an agent stopped on a permission question. It is a file with an id on this machine. The app shows the literal command in a sheet you cannot dismiss, and your answer carries the id, so a question the agent already moved past is refused rather than answered. A gate is never hidden. |
+| **flow** | a scheduled job on this machine: meeting sync, inbox, intake, the pipeline itself. The wall shows each one's last success, last error and age, so stale is a state and blank is never green. |
+
+A bot in the roster is a person-shaped handle on the harness: one conversation
+history each, and its runs, commissions and gates appear inline as it works.
 
 ```mermaid
 flowchart LR
