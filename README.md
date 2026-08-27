@@ -73,6 +73,8 @@ You need Xcode, Python 3, and the GitHub CLI logged in. No account anywhere.
 
 ```sh
 export OFFICE_OWNERS=your-github-username,your-org
+export OFFICE_POLL_S=300         # how often the door asks GitHub (default 300)
+export OFFICE_GH_RESERVE=1000    # pause GitHub fetches under this many points left
 python3 client/serve.py --root ~/path/to/your/vault    # the door, and the runtime root
 python3 client/serve.py --once                         # one snapshot as JSON, for a script
 ```
@@ -86,14 +88,16 @@ running (a launchd job works) and the roster stays live.
 
 ```sh
 npm test        # the python door + the Swift state rules, headless
-npm run shot    # builds the app, photographs four framings, then LOOK
+npm run shot    # builds the app, photographs five framings, then LOOK
 ```
 
-`scripts/shoot.sh` writes four PNGs into `shots/`: `app-roster.png` (bots above
-desks), `app-desk.png` (a desk thread), `app-gate.png` (the sheet over the room)
-and `app-needs.png` (the "needs me" filter). They are not committed, because a
-screenshot in a repo is stale the day after it lands. Run it and open them: every
-defect this project has had was invisible in source and obvious on screen.
+`scripts/shoot.sh` writes five PNGs into `shots/`: `app-roster.png` (bots above
+desks), `app-desk.png` (a desk thread), `app-gate.png` (the sheet over the room),
+`app-needs.png` (the "needs me" filter) and `app-putaway.png` (the desks a person
+put away, and a desk saying out loud that what you are reading is the last thing
+it managed to pull). They are not committed, because a screenshot in a repo is
+stale the day after it lands. Run it and open them: every defect this project has
+had was invisible in source and obvious on screen.
 
 ## What feeds it
 

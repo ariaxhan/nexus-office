@@ -78,6 +78,9 @@ def read_bots() -> list:
             continue
         out.append({"id": bot_id,
                     "name": str(row.get("name") or bot_id),
+                    # One line saying what to ask this bot. Short enough to sit
+                    # under the name on a desk, which is why it is not `identity`.
+                    "purpose": str(row.get("purpose") or ""),
                     "color": str(row.get("color") or "")})
     return out
 

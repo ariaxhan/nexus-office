@@ -46,6 +46,11 @@ public final class Store {
     public private(set) var botsNotice: String?
     public private(set) var stations: [Station] = []
     public private(set) var worldNotice: String?
+    /// When the snapshot on screen was built. A desk whose own `fetched_at` is
+    /// older than this is showing last-good data, which is a thing the desk has
+    /// to say out loud rather than a thing a person has to work out.
+    public private(set) var worldGenerated: String = ""
+    public private(set) var github: GitHubBudget?
     public private(set) var gate: Gate = .clear
     public private(set) var chats: [String: [ChatTurn]] = [:]
 
@@ -55,6 +60,33 @@ public final class Store {
     public var needsOnly = false
     public var toast: String?
     public var gateNotice: String?
+    /// Whether the put-away section is open. On the store rather than the view
+    /// because a person's answer to "show me what I put away" should survive
+    /// clicking a different desk, and because the shot harness has to be able
+    /// to open it to photograph it.
+    public var putAwayOpen = false
+
+    /// Half-typed text, by where it was typed.
+    ///
+    /// These used to be `@State` inside the composer and the comment box, which
+    /// meant SwiftUI tore them down with the view the moment the selection
+    /// changed: two sentences into a message, click another name to check
+    /// something, come back, gone. A draft is a thing the person made, so it
+    /// belongs to the office and not to whichever view happens to be on screen.
+    /// Sending clears its own key and nothing else.
+    public var drafts: [String: String] = [:]
+
+    /// A message being written to a bot.
+    public static func draftKey(bot id: String) -> String { "bot:\(id)" }
+
+    /// A comment being written on one issue at one desk. Keyed per issue, so
+    /// two half-written comments at the same desk do not overwrite each other.
+    public static func draftKey(repo: String, issue: Int) -> String { "\(repo)#\(issue)" }
+
+    /// A person's answer to "put this away", believed immediately and checked
+    /// against the next world poll. A row that waits ten seconds to move reads
+    /// as a click that did not land.
+    private var pendingHidden: [String: Bool] = [:]
 
     /// Shot mode only. The gate sheet is the loudest thing this app does, and it
     /// would sit on top of every other framing, so the harness parks it for the
@@ -88,7 +120,30 @@ public final class Store {
     public var visibleBots: [Bot] { StateRules.visibleBots(bots, query: query) }
 
     public var visibleDesks: [Station] {
-        StateRules.visibleDesks(stations, query: query, needsOnly: needsOnly)
+        StateRules.visibleDesks(stations, query: query, needsOnly: needsOnly, isHidden: isHidden)
+    }
+
+    /// Put away by a person: out of the desks list, still in the building.
+    public var putAwayDesks: [Station] {
+        StateRules.putAwayDesks(stations, isHidden: isHidden)
+    }
+
+    public var putAwayHeadline: String {
+        StateRules.putAwayHeadline(stations, isHidden: isHidden)
+    }
+
+    /// **Hidden is never silent.** Something put away has started needing a
+    /// person, and the collapsed header has to say so without being opened.
+    public var putAwayNeedsSomeone: Bool {
+        StateRules.putAwayNeedingAPerson(stations, isHidden: isHidden) > 0
+    }
+
+    public var polledLine: String { StateRules.polledLine(stations, isHidden: isHidden) }
+
+    /// What the server says, unless this person has just said otherwise and the
+    /// server has not caught up yet.
+    public func isHidden(_ station: Station) -> Bool {
+        pendingHidden[station.repo] ?? station.hidden
     }
 
     public var waitingCount: Int { StateRules.waitingCount(stations) }
@@ -203,6 +258,8 @@ public final class Store {
         do {
             let world = try await api.world()
             runtime = world.runtime
+            worldGenerated = world.generated
+            github = world.github
             // The gate comes from the gate poll. `world.runtime.gate` is a
             // cached snapshot of it and is never read: it has been up to ten
             // seconds behind the truth, which is long enough for the question
@@ -210,6 +267,13 @@ public final class Store {
             stations = StateRules.attachGate(stations: world.stations.sorted { $0.repo < $1.repo },
                                              runtime: world.runtime,
                                              gate: gate.isPending ? gate : nil)
+            // The server has now spoken about what is put away. Wherever it
+            // agrees with the click that was believed early, the belief is
+            // dropped; where it disagrees, the server wins, because it is the
+            // one that decides what actually gets polled.
+            for station in stations where pendingHidden[station.repo] == station.hidden {
+                pendingHidden.removeValue(forKey: station.repo)
+            }
             worldNotice = world.killed ? "the kill switch is on: nothing will run" : nil
         } catch let error as ApiError {
             worldNotice = error.message
@@ -246,6 +310,10 @@ public final class Store {
     public func send(to id: String, message: String) async {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // The box empties because the message moved into the transcript on the
+        // line below, not because it went anywhere yet. Only this bot's draft
+        // is cleared: a sentence half written to somebody else is untouched.
+        drafts[Self.draftKey(bot: id)] = nil
         // Show it immediately. The turn takes a whole agent run, and a message
         // that vanishes for ninety seconds reads as a message that was lost.
         chats[id, default: []].append(ChatTurn(role: "user", content: trimmed, at: nowISO()))
@@ -299,6 +367,29 @@ public final class Store {
         guard gate.isPending else { return "that question has moved on" }
         return "that question has moved on. the floor is now asking about "
             + StateRules.line(gate.target, limit: 80)
+    }
+
+    /// Put a desk away, or bring it back.
+    ///
+    /// The row moves on the click and the server is told afterwards. If the
+    /// server refuses, the row moves back and says why: a click that silently
+    /// did nothing is worse than one that visibly failed, because the person
+    /// walks away believing the floor is smaller than it is.
+    public func setDesk(repo: String, hidden: Bool) async {
+        pendingHidden[repo] = hidden
+        if hidden, selection == .desk(repo) { putAwayOpen = true }
+        do {
+            let away = Set(try await api.setDesk(repo: repo, hidden: hidden))
+            pendingHidden[repo] = away.contains(repo)
+            toast = hidden ? "\(repo) is put away" : "\(repo) is back on the floor"
+            await refreshWorld()
+        } catch let error as ApiError {
+            pendingHidden.removeValue(forKey: repo)
+            toast = error.message
+        } catch {
+            pendingHidden.removeValue(forKey: repo)
+            toast = error.localizedDescription
+        }
     }
 
     public func decide(kind: String, repo: String, issue: String,

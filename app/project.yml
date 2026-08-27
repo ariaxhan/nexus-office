@@ -31,9 +31,14 @@ targets:
       - path: Demo
         buildPhase: resources
   # Standalone unit-test bundle: no app host, no signing, no AppKit. It compiles
-  # only the Foundation-only files, so the rules that decide what a desk is, and
-  # which question an answer belongs to, are provable headlessly and cannot
-  # quietly start depending on a view.
+  # only the Foundation-only files, so the rules that decide what a desk is,
+  # which question an answer belongs to, and what survives switching threads are
+  # provable headlessly and cannot quietly start depending on a view.
+  #
+  # `Store` and `Api` are in here because a draft that outlives the view showing
+  # it is a claim about the store and nothing else, and because the demo floor is
+  # the only fake `Api` worth having. Neither imports AppKit or SwiftUI, and the
+  # day one of them does, this target stops building, which is the point.
   OfficeTests:
     type: bundle.unit-test
     platform: macOS
@@ -42,6 +47,8 @@ targets:
       - path: Office/Model/StateRules.swift
       - path: Office/Model/Models.swift
       - path: Office/Model/GateAnswer.swift
+      - path: Office/Model/Store.swift
+      - path: Office/Model/Api.swift
     settings:
       base:
         PRODUCT_NAME: OfficeTests

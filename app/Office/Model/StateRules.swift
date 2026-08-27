@@ -184,21 +184,64 @@ public enum StateRules {
 
     /// Which desks are in the list right now.
     ///
-    /// Two rules it must never break. Filtering is a VIEW and never touches what
-    /// the runner does. And **a gate is never hidden**: no search string and no
-    /// filter removes a raised hand from the room, because losing a blocked agent
-    /// behind a view is the one failure this surface cannot be allowed to have.
+    /// Three rules it must never break. Filtering is a VIEW and never touches
+    /// what the runner does. **A gate is never hidden**: no search string, no
+    /// filter and no "put this away" removes a raised hand from the room,
+    /// because losing a blocked agent behind a view is the one failure this
+    /// surface cannot be allowed to have. And putting a desk away is a filter
+    /// like the other two, so it obeys the same escape hatch.
     public static func visibleDesks(_ stations: [Station],
                                     query: String = "",
-                                    needsOnly: Bool = false) -> [Station] {
+                                    needsOnly: Bool = false,
+                                    isHidden: (Station) -> Bool = { $0.hidden }) -> [Station] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return stations.filter { station in
             if station.gate?.isPending == true { return true }
+            if isHidden(station) { return false }
             if needsOnly && !deskState(station).needsAPerson { return false }
             if needle.isEmpty { return true }
             return station.repo.lowercased().contains(needle)
                 || station.detail.lowercased().contains(needle)
         }
+    }
+
+    /// The desks a person put away, in the order the roster lists everything.
+    ///
+    /// Never touched by the search box or by "needs me". A put-away desk is out
+    /// of the way, not out of the building, and the way it stays findable is
+    /// that its section always holds every one of them. A desk with a raised
+    /// hand is not in here at all: it is back up in the list.
+    public static func putAwayDesks(_ stations: [Station],
+                                    isHidden: (Station) -> Bool = { $0.hidden }) -> [Station] {
+        stations.filter { isHidden($0) && $0.gate?.isPending != true }
+    }
+
+    /// **Hidden is never silent.** How many put-away desks are waiting on a
+    /// person right now, so the collapsed header can say so instead of a person
+    /// having to open it to find out.
+    public static func putAwayNeedingAPerson(_ stations: [Station],
+                                             isHidden: (Station) -> Bool = { $0.hidden }) -> Int {
+        putAwayDesks(stations, isHidden: isHidden).filter { deskState($0).needsAPerson }.count
+    }
+
+    /// The header on a section a person can leave shut: what is in it, and
+    /// whether anything in it needs them.
+    public static func putAwayHeadline(_ stations: [Station],
+                                       isHidden: (Station) -> Bool = { $0.hidden }) -> String {
+        let away = putAwayDesks(stations, isHidden: isHidden).count
+        let waiting = putAwayNeedingAPerson(stations, isHidden: isHidden)
+        if waiting == 0 { return "put away (\(away))" }
+        return "put away (\(away)) \u{00b7} \(waiting) needs you"
+    }
+
+    /// The count under the desks header. Put away means not polled, so this is
+    /// the honest denominator: how much of the floor the server is actually
+    /// asking GitHub about.
+    public static func polledLine(_ stations: [Station],
+                                  isHidden: (Station) -> Bool = { $0.hidden }) -> String {
+        let all = stations.filter { !$0.synthetic }
+        let polled = all.filter { !isHidden($0) }.count
+        return "\(polled) of \(all.count) polled"
     }
 
     public static func visibleBots(_ bots: [Bot], query: String = "") -> [Bot] {
@@ -220,6 +263,17 @@ public enum StateRules {
     /// collapsed and cut here rather than left to the layout to survive.
     public static func lastLine(bot: Bot, limit: Int = 78) -> String {
         line(bot.last?.content ?? "", limit: limit)
+    }
+
+    /// What a bot's row says under its name.
+    ///
+    /// The last thing it said, once it has said anything. Before that, what it
+    /// is FOR. "no messages yet" is a fact about the transcript and not about
+    /// the colleague, and a roster of four rows all saying it tells a person
+    /// nothing about which one to open.
+    public static func botSubtitle(bot: Bot, limit: Int = 64) -> String {
+        let said = lastLine(bot: bot, limit: limit)
+        return said.isEmpty ? line(bot.purpose, limit: limit) : said
     }
 
     public static func line(_ raw: String, limit: Int = 78) -> String {
@@ -260,6 +314,96 @@ public enum StateRules {
             formatter.dateFormat = "MMM d"
         }
         return formatter.string(from: when)
+    }
+
+    /// A point in time a person can say out loud, and place.
+    ///
+    /// `stamp` answers "when, roughly" for a column of them. This answers
+    /// "when exactly" for the middle of a sentence, which needs the clock even
+    /// when the day is not today: "showing what we had at Yesterday" is not
+    /// English, and "showing what we had at 5:42 PM yesterday" is.
+    public static func moment(_ isoString: String, now: Date = Date(),
+                              calendar: Calendar = .current) -> String {
+        guard let when = date(isoString) else { return "" }
+        let clock = DateFormatter()
+        clock.dateFormat = "h:mm a"
+        let time = clock.string(from: when)
+        if calendar.isDate(when, inSameDayAs: now) { return time }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(when, inSameDayAs: yesterday) {
+            return "\(time) yesterday"
+        }
+        let day = DateFormatter()
+        day.dateFormat = "MMM d"
+        return "\(time) on \(day.string(from: when))"
+    }
+
+    // MARK: - the most recent thing we were able to pull
+
+    /// One snapshot interval of slack.
+    ///
+    /// `fetched_at` is written when GitHub answers and `generated` when the
+    /// snapshot finishes, so the two are never exactly equal even on a perfectly
+    /// healthy pull. Without this every desk on the floor would call itself
+    /// stale, and a warning that is always on is a warning nobody reads.
+    private static let freshnessSlack: TimeInterval = 120
+
+    /// Is this desk showing data older than the snapshot it arrived in?
+    ///
+    /// Only a `fetched_at` we can actually read counts. A missing or unparseable
+    /// one is the server declining to say, and "we do not know how old this is"
+    /// must not be rendered as "this is current".
+    public static func isStale(station: Station, generated: String) -> Bool {
+        guard let fetched = date(station.fetchedAt), let built = date(generated) else { return false }
+        return built.timeIntervalSince(fetched) > freshnessSlack
+    }
+
+    /// The header's right hand phrase: "as of 5:42 PM", or nothing.
+    ///
+    /// Shown when the data is older than the snapshot, and shown when something
+    /// went wrong reading the desk even if the clocks happen to agree, because
+    /// an error means what is on screen is the previous answer either way.
+    public static func asOf(station: Station, generated: String,
+                            now: Date = Date(), calendar: Calendar = .current) -> String? {
+        guard isStale(station: station, generated: generated) || !station.problems.isEmpty
+        else { return nil }
+        let when = moment(station.fetchedAt, now: now, calendar: calendar)
+        return when.isEmpty ? nil : "as of \(when)"
+    }
+
+    /// The one line a desk says about why what you are reading is not current.
+    ///
+    /// One line, never two. The issues half and the pull requests half of a pull
+    /// fail together and report the same sentence twice, and two identical red
+    /// lines read as two problems rather than one, which is how a person starts
+    /// looking for a second fault that was never there.
+    ///
+    /// A spent budget outranks the per-desk error because it explains every desk
+    /// at once: while the door has stopped asking, no repo's data is current and
+    /// no repo's error is news.
+    ///
+    /// But only on a desk that is actually behind: one fetched this build, or
+    /// one put away and never fetched, has nothing to apologise for, and a
+    /// notice on every desk is a notice on none.
+    public static func staleNotice(station: Station, github: GitHubBudget?,
+                                   generated: String = "",
+                                   now: Date = Date(),
+                                   calendar: Calendar = .current) -> String? {
+        let had = moment(station.fetchedAt, now: now, calendar: calendar)
+        let showing = had.isEmpty ? "" : "; showing what we had at \(had)"
+        let behind = isStale(station: station, generated: generated) || !station.problems.isEmpty
+
+        if let github, github.isPaused, behind {
+            let until = moment(github.pausedUntil, now: now, calendar: calendar)
+            let head = until.isEmpty
+                ? "GitHub is out of budget"
+                : "GitHub is out of budget until \(until)"
+            return head + showing
+        }
+
+        let problems = station.problems
+        guard !problems.isEmpty else { return nil }
+        return problems.joined(separator: "; ") + showing
     }
 
     /// How long the hand has been up, said out loud. A gate's whole value is the

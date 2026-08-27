@@ -346,7 +346,334 @@ final class StateRulesTests: XCTestCase {
                        "UNKNOWN is ask again in a moment, never permission")
     }
 
+    // MARK: - the most recent thing we were able to pull
+
+    func testADeskThatPulledCleanlySaysNothingAboutFreshness() {
+        let station = Station(repo: "a/fresh", at: built, fetchedAt: built)
+        XCTAssertFalse(StateRules.isStale(station: station, generated: built))
+        XCTAssertNil(StateRules.asOf(station: station, generated: built, now: now))
+        XCTAssertNil(StateRules.staleNotice(station: station, github: nil, now: now))
+        XCTAssertNil(StateRules.staleNotice(station: station, github: GitHubBudget(remaining: 4200),
+                                            now: now),
+                     "a budget with room left is not news")
+    }
+
+    func testAPauseSaysNothingOnADeskThatIsCurrent() {
+        // The floor is paused, but this desk answered this build and this one
+        // was put away before anyone asked. Neither is behind, so neither talks.
+        let budget = GitHubBudget(limit: 5000, remaining: 0, pausedUntil: shift(8 * 60),
+                                  error: "secondary rate limit")
+        let fresh = Station(repo: "a/fresh", fetchedAt: shift(-45))
+        XCTAssertNil(StateRules.staleNotice(station: fresh, github: budget,
+                                            generated: built, now: now))
+        let away = Station(repo: "a/away", fetchedAt: "", hidden: true)
+        XCTAssertNil(StateRules.staleNotice(station: away, github: budget,
+                                            generated: built, now: now))
+        let old = Station(repo: "a/old", fetchedAt: shift(-3 * 3600))
+        XCTAssertNotNil(StateRules.staleNotice(station: old, github: budget,
+                                               generated: built, now: now))
+    }
+
+    func testTheGapEveryHealthyPullHasIsNotStaleness() {
+        // `fetched_at` is written when GitHub answers and `generated` when the
+        // snapshot finishes, so they are never equal. A warning that is always
+        // on is a warning nobody reads.
+        let station = Station(repo: "a/normal", fetchedAt: shift(-45))
+        XCTAssertFalse(StateRules.isStale(station: station, generated: built))
+        XCTAssertNil(StateRules.asOf(station: station, generated: built, now: now))
+    }
+
+    func testAnOldPullIsSaidOutLoudInTheHeader() {
+        let station = Station(repo: "a/old", fetchedAt: shift(-3 * 3600))
+        XCTAssertTrue(StateRules.isStale(station: station, generated: built))
+        let asOf = StateRules.asOf(station: station, generated: built, now: now)
+        XCTAssertEqual(asOf, "as of " + StateRules.moment(station.fetchedAt, now: now))
+        XCTAssertTrue(asOf?.hasPrefix("as of ") == true)
+    }
+
+    func testAFetchedAtNobodyCanReadIsNotReportedAsCurrent() {
+        // "we do not know how old this is" must not render as "this is current",
+        // and it must not render as a wrong time either. It renders as nothing.
+        for unreadable in ["", "not a date", "yesterday-ish"] {
+            let station = Station(repo: "a/unknown", fetchedAt: unreadable)
+            XCTAssertFalse(StateRules.isStale(station: station, generated: built))
+            XCTAssertNil(StateRules.asOf(station: station, generated: built, now: now))
+        }
+    }
+
+    func testAnErrorMakesTheHeaderSayAsOfEvenWhenTheClocksAgree() {
+        // The pull failed, so what is on screen is the previous answer whatever
+        // the two timestamps happen to say.
+        let station = Station(repo: "a/failed", fetchedAt: built,
+                              issuesError: "GitHub answered 403")
+        XCTAssertFalse(StateRules.isStale(station: station, generated: built))
+        XCTAssertNotNil(StateRules.asOf(station: station, generated: built, now: now))
+    }
+
+    // MARK: - one notice, never two
+
+    func testTheSameFailureTwiceIsOneSentence() {
+        // The exact defect: both halves of a pull fail together and report the
+        // same line, and two identical red rows read as two faults.
+        let said = "GitHub answered 403: the hourly budget for this token is spent"
+        let station = Station(repo: "a/stale", fetchedAt: shift(-3 * 3600),
+                              issuesError: said, prsError: said)
+        XCTAssertEqual(station.problems, [said], "said once, not twice")
+
+        let notice = try? XCTUnwrap(StateRules.staleNotice(station: station,
+                                                           github: nil, now: now))
+        let text = notice ?? ""
+        XCTAssertEqual(occurrences(of: said, in: text), 1)
+        XCTAssertTrue(text.hasPrefix(said))
+        XCTAssertEqual(text, said + "; showing what we had at "
+                       + StateRules.moment(station.fetchedAt, now: now))
+    }
+
+    func testTwoDifferentFailuresAreBothKept() {
+        let station = Station(repo: "a/two", fetchedAt: shift(-3 * 3600),
+                              issuesError: "issues: 403", prsError: "pulls: 502")
+        XCTAssertEqual(station.problems, ["issues: 403", "pulls: 502"])
+        let text = StateRules.staleNotice(station: station, github: nil, now: now) ?? ""
+        XCTAssertTrue(text.hasPrefix("issues: 403; pulls: 502; showing what we had at "))
+    }
+
+    func testABlankErrorIsNotAProblem() {
+        let station = Station(repo: "a/blank", fetchedAt: built,
+                              issuesError: "", prsError: "   ")
+        XCTAssertTrue(station.problems.isEmpty)
+        XCTAssertNil(StateRules.staleNotice(station: station, github: nil, now: now))
+    }
+
+    func testAnErrorWithNoSuccessfulPullEverSaysOnlyWhatWentWrong() {
+        // Nothing was ever pulled here, so there is no "what we had".
+        let station = Station(repo: "a/never", fetchedAt: "",
+                              issuesError: "no account holds push here")
+        XCTAssertEqual(StateRules.staleNotice(station: station, github: nil, now: now),
+                       "no account holds push here")
+    }
+
+    func testASpentBudgetOutranksTheDesksOwnError() {
+        // While the door has stopped asking, no repo's data is current and no
+        // repo's error is news. One sentence explains the whole floor.
+        let budget = GitHubBudget(limit: 5000, remaining: 0,
+                                  pausedUntil: shift(8 * 60),
+                                  error: "secondary rate limit")
+        let station = Station(repo: "a/stale", fetchedAt: shift(-3 * 3600),
+                              issuesError: "GitHub answered 403", prsError: "GitHub answered 403")
+        let text = StateRules.staleNotice(station: station, github: budget, now: now) ?? ""
+        XCTAssertEqual(text,
+                       "GitHub is out of budget until "
+                       + StateRules.moment(budget.pausedUntil, now: now)
+                       + "; showing what we had at "
+                       + StateRules.moment(station.fetchedAt, now: now))
+        XCTAssertEqual(occurrences(of: "showing what we had at", in: text), 1)
+        XCTAssertFalse(text.contains("403"))
+    }
+
+    func testASpentBudgetWithNoReadableClockStillSaysWhy() {
+        let budget = GitHubBudget(pausedUntil: "soon")
+        // A desk that is behind (it has an error) under a pause with an unreadable
+        // clock still gets the reason, just without the hour.
+        XCTAssertEqual(StateRules.staleNotice(station: Station(repo: "a/x", fetchedAt: "",
+                                                               issuesError: "GitHub answered 403"),
+                                              github: budget, now: now),
+                       "GitHub is out of budget")
+    }
+
+    func testAMomentSaysWhichDayWhenItIsNotToday() {
+        XCTAssertEqual(StateRules.moment(""), "")
+        XCTAssertEqual(StateRules.moment("not a date"), "")
+        XCTAssertFalse(StateRules.moment(built, now: now).isEmpty)
+
+        // "showing what we had at Yesterday" is not English. Two days back is
+        // far enough that no time zone can call it today or yesterday.
+        let old = StateRules.moment(shift(-48 * 3600), now: now)
+        XCTAssertTrue(old.contains(" on "), "a stamp from another day places the day: \(old)")
+    }
+
+    // MARK: - what a bot is for
+
+    func testABotRowSaysWhatItIsForUntilItHasSaidAnything() {
+        let quiet = Bot(id: "research", name: "Research",
+                        purpose: "Looks before anyone builds: prior work, failure modes.")
+        XCTAssertEqual(StateRules.botSubtitle(bot: quiet), quiet.purpose)
+
+        let spoken = Bot(id: "research", name: "Research", purpose: quiet.purpose,
+                         last: ChatTurn(role: "assistant", content: "Failure map is written."))
+        XCTAssertEqual(StateRules.botSubtitle(bot: spoken), "Failure map is written.")
+    }
+
+    func testASilentBotWithNoPurposeSaysNothingRatherThanSomethingUseless() {
+        XCTAssertEqual(StateRules.botSubtitle(bot: Bot(id: "x", name: "X")), "")
+    }
+
+    func testALongPurposeIsCutLikeAnyOtherRosterLine() {
+        let bot = Bot(id: "x", name: "X", purpose: String(repeating: "p", count: 200))
+        XCTAssertEqual(StateRules.botSubtitle(bot: bot, limit: 20).count, 21)
+    }
+
+    // MARK: - put away, and brought back
+
+    func testAPutAwayDeskLeavesTheListAndTurnsUpInTheOtherOne() {
+        let floor = [Station(repo: "acme/docs"),
+                     Station(repo: "acme/legacy-import", hidden: true),
+                     Station(repo: "northwind/api", issues: [quietIssue()])]
+
+        XCTAssertEqual(StateRules.visibleDesks(floor).map(\.repo), ["acme/docs", "northwind/api"])
+        XCTAssertEqual(StateRules.putAwayDesks(floor).map(\.repo), ["acme/legacy-import"])
+        XCTAssertEqual(StateRules.polledLine(floor), "2 of 3 polled")
+    }
+
+    func testPuttingSomethingAwayCanNeverHideARaisedHand() {
+        // The rule the whole surface is built on, now with a third filter to
+        // survive. A desk a person put away that is standing there with its
+        // hand up is back in the list, and is not in the put-away section.
+        let gated = Station(repo: "acme/legacy-import", hidden: true, gate: pendingGate())
+        let floor = [Station(repo: "acme/docs"), gated]
+
+        XCTAssertTrue(StateRules.visibleDesks(floor).contains { $0.repo == gated.repo })
+        XCTAssertTrue(StateRules.visibleDesks(floor, query: "zzzz", needsOnly: true)
+            .contains { $0.repo == gated.repo })
+        XCTAssertTrue(StateRules.putAwayDesks(floor).isEmpty,
+                      "it is up in the list, so it must not also be down in the drawer")
+    }
+
+    func testHiddenIsNeverSilent() {
+        // Something put away has started needing a person. The closed header
+        // says so, so nobody has to open it to find out.
+        let quiet = [Station(repo: "a/one", hidden: true), Station(repo: "a/two", hidden: true)]
+        XCTAssertEqual(StateRules.putAwayHeadline(quiet), "put away (2)")
+        XCTAssertEqual(StateRules.putAwayNeedingAPerson(quiet), 0)
+
+        let waiting = quiet + [Station(repo: "a/three", hidden: true, issues: [waitingIssue()])]
+        XCTAssertEqual(StateRules.putAwayNeedingAPerson(waiting), 1)
+        XCTAssertEqual(StateRules.putAwayHeadline(waiting), "put away (3) \u{00b7} 1 needs you")
+    }
+
+    func testTheSearchBoxNeverReachesTheDrawer() {
+        // A put-away desk is out of the way, not out of the building: the
+        // section always holds every one of them so they stay findable.
+        let floor = [Station(repo: "acme/docs"),
+                     Station(repo: "acme/legacy-import", hidden: true),
+                     Station(repo: "northwind/analytics", hidden: true)]
+        XCTAssertEqual(StateRules.putAwayDesks(floor).count, 2)
+        XCTAssertEqual(StateRules.visibleDesks(floor, query: "legacy").count, 0,
+                       "the desks list is what the search filters")
+    }
+
+    func testTheInventedGateDeskIsNotCountedAsSomethingWePoll() {
+        let floor = [Station(repo: "acme/docs"),
+                     Station(repo: "runtime/agent", gate: pendingGate(), synthetic: true)]
+        XCTAssertEqual(StateRules.polledLine(floor), "1 of 1 polled")
+    }
+
+    func testAnOverrideBeatsWhatTheSnapshotSaysUntilItCatchesUp() {
+        // The optimistic flip: the person said put this away, the world poll has
+        // not come round, and the row has to have moved already.
+        let floor = [Station(repo: "acme/docs"), Station(repo: "acme/website")]
+        let justClicked: (Station) -> Bool = { $0.repo == "acme/website" }
+        XCTAssertEqual(StateRules.visibleDesks(floor, isHidden: justClicked).map(\.repo),
+                       ["acme/docs"])
+        XCTAssertEqual(StateRules.putAwayDesks(floor, isHidden: justClicked).map(\.repo),
+                       ["acme/website"])
+        XCTAssertEqual(StateRules.polledLine(floor, isHidden: justClicked), "1 of 2 polled")
+    }
+
+    // MARK: - the wire, again
+
+    func testAStationReadsTheFreshnessAndPutAwayFields() throws {
+        let json = #"""
+        {"repo":"a/b","access":true,"at":"2026-08-26T18:33:00Z",
+         "fetched_at":"2026-08-26T15:10:00Z","hidden":true,
+         "issues":[],"prs":[],"issues_error":"403","prs_error":"403"}
+        """#
+        let station = try JSONDecoder().decode(Station.self, from: Data(json.utf8))
+        XCTAssertEqual(station.fetchedAt, "2026-08-26T15:10:00Z")
+        XCTAssertTrue(station.hidden)
+        XCTAssertEqual(station.problems, ["403"])
+        XCTAssertTrue(StateRules.isStale(station: station, generated: "2026-08-26T18:40:00Z"))
+    }
+
+    func testAServerThatPredatesTheseFieldsIsNotAFloorOfHiddenStaleDesks() throws {
+        // The python door is upgraded on its own schedule. Absent must read as
+        // "on the floor, freshness unknown", never as "put away".
+        let json = #"{"repo":"a/b","access":true,"at":"2026-08-26T18:33:00Z","issues":[],"prs":[]}"#
+        let station = try JSONDecoder().decode(Station.self, from: Data(json.utf8))
+        XCTAssertFalse(station.hidden)
+        XCTAssertEqual(station.fetchedAt, "")
+        XCTAssertFalse(StateRules.isStale(station: station, generated: "2026-08-26T18:40:00Z"))
+        XCTAssertNil(StateRules.staleNotice(station: station, github: nil, now: now))
+    }
+
+    func testABotCarriesItsPurposeAndSurvivesNotHavingOne() throws {
+        let named = try JSONDecoder().decode(
+            Bot.self,
+            from: Data(#"{"id":"chief","name":"Chief","purpose":"What is running."}"#.utf8))
+        XCTAssertEqual(named.purpose, "What is running.")
+
+        let bare = try JSONDecoder().decode(
+            Bot.self, from: Data(#"{"id":"chief","name":"Chief"}"#.utf8))
+        XCTAssertEqual(bare.purpose, "")
+    }
+
+    func testTheBudgetReadsAnUnknownCountAsUnknownRatherThanZero() throws {
+        // `null` is the door declining to say. Reading it as zero would put
+        // "out of budget" on a floor that is perfectly healthy.
+        let json = #"""
+        {"limit":null,"remaining":null,"reset_at":"","cost":12,"paused_until":"","error":""}
+        """#
+        let budget = try JSONDecoder().decode(GitHubBudget.self, from: Data(json.utf8))
+        XCTAssertNil(budget.limit)
+        XCTAssertNil(budget.remaining)
+        XCTAssertEqual(budget.cost, 12)
+        XCTAssertFalse(budget.isPaused)
+    }
+
+    func testTheWorldCarriesTheBudgetAndSurvivesNotHavingOne() throws {
+        let with = try JSONDecoder().decode(
+            World.self,
+            from: Data(#"{"generated":"g","stations":[],"github":{"paused_until":"2026-01-01T00:00:00Z"}}"#.utf8))
+        XCTAssertEqual(with.github?.isPaused, true)
+
+        let without = try JSONDecoder().decode(
+            World.self, from: Data(#"{"generated":"g","stations":[]}"#.utf8))
+        XCTAssertNil(without.github)
+    }
+
+    func testTheDesksListIsAListAndNotADelta() throws {
+        let answer = try JSONDecoder().decode(
+            DesksResponse.self,
+            from: Data(#"{"ok":true,"hidden":["a/b","c/d"]}"#.utf8))
+        XCTAssertEqual(answer.hidden, ["a/b", "c/d"])
+
+        let empty = try JSONDecoder().decode(DesksResponse.self, from: Data(#"{"ok":true}"#.utf8))
+        XCTAssertTrue(empty.hidden.isEmpty)
+    }
+
     // MARK: - helpers
+
+    /// The snapshot everything in the freshness tests is measured against, and
+    /// a fixed "now" so no assertion here can pass at one time of day and fail
+    /// at another.
+    private let built = "2026-08-26T18:40:00Z"
+    private var now: Date { StateRules.date(built)! }
+
+    private func shift(_ seconds: TimeInterval) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.string(from: now.addingTimeInterval(seconds))
+    }
+
+    private func occurrences(of needle: String, in haystack: String) -> Int {
+        var count = 0
+        var rest = haystack[...]
+        while let found = rest.range(of: needle) {
+            count += 1
+            rest = rest[found.upperBound...]
+        }
+        return count
+    }
 
     private func state(_ station: Station) -> DeskState { StateRules.deskState(station) }
 
