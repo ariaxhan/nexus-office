@@ -51,7 +51,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import chat  # noqa: E402  (needs the path above)
+import buzz  # noqa: E402  (needs the path above)
+import chat  # noqa: E402
 import runtime as rt  # noqa: E402
 import webhook  # noqa: E402
 
@@ -813,6 +814,7 @@ def main(argv=None) -> int:
 
     httpd = make_server(world, a.port)
     threading.Thread(target=world.keep_fresh, daemon=True).start()
+    threading.Thread(target=buzz.watch, args=(rt.read_gates, office_sync.RECEIPTS), daemon=True).start()
     log(f"http://127.0.0.1:{a.port}/  (loopback only; the door is this machine)")
     log("webhooks: " + ("/webhook is signed and listening"
                         if webhook.SECRET else

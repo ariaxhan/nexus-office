@@ -97,6 +97,27 @@ cost, and where `_meta/bots.json` names your bots. The snapshot rebuilds in the
 background at most once a minute, so nothing waits on GitHub. Leave the door
 running (a launchd job works) and the roster stays live.
 
+GitHub can knock, so the room does not have to keep asking. Set
+`OFFICE_WEBHOOK_SECRET` and `POST /webhook` becomes the one path Tailscale
+Funnel puts on the public internet, on its own port:
+
+```sh
+export OFFICE_WEBHOOK_SECRET="$(security find-generic-password -s github-webhook -a secret -w)"
+tailscale funnel --bg --https=8443 --set-path=/webhook http://127.0.0.1:8790/webhook
+```
+
+Funnel is per PORT, not per path, so it gets 8443 with exactly one mount and
+every other path there 404s. Add `your-host.ts.net:8443` to
+`OFFICE_TRUSTED_HOSTS`. That route is the only one exempt from the tailnet login
+and the origin rule, because GitHub can satisfy neither; what holds it up is an
+HMAC-SHA256 over the raw request bytes, and with no secret set it answers 503
+rather than accepting anything unsigned. A comment, an issue or a merged PR
+debounces for twenty seconds and then runs `dispatch.sh --repo` for that one
+checkout, serially, because the pipeline takes one global lock. The pipeline's
+own comments never trigger it. `GET /api/webhook` says whether anything is
+arriving. Registering the hooks (one per repo, no user-level webhook exists) is
+a script still to come; today `gh api -X POST repos/OWNER/NAME/hooks` does it.
+
 The same door serves the phone at `/`: three files out of `client/phone/`, no
 build step and no request to anywhere but itself, showing the raised hand first,
 then what needs you, the bots, the desks and the wall. It is the same office and
