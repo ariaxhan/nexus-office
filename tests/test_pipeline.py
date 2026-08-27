@@ -104,6 +104,16 @@ class PipelineBase(unittest.TestCase):
     def log(self, lines):
         self.log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    def receipts(self, rows, extra=()):
+        """The runner's own receipts. `rows` are (repo, seconds ago), `extra`
+        are raw lines, so a torn one can be written on purpose."""
+        lines = [json.dumps({"at": _iso(time.time() - ago), "repo": repo,
+                             "outcome": "survey", "detail": ""})
+                 for repo, ago in rows]
+        lines.extend(extra)
+        (self.runtime / "receipts.jsonl").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+
     def dead_pid(self) -> int:
         """A pid that is definitely not running: spawn a process and reap it."""
         proc = subprocess.Popen(["/bin/bash", "-c", "exit 0"])
@@ -298,9 +308,89 @@ class PipelineTest(PipelineBase):
                       lambda: (self.root / "_meta" / "state" / "pipeline-off").touch()):
             setup()
             out = self.mod.read()
-            for field in ("state", "detail", "running", "running_for", "doing", "next_in"):
+            for field in ("state", "detail", "running", "running_for", "doing",
+                          "next_in", "heartbeat", "covered"):
                 self.assertIn(field, out, f"{field} missing for state {out.get('state')}")
             self.assertIsInstance(out["running"], bool)
+
+
+class CoverageTest(PipelineBase):
+    """What the last sweep actually reached.
+
+    Every other field on this source answers "is it about to run". None of them
+    answers "did the last run do anything", and a runner that fires on schedule
+    and touches zero repos is green on all of them at once.
+    """
+
+    def test_the_last_finished_sweep_is_reported_not_just_the_next_one(self):
+        # last-success is written at the END of a sweep, so a run that started
+        # and died never moves it. That is what makes it worth reading.
+        self.heartbeat(600)
+        out = self.mod.read()
+        self.assertIsNotNone(out["heartbeat"])
+        self.assertLess(abs(out["heartbeat_age_s"] - 600), 5)
+
+    def test_a_pipeline_that_never_finished_a_sweep_says_so_rather_than_zero(self):
+        out = self.mod.read()
+        self.assertIsNone(out["heartbeat"])
+        self.assertIsNone(out["heartbeat_age_s"])
+
+    def test_coverage_counts_repos_and_decisions_inside_the_window(self):
+        self.receipts([("a/one", 60), ("a/one", 120), ("b/two", 300)])
+        cover = self.mod.read()["covered"]
+        self.assertEqual(cover["state"], "ok")
+        self.assertEqual(cover["repos"], 2)
+        self.assertEqual(cover["receipts"], 3)
+
+    def test_receipts_older_than_the_window_are_not_this_run(self):
+        # A rolling 24 hours, the same window office-sync uses for world.today,
+        # so the two never describe different spans of time.
+        self.receipts([("a/one", 60), ("b/two", 90000)])
+        cover = self.mod.read()["covered"]
+        self.assertEqual(cover["repos"], 1)
+        self.assertEqual(cover["receipts"], 1)
+
+    def test_a_torn_receipt_line_is_counted_and_never_skipped_in_silence(self):
+        self.receipts([("a/one", 60)], extra=['{"at": "2026-08-27T0'])
+        cover = self.mod.read()["covered"]
+        self.assertEqual(cover["receipts"], 1)
+        self.assertEqual(cover["unparsed"], 1)
+
+    def test_no_receipts_file_is_missing_rather_than_zero_repos(self):
+        cover = self.mod.read()["covered"]
+        self.assertEqual(cover["state"], "missing")
+        self.assertIsNone(cover["repos"])
+
+    def test_a_sweep_that_reached_nothing_is_visible_on_the_card(self):
+        # The whole point: on time, no errors, and it did not touch a repo.
+        self.heartbeat(600)
+        self.receipts([])
+        card = self.mod.card(self.mod.read())
+        assert_card(self, card)
+        facts = {f["label"]: f for f in card["facts"]}
+        self.assertIn("0 repos in 24h", facts["last full run"]["value"])
+        self.assertEqual(facts["last full run"]["tone"], "warn")
+
+    def test_a_healthy_sweep_says_when_and_how_wide(self):
+        self.heartbeat(600)
+        self.receipts([("a/one", 60), ("b/two", 300)])
+        facts = {f["label"]: f["value"]
+                 for f in self.mod.card(self.mod.read())["facts"]}
+        self.assertIn("2 repos in 24h", facts["last full run"])
+        self.assertIn("ago", facts["last full run"])
+
+    def test_receipts_nobody_can_read_is_a_hole_that_wants_a_person(self):
+        path = self.runtime / "receipts.jsonl"
+        path.write_text("{}\n", encoding="utf-8")
+        path.chmod(0o000)
+        try:
+            self.heartbeat(600)
+            data = self.mod.read()
+            self.assertEqual(data["covered"]["state"], "unreadable")
+            card = self.mod.card(data)
+            self.assertEqual(card["needs"], 1)
+        finally:
+            path.chmod(0o644)
 
 
 class CardTest(PipelineBase):
