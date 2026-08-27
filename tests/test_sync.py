@@ -510,5 +510,172 @@ class SingleRepoTest(SyncCase):
         self.assertFalse(hasattr(self.mod, "fetch_prs"))
 
 
+class DecisionTest(SyncCase):
+    """One issue decision becomes an ordered list of gh commands, or a refusal."""
+
+    def setUp(self):
+        super().setUp()
+        self.ran = []
+        self.mod.sh = self.record_sh
+
+    def record_sh(self, cmd, timeout=45, env=None, check=False):
+        self.ran.append(cmd)
+        return 0, "", ""
+
+    def decide(self, kind, issue=7, dry=False, **payload):
+        return self.mod.apply_decision(
+            {"repo": "acme/one", "kind": kind, "issue": issue, "payload": payload},
+            FakeAccess(), dry)
+
+    def test_a_comment_step_needs_words_and_an_issue(self):
+        self.assertEqual(self.mod._comment_step("comment", "7", "acme/one", ""),
+                         (None, "nothing to say"))
+        self.assertEqual(self.mod._comment_step("nudge", "", "acme/one", ""),
+                         (None, "a comment needs an issue"))
+        self.assertEqual(self.mod._comment_step("close", "7", "acme/one", ""), (None, ""))
+        self.assertEqual(self.mod._comment_step("label", "7", "acme/one", "x"), (None, ""))
+        cmd, err = self.mod._comment_step("nudge", "7", "acme/one", "")
+        self.assertEqual(err, "")
+        self.assertEqual(cmd[-1], self.mod.REQUEUE_LINE)
+
+    def test_edit_steps_per_kind(self):
+        steps, err = self.mod._edit_steps("unblock", "7", "acme/one", {})
+        self.assertEqual((err, len(steps)), ("", 1))
+        self.assertIn("--remove-label", steps[0])
+        self.assertEqual(self.mod._edit_steps("label", "7", "acme/one", {"label": " "}),
+                         ([], "no label given"))
+        self.assertEqual(self.mod._edit_steps("close", "", "acme/one", {}), ([], ""))
+        self.assertEqual(self.mod._edit_steps("reopen", "7", "acme/one", {})[0][0][:3],
+                         ["gh", "issue", "reopen"])
+
+    def test_issue_steps_refuses_when_nothing_would_run(self):
+        self.assertEqual(self.mod._issue_steps("bogus", "7", "acme/one", "", {}),
+                         (None, "nothing to do for bogus"))
+        steps, err = self.mod._issue_steps("unblock", "7", "acme/one", "yes", {})
+        self.assertEqual(err, "")
+        self.assertEqual([s[2] for s in steps], ["comment", "edit"])
+
+    def test_a_missing_label_is_not_a_failure(self):
+        self.assertTrue(self.mod._is_missing_label_error(
+            ["gh", "issue", "edit", "7", "--remove-label", "x"], "label not found"))
+        self.assertFalse(self.mod._is_missing_label_error(
+            ["gh", "issue", "comment", "7"], "label not found"))
+        self.assertFalse(self.mod._is_missing_label_error(
+            ["gh", "issue", "edit", "7", "--remove-label", "x"], "permission denied"))
+
+    def test_run_steps_dry_runs_nothing_and_stops_on_the_first_failure(self):
+        steps = [["gh", "issue", "comment", "7"], ["gh", "issue", "close", "7"]]
+        self.assertEqual(self.mod._run_steps(steps, {}, True),
+                         (True, ["would issue comment 7", "would issue close 7"]))
+        self.assertEqual(self.ran, [])
+        self.mod.sh = lambda cmd, timeout=45, env=None, check=False: (1, "", "boom\nmore")
+        self.assertEqual(self.mod._run_steps(steps, {}, False), (False, "issue comment: boom"))
+
+    def test_an_unblock_comments_then_drops_the_label_as_this_login(self):
+        ok, msg = self.decide("unblock", body="answered")
+        self.assertTrue(ok)
+        self.assertEqual(msg, "as ariaxhan: issue comment; issue edit")
+        self.assertEqual([c[:3] for c in self.ran],
+                         [["gh", "issue", "comment"], ["gh", "issue", "edit"]])
+
+    def test_a_repo_level_nudge_requeues_what_the_bot_sits_on(self):
+        self.mod.fetch_issues = lambda repo, tok: (
+            [{"number": 4, "bot_last": True}, {"number": 5, "bot_last": False}], None)
+        ok, msg = self.mod._requeue_stuck_issues("acme/one", "ariaxhan", "tok", True)
+        self.assertEqual((ok, msg), (True, "as ariaxhan: requeued would requeue #4"))
+        self.assertEqual(self.ran, [])
+        self.mod.fetch_issues = lambda repo, tok: ([{"number": 5, "bot_last": False}], None)
+        self.assertEqual(self.mod._requeue_stuck_issues("acme/one", "a", "tok", False),
+                         (False, "nothing here is waiting on a human"))
+
+    def test_refusals_before_any_command_runs(self):
+        self.assertEqual(self.decide("close", issue=None),
+                         (False, "close needs an issue number"))
+        self.assertEqual(self.decide("comment"), (False, "nothing to say"))
+        self.assertEqual(self.decide("label", label=""), (False, "no label given"))
+        self.assertEqual(self.ran, [])
+
+
+class RuntimeDecisionTest(SyncCase):
+    """A runtime decision goes to the local runtime by kind, and never to GitHub."""
+
+    def setUp(self):
+        super().setUp()
+        self.posted = []
+        self.mod.rt.post = lambda path, body, timeout=20: self.posted.append((path, body))
+        self.mod.rt._root = lambda: pathlib.Path(self.tmp.name)
+        self.mod.rt.read_gate = lambda: {"state": "pending", "id": "q1"}
+        self.mod.rt.answer_gate = lambda root, qid, answer, always: (True, f"{answer} {qid}")
+
+    def test_the_table_routes_every_runtime_kind_and_nothing_else(self):
+        self.assertEqual(set(self.mod.RUNTIME_HANDLERS), self.mod.RUNTIME_KINDS)
+        self.assertEqual(self.mod.apply_runtime_decision({"kind": "merge"}, True),
+                         (False, "unknown runtime kind merge"))
+
+    def test_a_permit_answers_the_gate_it_was_asked_about(self):
+        permit = lambda dry, **p: self.mod.apply_runtime_decision(
+            {"kind": "permit", "payload": p}, dry)
+        self.assertEqual(permit(True, question_id="q1", answer="allow"), (True, "would allow"))
+        self.assertEqual(permit(True, question_id="q2", answer="allow"),
+                         (False, "the agent has moved on"))
+        self.assertEqual(permit(False, question_id="q1", answer="deny"), (True, "deny q1"))
+        self.assertEqual(permit(False, question_id="q1", answer="maybe"),
+                         (False, "a permit must answer allow or deny"))
+        self.mod.rt.read_gate = lambda: {"state": "clear"}
+        self.assertEqual(permit(True, question_id="q1", answer="allow"),
+                         (False, "nothing is waiting on a gate right now"))
+
+    def test_chat_and_run_and_stop_post_to_the_runtime(self):
+        self.assertEqual(self.mod._apply_chat({}, {"body": " "}, False), (False, "nothing to say"))
+        self.assertEqual(self.mod._apply_chat({}, {"body": "hi"}, False), (True, "said 'hi'"))
+        ok, msg = self.mod._apply_run({"repo": "acme/one", "issue": 4}, {}, False)
+        self.assertEqual((ok, msg), (True, "started 'Work acme/one#4'"))
+        self.assertEqual(self.mod._apply_run({"repo": "acme/one"}, {}, True),
+                         (True, "would run 'Work on acme/one'"))
+        self.assertEqual(self.mod._apply_stop({}, {"run_id": "r9"}, False)[0], True)
+        self.assertEqual(self.posted, [("/api/chat", {"message": "hi"}),
+                                       ("/api/run", {"task": "Work acme/one#4"}),
+                                       ("/api/run/stop", {"run_id": "r9"})])
+
+    def test_a_runtime_that_refuses_is_reported_not_raised(self):
+        def refuse(path, body, timeout=20):
+            raise RuntimeError("down")
+        self.mod.rt.post = refuse
+        self.assertEqual(self.mod._apply_chat({}, {"body": "hi"}, False),
+                         (False, "the runtime did not take it: down"))
+        self.assertEqual(self.mod._apply_stop({}, {}, False), (False, "could not stop it: down"))
+
+
+class BatchPartsTest(SyncCase):
+    """The pieces fetch_batch is made of, each on its own."""
+
+    def test_the_body_is_a_dict_or_nothing(self):
+        self.assertEqual(self.mod._json_body(""), {})
+        self.assertEqual(self.mod._json_body("not json"), {})
+        self.assertEqual(self.mod._json_body("[1]"), {})
+        self.assertEqual(self.mod._json_body('{"data": 1}'), {"data": 1})
+
+    def test_an_error_names_its_repo_or_sinks_the_batch(self):
+        nwos = ["acme/one", "acme/two"]
+        self.assertEqual(self.mod._alias_index({"path": ["r1"]}, 2), 1)
+        self.assertEqual(self.mod._alias_index({"path": ["r7"]}, 2), -1)
+        self.assertEqual(self.mod._alias_index({}, 2), -1)
+        errors, fatal = self.mod._sort_errors(
+            [{"path": ["r0"], "message": "gone"}, {"message": "bad query"},
+             {"type": "RATE_LIMITED", "message": "slow down"}], nwos)
+        self.assertEqual(errors, {"acme/one": "gone"})
+        self.assertEqual(fatal, "slow down")
+        self.assertTrue(self.mod._is_rate_limited("API rate limit exceeded", {}))
+        self.assertFalse(self.mod._is_rate_limited("not found", {"type": "NOT_FOUND"}))
+
+    def test_the_bot_last_word_travels_only_when_the_bot_spoke_last(self):
+        self.assertEqual(self.mod._bot_last_word(issue_node(1, comment=None)), "")
+        self.assertEqual(self.mod._bot_last_word(issue_node(1, comment="a human")), "")
+        word = self.mod._bot_last_word(issue_node(1))
+        self.assertIn(self.mod.BOT_MARKER, word)
+        row = self.mod._issue_row(issue_node(1))
+        self.assertEqual((row["bot_last"], row["last_word"]), (True, word))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -465,27 +465,40 @@ def batch_query(n: int) -> str:
             f"{lines}\n}}\n{DESK_FRAGMENT}")
 
 
+def _bot_last_word(node) -> str:
+    """The bot's comment when it had the last word on this issue, else "".
+
+    THE rule, copied from dispatch.sh on purpose: the bot having the last
+    word is what "waiting on a human" mechanically means. A label is a hint
+    that can go stale; this cannot.
+    """
+    comments = ((node.get("comments") or {}).get("nodes")) or []
+    if not comments:
+        return ""
+    body = comments[-1].get("body") or ""
+    if BOT_MARKER not in body:
+        return ""
+    return body
+
+
+def _issue_row(i) -> dict:
+    last_word = _bot_last_word(i)
+    return {
+        "number": i.get("number"),
+        "title": i.get("title") or "",
+        "body": (i.get("body") or "")[:4000],
+        "labels": [l.get("name") for l in ((i.get("labels") or {}).get("nodes") or [])],
+        "url": i.get("url") or "",
+        "updatedAt": i.get("updatedAt") or "",
+        "bot_last": bool(last_word),
+        # When the bot spoke last, its words ARE the question a human has to
+        # answer, so they travel with the issue instead of behind a click.
+        "last_word": last_word[:1500],
+    }
+
+
 def _issue_rows(nodes) -> list:
-    issues = []
-    for i in nodes or []:
-        comments = ((i.get("comments") or {}).get("nodes")) or []
-        last = comments[-1] if comments else None
-        # THE rule, copied from dispatch.sh on purpose: the bot having the last
-        # word is what "waiting on a human" mechanically means. A label is a hint
-        # that can go stale; this cannot.
-        bot_last = bool(last and BOT_MARKER in (last.get("body") or ""))
-        issues.append({
-            "number": i.get("number"),
-            "title": i.get("title") or "",
-            "body": (i.get("body") or "")[:4000],
-            "labels": [l.get("name") for l in ((i.get("labels") or {}).get("nodes") or [])],
-            "url": i.get("url") or "",
-            "updatedAt": i.get("updatedAt") or "",
-            "bot_last": bot_last,
-            # When the bot spoke last, its words ARE the question a human has to
-            # answer, so they travel with the issue instead of behind a click.
-            "last_word": (last.get("body") or "")[:1500] if bot_last else "",
-        })
+    issues = [_issue_row(i) for i in nodes or []]
     issues.sort(key=lambda x: (not x["bot_last"], -(x["number"] or 0)))
     return issues
 
@@ -526,6 +539,65 @@ def _pr_rows(nodes) -> list:
     return prs
 
 
+def _batch_command(nwos) -> list:
+    cmd = ["gh", "api", "graphql", "-f", "query=" + batch_query(len(nwos))]
+    for i, nwo in enumerate(nwos):
+        owner, name = nwo.split("/", 1)
+        cmd += ["-f", f"o{i}={owner}", "-f", f"n{i}={name}"]
+    return cmd
+
+
+def _json_body(out: str) -> dict:
+    """The JSON object gh printed, or {} when it printed nothing usable."""
+    try:
+        body = json.loads(out) if out.strip() else {}
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _is_rate_limited(msg: str, error: dict) -> bool:
+    return RATE_WORDS in msg.lower() or str(error.get("type") or "") == "RATE_LIMITED"
+
+
+def _alias_index(error: dict, n: int) -> int:
+    """Which repo of the batch a GraphQL error is about, or -1 for the whole batch."""
+    path = error.get("path") or []
+    alias = str(path[0]) if path else ""
+    if alias[:1] == "r" and alias[1:].isdigit() and int(alias[1:]) < n:
+        return int(alias[1:])
+    return -1
+
+
+def _sort_errors(body_errors, nwos):
+    """Per-repo errors and the one that sinks the whole batch, as (errors, fatal)."""
+    errors, fatal = {}, ""
+    for e in body_errors:
+        msg = str(e.get("message") or e.get("type") or "graphql error")[:160]
+        if _is_rate_limited(msg, e):
+            fatal = msg
+            continue
+        i = _alias_index(e, len(nwos))
+        if i >= 0:
+            errors.setdefault(nwos[i], msg)
+        else:
+            fatal = fatal or msg
+    return errors, fatal
+
+
+def _desk_rows(data: dict, nwos, errors: dict, fatal: str) -> dict:
+    """{nwo: {"issues", "prs"}} for every repo that answered; the rest get an error."""
+    rows = {}
+    for i, nwo in enumerate(nwos):
+        node = data.get(f"r{i}")
+        if not isinstance(node, dict):
+            errors.setdefault(nwo, fatal or "GitHub returned nothing for this repo")
+            continue
+        rows[nwo] = {"issues": _issue_rows((node.get("issues") or {}).get("nodes")),
+                     "prs": _pr_rows((node.get("pullRequests") or {}).get("nodes"))}
+    return rows
+
+
 def fetch_batch(nwos, token):
     """(rows, errors, rate, fatal) for up to BATCH_SIZE repos on one token.
 
@@ -537,45 +609,19 @@ def fetch_batch(nwos, token):
     nwos = [n for n in nwos if NWO_RE.match(n or "")]
     if not nwos:
         return {}, {}, {}, ""
-    cmd = ["gh", "api", "graphql", "-f", "query=" + batch_query(len(nwos))]
-    for i, nwo in enumerate(nwos):
-        owner, name = nwo.split("/", 1)
-        cmd += ["-f", f"o{i}={owner}", "-f", f"n{i}={name}"]
 
-    rc, out, err = sh(cmd, timeout=90, env={"GH_TOKEN": token})
+    rc, out, err = sh(_batch_command(nwos), timeout=90, env={"GH_TOKEN": token})
     # gh exits non-zero when ANY alias in the batch errored, and still prints the
     # whole body. The body is the answer; the exit code is only a summary of it,
     # so one dead repo must not be read as ten dead repos.
-    try:
-        body = json.loads(out) if out.strip() else {}
-    except Exception:
-        body = {}
-    if not isinstance(body, dict) or not body:
+    body = _json_body(out)
+    if not body:
         return {}, {}, {}, (err.strip().splitlines() or [f"gh exit {rc}"])[0][:160]
 
     data = body.get("data") or {}
     rate = data.get("rateLimit") or {}
-    errors, fatal = {}, ""
-    for e in body.get("errors") or []:
-        msg = str(e.get("message") or e.get("type") or "graphql error")[:160]
-        if RATE_WORDS in msg.lower() or str(e.get("type") or "") == "RATE_LIMITED":
-            fatal = msg
-            continue
-        path = e.get("path") or []
-        alias = str(path[0]) if path else ""
-        if alias[:1] == "r" and alias[1:].isdigit() and int(alias[1:]) < len(nwos):
-            errors.setdefault(nwos[int(alias[1:])], msg)
-        else:
-            fatal = fatal or msg
-
-    rows = {}
-    for i, nwo in enumerate(nwos):
-        node = data.get(f"r{i}")
-        if not isinstance(node, dict):
-            errors.setdefault(nwo, fatal or "GitHub returned nothing for this repo")
-            continue
-        rows[nwo] = {"issues": _issue_rows((node.get("issues") or {}).get("nodes")),
-                     "prs": _pr_rows((node.get("pullRequests") or {}).get("nodes"))}
+    errors, fatal = _sort_errors(body.get("errors") or [], nwos)
+    rows = _desk_rows(data, nwos, errors, fatal)
     return rows, errors, rate, fatal
 
 
@@ -595,6 +641,157 @@ def fetch_issues(nwo, token):
     return None, errors.get(nwo) or fatal or "GitHub returned nothing for this repo"
 
 
+def _group_by_token(visible, tokens, errors) -> dict:
+    """{token: [repos]} for the desks somebody can push to; the rest get an error."""
+    by_token = {}
+    for repo in visible:
+        who, tok = tokens.get(repo) or (None, None)
+        if not tok:
+            errors[repo] = "no account holds push here"
+            continue
+        by_token.setdefault(tok, []).append(repo)
+    return by_token
+
+
+def _batches(by_token: dict) -> list:
+    return [(tok, group[i:i + BATCH_SIZE])
+            for tok, group in by_token.items()
+            for i in range(0, len(group), BATCH_SIZE)]
+
+
+def _blame_batch(chunk, rows, errors, fatal) -> None:
+    """The batch as a whole is unusable, so every desk in it wears the same
+    line. None of them is blanked; they keep what they had."""
+    for repo in chunk:
+        if repo not in rows:
+            errors.setdefault(repo, fatal)
+
+
+def _fetch_batches(batches, fresh, errors):
+    """Run the batches in order, filling `fresh` and `errors`.
+
+    Returns (cost, gh_error, stopped). Sequential on purpose. The reserve is
+    only a reserve if the decision to stop is made before the next query goes
+    out, not after eight of them already did.
+    """
+    cost, gh_error, stopped = 0, "", ""
+    for tok, chunk in batches:
+        left = BUDGET["remaining"]
+        if isinstance(left, int) and left < GH_RESERVE:
+            stopped = pause(f"only {left} graphql points left, reserve is {GH_RESERVE}",
+                            BUDGET["reset_at"])
+            break
+        rows, errs, rate, fatal = fetch_batch(chunk, tok)
+        cost += note_rate(rate)
+        fresh.update(rows)
+        errors.update(errs)
+        if fatal:
+            gh_error = fatal
+            _blame_batch(chunk, rows, errors, fatal)
+            if RATE_WORDS in fatal.lower():
+                stopped = pause(fatal, BUDGET["reset_at"])
+                break
+    return cost, gh_error, stopped
+
+
+def _fetch_visible(visible, tokens, fresh, errors):
+    """Ask GitHub about every visible desk unless the budget says wait.
+
+    Returns (cost, gh_error). A desk that got no fresh rows because the build
+    was paused says so instead of blanking.
+    """
+    stopped = paused_until()
+    cost, gh_error = 0, ""
+    if not stopped:
+        by_token = _group_by_token(visible, tokens, errors)
+        cost, gh_error, stopped = _fetch_batches(_batches(by_token), fresh, errors)
+    if stopped:
+        for repo in visible:
+            if repo not in fresh:
+                errors[repo] = f"GitHub paused until {stopped}"
+    return cost, gh_error
+
+
+def _remember_fresh(cache: dict, fresh: dict, desks, hidden, stamp: str) -> dict:
+    """Fold this build's rows into the on-disk cache and forget lost desks."""
+    for repo, rows in fresh.items():
+        cache[repo] = {"fetched_at": stamp, "issues": rows["issues"], "prs": rows["prs"]}
+    keep = set(desks) | hidden
+    cache = {r: v for r, v in cache.items() if r in keep}
+    if fresh:
+        write_desks(cache)
+    return cache
+
+
+def _desk_access(repo, hidden, access, tokens):
+    """(identity, access) for one desk: who can push there, and whether anyone can."""
+    if repo in hidden:
+        # Never probed this build, so the answer is whatever we already knew.
+        # `None` access means "the snapshot did not say", which is not the
+        # same as "locked" and must not render as it.
+        hit = access.cache.get(repo)
+        return (hit or None), (None if hit is None else bool(hit))
+    who = (tokens.get(repo) or (None, None))[0]
+    return who, bool(who)
+
+
+def _stale_reason(repo, errors, fresh) -> str:
+    """Why a desk is showing last-good data, or "" when it heard from GitHub."""
+    if repo in fresh:
+        return ""
+    return errors.get(repo) or ""
+
+
+def _station(repo, runs, who, can, hidden: bool, pins, kept: dict, stale: str) -> dict:
+    head = headline(runs)
+    st = {
+        "repo": repo,
+        "identity": who,
+        "access": can,
+        "outcome": head.get("outcome", ""),
+        "detail": head.get("detail", ""),
+        "at": head.get("at", ""),
+        "runs": runs[:10],
+        # Put away, but still here, still carrying what it last showed, so
+        # the app can list it and bring it back. Never fetched while hidden.
+        "hidden": hidden,
+        # Its rank at the top of the roster, or null when it is not pinned.
+        # The order itself is `world.pins`; this is the same fact per desk.
+        "pinned": pins.index(repo) if repo in pins else None,
+        # When this desk last heard from GitHub. "" means never.
+        "fetched_at": kept.get("fetched_at", ""),
+        "issues": list(kept.get("issues") or []),
+        "issues_error": None,
+        "prs": list(kept.get("prs") or []),
+        "prs_error": None,
+    }
+    if stale:
+        # Last-good data AND the reason it is last-good. A desk that blanks
+        # because GitHub said no is a lie; a stale desk that says so is not.
+        st["issues_error"] = stale
+        st["prs_error"] = stale
+    return st
+
+
+def _heartbeat() -> str:
+    if not HEARTBEAT:
+        return ""
+    try:
+        return HEARTBEAT.read_text().strip()[:40]
+    except Exception:
+        return ""
+
+
+def _log_room(stations, cost, run) -> None:
+    waiting = sum(1 for s in stations for i in s["issues"] if i["bot_last"])
+    log(f"{len(stations)} desks, "
+        f"{sum(len(s['issues']) for s in stations)} open issues, {waiting} waiting on you, "
+        f"{cost} graphql points this build")
+    gate = run.get("gate") or {}
+    if gate.get("state") == "pending":
+        log(f"A GATE IS OPEN: {gate.get('permission')} {gate.get('target', '')[:60]}")
+
+
 def build_snapshot(access: Access):
     by_repo, counts = receipts()
     hidden = set(read_hidden())
@@ -610,121 +807,25 @@ def build_snapshot(access: Access):
     with ThreadPoolExecutor(max_workers=8) as pool:
         tokens = dict(zip(visible, pool.map(access.token_for, visible)))
 
-    cost = 0
-    gh_error = ""
     fresh, errors = {}, {}
-    stopped = paused_until()
-    if not stopped:
-        by_token = {}
-        for repo in visible:
-            who, tok = tokens.get(repo) or (None, None)
-            if not tok:
-                errors[repo] = "no account holds push here"
-                continue
-            by_token.setdefault(tok, []).append(repo)
-        batches = [(tok, group[i:i + BATCH_SIZE])
-                   for tok, group in by_token.items()
-                   for i in range(0, len(group), BATCH_SIZE)]
-
-        # Sequential on purpose. The reserve is only a reserve if the decision to
-        # stop is made before the next query goes out, not after eight of them
-        # already did.
-        for tok, chunk in batches:
-            left = BUDGET["remaining"]
-            if isinstance(left, int) and left < GH_RESERVE:
-                stopped = pause(f"only {left} graphql points left, reserve is {GH_RESERVE}",
-                                BUDGET["reset_at"])
-                break
-            rows, errs, rate, fatal = fetch_batch(chunk, tok)
-            cost += note_rate(rate)
-            fresh.update(rows)
-            errors.update(errs)
-            if fatal:
-                # The batch as a whole is unusable, so every desk in it wears the
-                # same line. None of them is blanked; they keep what they had.
-                gh_error = fatal
-                for repo in chunk:
-                    if repo not in rows:
-                        errors.setdefault(repo, fatal)
-                if RATE_WORDS in fatal.lower():
-                    stopped = pause(fatal, BUDGET["reset_at"])
-                    break
-    if stopped:
-        for repo in visible:
-            if repo not in fresh:
-                errors[repo] = f"GitHub paused until {stopped}"
+    cost, gh_error = _fetch_visible(visible, tokens, fresh, errors)
 
     stamp = NOW.strftime(ISO)
-    for repo, rows in fresh.items():
-        cache[repo] = {"fetched_at": stamp, "issues": rows["issues"], "prs": rows["prs"]}
-    keep = set(desks) | hidden
-    cache = {r: v for r, v in cache.items() if r in keep}
-    if fresh:
-        write_desks(cache)
+    cache = _remember_fresh(cache, fresh, desks, hidden, stamp)
 
     stations = []
     for repo in desks:
-        runs = by_repo[repo]
-        head = headline(runs)
-        if repo in hidden:
-            # Never probed this build, so the answer is whatever we already knew.
-            # `None` access means "the snapshot did not say", which is not the
-            # same as "locked" and must not render as it.
-            hit = access.cache.get(repo)
-            who, can = (hit or None), (None if hit is None else bool(hit))
-        else:
-            who = (tokens.get(repo) or (None, None))[0]
-            can = bool(who)
-        kept = cache.get(repo) or {}
-        st = {
-            "repo": repo,
-            "identity": who,
-            "access": can,
-            "outcome": head.get("outcome", ""),
-            "detail": head.get("detail", ""),
-            "at": head.get("at", ""),
-            "runs": runs[:10],
-            # Put away, but still here, still carrying what it last showed, so
-            # the app can list it and bring it back. Never fetched while hidden.
-            "hidden": repo in hidden,
-            # Its rank at the top of the roster, or null when it is not pinned.
-            # The order itself is `world.pins`; this is the same fact per desk.
-            "pinned": pins.index(repo) if repo in pins else None,
-            # When this desk last heard from GitHub. "" means never.
-            "fetched_at": kept.get("fetched_at", ""),
-            "issues": list(kept.get("issues") or []),
-            "issues_error": None,
-            "prs": list(kept.get("prs") or []),
-            "prs_error": None,
-        }
-        err = errors.get(repo)
-        if err and repo not in fresh:
-            # Last-good data AND the reason it is last-good. A desk that blanks
-            # because GitHub said no is a lie; a stale desk that says so is not.
-            st["issues_error"] = err
-            st["prs_error"] = err
-        stations.append(st)
+        who, can = _desk_access(repo, hidden, access, tokens)
+        stations.append(_station(repo, by_repo[repo], who, can, repo in hidden, pins,
+                                 cache.get(repo) or {}, _stale_reason(repo, errors, fresh)))
 
     access.save()
-    hb = ""
-    if HEARTBEAT:
-        try:
-            hb = HEARTBEAT.read_text().strip()[:40]
-        except Exception:
-            pass
-
-    waiting = sum(1 for s in stations for i in s["issues"] if i["bot_last"])
-    log(f"{len(stations)} desks, "
-        f"{sum(len(s['issues']) for s in stations)} open issues, {waiting} waiting on you, "
-        f"{cost} graphql points this build")
     run = rt.snapshot()
-    gate = run.get("gate") or {}
-    if gate.get("state") == "pending":
-        log(f"A GATE IS OPEN: {gate.get('permission')} {gate.get('target', '')[:60]}")
+    _log_room(stations, cost, run)
 
     return {
         "generated": stamp,
-        "heartbeat": hb,
+        "heartbeat": _heartbeat(),
         "killed": bool(KILLSWITCH and KILLSWITCH.exists()),
         "today": counts,
         "stations": stations,
@@ -774,28 +875,13 @@ def apply_merge(repo, who, tok, payload, dry: bool):
         return False, "a merge needs a PR number"
 
     env = {"GH_TOKEN": tok}
-    rc, out, err = sh(["gh", "pr", "view", num, "--repo", repo, "--json",
-                       "headRefName,isDraft,mergeable,state,title"],
-                      timeout=60, env=env)
-    if rc != 0:
-        return False, f"could not read PR #{num}: {(err.strip().splitlines() or ['failed'])[0][:120]}"
-    try:
-        pr = json.loads(out or "{}")
-    except Exception as exc:
-        return False, f"could not read PR #{num}: {exc}"
-
+    pr, err = _read_pr(repo, num, env)
+    if err:
+        return False, err
     head = pr.get("headRefName") or ""
-    if not head.startswith(PR_PREFIX):
-        # The refusal names the branch on purpose. A silent no here would look
-        # exactly like a failure to reach GitHub.
-        return False, (f"refusing: PR #{num} is on {head!r}, which is not a pipeline "
-                       f"branch. The office only merges branches starting {PR_PREFIX!r}.")
-    if (pr.get("state") or "").upper() != "OPEN":
-        return False, f"PR #{num} is {pr.get('state', 'not open').lower()}"
-    if pr.get("isDraft"):
-        return False, f"PR #{num} is a draft; a draft says it is not ready"
-    if (pr.get("mergeable") or "").upper() == "CONFLICTING":
-        return False, f"PR #{num} conflicts with its base and needs a human"
+    refusal = _merge_refusal(pr, num, head)
+    if refusal:
+        return False, refusal
 
     if dry:
         return True, f"would squash-merge #{num} ({head})"
@@ -808,6 +894,99 @@ def apply_merge(repo, who, tok, payload, dry: bool):
     return True, f"as {who}: squash-merged #{num} ({head}); its Closes line shuts the issue"
 
 
+def _read_pr(repo, num, env):
+    """The PR as GitHub describes it right now, as (pr, error)."""
+    rc, out, err = sh(["gh", "pr", "view", num, "--repo", repo, "--json",
+                       "headRefName,isDraft,mergeable,state,title"],
+                      timeout=60, env=env)
+    if rc != 0:
+        return None, f"could not read PR #{num}: {(err.strip().splitlines() or ['failed'])[0][:120]}"
+    try:
+        return json.loads(out or "{}"), ""
+    except Exception as exc:
+        return None, f"could not read PR #{num}: {exc}"
+
+
+def _merge_refusal(pr: dict, num: str, head: str) -> str:
+    """Why this PR must not be merged, or "" when it may."""
+    if not head.startswith(PR_PREFIX):
+        # The refusal names the branch on purpose. A silent no here would look
+        # exactly like a failure to reach GitHub.
+        return (f"refusing: PR #{num} is on {head!r}, which is not a pipeline "
+                f"branch. The office only merges branches starting {PR_PREFIX!r}.")
+    if (pr.get("state") or "").upper() != "OPEN":
+        return f"PR #{num} is {pr.get('state', 'not open').lower()}"
+    if pr.get("isDraft"):
+        return f"PR #{num} is a draft; a draft says it is not ready"
+    if (pr.get("mergeable") or "").upper() == "CONFLICTING":
+        return f"PR #{num} conflicts with its base and needs a human"
+    return ""
+
+
+def _apply_permit(d, payload, dry: bool):
+    """Answer the gate on disk, and only the gate whose id was answered."""
+    root = rt._root()
+    if root is None:
+        return False, "no runtime root configured (OFFICE_RUNTIME_ROOT)"
+    qid = str(payload.get("question_id") or "")
+    answer = payload.get("answer")
+    if answer not in ("allow", "deny"):
+        return False, "a permit must answer allow or deny"
+    if dry:
+        live = rt.read_gate()
+        if live.get("state") != "pending":
+            return False, "nothing is waiting on a gate right now"
+        same = live.get("id") == qid
+        return same, ("would " + answer) if same else "the agent has moved on"
+    return rt.answer_gate(root, qid, answer, bool(payload.get("always")))
+
+
+def _apply_chat(d, payload, dry: bool):
+    text = (payload.get("body") or "").strip()
+    if not text:
+        return False, "nothing to say"
+    if dry:
+        return True, f"would say {text[:60]!r}"
+    try:
+        rt.post("/api/chat", {"message": text})
+    except Exception as exc:
+        return False, f"the runtime did not take it: {exc}"
+    return True, f"said {text[:60]!r}"
+
+
+def _apply_run(d, payload, dry: bool):
+    task = (payload.get("body") or "").strip()
+    repo = d.get("repo") or ""
+    issue = d.get("issue")
+    if not task:
+        task = f"Work {repo}#{issue}" if issue else f"Work on {repo}"
+    if dry:
+        return True, f"would run {task[:70]!r}"
+    try:
+        rt.post("/api/run", {"task": task})
+    except Exception as exc:
+        return False, f"the runtime refused the run: {exc}"
+    return True, f"started {task[:70]!r}"
+
+
+def _apply_stop(d, payload, dry: bool):
+    if dry:
+        return True, "would stop the current run"
+    try:
+        rt.post("/api/run/stop", {"run_id": payload.get("run_id") or ""})
+    except Exception as exc:
+        return False, f"could not stop it: {exc}"
+    return True, "asked the runtime to stop at the next step boundary"
+
+
+RUNTIME_HANDLERS = {
+    "permit": _apply_permit,
+    "chat": _apply_chat,
+    "run": _apply_run,
+    "stop": _apply_stop,
+}
+
+
 def apply_runtime_decision(d, dry: bool):
     """Route a decision at the local runtime rather than at GitHub.
 
@@ -816,60 +995,126 @@ def apply_runtime_decision(d, dry: bool):
     against the gate on disk before a single byte is written.
     """
     kind = d.get("kind")
-    payload = d.get("payload") or {}
+    handler = RUNTIME_HANDLERS.get(kind)
+    if handler is None:
+        return False, f"unknown runtime kind {kind}"
+    return handler(d, d.get("payload") or {}, dry)
 
-    if kind == "permit":
-        root = rt._root()
-        if root is None:
-            return False, "no runtime root configured (OFFICE_RUNTIME_ROOT)"
-        qid = str(payload.get("question_id") or "")
-        answer = payload.get("answer")
-        if answer not in ("allow", "deny"):
-            return False, "a permit must answer allow or deny"
+
+REQUEUE_LINE = "Requeued from the office board."
+
+
+def _has_issue_number(issue) -> bool:
+    return bool(issue and str(issue).isdigit())
+
+
+def _first_error_line(err: str, width: int = 160) -> str:
+    return (err.strip().splitlines() or ["failed"])[0][:width]
+
+
+def _requeue_stuck_issues(repo, who, tok, dry: bool):
+    """A repo-level nudge has no issue to speak on, so it means "unblock everything
+    here": post the requeue line on each issue the bot is sitting on. That is the
+    only bounded reading of "work this repo next" that does something real."""
+    issues, err = fetch_issues(repo, tok)
+    if issues is None:
+        return False, f"could not list issues: {err}"
+    stuck = [i for i in issues if i["bot_last"]][:10]
+    if not stuck:
+        return False, "nothing here is waiting on a human"
+    env = {"GH_TOKEN": tok}
+    done = []
+    for i in stuck:
+        n = str(i["number"])
         if dry:
-            live = rt.read_gate()
-            if live.get("state") != "pending":
-                return False, "nothing is waiting on a gate right now"
-            same = live.get("id") == qid
-            return same, ("would " + answer) if same else "the agent has moved on"
-        return rt.answer_gate(root, qid, answer, bool(payload.get("always")))
+            done.append(f"would requeue #{n}")
+            continue
+        rc, _, err = sh(["gh", "issue", "comment", n, "--repo", repo,
+                         "--body", REQUEUE_LINE], timeout=60, env=env)
+        if rc != 0:
+            return False, f"#{n}: {_first_error_line(err, 120)}"
+        sh(["gh", "issue", "edit", n, "--repo", repo,
+            "--remove-label", WAITING_LABEL], timeout=60, env=env)
+        done.append(f"#{n}")
+    return True, f"as {who}: requeued " + ", ".join(done)
 
-    if kind == "chat":
-        text = (payload.get("body") or "").strip()
-        if not text:
-            return False, "nothing to say"
+
+def _comment_step(kind, num, repo, body):
+    """The comment an issue decision posts, as (command, refusal).
+
+    A comment with no marker is exactly what re-queues an issue, because the
+    runner's whole selection rule is "did the bot have the last word". This
+    is the mechanism, not a side effect: answering a question IS the nudge.
+    """
+    if kind not in ("comment", "unblock", "nudge", "close"):
+        return None, ""
+    text = body or (REQUEUE_LINE if kind == "nudge" else "")
+    if not text:
+        if kind in ("comment", "unblock"):
+            return None, "nothing to say"
+        return None, ""
+    if not num:
+        return None, "a comment needs an issue"
+    return ["gh", "issue", "comment", num, "--repo", repo, "--body", text], ""
+
+
+def _edit_steps(kind, num, repo, payload):
+    """The label, close and reopen commands an issue decision runs, as (commands, refusal)."""
+    if not num:
+        return [], ""
+    steps = []
+    if kind in ("unblock", "nudge"):
+        steps.append(["gh", "issue", "edit", num, "--repo", repo,
+                      "--remove-label", WAITING_LABEL])
+    if kind == "label":
+        label = (payload.get("label") or "").strip()
+        if not label:
+            return [], "no label given"
+        steps.append(["gh", "issue", "edit", num, "--repo", repo, "--add-label", label])
+    if kind == "close":
+        steps.append(["gh", "issue", "close", num, "--repo", repo])
+    if kind == "reopen":
+        steps.append(["gh", "issue", "reopen", num, "--repo", repo])
+    return steps, ""
+
+
+def _issue_steps(kind, num, repo, body, payload):
+    """Every gh command one issue decision turns into, as (commands, refusal)."""
+    comment, err = _comment_step(kind, num, repo, body)
+    if err:
+        return None, err
+    edits, err = _edit_steps(kind, num, repo, payload)
+    if err:
+        return None, err
+    steps = ([comment] if comment else []) + edits
+    if not steps:
+        return None, f"nothing to do for {kind}"
+    return steps, ""
+
+
+def _is_missing_label_error(cmd, msg: str) -> bool:
+    """Removing a label the issue never had is a no-op, not a failure, and
+    failing the whole decision over it would strand a real reply."""
+    return "--remove-label" in cmd and ("not found" in msg.lower() or "label" in msg.lower())
+
+
+def _run_steps(steps, env, dry: bool):
+    """Run the gh commands in order: (True, what was done) or (False, why it stopped)."""
+    done = []
+    for cmd in steps:
         if dry:
-            return True, f"would say {text[:60]!r}"
-        try:
-            rt.post("/api/chat", {"message": text})
-        except Exception as exc:
-            return False, f"the runtime did not take it: {exc}"
-        return True, f"said {text[:60]!r}"
-
-    if kind == "run":
-        task = (payload.get("body") or "").strip()
-        repo = d.get("repo") or ""
-        issue = d.get("issue")
-        if not task:
-            task = f"Work {repo}#{issue}" if issue else f"Work on {repo}"
-        if dry:
-            return True, f"would run {task[:70]!r}"
-        try:
-            rt.post("/api/run", {"task": task})
-        except Exception as exc:
-            return False, f"the runtime refused the run: {exc}"
-        return True, f"started {task[:70]!r}"
-
-    if kind == "stop":
-        if dry:
-            return True, "would stop the current run"
-        try:
-            rt.post("/api/run/stop", {"run_id": payload.get("run_id") or ""})
-        except Exception as exc:
-            return False, f"could not stop it: {exc}"
-        return True, "asked the runtime to stop at the next step boundary"
-
-    return False, f"unknown runtime kind {kind}"
+            done.append("would " + " ".join(cmd[1:4]))
+            continue
+        rc, _, err = sh(cmd, timeout=60, env=env)
+        verb = f"{cmd[1]} {cmd[2]}"
+        if rc != 0:
+            msg = _first_error_line(err)
+            if _is_missing_label_error(cmd, msg):
+                done.append(f"{verb}: label was not set")
+                continue
+            return False, f"{verb}: {msg}"
+        done.append(verb)
+    return True, done
 
 
 def apply_decision(d, access: Access, dry: bool):
@@ -895,81 +1140,22 @@ def apply_decision(d, access: Access, dry: bool):
     # re-derived from GitHub here rather than from anything the browser said.
     if kind == "merge":
         return apply_merge(repo, who, tok, payload, dry)
-    if kind != "nudge" and not (issue and str(issue).isdigit()):
+    if kind != "nudge" and not _has_issue_number(issue):
         return False, f"{kind} needs an issue number"
 
-    env = {"GH_TOKEN": tok}
     num = str(issue) if issue else ""
-    steps = []
-
-    # A repo-level nudge has no issue to speak on, so it means "unblock everything
-    # here": post the requeue line on each issue the bot is sitting on. That is the
-    # only bounded reading of "work this repo next" that does something real.
     if kind == "nudge" and not num:
-        issues, err = fetch_issues(repo, tok)
-        if issues is None:
-            return False, f"could not list issues: {err}"
-        stuck = [i for i in issues if i["bot_last"]][:10]
-        if not stuck:
-            return False, "nothing here is waiting on a human"
-        done = []
-        for i in stuck:
-            n = str(i["number"])
-            if dry:
-                done.append(f"would requeue #{n}")
-                continue
-            rc, _, err = sh(["gh", "issue", "comment", n, "--repo", repo,
-                             "--body", "Requeued from the office board."],
-                            timeout=60, env=env)
-            if rc != 0:
-                return False, f"#{n}: {(err.strip().splitlines() or ['failed'])[0][:120]}"
-            sh(["gh", "issue", "edit", n, "--repo", repo,
-                "--remove-label", WAITING_LABEL], timeout=60, env=env)
-            done.append(f"#{n}")
-        return True, f"as {who}: requeued " + ", ".join(done)
+        return _requeue_stuck_issues(repo, who, tok, dry)
 
-    if kind in ("comment", "unblock", "nudge", "close"):
-        # A comment with no marker is exactly what re-queues an issue, because the
-        # runner's whole selection rule is "did the bot have the last word". This
-        # is the mechanism, not a side effect: answering a question IS the nudge.
-        text = body or ("Requeued from the office board." if kind == "nudge" else "")
-        if kind in ("comment", "unblock") and not text:
-            return False, "nothing to say"
-        if text and num:
-            steps.append(["gh", "issue", "comment", num, "--repo", repo, "--body", text])
-        elif text and not num:
-            return False, "a comment needs an issue"
+    return _apply_issue_decision(repo, who, tok, num, kind, body, payload, dry)
 
-    if kind in ("unblock", "nudge") and num:
-        steps.append(["gh", "issue", "edit", num, "--repo", repo,
-                      "--remove-label", WAITING_LABEL])
-    if kind == "label" and num:
-        label = (payload.get("label") or "").strip()
-        if not label:
-            return False, "no label given"
-        steps.append(["gh", "issue", "edit", num, "--repo", repo, "--add-label", label])
-    if kind == "close" and num:
-        steps.append(["gh", "issue", "close", num, "--repo", repo])
-    if kind == "reopen" and num:
-        steps.append(["gh", "issue", "reopen", num, "--repo", repo])
 
-    if not steps:
-        return False, f"nothing to do for {kind}"
-
-    done = []
-    for cmd in steps:
-        if dry:
-            done.append("would " + " ".join(cmd[1:4]))
-            continue
-        rc, _, err = sh(cmd, timeout=60, env=env)
-        verb = f"{cmd[1]} {cmd[2]}"
-        if rc != 0:
-            msg = (err.strip().splitlines() or ["failed"])[0][:160]
-            # Removing a label the issue never had is a no-op, not a failure, and
-            # failing the whole decision over it would strand a real reply.
-            if "--remove-label" in cmd and ("not found" in msg.lower() or "label" in msg.lower()):
-                done.append(f"{verb}: label was not set")
-                continue
-            return False, f"{verb}: {msg}"
-        done.append(verb)
-    return True, f"as {who}: " + "; ".join(done)
+def _apply_issue_decision(repo, who, tok, num, kind, body, payload, dry: bool):
+    """Comment, relabel, close or reopen one issue, in that order, as this login."""
+    steps, err = _issue_steps(kind, num, repo, body, payload)
+    if err:
+        return False, err
+    ok, result = _run_steps(steps, {"GH_TOKEN": tok}, dry)
+    if not ok:
+        return False, result
+    return True, f"as {who}: " + "; ".join(result)
