@@ -179,6 +179,92 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.section("clock")?.card.facts.first?.label, "ok")
     }
 
+    // MARK: - two hands in the air at once
+
+    /// The M3 check, driven through the real store against a real fixture:
+    /// two bots raise gates at once, both show, both answer independently,
+    /// neither is lost.
+    func testBothHandsShowAndTheOldestIsTheOneOnTop() async throws {
+        let store = try crowdedFloor()
+        await store.refreshBots()
+        await store.refreshWorld()
+        await store.refreshGate()
+
+        XCTAssertEqual(store.gates.map(\.id), ["q-first", "q-second"])
+        XCTAssertEqual(store.gate.id, "q-first", "the oldest is what every older surface reads")
+        XCTAssertTrue(store.showsGateSheet)
+        XCTAssertEqual(store.gateQueueLine, "1 of 2, Chief is next")
+
+        // Both bots are marked, not only the one at the front of the queue.
+        XCTAssertTrue(store.gateBelongsTo(bot: "release"))
+        XCTAssertTrue(store.gateBelongsTo(bot: "chief"))
+        XCTAssertEqual(store.gate(for: "chief")?.id, "q-second")
+        XCTAssertEqual(store.gate(for: "release")?.id, "q-first")
+        XCTAssertNil(store.gate(for: "inbox"))
+
+        // And both desks are marked, each with its own question.
+        let first = try XCTUnwrap(store.station("acme/checkout-api"))
+        let second = try XCTUnwrap(store.station("acme/storefront"))
+        XCTAssertEqual(store.gateShown(at: first)?.id, "q-first")
+        XCTAssertEqual(store.gateShown(at: second)?.id, "q-second")
+        XCTAssertEqual(StateRules.deskState(station: second, gate: store.gateShown(at: second)),
+                       .gated)
+    }
+
+    func testAnsweringTheFirstLeavesTheSecondStandingThere() async throws {
+        let store = try crowdedFloor()
+        await store.refreshBots()
+        await store.refreshWorld()
+        await store.refreshGate()
+
+        await store.answerGate(id: "q-first", answer: "allow", always: false)
+
+        XCTAssertEqual(store.gates.map(\.id), ["q-second"], "the second hand is still up")
+        XCTAssertEqual(store.gate.id, "q-second", "and it is now the one on top")
+        XCTAssertTrue(store.showsGateSheet, "the sheet leaves when the room is empty, not the queue")
+        XCTAssertNil(store.gateQueueLine, "one hand up says nothing about a queue")
+        XCTAssertFalse(store.gateBelongsTo(bot: "release"))
+        XCTAssertTrue(store.gateBelongsTo(bot: "chief"))
+
+        await store.answerGate(id: "q-second", answer: "deny", always: false)
+        XCTAssertTrue(store.gates.isEmpty)
+        XCTAssertFalse(store.showsGateSheet)
+        XCTAssertFalse(store.gate.isPending)
+    }
+
+    /// A click aimed at a question that has left must land on nothing, not on
+    /// whatever moved up into its place.
+    func testAnAnswerAimedAtAQuestionThatLeftNeverLandsOnTheNextOne() async throws {
+        let store = try crowdedFloor()
+        await store.refreshBots()
+        await store.refreshGate()
+        await store.answerGate(id: "q-first", answer: "allow", always: false)
+
+        await store.answerGate(id: "q-first", answer: "allow", always: true)
+        XCTAssertEqual(store.gates.map(\.id), ["q-second"],
+                       "the second question is untouched by a click that was never aimed at it")
+        XCTAssertEqual(store.toast, "that question has moved on. the floor is now asking about "
+                       + "rm -rf ~/code/acme/storefront/node_modules")
+    }
+
+    /// One alert per question, however many hands are up. A second bot arriving
+    /// while the first is still waiting is its own interruption; a poll that
+    /// merely repeats what is already on screen is not.
+    func testEveryNewQuestionIsAnnouncedExactlyOnce() async throws {
+        let store = try crowdedFloor()
+        await store.refreshGate()
+        XCTAssertEqual(store.announced, ["q-first", "q-second"])
+
+        await store.refreshGate()
+        await store.refreshGate()
+        XCTAssertEqual(store.announced, ["q-first", "q-second"],
+                       "polling the same two hands twice is not two more interruptions")
+
+        await store.answerGate(id: "q-first", answer: "allow", always: false)
+        XCTAssertEqual(store.announced, ["q-first", "q-second"],
+                       "the one still waiting was already announced when it went up")
+    }
+
     // MARK: - the floor
 
     /// A three desk office on disk, small enough to assert against exactly.
@@ -191,6 +277,51 @@ final class StoreTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return Store(api: Api(source: .demo(url)))
     }
+
+    /// A floor with two bots standing there at once, which is the case the
+    /// single-gate office could not draw: the second hand waited invisibly
+    /// behind the first until somebody answered it.
+    private func crowdedFloor() throws -> Store {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("office-store-tests-\(UUID().uuidString).json")
+        try Data(Self.crowded.utf8).write(to: url)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return Store(api: Api(source: .demo(url)))
+    }
+
+    private static let crowded = #"""
+    {
+      "bots": {
+        "runtime": "up",
+        "bots": [
+          {"id": "chief", "name": "Chief", "purpose": "What is running."},
+          {"id": "release", "name": "Release", "purpose": "What shipped."},
+          {"id": "inbox", "name": "Inbox", "purpose": "What arrived."}
+        ]
+      },
+      "chats": {},
+      "gates": [
+        {"state": "pending", "id": "q-first", "permission": "run_bash",
+         "target": "git push origin main --follow-tags", "waiting_s": 47, "bot": "release"},
+        {"state": "pending", "id": "q-second", "permission": "run_bash",
+         "target": "rm -rf ~/code/acme/storefront/node_modules", "waiting_s": 12, "bot": "chief"}
+      ],
+      "world": {
+        "generated": "2026-08-26T18:40:00Z",
+        "killed": false,
+        "runtime": {"url": "http://127.0.0.1:8787", "root": "/Users/you/code/checkout-api"},
+        "sections": {},
+        "stations": [
+          {"repo": "acme/checkout-api", "access": true, "at": "2026-08-26T18:18:00Z",
+           "fetched_at": "2026-08-26T18:18:00Z", "hidden": false, "issues": [], "prs": []},
+          {"repo": "acme/storefront", "access": true, "at": "2026-08-26T18:18:00Z",
+           "fetched_at": "2026-08-26T18:18:00Z", "hidden": false, "issues": [], "prs": []},
+          {"repo": "acme/docs", "access": true, "at": "2026-08-26T18:18:00Z",
+           "fetched_at": "2026-08-26T18:18:00Z", "hidden": false, "issues": [], "prs": []}
+        ]
+      }
+    }
+    """#
 
     private static let fixture = #"""
     {

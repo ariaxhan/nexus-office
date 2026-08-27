@@ -57,7 +57,13 @@ public final class Store {
     /// to say out loud rather than a thing a person has to work out.
     public private(set) var worldGenerated: String = ""
     public private(set) var github: GitHubBudget?
-    public private(set) var gate: Gate = .clear
+    /// Every hand in the air, oldest first, exactly as the door listed them.
+    /// The room can hold more than one, and the second one is not allowed to
+    /// wait invisibly behind the first.
+    public private(set) var gates: [Gate] = []
+    /// The door's own word for an empty floor: `clear`, or `down` when the
+    /// harness is not there to ask. Only ever read when `gates` is empty.
+    private var quiet: Gate = .clear
     public private(set) var chats: [String: [ChatTurn]] = [:]
 
     // what the person did
@@ -99,7 +105,11 @@ public final class Store {
     /// three pictures that are not about it. Nothing else may ever set this.
     public var suppressGateSheet = false
 
-    private var lastAnnouncedGate: String?
+    /// The ids already announced, so a second hand going up while the first is
+    /// still waiting gets its own alert and neither gets two. Kept as a list so
+    /// the rule is provable rather than merely believed.
+    public private(set) var announced: [String] = []
+    private var announcedIds: Set<String> = []
     /// Where the runtime is working, kept from the last world poll so the gate
     /// poll can re-seat the raised hand without waiting ten seconds for one.
     private var runtime: RuntimeInfo?
@@ -110,6 +120,11 @@ public final class Store {
     }
 
     // MARK: - derived
+
+    /// The oldest hand up: what every surface built before the floor could hold
+    /// two of them still reads. Derived from the list, never stored beside it,
+    /// so the two can never disagree.
+    public var gate: Gate { gates.first ?? quiet }
 
     public var gateIsPending: Bool { gate.isPending }
 
@@ -178,7 +193,21 @@ public final class Store {
     /// The gate belongs to a bot's thread when the server says which bot raised
     /// it. When it does not, it still gets a desk, and it is still never hidden.
     public func gateBelongsTo(bot id: String) -> Bool {
-        gate.isPending && gate.bot == id
+        StateRules.gateBelongsTo(gates: gates, bot: id)
+    }
+
+    /// The hand THIS bot has up, which is not always the oldest one on the
+    /// floor. A bot second in the queue still draws its own question in its own
+    /// thread, because the alternative is a thread that says nothing is
+    /// happening while its bot stands there waiting.
+    public func gate(for bot: String) -> Gate? {
+        StateRules.gate(in: gates, for: bot)
+    }
+
+    /// The quiet line under the oldest question: how many are up, and who is
+    /// behind this one. Nil when there is only one.
+    public var gateQueueLine: String? {
+        StateRules.gateQueueLine(gates) { self.bot($0)?.name }
     }
 
     /// The one gate a desk may draw, and the only one it may answer.
@@ -189,12 +218,7 @@ public final class Store {
     /// passed: rendering it put an old question's text above a new question's
     /// buttons, which is how a person approves a command they never read.
     public func gateShown(at station: Station) -> Gate? {
-        guard gate.isPending else { return nil }
-        return gateDesks.contains(station.repo) ? gate : nil
-    }
-
-    private var gateDesks: Set<String> {
-        StateRules.gateDesks(gate: gate, stations: stations)
+        StateRules.gateShown(gates: gates, at: station, stations: stations)
     }
 
     // MARK: - the loop
@@ -249,7 +273,19 @@ public final class Store {
 
     public func refreshGate() async {
         do {
-            apply(try await api.gate())
+            let listed = try await api.gates()
+            apply(listed.gates, quiet: listed.quiet)
+        } catch let error as ApiError where error.isMissing {
+            // A door that predates this route still knows about one raised
+            // hand, and one raised hand nobody can see is the single failure
+            // this surface is not allowed to have. So it is asked the old way
+            // rather than left blank.
+            do {
+                let one = try await api.gate()
+                apply(one.isPending ? [one] : [], quiet: one)
+            } catch {
+                // Same as below: last known beats a false all-clear.
+            }
         } catch {
             // A gate that cannot be read is not a gate that is clear. The last
             // known state is kept rather than quietly downgraded to "fine".
@@ -262,19 +298,24 @@ public final class Store {
     /// with it, because an answer to a question that is gone reads as an answer
     /// to the one that replaced it, and the desks are re-seated on the spot
     /// rather than eight seconds later when the world poll happens to come round.
-    private func apply(_ next: Gate) {
-        let moved = next.id != gate.id
-        gate = next
+    private func apply(_ next: [Gate], quiet state: Gate) {
+        let pending = next.filter(\.isPending)
+        let moved = pending.first?.id != gates.first?.id
+        gates = pending
+        quiet = state
         if moved { gateNotice = nil }
-        stations = StateRules.attachGate(stations: stations, runtime: runtime,
-                                         gate: next.isPending ? next : nil)
-        guard next.isPending else {
-            lastAnnouncedGate = nil
-            return
-        }
-        if lastAnnouncedGate != next.id {
-            lastAnnouncedGate = next.id
-            announce(next)
+        stations = StateRules.attachGates(stations: stations, runtime: runtime, gates: pending)
+
+        // One alert per question, however many hands are up. A second bot
+        // arriving while the first is still waiting is its own interruption and
+        // gets its own alert; neither of them gets a second one.
+        let live = Set(pending.map(\.id))
+        announcedIds.formIntersection(live)
+        for gate in pending where !announcedIds.contains(gate.id) {
+            announcedIds.insert(gate.id)
+            announced.append(gate.id)
+            if announced.count > 20 { announced.removeFirst(announced.count - 20) }
+            announce(gate)
         }
     }
 
@@ -290,9 +331,9 @@ public final class Store {
             // cached snapshot of it and is never read: it has been up to ten
             // seconds behind the truth, which is long enough for the question
             // on screen to be one the agent has already given up on.
-            stations = StateRules.attachGate(stations: world.stations.sorted { $0.repo < $1.repo },
-                                             runtime: world.runtime,
-                                             gate: gate.isPending ? gate : nil)
+            stations = StateRules.attachGates(stations: world.stations.sorted { $0.repo < $1.repo },
+                                              runtime: world.runtime,
+                                              gates: gates)
             // The server has now spoken about what is put away. Wherever it
             // agrees with the click that was believed early, the belief is
             // dropped; where it disagrees, the server wins, because it is the
@@ -361,7 +402,7 @@ public final class Store {
     /// says so: sending the click to whatever gate happens to be live now would
     /// approve a command nobody ever read.
     public func answerGate(id: String, answer: String, always: Bool) async {
-        switch GateAnswer.decide(displayedId: id, liveGate: gate) {
+        switch GateAnswer.decide(displayedId: id, liveGates: gates) {
         case .movedOn:
             say(movedOn)
             return
@@ -445,7 +486,12 @@ public final class Store {
 
     private func announce(_ gate: Gate) {
         #if canImport(UserNotifications)
-        guard Bundle.main.bundleIdentifier != nil else { return }
+        // An alert is a thing an app posts. Asking the notification centre for
+        // one from a bare test bundle is not a quiet no-op, it is a crash, and
+        // the rule about announcing each question once has to be provable
+        // headlessly.
+        guard Bundle.main.bundleIdentifier != nil,
+              Bundle.main.bundleURL.pathExtension == "app" else { return }
         let content = UNMutableNotificationContent()
         content.title = "An agent is asking permission"
         content.subtitle = gate.permission

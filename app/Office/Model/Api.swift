@@ -82,6 +82,17 @@ public final class Api {
         return try await get("/api/bots", as: BotsResponse.self)
     }
 
+    /// Every hand in the air, oldest first.
+    ///
+    /// The floor is a room and not a queue of one, so this is what the app
+    /// polls. `gate()` below is the same door's older, single answer, kept for
+    /// exactly one purpose: a server that has not learned this route yet must
+    /// still be able to show a person a raised hand.
+    public func gates() async throws -> GatesResponse {
+        if let demo { return try demo.gates() }
+        return try await get("/api/gates", as: GatesResponse.self)
+    }
+
     public func gate() async throws -> Gate {
         if let demo { return try demo.gate() }
         return try await get("/api/gate", as: Gate.self)
@@ -241,16 +252,24 @@ private final class DemoFloor {
     private struct Fixture: Decodable {
         var bots: BotsResponse
         var world: World
-        var gate: Gate
+        /// Every hand up, oldest first. A fixture written before the floor could
+        /// hold two of them says `gate` instead, and one raised hand is a list
+        /// of one: the old shape keeps working rather than photographing an
+        /// office where nobody is waiting.
+        var gates: [Gate]
         var chats: [String: [ChatTurn]]
 
-        enum CodingKeys: String, CodingKey { case bots, world, gate, chats }
+        var gate: Gate { gates.first ?? .clear }
+
+        enum CodingKeys: String, CodingKey { case bots, world, gate, gates, chats }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             bots = try c.decode(BotsResponse.self, forKey: .bots)
             world = try c.decode(World.self, forKey: .world)
-            gate = ((try? c.decodeIfPresent(Gate.self, forKey: .gate)) ?? nil) ?? .clear
+            let listed = c.list(.gates, Lenient<Gate>.self).compactMap(\.value)
+            let single = ((try? c.decodeIfPresent(Gate.self, forKey: .gate)) ?? nil) ?? .clear
+            gates = listed.isEmpty ? (single.isPending ? [single] : []) : listed
             chats = ((try? c.decodeIfPresent([String: [ChatTurn]].self, forKey: .chats)) ?? nil) ?? [:]
         }
 
@@ -258,7 +277,7 @@ private final class DemoFloor {
         init() {
             bots = BotsResponse(bots: [], runtime: "down")
             world = World()
-            gate = .clear
+            gates = []
             chats = [:]
         }
     }
@@ -315,6 +334,10 @@ private final class DemoFloor {
 
     func bots() throws -> BotsResponse { lock.withLock { fixture.bots } }
     func gate() throws -> Gate { lock.withLock { fixture.gate } }
+
+    func gates() throws -> GatesResponse {
+        lock.withLock { GatesResponse(at: Self.now(), gates: fixture.gates) }
+    }
     func world() throws -> World { lock.withLock { fixture.world } }
 
     func chat(bot: String) throws -> [ChatTurn] {
@@ -352,18 +375,23 @@ private final class DemoFloor {
         }
     }
 
+    /// Answer one hand, by its id, and leave the rest of the room alone.
+    ///
+    /// The answered question is taken out of the list and whatever was behind it
+    /// is still up. A demo floor that cleared every gate on one click would make
+    /// the one thing this fixture exists to show, two people waiting at once,
+    /// unphotographable.
     func answerGate(id: String, answer: String, always: Bool) throws -> Ack {
         try lock.withLock {
-            guard fixture.gate.isPending else {
-                throw ApiError(status: 409, message: "that question is gone; the agent stopped waiting")
+            guard let index = fixture.gates.firstIndex(where: { $0.isPending && $0.id == id }) else {
+                throw ApiError(status: 409, message: fixture.gates.contains(where: \.isPending)
+                    ? "the agent has moved on; this answer was for an older question"
+                    : "that question is gone; the agent stopped waiting")
             }
-            guard fixture.gate.id == id else {
-                throw ApiError(status: 409,
-                               message: "the agent has moved on; this answer was for an older question")
-            }
-            let permission = fixture.gate.permission
-            fixture.gate = .clear
-            fixture.world.runtime?.gate = .clear
+            let permission = fixture.gates[index].permission
+            fixture.gates.remove(at: index)
+            let onTop = fixture.gate
+            fixture.world.runtime?.gate = onTop
             return Ack(ok: true, message: answer + (always ? " (always)" : "") + " for \(permission)")
         }
     }

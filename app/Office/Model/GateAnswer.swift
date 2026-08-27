@@ -18,10 +18,20 @@ public enum GateAnswer: Equatable {
     case movedOn
 
     public static func decide(displayedId: String, liveGate: Gate?) -> GateAnswer {
+        decide(displayedId: displayedId, liveGates: liveGate.map { [$0] } ?? [])
+    }
+
+    /// The same rule, against every hand that is up.
+    ///
+    /// Two bots can be waiting at once, so "is this still the question on the
+    /// floor" stopped being a question about the oldest one. It is a question
+    /// about whether the id that was drawn is anywhere in the room: answering
+    /// the second gate must land on the second gate, and answering a gate that
+    /// has left must land on nothing at all, including on whatever moved up
+    /// into its place.
+    public static func decide(displayedId: String, liveGates: [Gate]) -> GateAnswer {
         guard !displayedId.isEmpty,
-              let live = liveGate,
-              live.isPending,
-              live.id == displayedId
+              liveGates.contains(where: { $0.isPending && $0.id == displayedId })
         else { return .movedOn }
         return .post(displayedId)
     }

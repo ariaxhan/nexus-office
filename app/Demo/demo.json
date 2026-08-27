@@ -86,15 +86,26 @@
       }
     ]
   },
-  "gate": {
-    "state": "pending",
-    "id": "a1b2c3d4e5f60718",
-    "permission": "run_bash",
-    "target": "git push origin main --follow-tags",
-    "detail": "Cutting 0.4.2. The tag is written and the changelog is committed. This is the push that makes it real.",
-    "waiting_s": 47,
-    "bot": "release"
-  },
+  "gates": [
+    {
+      "state": "pending",
+      "id": "a1b2c3d4e5f60718",
+      "permission": "run_bash",
+      "target": "git push origin main --follow-tags",
+      "detail": "Cutting 0.4.2. The tag is written and the changelog is committed. This is the push that makes it real.",
+      "waiting_s": 47,
+      "bot": "release"
+    },
+    {
+      "state": "pending",
+      "id": "f7e6d5c4b3a29180",
+      "permission": "run_bash",
+      "target": "rm -rf ~/code/acme/storefront/node_modules",
+      "detail": "The install is wedged on a lockfile conflict and this is the clean start. Nothing here is tracked.",
+      "waiting_s": 12,
+      "bot": "chief"
+    }
+  ],
   "world": {
     "generated": "2026-08-26T18:40:00Z",
     "heartbeat": "2026-08-26T18:39:00Z",
