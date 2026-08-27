@@ -89,6 +89,17 @@ LOGIN = os.environ.get("OFFICE_LOGIN", "").strip().lower()
 def _loopback_hosts(port: int) -> set[str]:
     return {f"127.0.0.1:{port}", f"localhost:{port}"}
 
+# Every write is small enough to be a decision typed by a person, except one: a
+# chat turn can carry a screenshot. Only that route gets the bigger ceiling, so a
+# half-megabyte permit or desk write is still refused as the mistake it is.
+WRITE_LIMIT = 256 * 1024
+CHAT_LIMIT = 512 * 1024
+# How much of an over-sized body is read before it is refused. An unread body is
+# not harmless: on a kept-alive connection the leftovers are parsed as the next
+# request, and closing on a sender that is still writing costs it the 400 it
+# needed to see. Past this, the connection goes instead.
+DRAIN_LIMIT = 8 * 1024 * 1024
+
 BAD_ID = "permit needs the question id it is answering"
 BAD_ANSWER = "permit answer must be allow or deny"
 NO_ROOT = "no runtime root configured (OFFICE_RUNTIME_ROOT)"
@@ -326,9 +337,22 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj).encode(), "application/json; charset=utf-8")
 
-    def _read_json(self, limit=256 * 1024):
+    def _drain(self, n: int) -> None:
+        """Read a body we are not going to use, so the socket stays in step."""
+        left = n
+        while left > 0:
+            chunk = self.rfile.read(min(left, 64 * 1024))
+            if not chunk:
+                return
+            left -= len(chunk)
+
+    def _read_json(self, limit=WRITE_LIMIT):
         n = int(self.headers.get("content-length") or 0)
         if n > limit:
+            if n <= DRAIN_LIMIT:
+                self._drain(n)
+            else:
+                self.close_connection = True
             raise ValueError("payload too large")
         raw = self.rfile.read(n).decode("utf-8") if n else ""
         out = json.loads(raw or "{}")
@@ -355,6 +379,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"hidden": office_sync.read_hidden()})
             if path == "/api/gate":
                 return self._json(rt.read_gate())
+            if path == "/api/gates":
+                return self._json(self._gates())
             if path == "/api/bots":
                 return self._json(self.chatroom.roster())
             if path == "/api/chat":
@@ -391,7 +417,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/chat":
                 # Returns before the turn has run: a chat turn is an agent run,
                 # and nothing on the other end of this socket waits two minutes.
-                code, body = self.chatroom.say(self._read_json())
+                code, body = self.chatroom.say(self._read_json(limit=CHAT_LIMIT))
                 return self._json(body, code)
             return self._json({"error": "not found"}, 404)
         except ValueError as exc:
@@ -414,6 +440,24 @@ class Handler(BaseHTTPRequestHandler):
         if not ok and d["kind"] == "permit":
             return self._json({"ok": False, "result": result}, 409)
         return self._json({"ok": bool(ok), "result": result})
+
+    def _gates(self):
+        """Every raised hand, not just the oldest.
+
+        `/api/gate` answers with the one at the front of the queue, which is the
+        shape every existing reader has always seen. This one answers with the
+        whole floor, because two bots on two threads can both be blocked and a
+        room that draws one of them is a room that hides the other.
+
+        `state` appears only when something is wrong, and is the same word
+        `/api/gate` would have used, so the two can never disagree about whether
+        the gate channel is working.
+        """
+        got = rt.read_gates()
+        out = {"at": now_iso(), "gates": got.get("gates") or []}
+        if got.get("state") != "ok":
+            out["state"] = got.get("state") or "error"
+        return out
 
     def _gate(self, body):
         qid = str(body.get("question_id") or "")

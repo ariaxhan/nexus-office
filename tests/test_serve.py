@@ -434,6 +434,9 @@ class FakeHarness:
         self.lock = threading.Lock()
         self.turns = {b: [] for b in self.BOTS}
         self.received = []
+        # The whole body of every turn, not just (bot, message): an attachment
+        # is only forwarded correctly if it arrives here byte for byte.
+        self.bodies = []
         self.hold = None  # an Event a test sets to keep a turn in flight
         outer = self
 
@@ -473,6 +476,7 @@ class FakeHarness:
                     return self.reply({"error": "no such bot"}, 404)
                 with outer.lock:
                     outer.received.append((bot, msg))
+                    outer.bodies.append(body)
                     outer.turns[bot].append({"role": "user", "text": msg, "at": "then"})
                     outer.turns[bot].append({"role": "assistant", "text": f"heard {msg}",
                                              "at": "then"})
@@ -547,6 +551,7 @@ class ChatTest(unittest.TestCase):
         with self.harness.lock:
             self.harness.turns = {b: [] for b in self.harness.BOTS}
             self.harness.received = []
+            self.harness.bodies = []
 
     def tearDown(self):
         self.harness.hold = None
@@ -681,3 +686,269 @@ class ChatTest(unittest.TestCase):
         code, _ = api_post(self.port, "/api/chat", {"bot": "chief", "message": "again"})
         self.assertEqual(code, 202)
         self.assertTrue(self.until(lambda: "error" not in self.bot("chief")[1]))
+
+    # ── a turn that carries a picture ───────────────────────────────────────
+    # The office is a courier here. It checks that there is one attachment, that
+    # it says it is a PNG or a JPEG, and that the whole body fits; then it hands
+    # the thing over untouched. What the bytes actually are is the harness's
+    # question, and opening the parcel would only add a place to be wrong.
+
+    def shot(self, **over):
+        item = {"name": "screen.png", "mime_type": "image/png",
+                "data_base64": "iVBORw0KGgo="}
+        item.update(over)
+        return item
+
+    def last_body(self, bot):
+        self.assertTrue(self.until(lambda: any(b.get("bot") == bot
+                                               for b in self.harness.bodies)))
+        with self.harness.lock:
+            return [b for b in self.harness.bodies if b.get("bot") == bot][-1]
+
+    def test_a_turn_without_a_picture_is_the_same_turn_it_always_was(self):
+        """The Mac app sends no attachments today. Nothing it sends may grow a
+        new key on the wire, or the harness sees a shape it never agreed to."""
+        code, _ = api_post(self.port, "/api/chat", {"bot": "chief", "message": "morning"})
+        self.assertEqual(code, 202)
+        self.assertEqual(self.last_body("chief"), {"bot": "chief", "message": "morning"})
+
+    def test_an_attachment_reaches_the_harness_exactly_as_it_was_sent(self):
+        shot = self.shot(name="desk.png", data_base64="QUJD")
+        code, _ = api_post(self.port, "/api/chat",
+                           {"bot": "chief", "message": "look", "attachments": [shot]})
+        self.assertEqual(code, 202)
+        self.assertEqual(self.last_body("chief"),
+                         {"bot": "chief", "message": "look", "attachments": [shot]})
+
+    def test_a_jpeg_is_a_picture_too(self):
+        shot = self.shot(name="desk.jpg", mime_type="image/jpeg")
+        code, _ = api_post(self.port, "/api/chat",
+                           {"bot": "chief", "message": "look", "attachments": [shot]})
+        self.assertEqual(code, 202)
+        self.assertEqual(self.last_body("chief")["attachments"], [shot])
+
+    def test_an_empty_attachment_list_is_a_turn_with_no_picture(self):
+        code, _ = api_post(self.port, "/api/chat",
+                           {"bot": "chief", "message": "hi", "attachments": []})
+        self.assertEqual(code, 202)
+        self.assertNotIn("attachments", self.last_body("chief"))
+
+    def test_a_second_attachment_is_refused_rather_than_quietly_dropped(self):
+        """A trimmed attachment is a turn about a screenshot nobody sent."""
+        code, body = api_post(self.port, "/api/chat", {
+            "bot": "chief", "message": "look", "attachments": [self.shot(), self.shot()]})
+        self.assertEqual(code, 400)
+        self.assertIn("at most", body["error"])
+        self.assertNotIn(("chief", "look"), self.harness.received)
+
+    def test_an_attachment_that_is_not_a_png_or_a_jpeg_is_refused(self):
+        for mime in ("image/gif", "application/pdf", "text/html", "image/PNG", ""):
+            code, body = api_post(self.port, "/api/chat", {
+                "bot": "chief", "message": "look",
+                "attachments": [self.shot(mime_type=mime)]})
+            self.assertEqual(code, 400, mime)
+            self.assertIn("error", body)
+
+    def test_an_attachment_missing_a_field_is_refused(self):
+        broken = [{"name": "a.png", "mime_type": "image/png"},   # no bytes
+                  {"mime_type": "image/png", "data_base64": "QUJD"},  # no name
+                  {"name": "a.png", "data_base64": "QUJD"},      # no type
+                  {"name": "", "mime_type": "image/png", "data_base64": "QUJD"},
+                  {"name": "a.png", "mime_type": "image/png", "data_base64": ""},
+                  "not-an-object", 7, None]
+        for item in broken:
+            code, body = api_post(self.port, "/api/chat", {
+                "bot": "chief", "message": "look", "attachments": [item]})
+            self.assertEqual(code, 400, repr(item))
+            self.assertIn("error", body)
+
+    def test_attachments_that_are_not_a_list_are_refused(self):
+        for value in ("a.png", {"name": "a.png"}, 3):
+            code, body = api_post(self.port, "/api/chat", {
+                "bot": "chief", "message": "look", "attachments": value})
+            self.assertEqual(code, 400, repr(value))
+            self.assertIn("error", body)
+
+    def test_a_picture_sized_body_gets_through_and_a_bigger_one_does_not(self):
+        """512 KB is the ceiling for a chat turn and only for a chat turn."""
+        code, _ = api_post(self.port, "/api/chat", {
+            "bot": "chief", "message": "look",
+            "attachments": [self.shot(data_base64="A" * (400 * 1024))]})
+        self.assertEqual(code, 202)
+
+        code, body = api_post(self.port, "/api/chat", {
+            "bot": "inbox", "message": "look",
+            "attachments": [self.shot(data_base64="A" * (600 * 1024))]})
+        self.assertEqual(code, 400)
+        self.assertIn("too large", body["error"])
+        self.assertNotIn(("inbox", "look"), self.harness.received)
+
+    def test_every_other_write_keeps_the_smaller_ceiling(self):
+        """The picture ceiling belongs to the chat route alone. A half-megabyte
+        permit is a mistake, not a photo, and is still refused as one."""
+        code, body = api_post(self.port, "/api/decision", {
+            "kind": "comment", "repo": "acme/thing", "issue": "1",
+            "body": "x" * (400 * 1024)})
+        self.assertEqual(code, 400)
+        self.assertIn("too large", body["error"])
+
+
+class GatesTest(unittest.TestCase):
+    """`/api/gates`: the whole floor, not just the hand at the front of it.
+
+    The harness gives every asking bot its own gate file, because two bots on two
+    threads can raise a hand in the same second and one shared file meant the
+    second write erased the first. So the office reads the whole directory, and
+    a hand it cannot see is a hand nobody will ever answer.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import serve
+
+        cls.serve = serve
+        serve.log = lambda msg: None
+        serve.office_sync.Access = lambda: object()
+        serve.office_sync.build_snapshot = lambda access: copy.deepcopy(SNAP)
+
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = pathlib.Path(cls.tmp.name)
+        cls.state = cls.root / "_meta" / "state"
+        cls.state.mkdir(parents=True)
+        cls.was = os.environ.get("OFFICE_RUNTIME_ROOT")
+        os.environ["OFFICE_RUNTIME_ROOT"] = str(cls.root)
+
+        cls.world = serve.World()
+        cls.world.build()
+        cls.httpd = serve.make_server(cls.world, 0)
+        cls.port = cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        if cls.was is None:
+            os.environ.pop("OFFICE_RUNTIME_ROOT", None)
+        else:
+            os.environ["OFFICE_RUNTIME_ROOT"] = cls.was
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        os.environ["OFFICE_RUNTIME_ROOT"] = str(self.root)
+        for path in self.state.glob("pending-question*"):
+            path.unlink()
+
+    def file(self, bot=""):
+        name = "pending-question.json" if not bot else f"pending-question.{bot}.json"
+        return self.state / name
+
+    def ask(self, qid, bot="", target="npm ci", ago=30):
+        self.file(bot).write_text(json.dumps({
+            "id": qid, "permission": "Bash", "target": target,
+            "detail": "", "asked_at": time.time() - ago,
+        }))
+        return qid
+
+    def test_an_empty_floor_is_an_empty_list_and_nothing_is_wrong(self):
+        code, body = api_get(self.port, "/api/gates")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["gates"], [])
+        self.assertTrue(body["at"])
+        self.assertNotIn("state", body)  # `state` appears only when something IS wrong
+
+    def test_every_raised_hand_is_listed_oldest_first_with_its_bot(self):
+        self.ask("a" * 16, bot="chief", ago=20)
+        self.ask("b" * 16, ago=900)
+        code, body = api_get(self.port, "/api/gates")
+        self.assertEqual(code, 200)
+        self.assertEqual([g["id"] for g in body["gates"]], ["b" * 16, "a" * 16])
+        self.assertEqual([g["bot"] for g in body["gates"]], [None, "chief"])
+        for gate in body["gates"]:
+            self.assertEqual(gate["state"], "pending")
+            self.assertEqual(gate["target"], "npm ci")
+            self.assertIsNotNone(gate["waiting_s"])
+
+    def test_the_single_gate_is_the_first_of_the_list_in_the_old_shape(self):
+        """Nothing that reads `/api/gate` today may learn a new shape to keep
+        working, and the two endpoints may never disagree about the front hand."""
+        self.ask("a" * 16, bot="chief", ago=20)
+        self.ask("b" * 16, ago=900)
+        one = api_get(self.port, "/api/gate")[1]
+        many = api_get(self.port, "/api/gates")[1]["gates"]
+        self.assertEqual(one["state"], "pending")
+        self.assertEqual(one["id"], many[0]["id"])
+        self.assertEqual(sorted(one), sorted(many[0]))
+
+    def test_answering_one_gate_leaves_the_other_one_listed(self):
+        """THE test for this endpoint. Two bots blocked, one answered: the other
+        hand is still up, still listed, and its file was never touched."""
+        chief = self.ask("a" * 16, bot="chief", ago=60)
+        release = self.ask("b" * 16, bot="release", ago=30)
+        untouched = self.file("release").read_bytes()
+
+        code, body = api_post(self.port, "/api/gate",
+                              {"question_id": chief, "answer": "allow"})
+        self.assertEqual(code, 200, body)
+        self.assertTrue(body["ok"])
+        self.assertEqual(json.loads(self.file("chief").read_text())["answer"], "allow")
+        self.assertEqual(self.file("release").read_bytes(), untouched)
+
+        listed = api_get(self.port, "/api/gates")[1]["gates"]
+        self.assertEqual([g["id"] for g in listed], [release])
+        self.assertEqual(api_get(self.port, "/api/gate")[1]["id"], release)
+
+    def test_answering_an_id_nobody_carries_is_409_and_writes_nothing(self):
+        self.ask("a" * 16, bot="chief")
+        before = self.file("chief").read_bytes()
+        code, body = api_post(self.port, "/api/gate",
+                              {"question_id": "c" * 16, "answer": "allow"})
+        self.assertEqual(code, 409)
+        self.assertFalse(body["ok"])
+        self.assertEqual(self.file("chief").read_bytes(), before)
+        self.assertEqual(len(api_get(self.port, "/api/gates")[1]["gates"]), 1)
+
+    def test_an_unconfigured_runtime_says_so_rather_than_showing_a_clear_floor(self):
+        """An empty list and a broken channel must never render the same. The
+        word is the same one `/api/gate` uses, so the two cannot tell different
+        stories about whether the gate channel works at all."""
+        os.environ.pop("OFFICE_RUNTIME_ROOT", None)
+        gates = api_get(self.port, "/api/gates")[1]
+        one = api_get(self.port, "/api/gate")[1]
+        self.assertEqual(gates["gates"], [])
+        self.assertEqual(gates["state"], "unconfigured")
+        self.assertEqual(gates["state"], one["state"])
+
+    def test_the_floor_is_listed_with_the_harness_closed(self):
+        """Why this reads files and not the harness's HTTP.
+
+        The gate is the channel that matters, so it is the one that must not
+        depend on a dev server being up: a hand raised by an agent that is still
+        standing there blocked has to be visible, and answerable, with nothing
+        else running. Answering writes the file too, so a list read over the wire
+        would be a list of gates that could not be answered.
+        """
+        self.ask("a" * 16, bot="chief")
+        was = os.environ.get("OFFICE_RUNTIME_URL")
+        os.environ["OFFICE_RUNTIME_URL"] = f"http://127.0.0.1:{free_port()}"
+        try:
+            body = api_get(self.port, "/api/gates")[1]
+            self.assertEqual([g["id"] for g in body["gates"]], ["a" * 16])
+            self.assertNotIn("state", body)
+            code, answered = api_post(self.port, "/api/gate",
+                                      {"question_id": "a" * 16, "answer": "deny"})
+            self.assertEqual(code, 200, answered)
+            self.assertEqual(api_get(self.port, "/api/gates")[1]["gates"], [])
+        finally:
+            if was is None:
+                os.environ.pop("OFFICE_RUNTIME_URL", None)
+            else:
+                os.environ["OFFICE_RUNTIME_URL"] = was
+
+    def test_a_torn_file_says_unreadable_and_still_lists_what_it_could_read(self):
+        self.file().write_text('{"id": "abc", "permis')
+        self.ask("a" * 16, bot="chief")
+        body = api_get(self.port, "/api/gates")[1]
+        self.assertEqual(body["state"], "unreadable")
+        self.assertEqual([g["id"] for g in body["gates"]], ["a" * 16])
+
