@@ -53,9 +53,18 @@ BUILD_WAIT_S = 300
 
 GITHUB_KINDS = {"comment", "unblock", "close", "reopen", "label", "nudge", "merge"}
 RUNTIME_KINDS = {"permit", "chat", "run", "stop"}
-REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
-QID_RE = re.compile(r"^[0-9a-f]{8,64}$")
-NUM_RE = re.compile(r"^\d+$")
+# fullmatch with ASCII: Python's `$` forgives a trailing newline and `\w` is Unicode,
+# neither of which the Worker's JS regexes allowed. Parity, not paranoia.
+REPO_RE = re.compile(r"[\w.-]+/[\w.-]+\Z", re.ASCII)
+QID_RE = re.compile(r"[0-9a-f]{8,64}\Z", re.ASCII)
+NUM_RE = re.compile(r"\d+\Z", re.ASCII)
+
+# The bind address keeps the network out. It does not keep the browser out: any
+# page you have open can POST to 127.0.0.1, and a text/plain form post needs no
+# preflight. So every request must name this door as its Host, and a write must
+# come from this origin (or from no page at all: curl, the app) as JSON. A name
+# that fronts this server (tailscale serve, M2) is added through OFFICE_TRUSTED_HOSTS.
+TRUSTED_HOSTS = {h.strip().lower() for h in os.environ.get("OFFICE_TRUSTED_HOSTS", "").split(",") if h.strip()}
 
 BAD_ID = "permit needs the question id it is answering"
 BAD_ANSWER = "permit answer must be allow or deny"
@@ -207,6 +216,28 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self, "path", "").startswith("/api/"):
             log(f"{self.command} {self.path} {args[1] if len(args) > 1 else ''}".rstrip())
 
+    # ── the door ────────────────────────────────────────────────────────────
+    def _host_ok(self) -> bool:
+        host = (self.headers.get("host") or "").lower()
+        port = self.server.server_address[1]
+        return host in {f"127.0.0.1:{port}", f"localhost:{port}"} or host in TRUSTED_HOSTS
+
+    def _write_ok(self) -> str | None:
+        """None when a write may proceed, else the reason it may not."""
+        ctype = (self.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return "writes are application/json"
+        site = (self.headers.get("sec-fetch-site") or "").lower()
+        if site and site not in ("same-origin", "none"):
+            return "cross-site write refused"
+        origin = (self.headers.get("origin") or "").lower()
+        if origin:
+            host = origin.split("://", 1)[-1]
+            if host not in {f"127.0.0.1:{self.server.server_address[1]}",
+                            f"localhost:{self.server.server_address[1]}"} and host not in TRUSTED_HOSTS:
+                return "cross-origin write refused"
+        return None
+
     # ── plumbing ────────────────────────────────────────────────────────────
     def _send(self, code, body: bytes, ctype: str):
         self.send_response(code)
@@ -233,6 +264,8 @@ class Handler(BaseHTTPRequestHandler):
     # ── routes ──────────────────────────────────────────────────────────────
     def do_GET(self):  # noqa: N802 (http.server's name)
         path, _, query = self.path.partition("?")
+        if not self._host_ok():
+            return self._json({"error": "wrong host"}, 403)
         try:
             if path == "/api/world":
                 if urllib.parse.parse_qs(query).get("fresh"):
@@ -255,6 +288,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.partition("?")[0]
+        if not self._host_ok():
+            return self._json({"error": "wrong host"}, 403)
+        why = self._write_ok()
+        if why:
+            return self._json({"error": why}, 403)
         try:
             if path == "/api/decision":
                 return self._decision(self._read_json())
@@ -302,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
         rel = urllib.parse.unquote(path).lstrip("/")
         root = self.dist.resolve()
         target = (root / rel).resolve() if rel else (root / "index.html")
-        if not str(target).startswith(str(root)) or not target.is_file():
+        if not target.is_relative_to(root) or not target.is_file():
             target = root / "index.html"
         if not target.is_file():
             return self._json({"error": "no index.html; run `npm run build` first"}, 404)
