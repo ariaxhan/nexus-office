@@ -131,7 +131,7 @@ struct RootView: View {
                 Empty(text: "That is not on the wall any more.")
             }
         case nil:
-            Empty(text: "Pick someone on the left.")
+            Empty(text: "Pick a bot to talk to it, a desk to work its issues, or a card on the wall to see a flow. A raised hand opens by itself.")
         }
     }
 }
