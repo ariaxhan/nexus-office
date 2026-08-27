@@ -596,5 +596,86 @@ class DecisionTest(SyncCase):
         self.assertEqual(self.ran, [])
 
 
+class RuntimeDecisionTest(SyncCase):
+    """A runtime decision goes to the local runtime by kind, and never to GitHub."""
+
+    def setUp(self):
+        super().setUp()
+        self.posted = []
+        self.mod.rt.post = lambda path, body, timeout=20: self.posted.append((path, body))
+        self.mod.rt._root = lambda: pathlib.Path(self.tmp.name)
+        self.mod.rt.read_gate = lambda: {"state": "pending", "id": "q1"}
+        self.mod.rt.answer_gate = lambda root, qid, answer, always: (True, f"{answer} {qid}")
+
+    def test_the_table_routes_every_runtime_kind_and_nothing_else(self):
+        self.assertEqual(set(self.mod.RUNTIME_HANDLERS), self.mod.RUNTIME_KINDS)
+        self.assertEqual(self.mod.apply_runtime_decision({"kind": "merge"}, True),
+                         (False, "unknown runtime kind merge"))
+
+    def test_a_permit_answers_the_gate_it_was_asked_about(self):
+        permit = lambda dry, **p: self.mod.apply_runtime_decision(
+            {"kind": "permit", "payload": p}, dry)
+        self.assertEqual(permit(True, question_id="q1", answer="allow"), (True, "would allow"))
+        self.assertEqual(permit(True, question_id="q2", answer="allow"),
+                         (False, "the agent has moved on"))
+        self.assertEqual(permit(False, question_id="q1", answer="deny"), (True, "deny q1"))
+        self.assertEqual(permit(False, question_id="q1", answer="maybe"),
+                         (False, "a permit must answer allow or deny"))
+        self.mod.rt.read_gate = lambda: {"state": "clear"}
+        self.assertEqual(permit(True, question_id="q1", answer="allow"),
+                         (False, "nothing is waiting on a gate right now"))
+
+    def test_chat_and_run_and_stop_post_to_the_runtime(self):
+        self.assertEqual(self.mod._apply_chat({}, {"body": " "}, False), (False, "nothing to say"))
+        self.assertEqual(self.mod._apply_chat({}, {"body": "hi"}, False), (True, "said 'hi'"))
+        ok, msg = self.mod._apply_run({"repo": "acme/one", "issue": 4}, {}, False)
+        self.assertEqual((ok, msg), (True, "started 'Work acme/one#4'"))
+        self.assertEqual(self.mod._apply_run({"repo": "acme/one"}, {}, True),
+                         (True, "would run 'Work on acme/one'"))
+        self.assertEqual(self.mod._apply_stop({}, {"run_id": "r9"}, False)[0], True)
+        self.assertEqual(self.posted, [("/api/chat", {"message": "hi"}),
+                                       ("/api/run", {"task": "Work acme/one#4"}),
+                                       ("/api/run/stop", {"run_id": "r9"})])
+
+    def test_a_runtime_that_refuses_is_reported_not_raised(self):
+        def refuse(path, body, timeout=20):
+            raise RuntimeError("down")
+        self.mod.rt.post = refuse
+        self.assertEqual(self.mod._apply_chat({}, {"body": "hi"}, False),
+                         (False, "the runtime did not take it: down"))
+        self.assertEqual(self.mod._apply_stop({}, {}, False), (False, "could not stop it: down"))
+
+
+class BatchPartsTest(SyncCase):
+    """The pieces fetch_batch is made of, each on its own."""
+
+    def test_the_body_is_a_dict_or_nothing(self):
+        self.assertEqual(self.mod._json_body(""), {})
+        self.assertEqual(self.mod._json_body("not json"), {})
+        self.assertEqual(self.mod._json_body("[1]"), {})
+        self.assertEqual(self.mod._json_body('{"data": 1}'), {"data": 1})
+
+    def test_an_error_names_its_repo_or_sinks_the_batch(self):
+        nwos = ["acme/one", "acme/two"]
+        self.assertEqual(self.mod._alias_index({"path": ["r1"]}, 2), 1)
+        self.assertEqual(self.mod._alias_index({"path": ["r7"]}, 2), -1)
+        self.assertEqual(self.mod._alias_index({}, 2), -1)
+        errors, fatal = self.mod._sort_errors(
+            [{"path": ["r0"], "message": "gone"}, {"message": "bad query"},
+             {"type": "RATE_LIMITED", "message": "slow down"}], nwos)
+        self.assertEqual(errors, {"acme/one": "gone"})
+        self.assertEqual(fatal, "slow down")
+        self.assertTrue(self.mod._is_rate_limited("API rate limit exceeded", {}))
+        self.assertFalse(self.mod._is_rate_limited("not found", {"type": "NOT_FOUND"}))
+
+    def test_the_bot_last_word_travels_only_when_the_bot_spoke_last(self):
+        self.assertEqual(self.mod._bot_last_word(issue_node(1, comment=None)), "")
+        self.assertEqual(self.mod._bot_last_word(issue_node(1, comment="a human")), "")
+        word = self.mod._bot_last_word(issue_node(1))
+        self.assertIn(self.mod.BOT_MARKER, word)
+        row = self.mod._issue_row(issue_node(1))
+        self.assertEqual((row["bot_last"], row["last_word"]), (True, word))
+
+
 if __name__ == "__main__":
     unittest.main()
