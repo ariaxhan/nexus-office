@@ -31,7 +31,9 @@ struct RosterView: View {
                         notary(notice)
                     }
                     ForEach(store.visibleDesks) { station in
-                        DeskRow(station: station, selected: store.selection == .desk(station.repo))
+                        DeskRow(station: station,
+                                gate: store.gateShown(at: station),
+                                selected: store.selection == .desk(station.repo))
                             .contentShape(Rectangle())
                             .onTapGesture { store.select(.desk(station.repo)) }
                     }
@@ -171,9 +173,12 @@ struct BotRow: View {
 
 struct DeskRow: View {
     let station: Station
+    /// The live gate, handed in from the gate poll. The row never reads the
+    /// copy attached to the station: that one is as old as the world snapshot.
+    let gate: Gate?
     let selected: Bool
 
-    private var state: DeskState { StateRules.deskState(station) }
+    private var state: DeskState { StateRules.deskState(station: station, gate: gate) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -211,7 +216,7 @@ struct DeskRow: View {
     }
 
     private var detail: String {
-        if state == .gated { return StateRules.line(station.gate?.permission ?? "", limit: 40) }
+        if state == .gated { return StateRules.line(gate?.permission ?? "", limit: 40) }
         if let error = station.issuesError { return StateRules.line(error, limit: 48) }
         return StateRules.line(station.detail, limit: 48)
     }

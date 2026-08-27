@@ -108,10 +108,14 @@ struct GateSheet: View {
 
     private var waiting: Double { (gate.waitingS ?? 0) + elapsed }
 
+    /// The id of the gate this sheet is drawing, not whatever is live when the
+    /// answer lands. If those two have drifted apart, `answerGate` posts nothing
+    /// and says the question moved on.
     private func answer(_ verdict: String, _ always: Bool) {
+        let displayed = gate.id
         sending = true
         Task {
-            await store.answerGate(verdict, always: always)
+            await store.answerGate(id: displayed, answer: verdict, always: always)
             sending = false
         }
     }

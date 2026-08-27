@@ -10,7 +10,12 @@ struct DeskThreadView: View {
     @Bindable var store: Store
     let station: Station
 
-    private var state: DeskState { StateRules.deskState(station) }
+    /// The live gate, if this desk is one of the desks it is shown at. Read from
+    /// the two second gate poll, never from the world snapshot this station was
+    /// decoded out of.
+    private var gate: Gate? { store.gateShown(at: station) }
+
+    private var state: DeskState { StateRules.deskState(station: station, gate: gate) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,10 +23,8 @@ struct DeskThreadView: View {
             Divider().overlay(Theme.hairline)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if station.gate?.isPending == true, let gate = station.gate {
-                        GateCard(gate: gate, notice: store.gateNotice) { answer, always in
-                            Task { await store.answerGate(answer, always: always) }
-                        }
+                    if let gate {
+                        GateCard(store: store, gate: gate)
                     }
                     if let error = station.issuesError {
                         problem(error)
@@ -42,7 +45,7 @@ struct DeskThreadView: View {
                         PullRequestCard(store: store, repo: station.repo, pr: pr)
                     }
                     if station.issues.isEmpty && station.prs.isEmpty
-                        && station.issuesError == nil && station.gate == nil {
+                        && station.issuesError == nil && gate == nil {
                         Text(station.detail.isEmpty ? "Nothing open here." : station.detail)
                             .font(.system(size: 12.5))
                             .foregroundStyle(Theme.faint)
