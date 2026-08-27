@@ -93,6 +93,8 @@ def read_gate() -> dict:
         "detail": str(data.get("detail") or "")[:4000],
         "asked_at": asked,
         "waiting_s": round(time.time() - asked) if asked else None,
+        # Which bot asked, when the runtime says. Absent means the shared session.
+        "bot": str(data.get("bot") or "") or None,
     }
 
 
