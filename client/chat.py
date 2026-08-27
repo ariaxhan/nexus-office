@@ -12,6 +12,11 @@ The roster and the conversation come from two different places on purpose.
                What was actually said. Only available while the harness serves,
                and it says so out loud rather than rendering as silence.
 
+A turn may carry one picture. The door checks that it is one attachment, that it
+says image/png or image/jpeg, and that the whole body fits in 512 KB; then it
+hands the thing to the harness untouched. Validating shape without decoding bytes
+is the whole of the office's job here.
+
 `identity` never leaves this file. It is the whole persona the harness feeds a
 turn, it is long, and it is nobody's business on the wire: the office ships the
 name, not the script.
@@ -41,6 +46,12 @@ BOTS_FILE = "_meta/bots.json"
 # once, so it is kept to the smallest alphabet that is safe in all three.
 BOT_RE = re.compile(r"[a-z0-9-]{1,32}\Z", re.ASCII)
 MAX_MESSAGE = 8000
+# One picture per turn. The office carries it, it does not open it: the door
+# checks the shape and the size, and what the bytes actually are is the harness's
+# question to answer. More than one is refused rather than trimmed, because a
+# silently dropped attachment is a turn about a screenshot nobody sent.
+MAX_ATTACHMENTS = 1
+IMAGE_TYPES = ("image/png", "image/jpeg")
 # A turn is an agent run, not a request. The harness holds the connection open
 # for the whole thing, so this is a "the harness died" timeout, not a latency
 # budget.
@@ -51,6 +62,10 @@ BAD_BOT = "bad bot id"
 NO_BOT = "no such bot"
 NO_MESSAGE = "a message is required"
 LONG_MESSAGE = f"a message is at most {MAX_MESSAGE} characters"
+BAD_ATTACHMENTS = "attachments must be a list"
+MANY_ATTACHMENTS = f"at most {MAX_ATTACHMENTS} attachment per message"
+BAD_ATTACHMENT = "an attachment needs a name, a mime_type and data_base64"
+BAD_MIME = "an attachment is image/png or image/jpeg"
 
 
 def now_iso() -> str:
@@ -83,6 +98,30 @@ def read_bots() -> list:
                     "purpose": str(row.get("purpose") or ""),
                     "color": str(row.get("color") or "")})
     return out
+
+
+def check_attachments(value):
+    """(attachments, the reason they were refused). Exactly one is falsy.
+
+    Shape and size only. The office never decodes the payload: it is a courier
+    here, and a courier that opens the parcel is a new place for a bad parcel to
+    do something. The harness is the one that has to make sense of the bytes.
+    """
+    if value is None:
+        return [], None
+    if not isinstance(value, list):
+        return None, BAD_ATTACHMENTS
+    if len(value) > MAX_ATTACHMENTS:
+        return None, MANY_ATTACHMENTS
+    for item in value:
+        if not isinstance(item, dict):
+            return None, BAD_ATTACHMENT
+        fields = [item.get(k) for k in ("name", "mime_type", "data_base64")]
+        if not all(isinstance(f, str) and f.strip() for f in fields):
+            return None, BAD_ATTACHMENT
+        if item["mime_type"] not in IMAGE_TYPES:
+            return None, BAD_MIME
+    return list(value), None
 
 
 def _harness_get(path: str):
@@ -163,6 +202,9 @@ class Chatroom:
             return 400, {"error": NO_MESSAGE}
         if len(message) > MAX_MESSAGE:
             return 400, {"error": LONG_MESSAGE}
+        attachments, why = check_attachments(body.get("attachments"))
+        if why:
+            return 400, {"error": why}
         # Refused now rather than thirty seconds from now. A typo would otherwise
         # come back only as an `error` on a desk, long after the app moved on.
         known = read_bots()
@@ -173,12 +215,19 @@ class Chatroom:
             if bot in self.busy:
                 return 409, {"error": "busy"}
             self.busy.add(bot)
-        threading.Thread(target=self._turn, args=(bot, message), daemon=True).start()
+        threading.Thread(target=self._turn, args=(bot, message, attachments),
+                         daemon=True).start()
         return 202, {"ok": True, "bot": bot}
 
-    def _turn(self, bot: str, message: str) -> None:
+    def _turn(self, bot: str, message: str, attachments=()) -> None:
+        # No attachment means no key: a turn without a picture goes on the wire
+        # exactly as it always has, so nothing already talking to the harness has
+        # to learn a new shape to keep working.
+        turn = {"message": message, "bot": bot}
+        if attachments:
+            turn["attachments"] = list(attachments)
         try:
-            rt.post("/api/chat", {"message": message, "bot": bot}, timeout=TURN_TIMEOUT_S)
+            rt.post("/api/chat", turn, timeout=TURN_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
             # Kept until the bot manages a whole turn. A failure that clears
             # itself on the next poll is a failure nobody ever sees.

@@ -40,10 +40,16 @@ class GateTest(unittest.TestCase):
     def path(self):
         return self.root / "_meta" / "state" / "pending-question.json"
 
-    def ask(self, qid="abc123def456", target="npx playwright install"):
-        self.path.write_text(json.dumps({
+    def gate_file(self, bot=""):
+        """Where the harness puts this bot's gate. One file per asking bot: two
+        bots run on two threads and can raise a hand in the same second."""
+        name = "pending-question.json" if not bot else f"pending-question.{bot}.json"
+        return self.root / "_meta" / "state" / name
+
+    def ask(self, qid="abc123def456", target="npx playwright install", bot="", ago=12):
+        self.gate_file(bot).write_text(json.dumps({
             "id": qid, "permission": "run_bash", "target": target,
-            "detail": "", "asked_at": time.time() - 12,
+            "detail": "", "asked_at": time.time() - ago,
         }))
         return qid
 
@@ -123,6 +129,132 @@ class GateTest(unittest.TestCase):
         ok, _ = self.rt.answer_gate(self.root, qid, "deny", False)
         self.assertTrue(ok)
         self.assertEqual(json.loads(self.path.read_text())["answer"], "deny")
+
+
+class ManyGatesTest(GateTest):
+    """One file per asking bot, which is how the harness writes them now.
+
+    The failure this guards is the worst one this project has: a bot raises its
+    hand, the office reads the one file it has always read, sees nothing, and
+    reports a clear floor while an agent stands there blocked forever.
+    """
+
+    # -- the single gate still answers, and now answers about everybody ---------
+
+    def test_a_named_bots_gate_is_not_hidden_by_the_unnamed_file_being_absent(self):
+        self.ask(qid="c" * 12, target="git push --force-with-lease", bot="chief")
+        gate = self.rt.read_gate()
+        self.assertEqual(gate["state"], "pending")
+        self.assertEqual(gate["target"], "git push --force-with-lease")
+        self.assertEqual(gate["bot"], "chief")
+
+    def test_the_single_gate_is_the_oldest_hand_on_the_floor(self):
+        self.ask(qid="1" * 12, ago=5)                      # the unnamed one, recent
+        self.ask(qid="2" * 12, bot="release", ago=600)     # a bot, waiting ten minutes
+        self.assertEqual(self.rt.read_gate()["id"], "2" * 12)
+        self.assertEqual(self.rt.read_gate()["bot"], "release")
+
+    def test_an_answered_hand_is_skipped_for_the_one_still_up(self):
+        self.ask(qid="1" * 12, ago=600)
+        data = json.loads(self.path.read_text())
+        data["answer"] = "allow"
+        self.path.write_text(json.dumps(data))
+        self.ask(qid="2" * 12, bot="chief", ago=5)
+        self.assertEqual(self.rt.read_gate()["id"], "2" * 12)
+
+    # -- the whole floor -------------------------------------------------------
+
+    def test_an_empty_floor_is_an_empty_list_and_says_it_read_cleanly(self):
+        self.assertEqual(self.rt.read_gates(), {"state": "ok", "gates": []})
+
+    def test_one_gate_is_a_list_of_one(self):
+        self.ask(qid="a" * 12)
+        got = self.rt.read_gates()
+        self.assertEqual(got["state"], "ok")
+        self.assertEqual([g["id"] for g in got["gates"]], ["a" * 12])
+        self.assertIsNone(got["gates"][0]["bot"])
+
+    def test_every_raised_hand_is_listed_oldest_first(self):
+        self.ask(qid="1" * 12, bot="chief", ago=30)
+        self.ask(qid="2" * 12, ago=900)
+        self.ask(qid="3" * 12, bot="release", ago=120)
+        got = self.rt.read_gates()
+        self.assertEqual([g["id"] for g in got["gates"]], ["2" * 12, "3" * 12, "1" * 12])
+        self.assertEqual([g["bot"] for g in got["gates"]], [None, "release", "chief"])
+
+    def test_a_listed_gate_is_the_same_object_as_the_single_one(self):
+        """One shape, defined once. If the list and the single gate could drift
+        apart, the app would render two different truths about one raised hand."""
+        self.ask(qid="d" * 12, bot="chief", target="npm ci")
+        one, many = self.rt.read_gate(), self.rt.read_gates()["gates"]
+        self.assertEqual(len(many), 1)
+        self.assertEqual(sorted(one), sorted(many[0]))
+        self.assertEqual({k: one[k] for k in one if k != "waiting_s"},
+                         {k: many[0][k] for k in many[0] if k != "waiting_s"})
+
+    def test_an_answered_gate_is_not_a_raised_hand(self):
+        qid = self.ask(qid="e" * 12, bot="chief")
+        self.assertEqual(len(self.rt.read_gates()["gates"]), 1)
+        self.assertTrue(self.rt.answer_gate(self.root, qid, "allow", False)[0])
+        self.assertEqual(self.rt.read_gates()["gates"], [])
+
+    def test_a_torn_file_never_hides_the_hand_next_to_it(self):
+        """A half-written neighbour is a reason to say so out loud, never a
+        reason to drop a gate that IS readable."""
+        self.path.write_text('{"id": "abc", "permis')
+        self.ask(qid="f" * 12, bot="chief")
+        got = self.rt.read_gates()
+        self.assertEqual(got["state"], "unreadable")
+        self.assertEqual([g["id"] for g in got["gates"]], ["f" * 12])
+
+    def test_an_unconfigured_runtime_lists_nothing_and_says_why(self):
+        os.environ.pop("OFFICE_RUNTIME_ROOT")
+        import importlib, runtime
+        got = importlib.reload(runtime).read_gates()
+        self.assertEqual(got, {"state": "unconfigured", "gates": []})
+
+    def test_a_root_that_is_not_there_is_not_an_empty_floor(self):
+        os.environ["OFFICE_RUNTIME_ROOT"] = str(self.root / "nope")
+        import importlib, runtime
+        got = importlib.reload(runtime).read_gates()
+        self.assertEqual(got["state"], "missing-root")
+        self.assertEqual(got["gates"], [])
+
+    # -- answering, across the whole floor -------------------------------------
+
+    def test_answering_one_bots_gate_leaves_the_other_hand_up(self):
+        """THE multi-gate test. Two bots blocked, one answered: the other is
+        still listed, still waiting, and its file is untouched."""
+        chief = self.ask(qid="1" * 12, bot="chief", ago=60)
+        release = self.ask(qid="2" * 12, bot="release", ago=30)
+        untouched = self.gate_file("release").read_bytes()
+
+        ok, msg = self.rt.answer_gate(self.root, chief, "allow", False)
+        self.assertTrue(ok, msg)
+        self.assertEqual(json.loads(self.gate_file("chief").read_text())["answer"], "allow")
+        self.assertEqual(self.gate_file("release").read_bytes(), untouched)
+
+        left = self.rt.read_gates()["gates"]
+        self.assertEqual([g["id"] for g in left], [release])
+        self.assertEqual(self.rt.read_gate()["id"], release)
+
+    def test_an_id_nobody_on_the_floor_carries_writes_to_nobody(self):
+        self.ask(qid="1" * 12, bot="chief")
+        self.ask(qid="2" * 12)
+        before = {b: self.gate_file(b).read_bytes() for b in ("chief", "")}
+        ok, msg = self.rt.answer_gate(self.root, "9" * 12, "allow", False)
+        self.assertFalse(ok)
+        self.assertIn("moved on", msg)
+        self.assertEqual({b: self.gate_file(b).read_bytes() for b in ("chief", "")}, before)
+
+    def test_a_gate_that_is_only_torn_is_not_reported_as_gone(self):
+        """"Gone" means the agent stopped waiting. A file we could not parse
+        means we do not know, and saying the wrong one of those is how an answer
+        gets abandoned."""
+        self.path.write_text('{"id": "abc", "permis')
+        ok, msg = self.rt.answer_gate(self.root, "a" * 12, "allow", False)
+        self.assertFalse(ok)
+        self.assertIn("could not read", msg)
 
 
 class BoardTest(unittest.TestCase):
