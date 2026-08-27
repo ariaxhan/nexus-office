@@ -155,6 +155,85 @@ final class StateRulesTests: XCTestCase {
         XCTAssertEqual(StateRules.visibleDesks(floor).count, 3)
     }
 
+    // MARK: - the roster is grouped, and drops nothing
+
+    private func floorOfThree() -> [Station] {
+        [Station(repo: "zeta/tools"), Station(repo: "acme/docs"), Station(repo: "acme/billing"),
+         Station(repo: "northwind/api"), Station(repo: "Beta/site"), Station(repo: "acme/Checkout")]
+    }
+
+    func testPinnedDesksComeFirstInTheOrderTheyWerePinned() {
+        let groups = StateRules.roster(floorOfThree(), pins: ["northwind/api", "acme/billing"])
+        XCTAssertEqual(groups.first?.header, StateRules.pinnedHeader)
+        XCTAssertEqual(groups.first?.desks.map(\.repo), ["northwind/api", "acme/billing"],
+                       "drag order, not alphabetical")
+        XCTAssertFalse(groups.dropFirst().flatMap(\.desks).contains { $0.repo == "acme/billing" },
+                       "a pinned desk is not also in its owner group")
+    }
+
+    func testNoPinsMeansNoPinnedGroup() {
+        let groups = StateRules.roster(floorOfThree(), pins: [])
+        XCTAssertNotEqual(groups.first?.header, StateRules.pinnedHeader)
+    }
+
+    func testYourOwnOwnerComesFirstThenTheRestAToZ() {
+        let groups = StateRules.roster(floorOfThree(), pins: [], owners: ["northwind"])
+        XCTAssertEqual(groups.map(\.header), ["northwind", "acme", "Beta", "zeta"])
+        let alone = StateRules.roster(floorOfThree(), pins: [])
+        XCTAssertEqual(alone.map(\.header), ["acme", "Beta", "zeta", "northwind"].sorted { $0.lowercased() < $1.lowercased() },
+                       "owners A to Z, case blind, when the door named nobody")
+    }
+
+    func testDesksInsideAGroupAreAToZ() {
+        let groups = StateRules.roster(floorOfThree(), pins: [], owners: ["acme"])
+        XCTAssertEqual(groups[0].desks.map(\.repo), ["acme/billing", "acme/Checkout", "acme/docs"])
+    }
+
+    func testAPinNamingADeskNotOnTheFloorIsIgnoredAndDropsNothing() {
+        let floor = floorOfThree()
+        let groups = StateRules.roster(floor, pins: ["gone/away", "acme/docs", "acme/docs"])
+        XCTAssertEqual(groups[0].desks.map(\.repo), ["acme/docs"], "twice pinned is once shown")
+        XCTAssertEqual(groups.flatMap(\.desks).count, floor.count)
+    }
+
+    func testGroupingNeverLosesARaisedHand() {
+        let gated = Station(repo: "acme/checkout-api", outcome: "survey",
+                            issues: [quietIssue()], gate: pendingGate())
+        let floor = [gated, Station(repo: "acme/docs"), Station(repo: "tiny/scratch")]
+        // What the filters would have handed over with everything else filtered
+        // out: the gate alone. Grouping must still show it, pinned or not.
+        for pins in [[String](), ["tiny/scratch"], ["acme/checkout-api"]] {
+            let visible = StateRules.visibleDesks(floor, query: "zzzz", needsOnly: true)
+            let groups = StateRules.roster(visible, pins: pins)
+            XCTAssertEqual(groups.flatMap(\.desks).map(\.repo), ["acme/checkout-api"], "\(pins)")
+        }
+        let all = StateRules.roster(StateRules.visibleDesks(floor), pins: ["acme/docs"])
+        XCTAssertEqual(all.flatMap(\.desks).count, 3)
+    }
+
+    func testAPinnedDeskThatIsPutAwayGoesToTheDrawerNotTheTop() {
+        // Put away outranks the pin: it is the later and the more deliberate
+        // of the two. The pin is kept in the order, so bringing the desk back
+        // puts it straight back at the top.
+        let floor = [Station(repo: "acme/docs", hidden: true), Station(repo: "acme/site")]
+        let groups = StateRules.roster(StateRules.visibleDesks(floor), pins: ["acme/docs"])
+        XCTAssertEqual(groups.map(\.header), ["acme"])
+        XCTAssertEqual(groups[0].desks.map(\.repo), ["acme/site"])
+        XCTAssertEqual(StateRules.putAwayDesks(floor).map(\.repo), ["acme/docs"])
+    }
+
+    func testDroppingOnARowLandsJustAboveItAndOnNothingLandsLast() {
+        let pins = ["a/one", "a/two", "a/three"]
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "a/three", before: "a/one"),
+                       ["a/three", "a/one", "a/two"])
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "a/one", before: nil),
+                       ["a/two", "a/three", "a/one"])
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "a/two", before: "a/two"), pins,
+                       "dropped on itself, nothing moves")
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "b/new", before: "a/two"),
+                       ["a/one", "b/new", "a/two", "a/three"], "a drop pins what was not pinned")
+    }
+
     // MARK: - the gate needs a desk to stand at
 
     func testAGateAttachesToTheRepoTheRuntimeIsIn() {

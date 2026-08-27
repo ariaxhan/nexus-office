@@ -22,6 +22,12 @@ carries the id of the question it is answering, and is refused if the agent has
 moved on. Configuration is office-sync.py's, and every call to GitHub is still
 made there, unchanged.
 
+One path is not like the others. `POST /webhook` is what Tailscale Funnel puts
+on the public internet, and it is the only route exempt from the tailnet login
+and the origin rule, because GitHub can satisfy neither. It is held up by an
+HMAC over the raw bytes instead, and with no OFFICE_WEBHOOK_SECRET set it
+answers 503 rather than accepting anything unsigned. See `client/webhook.py`.
+
 The room rebuilds every OFFICE_POLL_S seconds (default 300). That number is a
 GitHub budget, not a taste: one build asks GitHub once per ten desks, and the
 hour holds 5000 GraphQL points. `?fresh=1` still forces a build, at most once a
@@ -47,6 +53,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import chat  # noqa: E402  (needs the path above)
 import runtime as rt  # noqa: E402
+import webhook  # noqa: E402
 
 # The command is hyphenated because it is a command first and a module second.
 # Loading it by path is what the tests do too; renaming it would rename the thing
@@ -84,6 +91,27 @@ NUM_RE = re.compile(r"\d+\Z", re.ASCII)
 # app) never sends that header, and a forged one on loopback is ignored.
 TRUSTED_HOSTS = {h.strip().lower() for h in os.environ.get("OFFICE_TRUSTED_HOSTS", "").split(",") if h.strip()}
 LOGIN = os.environ.get("OFFICE_LOGIN", "").strip().lower()
+
+# THE ONE PUBLIC PATH. Tailscale Funnel exposes `POST /webhook` to the open
+# internet and nothing else; every other route stays on the tailnet behind
+# `Tailscale-User-Login`, or on loopback. GitHub cannot carry a tailnet login and
+# does not send an Origin, so that one route is exempt from `_identity_ok` and
+# `_write_ok` and is held up instead by an HMAC over the raw request bytes. With
+# no secret set the route answers 503: unsigned is never accepted, because a
+# public endpoint that skips the check when it is unconfigured runs your pipeline
+# for whoever finds it. The secret itself lives in `webhook.SECRET`, next to the
+# code that verifies against it, so this file, the status route and the card on
+# the wall cannot disagree about whether webhooks are configured.
+#
+# GitHub's own payload ceiling. Anything larger is not a delivery.
+WEBHOOK_LIMIT = 1024 * 1024
+# The accounts the pipeline itself speaks as. A comment from one of these is the
+# office's own voice coming back, and acting on it is a machine in a loop with
+# itself. Owners are the accounts that hold the desks; OFFICE_BOT_LOGINS names
+# any extra bot account whose token this process never sees.
+OUR_LOGINS = ({o.strip().lower() for o in office_sync.OWNERS if o.strip()}
+              | {b.strip().lower()
+                 for b in os.environ.get("OFFICE_BOT_LOGINS", "").split(",") if b.strip()})
 
 
 def _loopback_hosts(port: int) -> set[str]:
@@ -199,6 +227,46 @@ class World:
             self.fresh_at = now
         return self.build(wait=FRESH_WAIT_S)
 
+    def refresh_desk(self, nwo: str) -> bool:
+        """Refetch ONE desk and swap it into the snapshot.
+
+        About two GraphQL points against an hourly budget of five thousand, so a
+        webhook telling us one repo moved costs roughly a four-hundredth of what
+        rebuilding the room would. That is the whole reason this exists: without
+        it, "GitHub says something changed" and "show it" are the same expensive
+        thing, and the office would either poll or go stale.
+
+        False means the desk was not replaced, and it never blanks one: a repo
+        that could not be fetched keeps what it had, exactly as a build does.
+        """
+        if not office_sync.NWO_RE.match(nwo or ""):
+            return False
+        try:
+            who, tok = self.access().token_for(nwo)
+        except Exception as exc:  # noqa: BLE001
+            log(f"could not find a token for {nwo}: {type(exc).__name__}: {exc}")
+            return False
+        if not tok:
+            log(f"no account holds push on {nwo}; the desk keeps what it had")
+            return False
+        rows, errors, rate, fatal = office_sync.fetch_batch([nwo], tok)
+        office_sync.note_rate(rate)
+        row = rows.get(nwo)
+        if row is None:
+            log(f"could not refresh {nwo}: {errors.get(nwo) or fatal or 'GitHub returned nothing'}")
+            return False
+        stamp = now_iso()
+        with self.lock:
+            for st in ((self.snapshot or {}).get("stations") or []):
+                if st.get("repo") == nwo:
+                    st["issues"] = row["issues"]
+                    st["prs"] = row["prs"]
+                    st["fetched_at"] = stamp
+                    st["issues_error"] = None
+                    st["prs_error"] = None
+                    return True
+        return False
+
     def mark_hidden(self, repo: str, hidden: bool) -> None:
         """Flip the flag on the desk that is already on screen.
 
@@ -210,6 +278,15 @@ class World:
             for st in ((self.snapshot or {}).get("stations") or []):
                 if st.get("repo") == repo:
                     st["hidden"] = hidden
+
+    def mark_pins(self, pins: list) -> None:
+        """Land a new pin order on the snapshot now, not on the next poll."""
+        with self.lock:
+            snap = self.snapshot or {}
+            snap["pins"] = list(pins)
+            for st in (snap.get("stations") or []):
+                repo = st.get("repo")
+                st["pinned"] = pins.index(repo) if repo in pins else None
 
     def keep_fresh(self, every: float = POLL_S) -> None:
         while True:
@@ -283,6 +360,12 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     world = None
     chatroom = None
+    mailbox = None
+    trigger = None
+    # Said once, not once per delivery. A hook pointed at a door with no secret
+    # gets retried by GitHub for days, and one log line an hour is a note while
+    # one per delivery is a wall.
+    _no_secret_said = 0.0
 
     def log_message(self, fmt, *args):
         # One line per API call, on stderr. The page and its two files are noise.
@@ -377,6 +460,8 @@ class Handler(BaseHTTPRequestHandler):
                                    "fresh": fresh, "server_time": now_iso()})
             if path == "/api/desks":
                 return self._json({"hidden": office_sync.read_hidden()})
+            if path == "/api/pins":
+                return self._json({"pins": office_sync.read_pins()})
             if path == "/api/gate":
                 return self._json(rt.read_gate())
             if path == "/api/gates":
@@ -387,6 +472,8 @@ class Handler(BaseHTTPRequestHandler):
                 bot = (urllib.parse.parse_qs(query).get("bot") or [""])[0]
                 code, body = self.chatroom.history(bot)
                 return self._json(body, code)
+            if path == "/api/webhook":
+                return self._json(self._webhook_status())
             if path == "/api/health":
                 return self._json({"ok": True, "snapshot_at": self.world.at,
                                    "server_time": now_iso()})
@@ -400,6 +487,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.partition("?")[0]
+        # THE ONE EXEMPTION FROM `_identity_ok` AND `_write_ok`, AND WHY.
+        #
+        # This is the single path Tailscale Funnel puts on the public internet.
+        # GitHub is not on the tailnet, so it cannot carry `Tailscale-User-Login`,
+        # and it is not a browser, so it sends no `Origin` and no `Sec-Fetch-Site`.
+        # Both checks would refuse every real delivery. What holds this route up
+        # instead is an HMAC-SHA256 over the raw bytes against a secret only
+        # GitHub and this machine know, which is a stronger claim than either
+        # header: those two say "you came from somewhere I trust", this one says
+        # "these exact bytes came from someone holding the secret".
+        #
+        # `_host_ok` still applies, so a request that does not name this door is
+        # refused before the signature is even computed.
+        if path == "/webhook":
+            return self._webhook()
+        # Funnel's `--set-path=/webhook` STRIPS the prefix before proxying, so a
+        # mount pointed at a target without a path would arrive here as `POST /`.
+        # That is a misconfiguration, and it is told so rather than quietly
+        # aliased: a second name for the one public path is a second thing to
+        # keep in step, and the first time they drift one of them is unsigned.
+        if path == "/":
+            return self._json({"error": "the webhook is at /webhook; this is not an alias"}, 404)
         if not self._host_ok():
             return self._json({"error": "wrong host"}, 403)
         if not self._identity_ok():
@@ -414,6 +523,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._gate(self._read_json())
             if path == "/api/desks":
                 return self._desks(self._read_json())
+            if path == "/api/pins":
+                return self._pins(self._read_json())
             if path == "/api/chat":
                 # Returns before the turn has run: a chat turn is an agent run,
                 # and nothing on the other end of this socket waits two minutes.
@@ -494,6 +605,146 @@ class Handler(BaseHTTPRequestHandler):
         log(f"desk {repo} is now {'put away' if hidden else 'back'}")
         return self._json({"ok": True, "hidden": rows})
 
+    def _pins(self, body):
+        """Replace the pin order, whole.
+
+        The same door as putting a desk away: Host, JSON only, same origin. The
+        body is the entire ordered list and never a delta, because the order IS
+        the state and a delta against an order is a guess about where the other
+        entries went. GitHub is never touched.
+        """
+        pins = body.get("pins")
+        if not isinstance(pins, list):
+            return self._json({"error": "pins must be a list of repos"}, 400)
+        for repo in pins:
+            if not isinstance(repo, str) or not office_sync.NWO_RE.match(repo):
+                return self._json({"error": "bad repo"}, 400)
+        rows = office_sync.write_pins(pins)
+        self.world.mark_pins(rows)
+        log(f"pins are now {rows}")
+        return self._json({"ok": True, "pins": rows})
+
+    # ── the one public path ─────────────────────────────────────────────────
+    def _webhook(self):
+        """One GitHub delivery.
+
+        The order is deliberate and it is: size, host, signature, then parse.
+        Size first because it is the only check that costs nothing and is the
+        only one that can be answered without touching the body. Signature
+        before parse because a body that has not proved who sent it is not a
+        document, it is bytes, and json.loads on it is the first thing an
+        attacker gets to choose.
+
+        The 200 goes out BEFORE any work. GitHub gives a delivery ten seconds
+        and retries anything that is not a 2xx, so a door that dispatched first
+        and answered second would be redelivered mid-run and start a second one.
+        """
+        n = int(self.headers.get("content-length") or 0)
+        if n > WEBHOOK_LIMIT:
+            if n <= DRAIN_LIMIT:
+                self._drain(n)
+            else:
+                self.close_connection = True
+            return self._json({"error": "payload too large"}, 413)
+        if not self._host_ok():
+            self._drain(n)
+            return self._json({"error": "wrong host"}, 403)
+        ctype = (self.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            self._drain(n)
+            return self._json({"error": "webhooks are application/json"}, 415)
+        if not webhook.SECRET:
+            self._drain(n)
+            now = time.monotonic()
+            if now - Handler._no_secret_said > 3600:
+                Handler._no_secret_said = now
+                log("a webhook arrived and OFFICE_WEBHOOK_SECRET is not set; "
+                    "refusing it, because unsigned is never accepted")
+            return self._json({"error": "no webhook secret configured"}, 503)
+
+        raw = self.rfile.read(n) if n else b""
+        ok = webhook.verify(webhook.SECRET, raw, self.headers.get("x-hub-signature-256") or "")
+        run = webhook.note_signature(ok)
+        if not ok:
+            # Not logged per refusal: a public path that writes a line for every
+            # bad post is a disk somebody else gets to fill. The run of them is
+            # counted instead, and the webhook card says it out loud.
+            if run in (1, 3, 10) or run % 100 == 0:
+                log(f"refused a webhook with a bad signature ({run} in a row)")
+            return self._json({"error": "bad signature"}, 403)
+
+        delivery = (self.headers.get("x-github-delivery") or "").strip()[:120]
+        event = (self.headers.get("x-github-event") or "").strip()[:60]
+        if not delivery:
+            # GitHub always sends one, and it is the only key that makes a
+            # redelivery tell itself apart from a new event. A poster without
+            # one is told exactly what is missing rather than quietly deduped
+            # against nothing.
+            return self._json({"error": "no delivery id"}, 400)
+
+        # Claim, rather than merely check. Two retries can land at once, and a
+        # look that is not also a claim lets both through. The claim is released
+        # again unless this finishes, so a delivery that was refused or that
+        # died half-done comes back on the redeliver button and is handled
+        # fresh: that button is the only recovery control there is, and GitHub
+        # sends the SAME delivery id when it is pressed.
+        if not self.mailbox.claim(delivery):
+            return self._json({"ok": True, "duplicate": True, "delivery": delivery})
+
+        handled = False
+        try:
+            if event == "ping":
+                log(f"ping from GitHub, delivery {delivery}")
+                handled = True
+                return self._json({"ok": True, "pong": True, "delivery": delivery})
+
+            try:
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except Exception as exc:  # noqa: BLE001
+                # It carried a valid signature, so this is our misunderstanding
+                # and not GitHub's. A non-2xx here would buy a retry of the same
+                # unreadable bytes for days.
+                log(f"delivery {delivery} carried a body that would not read: {exc}")
+                handled = True
+                return self._json({"ok": True, "ignored": "unreadable body",
+                                   "delivery": delivery})
+
+            ev = webhook.parse(event, delivery, body if isinstance(body, dict) else {})
+            if ev is None:
+                handled = True
+                return self._json({"ok": True, "ignored": event or "unknown",
+                                   "delivery": delivery})
+
+            fire = webhook.should_trigger(ev, OUR_LOGINS)
+            self.mailbox.append(ev, trigger=fire)
+            handled = True
+            self._json({"ok": True, "delivery": delivery})
+            # Everything past the answer. `notice` drops the event in a mailbox
+            # and returns, so the request thread is never the thing waiting on a
+            # thirty minute lane.
+            if fire and self.trigger is not None:
+                self.trigger.notice(ev)
+            log(f"{event}.{ev.action or '-'} {ev.repo}#{ev.number or '-'} by {ev.login or '?'}"
+                f" -> {'queued' if fire else 'noted'}")
+            return None
+        finally:
+            self.mailbox.settle(delivery, handled)
+
+    def _webhook_status(self) -> dict:
+        """Is the mailbox alive, in the shape the app and the phone read.
+
+        Behind the normal door, unlike the route it describes: what arrived is
+        this office's business, and nothing here is needed by GitHub.
+        """
+        box = self.mailbox
+        return {
+            "configured": bool(webhook.SECRET),
+            "seen": box.count() if box else 0,
+            "last": box.last_events(20) if box else [],
+            "runs": box.last_runs(20) if box else [],
+            "queued": self.trigger.queued() if self.trigger else [],
+        }
+
     def _page(self, path):
         """The phone, through the same door as everything else.
 
@@ -525,9 +776,21 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(world: World, port: int = 8790):
-    """Loopback only. Never 0.0.0.0: the bind address IS the security model."""
+    """Loopback only. Never 0.0.0.0: the bind address IS the security model.
+
+    The one path that is reachable from outside this machine, `/webhook`, is
+    still served on this same loopback socket. Tailscale Funnel is what puts it
+    on the internet, and Funnel forwards to 127.0.0.1 like everything else, so
+    there is still no wider bind anywhere in this program.
+    """
+    mailbox = webhook.Mailbox(webhook.STATE)
+    trigger = webhook.Trigger(mailbox,
+                              root=os.environ.get("OFFICE_RUNTIME_ROOT") or None,
+                              refresh=world.refresh_desk,
+                              receipts=office_sync.RECEIPTS)
     handler = type("BoundHandler", (Handler,),
-                   {"world": world, "chatroom": chat.Chatroom()})
+                   {"world": world, "chatroom": chat.Chatroom(),
+                    "mailbox": mailbox, "trigger": trigger})
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
 
 
@@ -551,6 +814,9 @@ def main(argv=None) -> int:
     httpd = make_server(world, a.port)
     threading.Thread(target=world.keep_fresh, daemon=True).start()
     log(f"http://127.0.0.1:{a.port}/  (loopback only; the door is this machine)")
+    log("webhooks: " + ("/webhook is signed and listening"
+                        if webhook.SECRET else
+                        "OFF (no OFFICE_WEBHOOK_SECRET; /webhook answers 503)"))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

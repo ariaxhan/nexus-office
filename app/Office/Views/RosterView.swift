@@ -36,8 +36,27 @@ struct RosterView: View {
                     if let notice = store.worldNotice {
                         notary(notice)
                     }
-                    ForEach(store.visibleDesks) { station in
-                        deskRow(station)
+                    ForEach(store.roster, id: \.header) { group in
+                        groupHeader(group.header ?? "")
+                        ForEach(group.desks) { station in
+                            if group.header == StateRules.pinnedHeader {
+                                pinnedRow(station)
+                            } else {
+                                deskRow(station)
+                            }
+                        }
+                        if group.header == StateRules.pinnedHeader {
+                            // Past the last pin. Dropping onto a row lands
+                            // before it, so the only way to the bottom of the
+                            // list is a target that is nobody.
+                            Color.clear.frame(height: 6)
+                                .contentShape(Rectangle())
+                                .dropDestination(for: String.self) { repos, _ in
+                                    guard let repo = repos.first else { return false }
+                                    Task { await store.movePin(repo: repo, before: nil) }
+                                    return true
+                                }
+                        }
                     }
                     if store.visibleDesks.isEmpty && store.worldNotice == nil {
                         notary(store.needsOnly ? "nothing needs you right now" : "no desks yet")
@@ -91,10 +110,42 @@ struct RosterView: View {
                         Task { await store.setDesk(repo: station.repo, hidden: true) }
                     }
                 }
+                if store.isPinned(station) {
+                    Button("Unpin") {
+                        Task { await store.setPin(repo: station.repo, pinned: false) }
+                    }
+                } else {
+                    Button("Pin to top") {
+                        Task { await store.setPin(repo: station.repo, pinned: true) }
+                    }
+                }
                 if let url = URL(string: "https://github.com/\(station.repo)") {
                     Link("Open on GitHub", destination: url)
                 }
             }
+    }
+
+    /// A pinned desk can be picked up and dropped on another: the dropped one
+    /// lands just above the row it was dropped on. Order is the whole point of
+    /// the group, so it is the one place on the roster a drag means anything.
+    private func pinnedRow(_ station: Station) -> some View {
+        deskRow(station)
+            .draggable(station.repo)
+            .dropDestination(for: String.self) { repos, _ in
+                guard let repo = repos.first else { return false }
+                Task { await store.movePin(repo: repo, before: station.repo) }
+                return true
+            }
+    }
+
+    /// The name over one group of desks: "pinned", or an owner.
+    private func groupHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(Theme.faint)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
     }
 
     private var putAwayAnchor: String { "put-away-drawer" }

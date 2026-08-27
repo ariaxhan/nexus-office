@@ -29,7 +29,8 @@ SNAP = {
     "generated": "2026-08-26T12:00:00Z",
     "heartbeat": "", "killed": False, "today": {"landed": 2},
     "stations": [{"repo": "acme/thing", "issues": [], "prs": [],
-                   "hidden": False, "fetched_at": "2026-08-26T11:59:00Z"}],
+                   "hidden": False, "pinned": None, "fetched_at": "2026-08-26T11:59:00Z"}],
+    "pins": [], "owners": [],
     "runtime": {"gate": {"state": "clear"}, "board": {"state": "down"}},
     "sections": {},
     "github": {"limit": 5000, "remaining": 4800, "reset_at": "2026-08-26T13:00:00Z",
@@ -58,7 +59,13 @@ class ServeTest(unittest.TestCase):
                          serve.office_sync.DESKS_CACHE)
         serve.office_sync.STATE = sd
         serve.office_sync.HIDDEN_FILE = sd / "hidden.json"
+        serve.office_sync.PINS_FILE = sd / "pins.json"
         serve.office_sync.DESKS_CACHE = sd / "desks.json"
+        # The mailbox writes three more files in the same place, and is built
+        # inside make_server, so it has to be pointed somewhere disposable
+        # before the server exists rather than after.
+        cls.webhook_state_was = serve.webhook.STATE
+        serve.webhook.STATE = sd
 
         cls.world = serve.World()
         cls.world.build()
@@ -74,6 +81,7 @@ class ServeTest(unittest.TestCase):
         cls.httpd.server_close()
         (cls.serve.office_sync.STATE, cls.serve.office_sync.HIDDEN_FILE,
          cls.serve.office_sync.DESKS_CACHE) = cls.state_was
+        cls.serve.webhook.STATE = cls.webhook_state_was
         cls.state.cleanup()
 
     # ── plumbing ────────────────────────────────────────────────────────────
@@ -194,6 +202,45 @@ class ServeTest(unittest.TestCase):
             self.assertIn("error", body)
         self.assertEqual(self.get("/api/desks")[1]["hidden"], [])
 
+    # ── desks you pinned ────────────────────────────────────────────────────
+    def test_pins_start_empty_and_ride_in_the_world(self):
+        code, body = self.get("/api/pins")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["pins"], [])
+        world = self.get("/api/world")[1]["world"]
+        self.assertEqual(world["pins"], [])
+        self.assertIsNone(world["stations"][0]["pinned"])
+
+    def test_posting_pins_replaces_the_whole_order_and_lands_at_once(self):
+        try:
+            code, body = self.post("/api/pins", {"pins": ["zed/last", "acme/thing"]})
+            self.assertEqual(code, 200)
+            self.assertEqual(body["pins"], ["zed/last", "acme/thing"], "order kept, not sorted")
+            world = self.get("/api/world")[1]["world"]
+            self.assertEqual(world["pins"], ["zed/last", "acme/thing"])
+            self.assertEqual(world["stations"][0]["pinned"], 1, "rank, on the desk")
+
+            code, body = self.post("/api/pins", {"pins": ["acme/thing"]})
+            self.assertEqual(body["pins"], ["acme/thing"], "a replacement, not a merge")
+            self.assertEqual(self.get("/api/pins")[1]["pins"], ["acme/thing"])
+            self.assertEqual(self.get("/api/world")[1]["world"]["stations"][0]["pinned"], 0)
+        finally:
+            code, body = self.post("/api/pins", {"pins": []})
+        self.assertEqual(code, 200)
+        self.assertEqual(body["pins"], [])
+        self.assertIsNone(self.get("/api/world")[1]["world"]["stations"][0]["pinned"])
+
+    def test_pins_must_be_a_list_of_well_formed_repos(self):
+        for value in ("acme/thing", None, 1, {"a": 1}, True):
+            code, body = self.post("/api/pins", {"pins": value})
+            self.assertEqual(code, 400, repr(value))
+            self.assertIn("error", body)
+        for bad in ([""], ["nope"], ["a/b/c"], [1], ["acme/thing", "../../etc/passwd"]):
+            code, body = self.post("/api/pins", {"pins": bad})
+            self.assertEqual(code, 400, repr(bad))
+            self.assertEqual(body["error"], "bad repo")
+        self.assertEqual(self.get("/api/pins")[1]["pins"], [], "and wrote nothing")
+
     # ── refusals ────────────────────────────────────────────────────────────
     def test_an_unknown_kind_is_refused_before_anything_runs(self):
         code, body = self.post("/api/decision", {"kind": "delete", "repo": "a/b"})
@@ -304,6 +351,27 @@ class DoorTest(ServeTest):
         self.assertEqual(code, 200)
         self.assertEqual(body["hidden"], ["acme/thing"])
         self.raw("POST", "/api/desks", {}, {"repo": "acme/thing", "hidden": False})
+
+    def test_pinning_obeys_the_same_door_as_putting_away(self):
+        pins = {"pins": ["acme/thing"]}
+        for headers in ({"content-type": "text/plain"},
+                        {"sec-fetch-site": "cross-site"},
+                        {"origin": "https://evil.example.com"}):
+            code, _ = self.raw("POST", "/api/pins", headers, pins)
+            self.assertEqual(code, 403, headers)
+        code, _ = self.raw("POST", "/api/pins", {"host": "evil.example.com"}, pins)
+        self.assertEqual(code, 403)
+        code, body = self.raw("GET", "/api/pins", {"host": "evil.example.com"})
+        self.assertEqual(code, 403)
+        self.assertNotIn("pins", body)
+        self.assertEqual(self.get("/api/pins")[1]["pins"], [], "and wrote nothing")
+
+        code, body = self.raw("POST", "/api/pins",
+                              {"origin": f"http://127.0.0.1:{self.port}",
+                               "sec-fetch-site": "same-origin"}, pins)
+        self.assertEqual(code, 200)
+        self.assertEqual(body["pins"], ["acme/thing"])
+        self.raw("POST", "/api/pins", {}, {"pins": []})
 
     def test_reading_the_desk_list_from_another_host_is_refused(self):
         code, body = self.raw("GET", "/api/desks", {"host": "evil.example.com"})
@@ -962,3 +1030,393 @@ class GatesTest(unittest.TestCase):
         self.assertEqual(body["state"], "unreadable")
         self.assertEqual([g["id"] for g in body["gates"]], ["a" * 16])
 
+
+
+# ── the one public path ─────────────────────────────────────────────────────
+# `POST /webhook` is what Tailscale Funnel puts on the open internet, and it is
+# the only route that cannot pass `_identity_ok` (GitHub is not on the tailnet)
+# or `_write_ok` (GitHub sends no Origin). Everything below is about the two
+# claims that replaces them with: the Host still has to be this door, and the
+# bytes still have to be signed.
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from test_sync import FakeAccess, repo_node  # noqa: E402  (needs the path above)
+
+
+class FakeTrigger:
+    """The Trigger, without the pipeline. Records what it was told."""
+
+    def __init__(self):
+        self.seen = []
+
+    def notice(self, ev):
+        self.seen.append(ev)
+
+    def queued(self):
+        return sorted({e.repo for e in self.seen})
+
+
+class WebhookTest(unittest.TestCase):
+    SECRET = b"a shared secret"
+    TAILNET = "hook.tailnet.ts.net"
+
+    @classmethod
+    def setUpClass(cls):
+        import serve
+        import webhook
+
+        cls.serve = serve
+        cls.webhook = webhook
+        serve.log = lambda msg: None
+        serve.office_sync.Access = lambda: object()
+        serve.office_sync.build_snapshot = lambda access: copy.deepcopy(SNAP)
+
+        cls.state = tempfile.TemporaryDirectory()
+        sd = pathlib.Path(cls.state.name)
+        cls.was = (serve.office_sync.STATE, serve.office_sync.HIDDEN_FILE,
+                   serve.office_sync.DESKS_CACHE, webhook.STATE,
+                   webhook.SECRET, serve.OUR_LOGINS)
+        serve.office_sync.STATE = sd
+        serve.office_sync.HIDDEN_FILE = sd / "hidden.json"
+        serve.office_sync.PINS_FILE = sd / "pins.json"
+        serve.office_sync.DESKS_CACHE = sd / "desks.json"
+        webhook.STATE = sd
+        webhook.SECRET = cls.SECRET
+        serve.OUR_LOGINS = {"ariaxhan"}
+
+        cls.world = serve.World()
+        cls.world.build()
+        cls.httpd = serve.make_server(cls.world, 0)
+        cls.port = cls.httpd.server_address[1]
+        cls.handler = cls.httpd.RequestHandlerClass
+        cls.mailbox = cls.handler.mailbox
+        # The real Trigger would walk the vault and run a pipeline. It is built
+        # and then replaced, so what is under test is the door.
+        cls.handler.trigger.cancel()
+        cls.trigger = FakeTrigger()
+        cls.handler.trigger = cls.trigger
+        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        (cls.serve.office_sync.STATE, cls.serve.office_sync.HIDDEN_FILE,
+         cls.serve.office_sync.DESKS_CACHE, cls.webhook.STATE,
+         cls.webhook.SECRET, cls.serve.OUR_LOGINS) = cls.was
+        cls.state.cleanup()
+
+    def setUp(self):
+        self.trigger.seen.clear()
+        self.webhook.SECRET = self.SECRET
+
+    # ── plumbing ────────────────────────────────────────────────────────────
+    def deliver(self, body, event="issue_comment", delivery=None, headers=None,
+                secret=None, raw=None, sign=True):
+        import http.client
+        raw = raw if raw is not None else json.dumps(body).encode()
+        delivery = delivery or f"d-{time.time_ns()}"
+        h = {"host": f"127.0.0.1:{self.port}", "content-type": "application/json",
+             "x-github-event": event, "x-github-delivery": delivery,
+             "user-agent": "GitHub-Hookshot/abc123"}
+        if sign:
+            h["x-hub-signature-256"] = self.webhook.sign(secret or self.SECRET, raw)
+        h.update(headers or {})
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("POST", "/webhook", body=raw, headers=h)
+        r = c.getresponse()
+        out = json.loads(r.read().decode() or "{}")
+        c.close()
+        return r.status, out, delivery
+
+    def get(self, path, headers=None):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        h = {"host": f"127.0.0.1:{self.port}"}
+        h.update(headers or {})
+        c.request("GET", path, headers=h)
+        r = c.getresponse()
+        out = json.loads(r.read().decode() or "{}")
+        c.close()
+        return r.status, out
+
+    def comment(self, login="tim", body="what about the other case?", repo="acme/thing"):
+        return {"action": "created",
+                "issue": {"number": 42, "title": "the thing", "body": "please"},
+                "comment": {"body": body, "user": {"login": login}},
+                "repository": {"full_name": repo},
+                "sender": {"login": login}}
+
+    # ── the signature is the door ───────────────────────────────────────────
+    def test_a_signed_delivery_is_taken_and_queued(self):
+        code, body, delivery = self.deliver(self.comment())
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["delivery"], delivery)
+        self.assertEqual([e.delivery for e in self.trigger.seen], [delivery])
+        row = self.mailbox.last_events(1)[0]
+        self.assertEqual((row["delivery"], row["repo"], row["login"]),
+                         (delivery, "acme/thing", "tim"))
+        self.assertTrue(row["trigger"])
+
+    def test_an_unsigned_delivery_is_refused(self):
+        code, body, _ = self.deliver(self.comment(), sign=False)
+        self.assertEqual(code, 403)
+        self.assertEqual(body["error"], "bad signature")
+        self.assertEqual(self.trigger.seen, [])
+
+    def test_a_delivery_signed_with_the_wrong_secret_is_refused(self):
+        code, body, _ = self.deliver(self.comment(), secret=b"guessed it")
+        self.assertEqual(code, 403)
+        self.assertEqual(self.trigger.seen, [])
+
+    def test_a_body_altered_after_signing_is_refused(self):
+        """The signature is over the raw bytes, so one changed character is a
+        different message even though it parses to a legal payload."""
+        raw = json.dumps(self.comment()).encode()
+        sig = self.webhook.sign(self.SECRET, raw)
+        code, _, _ = self.deliver(None, raw=raw.replace(b"acme", b"evil"), sign=False,
+                                  headers={"x-hub-signature-256": sig})
+        self.assertEqual(code, 403)
+
+    def test_no_secret_configured_answers_503_and_never_accepts_it(self):
+        """Unsigned is never accepted, and 'unconfigured' is not a fallback to
+        open. A public path that falls open when nobody set a secret runs your
+        pipeline for whoever finds the URL."""
+        self.webhook.SECRET = b""
+        try:
+            code, body, _ = self.deliver(self.comment(), sign=False)
+            self.assertEqual(code, 503)
+            self.assertEqual(body["error"], "no webhook secret configured")
+            self.assertEqual(self.trigger.seen, [])
+        finally:
+            self.webhook.SECRET = self.SECRET
+
+    def test_a_body_over_a_megabyte_is_refused_before_anything_else(self):
+        big = json.dumps({"action": "created", "pad": "x" * (1024 * 1024 + 64)}).encode()
+        code, body, _ = self.deliver(None, raw=big)
+        self.assertEqual(code, 413)
+        self.assertEqual(self.trigger.seen, [])
+
+    def test_a_body_that_is_not_json_is_refused_by_content_type(self):
+        code, body, _ = self.deliver(self.comment(), headers={"content-type": "text/plain"})
+        self.assertEqual(code, 415)
+
+    def test_a_delivery_with_no_id_is_refused_out_loud(self):
+        """GitHub always sends one, and it is the only key a redelivery can be
+        told apart by. A poster without one is told what is missing rather than
+        quietly deduped against nothing."""
+        code, body, _ = self.deliver(self.comment(), headers={"x-github-delivery": ""})
+        self.assertEqual(code, 400)
+        self.assertEqual(body["error"], "no delivery id")
+
+    def test_a_request_for_another_host_is_refused(self):
+        code, body, _ = self.deliver(self.comment(), headers={"host": "evil.example.com"})
+        self.assertEqual(code, 403)
+        self.assertEqual(body["error"], "wrong host")
+
+    # ── the exemption, and its exact size ───────────────────────────────────
+    def test_a_tailnet_host_with_no_login_header_is_still_taken(self):
+        """THE one route that must work without a tailnet login. Funnel traffic
+        is a stranger by definition; if this 403s, no webhook ever arrives."""
+        was_hosts, was_login = set(self.serve.TRUSTED_HOSTS), self.serve.LOGIN
+        self.serve.TRUSTED_HOSTS = was_hosts | {self.TAILNET}
+        self.serve.LOGIN = "aria"
+        try:
+            code, body, delivery = self.deliver(self.comment(), headers={"host": self.TAILNET})
+            self.assertEqual(code, 200)
+            self.assertEqual(body["delivery"], delivery)
+            self.assertEqual([e.delivery for e in self.trigger.seen], [delivery])
+        finally:
+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
+
+    def test_a_forged_login_header_buys_nothing_here(self):
+        """The signature is the whole check on this path, so a header anyone can
+        type must not be able to add or subtract from it."""
+        code, _, _ = self.deliver(self.comment(),
+                                  headers={"tailscale-user-login": "not-aria"})
+        self.assertEqual(code, 200, "a forged login does not break a signed delivery")
+        code, _, _ = self.deliver(self.comment(), sign=False,
+                                  headers={"tailscale-user-login": "aria"})
+        self.assertEqual(code, 403, "and does not rescue an unsigned one")
+
+    def test_the_exemption_is_this_one_route_and_no_other(self):
+        """Every other write still meets the full door, tailnet login included."""
+        was_hosts, was_login = set(self.serve.TRUSTED_HOSTS), self.serve.LOGIN
+        self.serve.TRUSTED_HOSTS = was_hosts | {self.TAILNET}
+        self.serve.LOGIN = "aria"
+        try:
+            import http.client
+            for path, payload in (("/api/desks", {"repo": "acme/thing", "hidden": True}),
+                                  ("/api/pins", {"pins": []}),
+                                  ("/api/gate", {"question_id": "a" * 16, "answer": "allow"})):
+                raw = json.dumps(payload).encode()
+                c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+                c.request("POST", path, body=raw, headers={
+                    "host": self.TAILNET, "content-type": "application/json",
+                    "x-hub-signature-256": self.webhook.sign(self.SECRET, raw)})
+                r = c.getresponse()
+                r.read()
+                c.close()
+                self.assertEqual(r.status, 403, f"{path} is not exempt, signature or not")
+        finally:
+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
+
+    # ── at least once ───────────────────────────────────────────────────────
+    def test_a_redelivery_is_answered_200_and_does_nothing(self):
+        """GitHub retries anything that is not a 2xx. A redelivery that ran the
+        pipeline again would be a second agent on the same news."""
+        code, _, delivery = self.deliver(self.comment())
+        self.assertEqual(code, 200)
+        self.assertEqual(len(self.trigger.seen), 1)
+        code, body, _ = self.deliver(self.comment(), delivery=delivery)
+        self.assertEqual(code, 200)
+        self.assertTrue(body["duplicate"])
+        self.assertEqual(len(self.trigger.seen), 1, "and nothing was queued the second time")
+
+    def test_a_redelivery_of_one_that_was_refused_is_handled_fresh(self):
+        """The redeliver button sends the SAME id. A delivery that was refused
+        must not be remembered as done, or the one recovery control a person
+        has is a no-op exactly when they reach for it."""
+        code, _, delivery = self.deliver(self.comment(), sign=False)
+        self.assertEqual(code, 403)
+        code, body, _ = self.deliver(self.comment(), delivery=delivery)
+        self.assertEqual(code, 200)
+        self.assertNotIn("duplicate", body)
+        self.assertEqual(len(self.trigger.seen), 1)
+
+    def test_a_post_to_the_root_is_a_404_and_never_an_alias(self):
+        """Funnel's `--set-path` strips the prefix before proxying, so a mount
+        pointed at a target with no path arrives here as `POST /`. A second name
+        for the public path is a second thing to keep signed."""
+        import http.client
+        raw = json.dumps(self.comment()).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("POST", "/", body=raw, headers={
+            "host": f"127.0.0.1:{self.port}", "content-type": "application/json",
+            "x-github-event": "issue_comment", "x-github-delivery": "root-1",
+            "x-hub-signature-256": self.webhook.sign(self.SECRET, raw)})
+        r = c.getresponse()
+        body = json.loads(r.read().decode() or "{}")
+        c.close()
+        self.assertEqual(r.status, 404)
+        self.assertIn("not an alias", body["error"])
+        self.assertEqual(self.trigger.seen, [])
+
+    def test_a_ping_says_hello_and_starts_nothing(self):
+        code, body, _ = self.deliver({"zen": "hi", "hook_id": 1,
+                                      "repository": {"full_name": "acme/thing"}},
+                                     event="ping")
+        self.assertEqual(code, 200)
+        self.assertTrue(body["pong"])
+        self.assertEqual(self.trigger.seen, [])
+
+    def test_an_event_nobody_subscribed_this_code_to_is_noted_and_dropped(self):
+        code, body, _ = self.deliver({"ref": "refs/heads/main",
+                                      "repository": {"full_name": "acme/thing"}},
+                                     event="push")
+        self.assertEqual(code, 200, "never a retry: the subscription is wide, not broken")
+        self.assertEqual(body["ignored"], "push")
+        self.assertEqual(self.trigger.seen, [])
+
+    def test_our_own_comment_is_recorded_and_never_queued(self):
+        """The feedback loop. The pipeline comments; a comment is a webhook."""
+        code, _, delivery = self.deliver(self.comment(login="ariaxhan"))
+        self.assertEqual(code, 200)
+        self.assertEqual(self.trigger.seen, [])
+        row = self.mailbox.last_events(1)[0]
+        self.assertEqual(row["delivery"], delivery)
+        self.assertFalse(row["trigger"], "seen, and deliberately not acted on")
+
+    # ── what the app and the phone read ─────────────────────────────────────
+    def test_api_webhook_reports_the_mailbox(self):
+        code, _, delivery = self.deliver(self.comment())
+        self.assertEqual(code, 200)
+        code, body = self.get("/api/webhook")
+        self.assertEqual(code, 200)
+        self.assertTrue(body["configured"])
+        self.assertGreaterEqual(body["seen"], 1)
+        self.assertEqual(body["last"][-1]["delivery"], delivery)
+        self.assertIsInstance(body["runs"], list)
+        self.assertEqual(body["queued"], ["acme/thing"])
+
+    def test_api_webhook_is_behind_the_normal_door(self):
+        """It says what has arrived and from whom. That is this office's
+        business, and the exemption is for GitHub's route only."""
+        was_hosts, was_login = set(self.serve.TRUSTED_HOSTS), self.serve.LOGIN
+        self.serve.TRUSTED_HOSTS = was_hosts | {self.TAILNET}
+        self.serve.LOGIN = "aria"
+        try:
+            code, body = self.get("/api/webhook", {"host": self.TAILNET})
+            self.assertEqual(code, 403)
+            self.assertEqual(body.get("error"), "not you")
+            code, body = self.get("/api/webhook", {"host": self.TAILNET,
+                                                   "tailscale-user-login": "aria"})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["configured"])
+        finally:
+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
+        code, body = self.get("/api/webhook", {"host": "evil.example.com"})
+        self.assertEqual(code, 403)
+
+    def test_the_webhook_card_rides_in_the_world(self):
+        self.deliver(self.comment())
+        section = self.serve.office_sync.sections_mod.read_all()["webhook"]
+        card = section["card"]
+        self.assertEqual(card["title"], "Webhooks")
+        self.assertIn("event", card["headline"])
+
+    # ── one desk, not the whole room ────────────────────────────────────────
+    def test_refreshing_one_desk_swaps_that_station_and_no_other(self):
+        """About two GraphQL points against an hourly budget of five thousand.
+        Rebuilding the room instead would make hearing from GitHub cost more
+        than not hearing from it."""
+        snap = self.world.snapshot
+        snap["stations"].append({"repo": "acme/other", "issues": [], "prs": [],
+                                 "hidden": False, "pinned": None, "fetched_at": ""})
+        asked = []
+
+        def fake_sh(cmd, timeout=45, env=None, check=False):
+            # The same fake GitHub tests/test_sync.py uses: the repos ride in as
+            # variables, and r0..rN come back in the same order.
+            if cmd[:3] != ["gh", "api", "graphql"]:
+                raise AssertionError(f"nothing but graphql may run: {cmd}")
+            names = dict(kv.split("=", 1) for kv in cmd if "=" in kv and kv[:6] != "query=")
+            asked.append(f"{names['o0']}/{names['n0']}")
+            return 0, json.dumps({"data": {
+                "rateLimit": {"limit": 5000, "cost": 2, "remaining": 4000,
+                              "resetAt": "2026-08-27T13:00:00Z"},
+                "r0": repo_node()}}), ""
+
+        was_sh, was_access = self.serve.office_sync.sh, self.world._access
+        self.serve.office_sync.sh = fake_sh
+        self.world._access = FakeAccess()
+        try:
+            self.assertTrue(self.world.refresh_desk("acme/thing"))
+        finally:
+            self.serve.office_sync.sh = was_sh
+            self.world._access = was_access
+
+        self.assertEqual(asked, ["acme/thing"], "one desk, one query")
+        code, body = self.get("/api/world")
+        stations = {s["repo"]: s for s in body["world"]["stations"]}
+        self.assertEqual([i["number"] for i in stations["acme/thing"]["issues"]], [9, 4])
+        self.assertEqual([p["number"] for p in stations["acme/thing"]["prs"]], [11])
+        self.assertTrue(stations["acme/thing"]["fetched_at"])
+        self.assertIsNone(stations["acme/thing"]["issues_error"])
+        self.assertEqual(stations["acme/other"]["issues"], [], "and only that desk moved")
+        self.world.build()
+
+    def test_a_desk_that_cannot_be_fetched_keeps_what_it_had(self):
+        was_access = self.world._access
+        self.world._access = FakeAccess(tokens={"acme/thing": ""})
+        try:
+            self.assertFalse(self.world.refresh_desk("acme/thing"))
+        finally:
+            self.world._access = was_access
+        self.assertEqual(self.world.snapshot["stations"][0]["issues"], [])
+
+    def test_a_malformed_repo_never_reaches_github(self):
+        for repo in ("", "nope", "a/b/c", "../../etc/passwd"):
+            self.assertFalse(self.world.refresh_desk(repo), repr(repo))

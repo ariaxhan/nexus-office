@@ -328,6 +328,9 @@ public struct Station: Decodable, Hashable, Identifiable {
     /// Put away by a person. Still arrives with its last data, still counted,
     /// simply not polled and not in the desks list.
     public var hidden: Bool
+    /// Its rank at the top of the roster, or nil when a person never pinned
+    /// it. The order itself is `World.pins`; this is the same fact per desk.
+    public var pinned: Int?
     public var runs: [Run]
     public var issues: [Issue]
     public var issuesError: String?
@@ -358,7 +361,7 @@ public struct Station: Decodable, Hashable, Identifiable {
 
     public init(repo: String, identity: String = "", access: Bool? = true,
                 outcome: String = "", detail: String = "", at: String = "",
-                fetchedAt: String = "", hidden: Bool = false,
+                fetchedAt: String = "", hidden: Bool = false, pinned: Int? = nil,
                 runs: [Run] = [], issues: [Issue] = [], issuesError: String? = nil,
                 prs: [PullRequest] = [], prsError: String? = nil,
                 gate: Gate? = nil, synthetic: Bool = false) {
@@ -370,6 +373,7 @@ public struct Station: Decodable, Hashable, Identifiable {
         self.at = at
         self.fetchedAt = fetchedAt
         self.hidden = hidden
+        self.pinned = pinned
         self.runs = runs
         self.issues = issues
         self.issuesError = issuesError
@@ -380,7 +384,7 @@ public struct Station: Decodable, Hashable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case repo, identity, access, outcome, detail, at, hidden, runs, issues, prs
+        case repo, identity, access, outcome, detail, at, hidden, pinned, runs, issues, prs
         case fetchedAt = "fetched_at"
         case issuesError = "issues_error"
         case prsError = "prs_error"
@@ -396,6 +400,7 @@ public struct Station: Decodable, Hashable, Identifiable {
         at = c.str(.at) ?? ""
         fetchedAt = c.str(.fetchedAt) ?? ""
         hidden = c.bool(.hidden) ?? false
+        pinned = c.int(.pinned)
         runs = c.list(.runs, Run.self)
         issues = c.list(.issues, Issue.self)
         issuesError = c.str(.issuesError)
@@ -460,6 +465,21 @@ public struct DesksResponse: Decodable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         hidden = c.list(.hidden, String.self)
+    }
+}
+
+/// `GET /api/pins` and the answer to a `POST` of one: the whole pin order,
+/// never a delta, for the same reason as `DesksResponse`.
+public struct PinsResponse: Decodable {
+    public var pins: [String]
+
+    public init(pins: [String] = []) { self.pins = pins }
+
+    enum CodingKeys: String, CodingKey { case pins }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pins = c.list(.pins, String.self)
     }
 }
 
@@ -741,23 +761,31 @@ public struct World: Decodable {
     /// every ten seconds. Sorted by title here, once, where the key is still in
     /// hand to attach.
     public var sections: [Section]
+    /// The desks a person dragged to the top, in the order they put them.
+    public var pins: [String]
+    /// Whose office this is: the first name here is sorted above every other
+    /// org on the roster. Empty when the door could not say.
+    public var owners: [String]
     public var runtime: RuntimeInfo?
     public var github: GitHubBudget?
 
     public init(generated: String = "", heartbeat: String = "", killed: Bool = false,
                 stations: [Station] = [], sections: [Section] = [],
+                pins: [String] = [], owners: [String] = [],
                 runtime: RuntimeInfo? = nil, github: GitHubBudget? = nil) {
         self.generated = generated
         self.heartbeat = heartbeat
         self.killed = killed
         self.stations = stations
         self.sections = World.ordered(sections)
+        self.pins = pins
+        self.owners = owners
         self.runtime = runtime
         self.github = github
     }
 
     enum CodingKeys: String, CodingKey {
-        case generated, heartbeat, killed, stations, sections, runtime, github
+        case generated, heartbeat, killed, stations, sections, pins, owners, runtime, github
     }
 
     public init(from decoder: Decoder) throws {
@@ -774,6 +802,8 @@ public struct World: Decodable {
             section.adopt(id: key)
             return section
         })
+        pins = c.list(.pins, String.self)
+        owners = c.list(.owners, String.self)
         runtime = (try? c.decodeIfPresent(RuntimeInfo.self, forKey: .runtime)) ?? nil
         github = (try? c.decodeIfPresent(GitHubBudget.self, forKey: .github)) ?? nil
     }

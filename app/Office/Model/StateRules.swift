@@ -328,6 +328,72 @@ public enum StateRules {
         }
     }
 
+    /// One group of the desks list: pinned, or one owner.
+    public struct RosterSection: Equatable {
+        /// `nil` only when there is nothing to group by.
+        public let header: String?
+        public let desks: [Station]
+        public init(header: String?, desks: [Station]) {
+            self.header = header
+            self.desks = desks
+        }
+    }
+
+    public static let pinnedHeader = "pinned"
+
+    /// How the desks list is arranged, given the desks that are on it.
+    ///
+    /// Pinned desks come first, in the order a person dragged them. The rest
+    /// are grouped by the owner half of the repo: your own owners first, in the
+    /// order the door listed them, then every other org A to Z, and desks A to
+    /// Z inside a group. Grouping is a VIEW: it arranges what `visibleDesks`
+    /// handed it and drops nothing, so a raised hand that survived the filters
+    /// survives this too. A put-away desk is not in `visible` and so is not in
+    /// here: **the drawer outranks the pin**, because "put this away" is the
+    /// more recent and more deliberate of the two.
+    public static func roster(_ visible: [Station],
+                              pins: [String],
+                              owners: [String] = []) -> [RosterSection] {
+        var sections: [RosterSection] = []
+        var pinned: [Station] = []
+        var seen = Set<String>()
+        for repo in pins {
+            guard !seen.contains(repo), let hit = visible.first(where: { $0.repo == repo }) else { continue }
+            seen.insert(repo)
+            pinned.append(hit)
+        }
+        if !pinned.isEmpty { sections.append(RosterSection(header: pinnedHeader, desks: pinned)) }
+
+        let rest = visible.filter { !seen.contains($0.repo) }
+        let mine = owners.map { $0.lowercased() }
+        let groups = Dictionary(grouping: rest, by: { $0.owner.lowercased() })
+        let ordered = groups.keys.sorted { a, b in
+            let ra = mine.firstIndex(of: a) ?? mine.count
+            let rb = mine.firstIndex(of: b) ?? mine.count
+            return ra != rb ? ra < rb : a < b
+        }
+        for key in ordered {
+            let desks = groups[key]!.sorted { $0.repo.lowercased() < $1.repo.lowercased() }
+            sections.append(RosterSection(header: desks[0].owner, desks: desks))
+        }
+        return sections
+    }
+
+    /// The order after one pinned desk is dragged onto another: `repo` lands
+    /// just before `target`, or at the end when `target` is nil. A repo that
+    /// was not pinned becomes pinned by being dropped there. Dropping a desk
+    /// onto itself changes nothing.
+    public static func moved(pins: [String], repo: String, before target: String?) -> [String] {
+        guard repo != target else { return pins }
+        var out = pins.filter { $0 != repo }
+        if let target, let at = out.firstIndex(of: target) {
+            out.insert(repo, at: at)
+        } else {
+            out.append(repo)
+        }
+        return out
+    }
+
     /// The desks a person put away, in the order the roster lists everything.
     ///
     /// Never touched by the search box or by "needs me". A put-away desk is out

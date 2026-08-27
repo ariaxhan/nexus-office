@@ -244,6 +244,10 @@ def headline(runs):
 
 HIDDEN_FILE = STATE / "hidden.json"
 DESKS_CACHE = STATE / "desks.json"
+# The desks a person dragged to the top, in the order they dragged them. Like
+# hiding, a fact about this screen and never about the repo. Order is the whole
+# content of the file, so it is a list and never a set.
+PINS_FILE = STATE / "pins.json"
 
 # The one shape a repository name is allowed to have. Every name that reaches
 # GitHub passes this first. The batch query names repos in GraphQL VARIABLES
@@ -289,6 +293,45 @@ def set_hidden(nwo: str, hidden: bool) -> list:
         now = set(read_hidden())
         now.add(nwo) if hidden else now.discard(nwo)
         return write_hidden(now)
+
+
+def read_pins() -> list:
+    """The pinned repos, in pin order. Never raises: an unreadable list means none."""
+    try:
+        raw = json.loads(PINS_FILE.read_text())
+    except Exception:
+        return []
+    rows = raw.get("repos") if isinstance(raw, dict) else None
+    out = []
+    for r in rows or []:
+        if isinstance(r, str) and NWO_RE.match(r) and r not in out:
+            out.append(r)
+    return out
+
+
+_PINS_LOCK = threading.Lock()
+
+
+def write_pins(repos) -> list:
+    """Replace the whole pin order. Same torn-file rule as `write_hidden`: written
+    whole and moved into place, so a crash mid-write reads as "no pins" and not
+    as half an order.
+
+    A repo with no desk yet is kept on purpose, the way `set_hidden` keeps one:
+    a pin outlives the desk losing its receipts for a day, and comes back with it.
+    A malformed name is dropped rather than refused, because the file is the
+    order and one bad entry must not lose the other nine.
+    """
+    keep = []
+    for r in repos or []:
+        if isinstance(r, str) and NWO_RE.match(r) and r not in keep:
+            keep.append(r)
+    with _PINS_LOCK:
+        STATE.mkdir(parents=True, exist_ok=True)
+        tmp = PINS_FILE.with_name(PINS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps({"repos": keep}, indent=1))
+        tmp.replace(PINS_FILE)
+    return keep
 
 
 # ── last known good ──────────────────────────────────────────────────────────
@@ -555,6 +598,7 @@ def fetch_issues(nwo, token):
 def build_snapshot(access: Access):
     by_repo, counts = receipts()
     hidden = set(read_hidden())
+    pins = read_pins()
     cache = read_desks()
     desks = sorted(by_repo)
     visible = [r for r in desks if r not in hidden and NWO_RE.match(r)]
@@ -643,6 +687,9 @@ def build_snapshot(access: Access):
             # Put away, but still here, still carrying what it last showed, so
             # the app can list it and bring it back. Never fetched while hidden.
             "hidden": repo in hidden,
+            # Its rank at the top of the roster, or null when it is not pinned.
+            # The order itself is `world.pins`; this is the same fact per desk.
+            "pinned": pins.index(repo) if repo in pins else None,
             # When this desk last heard from GitHub. "" means never.
             "fetched_at": kept.get("fetched_at", ""),
             "issues": list(kept.get("issues") or []),
@@ -681,6 +728,11 @@ def build_snapshot(access: Access):
         "killed": bool(KILLSWITCH and KILLSWITCH.exists()),
         "today": counts,
         "stations": stations,
+        # Pin order, and whose office this is. The roster sorts the first owner
+        # here above every other org, so it comes from OFFICE_OWNERS when set
+        # and from the `gh` logins otherwise: both are "you", in that order.
+        "pins": pins,
+        "owners": list(OWNERS) or list(getattr(access, "mine", None) or []),
         "runtime": run,
         "sections": sections_mod.read_all(),
         "github": {

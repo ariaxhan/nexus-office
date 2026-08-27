@@ -157,6 +157,13 @@ public final class Api {
                               as: DesksResponse.self).hidden
     }
 
+    /// Replace the pin order, whole. Answers with the order the door kept,
+    /// which is what the roster reconciles its optimistic drop against.
+    public func setPins(_ pins: [String]) async throws -> [String] {
+        if let demo { return try demo.setPins(pins) }
+        return try await post("/api/pins", ["pins": pins], as: PinsResponse.self).pins
+    }
+
     public func decide(kind: String, repo: String, issue: String,
                        body: String? = nil, label: String? = nil, pr: Int? = nil) async throws -> Ack {
         var payload: [String: Any] = ["kind": kind, "repo": repo, "issue": issue]
@@ -370,6 +377,17 @@ private final class DemoFloor {
                 fixture.world.stations[index].hidden = hidden
             }
             return fixture.world.stations.filter(\.hidden).map(\.repo)
+        }
+    }
+
+    /// Same rule as `setDesk`: the fixture is the door, so the order sticks.
+    func setPins(_ pins: [String]) throws -> [String] {
+        lock.withLock {
+            fixture.world.pins = pins
+            for index in fixture.world.stations.indices {
+                fixture.world.stations[index].pinned = pins.firstIndex(of: fixture.world.stations[index].repo)
+            }
+            return pins
         }
     }
 
