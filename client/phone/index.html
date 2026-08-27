@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>The office</title>
+<!-- Two files, both from this door. No framework, no CDN, no build step: the
+     page that answers a raised hand must not depend on anything that can be
+     down, and a phone on a tailnet has no route to a CDN anyway. -->
+<link rel="stylesheet" href="/phone.css">
+</head>
+<body>
+
+<header class="top">
+  <p class="mark">the office</p>
+  <p class="stamp" id="stamp">opening</p>
+  <button class="refresh" id="refresh" type="button">refresh</button>
+</header>
+
+<main id="room">
+  <!-- Every one of these is filled by phone.js. The order is the point: the
+       raised hand is the first thing on the page, always, and nothing below it
+       can push it off. -->
+  <section class="band gateband" id="gate" hidden></section>
+  <section class="band" id="needs" hidden></section>
+  <section class="band" id="bots"></section>
+  <section class="band" id="desks"></section>
+  <section class="band" id="wall"></section>
+</main>
+
+<div class="thread" id="thread" hidden></div>
+<p class="toast" id="toast" hidden></p>
+
+<script src="/phone.js"></script>
+</body>
+</html>

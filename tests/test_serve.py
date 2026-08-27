@@ -63,7 +63,7 @@ class ServeTest(unittest.TestCase):
         cls.world = serve.World()
         cls.world.build()
         # Port 0 is "any free port", so several of these can run at once.
-        cls.httpd = serve.make_server(cls.world, None, 0)
+        cls.httpd = serve.make_server(cls.world, 0)
         cls.host, cls.port = cls.httpd.server_address[:2]
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
@@ -376,29 +376,6 @@ class DoorTest(ServeTest):
         self.assertIsNone(v({"kind": "merge", "repo": "a/b", "pr": "7"})[0])
 
 
-class StaticTest(unittest.TestCase):
-    def test_a_sibling_directory_named_like_dist_is_not_served(self):
-        import tempfile, http.client, serve
-        serve.log = lambda msg: None
-        tmp = pathlib.Path(tempfile.mkdtemp())
-        (tmp / "dist").mkdir(); (tmp / "dist-orders").mkdir()
-        (tmp / "dist" / "index.html").write_text("<!doctype html>ROOM")
-        (tmp / "dist-orders" / "index.html").write_text("<!doctype html>SIBLING")
-        world = serve.World()
-        httpd = serve.make_server(world, tmp / "dist", 0)
-        port = httpd.server_address[1]
-        t = threading.Thread(target=httpd.serve_forever, daemon=True); t.start()
-        try:
-            c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-            c.request("GET", "/../dist-orders/index.html", headers={"host": f"127.0.0.1:{port}"})
-            r = c.getresponse(); body = r.read().decode(); c.close()
-            self.assertEqual(r.status, 200)
-            self.assertIn("ROOM", body)
-            self.assertNotIn("SIBLING", body)
-        finally:
-            httpd.shutdown(); httpd.server_close()
-
-
 # ── the chatroom ────────────────────────────────────────────────────────────
 # Four bots you talk to like colleagues. Two things here are worth a test more
 # than the happy path is. The roster has to survive the harness being closed,
@@ -547,7 +524,7 @@ class ChatTest(unittest.TestCase):
 
         cls.world = serve.World()
         cls.world.build()
-        cls.httpd = serve.make_server(cls.world, None, 0)
+        cls.httpd = serve.make_server(cls.world, 0)
         cls.port = cls.httpd.server_address[1]
         threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
 

@@ -14,7 +14,10 @@ button finishes moving.
 The security model is the bind address. The socket is loopback only, never
 0.0.0.0, so the door is the machine and there is nothing to log in to. Reaching
 it from a phone goes through Tailscale Serve in front of this, never a wider
-bind. The one thing still checked in software is the gate: a permission answer
+bind, and `GET /` is the page that phone opens: three files out of client/phone/
+through the same Host and identity checks as every call under /api/, so there is
+nothing on it to log in to either. The one thing still checked in software is
+the gate: a permission answer
 carries the id of the question it is answering, and is refused if the agent has
 moved on. Configuration is office-sync.py's, and every call to GitHub is still
 made there, unchanged.
@@ -89,12 +92,22 @@ def _loopback_hosts(port: int) -> set[str]:
 BAD_ID = "permit needs the question id it is answering"
 BAD_ANSWER = "permit answer must be allow or deny"
 NO_ROOT = "no runtime root configured (OFFICE_RUNTIME_ROOT)"
-NO_PAGE = "no web page here; open the Office app, or the phone page arrives in milestone 2"
+NO_PAGE = "the office is at /; there is nothing else here"
 
-TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-         ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
-         ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
-         ".woff2": "font/woff2", ".map": "application/json"}
+# The phone page: three files, named one by one rather than a directory walked
+# at request time. An exact map cannot be talked into serving a sibling, so the
+# traversal question never has to be answered correctly under pressure.
+PHONE = HERE / "phone"
+PAGE = {"/": "index.html", "/index.html": "index.html",
+        "/phone.css": "phone.css", "/phone.js": "phone.js"}
+TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+         ".js": "text/javascript; charset=utf-8"}
+
+# The page loads two files from here, talks to this door, and can reach nowhere
+# else. No inline script, no inline style and no external host, which is why the
+# page is three files rather than one: a strict policy is worth two more GETs.
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; "
+       "connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'")
 
 
 def now_iso() -> str:
@@ -258,11 +271,10 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "nexus-office"
     protocol_version = "HTTP/1.1"
     world = None
-    dist = None
     chatroom = None
 
     def log_message(self, fmt, *args):
-        # One line per API call, on stderr. Every asset in dist/ is noise.
+        # One line per API call, on stderr. The page and its two files are noise.
         if getattr(self, "path", "").startswith("/api/"):
             log(f"{self.command} {self.path} {args[1] if len(args) > 1 else ''}".rstrip())
 
@@ -300,11 +312,13 @@ class Handler(BaseHTTPRequestHandler):
         return None
 
     # ── plumbing ────────────────────────────────────────────────────────────
-    def _send(self, code, body: bytes, ctype: str):
+    def _send(self, code, body: bytes, ctype: str, extra: dict | None = None):
         self.send_response(code)
         self.send_header("content-type", ctype)
         self.send_header("content-length", str(len(body)))
         self.send_header("cache-control", "no-store")
+        for name, value in (extra or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -352,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "server_time": now_iso()})
             if path.startswith("/api/"):
                 return self._json({"error": "not found"}, 404)
-            return self._static(path)
+            return self._page(path)
         except Exception as exc:  # noqa: BLE001
             self._json({"error": f"{type(exc).__name__}: {exc}"[:300]}, 500)
 
@@ -436,27 +450,40 @@ class Handler(BaseHTTPRequestHandler):
         log(f"desk {repo} is now {'put away' if hidden else 'back'}")
         return self._json({"ok": True, "hidden": rows})
 
-    def _static(self, path):
-        """A built page, if one exists. Anything that is not a file falls back to
-        index.html. There is no web build today: the surface is the Mac app, and
-        `dist/` is where the phone page will land in milestone 2."""
-        if not self.dist or not self.dist.is_dir():
+    def _page(self, path):
+        """The phone, through the same door as everything else.
+
+        It went through `_host_ok` and `_identity_ok` on the way in, exactly
+        like `/api/world` did, so a tailnet request without Aria's login never
+        reaches this line. The page itself therefore carries no login UI: there
+        is nothing here for a stranger to be asked.
+        """
+        if path == "/favicon.ico":
+            # Chrome asks for this on every load. Nothing here, and no 404 in
+            # the console for a thing nobody requested.
+            self.send_response(204)
+            self.send_header("cache-control", "no-store")
+            self.end_headers()
+            return None
+        name = PAGE.get(path)
+        if name is None:
             return self._json({"error": NO_PAGE}, 404)
-        rel = urllib.parse.unquote(path).lstrip("/")
-        root = self.dist.resolve()
-        target = (root / rel).resolve() if rel else (root / "index.html")
-        if not target.is_relative_to(root) or not target.is_file():
-            target = root / "index.html"
-        if not target.is_file():
+        target = PHONE / name
+        try:
+            body = target.read_bytes()
+        except OSError:
             return self._json({"error": NO_PAGE}, 404)
-        self._send(200, target.read_bytes(),
-                   TYPES.get(target.suffix, "application/octet-stream"))
+        self._send(200, body, TYPES[target.suffix], {
+            "content-security-policy": CSP,
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "no-referrer",
+        })
 
 
-def make_server(world: World, dist: pathlib.Path | None = None, port: int = 8790):
+def make_server(world: World, port: int = 8790):
     """Loopback only. Never 0.0.0.0: the bind address IS the security model."""
     handler = type("BoundHandler", (Handler,),
-                   {"world": world, "dist": dist, "chatroom": chat.Chatroom()})
+                   {"world": world, "chatroom": chat.Chatroom()})
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
 
 
@@ -477,7 +504,7 @@ def main(argv=None) -> int:
         print(json.dumps(world.snapshot, indent=2))
         return 0
 
-    httpd = make_server(world, HERE.parent / "dist", a.port)
+    httpd = make_server(world, a.port)
     threading.Thread(target=world.keep_fresh, daemon=True).start()
     log(f"http://127.0.0.1:{a.port}/  (loopback only; the door is this machine)")
     try:

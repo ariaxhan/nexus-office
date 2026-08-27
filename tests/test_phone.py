@@ -1,0 +1,252 @@
+"""The phone page, and the door it comes through.
+
+The page itself is three files with no build step, so the things that can go
+wrong with it are not compile errors. They are: it stops being reachable, it
+starts being reachable by someone who is not Aria, it grows a script tag with
+code inside it that the policy then has to be loosened for, or it starts asking
+GitHub for a fresh snapshot on a timer and quietly spends the hour's budget from
+a pocket. Each of those is one test here.
+
+    python3 -m unittest discover -s tests -p 'test_*.py'
+"""
+
+from __future__ import annotations
+
+import http.client
+import json
+import pathlib
+import re
+import sys
+import threading
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "client"))
+
+PHONE = ROOT / "client" / "phone"
+HTML = PHONE / "index.html"
+CSS = PHONE / "phone.css"
+JS = PHONE / "phone.js"
+
+# The name Tailscale Serve puts in front of this door. Anything on it must carry
+# a login header; loopback is this Mac and never does.
+TAILNET = "this-mac.tailnet.ts.net"
+
+
+class PageTest(unittest.TestCase):
+    """A server of its own, on a free port, serving the real files."""
+
+    @classmethod
+    def setUpClass(cls):
+        import serve
+
+        cls.serve = serve
+        cls.log_was = serve.log
+        serve.log = lambda msg: None
+        cls.was = (serve.office_sync.Access, serve.office_sync.build_snapshot)
+        # Nothing here needs a snapshot, and nothing here may touch GitHub.
+        serve.office_sync.Access = lambda: object()
+        serve.office_sync.build_snapshot = lambda access: {"generated": "", "stations": []}
+
+        cls.httpd = serve.make_server(serve.World(), 0)
+        cls.port = cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        cls.serve.office_sync.Access, cls.serve.office_sync.build_snapshot = cls.was
+        cls.serve.log = cls.log_was
+
+    def fetch(self, path, headers=None):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        h = {"host": f"127.0.0.1:{self.port}"}
+        h.update(headers or {})
+        c.request("GET", path, headers=h)
+        r = c.getresponse()
+        body = r.read().decode("utf-8", "replace")
+        out = (r.status, dict(r.getheaders()), body)
+        c.close()
+        return out
+
+    def as_tailnet(self, login="aria"):
+        """Put a name in front of the door, the way Tailscale Serve does."""
+        was = (set(self.serve.TRUSTED_HOSTS), self.serve.LOGIN)
+        self.serve.TRUSTED_HOSTS = set(self.serve.TRUSTED_HOSTS) | {TAILNET}
+        self.serve.LOGIN = login
+        self.addCleanup(self._restore, was)
+
+    def _restore(self, was):
+        self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was
+
+    # ── it is there ─────────────────────────────────────────────────────────
+    def test_the_office_is_at_the_root(self):
+        code, headers, body = self.fetch("/")
+        self.assertEqual(code, 200)
+        self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
+        self.assertIn("<title>The office</title>", body)
+
+    def test_the_page_carries_the_policy_that_makes_three_files_worth_it(self):
+        code, headers, _ = self.fetch("/")
+        self.assertEqual(code, 200)
+        csp = headers["content-security-policy"]
+        for rule in ("default-src 'none'", "script-src 'self'", "style-src 'self'",
+                     "connect-src 'self'", "img-src 'self'", "base-uri 'none'",
+                     "form-action 'none'"):
+            self.assertIn(rule, csp)
+        # No 'unsafe-inline' anywhere in it, which is the whole reason the page
+        # is three files and not one.
+        self.assertNotIn("unsafe", csp)
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(headers["x-content-type-options"], "nosniff")
+        self.assertEqual(headers["referrer-policy"], "no-referrer")
+
+    def test_the_two_files_the_page_asks_for_arrive_as_themselves(self):
+        for path, ctype, needle in (
+            ("/index.html", "text/html; charset=utf-8", "<title>The office</title>"),
+            ("/phone.css", "text/css; charset=utf-8", "--amber: #ffb020"),
+            ("/phone.js", "text/javascript; charset=utf-8", "/api/gate"),
+        ):
+            code, headers, body = self.fetch(path)
+            self.assertEqual(code, 200, path)
+            self.assertEqual(headers["content-type"], ctype, path)
+            self.assertIn(needle, body, path)
+            self.assertIn("content-security-policy", headers, path)
+
+    def test_anything_else_is_still_nothing(self):
+        """The page is an exact map of names. A file that is not on it, a
+        traversal out of it, and a directory it happens to sit next to are all
+        the same answer: there is nothing here."""
+        for path in ("/nope.js", "/phone", "/phone/index.html", "/index.html.bak",
+                     "/../serve.py", "/phone.css/../serve.py"):
+            code, headers, body = self.fetch(path)
+            self.assertEqual(code, 404, path)
+            self.assertEqual(json.loads(body)["error"], self.serve.NO_PAGE, path)
+            self.assertNotIn("import", body, path)
+
+    def test_the_favicon_chrome_asks_for_is_an_empty_yes_not_a_console_error(self):
+        code, headers, body = self.fetch("/favicon.ico")
+        self.assertEqual(code, 204)
+        self.assertEqual(body, "")
+
+    # ── the door in front of it ─────────────────────────────────────────────
+    def test_the_page_obeys_the_same_door_as_every_api_call(self):
+        """A name that is not this door reads nothing, page included: an
+        attacker's hostname resolving to 127.0.0.1 must not get the office."""
+        code, _, body = self.fetch("/", {"host": "evil.example.com"})
+        self.assertEqual(code, 403)
+        self.assertEqual(json.loads(body)["error"], "wrong host")
+
+    def test_a_tailnet_request_without_a_login_never_sees_the_page(self):
+        self.as_tailnet()
+        code, _, body = self.fetch("/", {"host": TAILNET})
+        self.assertEqual(code, 403)
+        self.assertEqual(json.loads(body)["error"], "not you")
+        self.assertNotIn("<title>", body)
+
+    def test_a_tailnet_request_with_the_right_login_gets_the_page(self):
+        self.as_tailnet()
+        code, headers, body = self.fetch("/", {"host": TAILNET,
+                                               "tailscale-user-login": "aria"})
+        self.assertEqual(code, 200)
+        self.assertIn("<title>The office</title>", body)
+        self.assertIn("content-security-policy", headers)
+
+    def test_a_forged_login_on_loopback_is_ignored(self):
+        """Loopback is this Mac. The header only means something behind
+        Tailscale Serve, and a page that started trusting it here would be a
+        page that trusts a header anybody can type."""
+        code, _, body = self.fetch("/", {"tailscale-user-login": "not-aria"})
+        self.assertEqual(code, 200)
+        self.assertIn("<title>The office</title>", body)
+
+
+class SourceTest(unittest.TestCase):
+    """What the three files are allowed to contain.
+
+    The policy above refuses inline script and inline style at run time. These
+    check the files never grew any, because the failure mode is not a broken
+    page: it is somebody widening the policy to make one work.
+    """
+
+    def test_the_html_has_no_code_in_it(self):
+        html = HTML.read_text(encoding="utf-8")
+        for tag in re.findall(r"<script\b[^>]*>(.*?)</script>", html, re.S):
+            self.assertEqual(tag.strip(), "", "a script tag with a body in it")
+
+    def test_the_html_has_no_inline_style(self):
+        html = HTML.read_text(encoding="utf-8")
+        self.assertNotIn('style="', html)
+        self.assertNotIn("style='", html)
+        self.assertNotIn("<style", html)
+
+    def test_nothing_is_loaded_from_anywhere_but_this_door(self):
+        html = HTML.read_text(encoding="utf-8")
+        for attr, value in re.findall(r"\b(src|href)\s*=\s*[\"']([^\"']*)[\"']", html):
+            self.assertTrue(value.startswith("/"), f"{attr}={value}")
+            self.assertFalse(value.startswith("//"), f"{attr}={value}")
+        for path in (HTML, CSS, JS):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("http://", text, path.name)
+            self.assertNotIn("https://", text, path.name)
+
+    def test_fresh_is_a_button_and_never_a_timer(self):
+        """Every fresh build asks GitHub, and the hour holds 5000 points. A
+        phone polling `?fresh=1` in a pocket would spend them on a screen
+        nobody is reading."""
+        js = JS.read_text(encoding="utf-8")
+        self.assertEqual(js.count("fresh=1"), 1, "one fresh path, and only one")
+
+        before = js[:js.index("fresh=1")]
+        self.assertIn("async function pollWorld(nowPlease)", before)
+        # It sits behind the caller saying so out loud, inside that function.
+        self.assertIn("if (nowPlease)", before[before.rindex("async function pollWorld"):])
+
+        # And nothing on a clock ever says so.
+        for at in [m.start() for m in re.finditer(r"setInterval\(", js)]:
+            window = js[at:at + 140]
+            self.assertNotIn("true", window, window)
+            self.assertNotIn("fresh", window, window)
+
+        # The one caller that does is the refresh button's own handler.
+        self.assertEqual(js.count("pollWorld(true)"), 1)
+        lead = js[:js.index("pollWorld(true)")]
+        self.assertIn('getElementById("refresh").addEventListener', lead[-200:])
+
+    def test_the_gate_answer_carries_the_id_the_card_drew(self):
+        """The sharpest edge in the project, on the smallest screen. Between a
+        gate being shown and being tapped the agent can time out and a different
+        gate can open, so the answer names the question it is answering and a
+        drifted one posts nothing at all."""
+        js = JS.read_text(encoding="utf-8")
+        at = js.index('write("/api/gate"')
+        post = js[at:at + 220]
+        # The field name serve.py._gate validates, carrying the id the card drew.
+        self.assertIn("question_id", post)
+        self.assertIn("drawn", post)
+        self.assertIn('answer: verdict', post)
+        self.assertIn("always", post)
+
+        moved = js.index("that question moved on")
+        self.assertLess(moved, at, "the drift check runs before the write, not after")
+        guard = js[js.index("async function answer("):moved]
+        self.assertIn("drawn !== live", guard)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class DriftAndNoiseTest(unittest.TestCase):
+    def test_a_swapped_question_disarms_the_buttons_for_a_beat(self):
+        js = (PHONE / "phone.js").read_text()
+        # The guard is real only if the redraw on an id change arms a timer the
+        # answer path checks; a guard that compares the live id to itself is none.
+        self.assertIn("state.gateArmAt = Date.now() + ARM_MS", js)
+        self.assertIn("if (Date.now() < (state.gateArmAt || 0))", js)
+        self.assertIn("b.disabled = disarmed", js)
+
+    def test_a_door_that_answers_500_is_said_out_loud(self):
+        js = (PHONE / "phone.js").read_text()
+        self.assertIn("the door is not answering", js)

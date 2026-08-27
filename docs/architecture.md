@@ -45,8 +45,9 @@ Every button resolves to a row here. A feature adds a row, not a subsystem.
 - **1. The runtime is the brain, in a native app.** Bots you message, desks you
   check, and the raised hand as an interruption you cannot wave away. *Landed;
   the web room was deleted with it.*
-- **2. A phone can see the floor.** The same door behind Tailscale Serve, and a
-  page built into `dist/` for the screen that is already in your hand.
+- **2. A phone can see the floor.** The same door behind Tailscale Serve, and the
+  page it serves at `/` (`client/phone/`, three files, no build) for the screen
+  that is already in your hand. Only Aria's tailnet login gets past the door.
 - **3. Memory becomes a place.** Semantic recall and the knowledge graph, walked
   rather than queried.
 
