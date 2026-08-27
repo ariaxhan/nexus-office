@@ -1,0 +1,438 @@
+{
+  "_note": "A fake floor for `--demo`. Every desk state appears at least once on purpose: a demo that only shows the happy path is a demo that lets the ugly cases rot. Timestamps are rebased to now when the fixture loads, so a shot taken next year still reads as a live office.",
+
+  "bots": {
+    "runtime": "up",
+    "at": "2026-08-26T18:40:00Z",
+    "bots": [
+      {
+        "id": "chief",
+        "name": "Chief",
+        "color": "#4fd1c5",
+        "busy": false,
+        "last": {
+          "role": "assistant",
+          "at": "2026-08-26T18:12:00Z",
+          "text": "Nothing in code. #213 landed an hour ago and its PR is clean. Billing #58 is the real block."
+        }
+      },
+      {
+        "id": "inbox",
+        "name": "Inbox",
+        "color": "#8b7cf6",
+        "busy": false,
+        "last": {
+          "role": "assistant",
+          "at": "2026-08-26T17:30:00Z",
+          "text": "Triaged fourteen new issues. Nine went to the pipeline, five are waiting on a person."
+        }
+      },
+      {
+        "id": "release",
+        "name": "Release",
+        "color": "#f0a13a",
+        "busy": true,
+        "last": {
+          "role": "assistant",
+          "at": "2026-08-26T18:38:00Z",
+          "text": "Asking for the push now. main is protected, so this one comes to you."
+        }
+      },
+      {
+        "id": "research",
+        "name": "Research",
+        "color": "#5b8def",
+        "busy": false,
+        "error": "URLError: the harness stopped answering halfway through the last turn",
+        "last": {
+          "role": "assistant",
+          "at": "2026-08-26T14:05:00Z",
+          "text": "Failure map for the webhook retries is written. Two prior attempts, both abandoned for the same reason."
+        }
+      }
+    ]
+  },
+
+  "chats": {
+    "chief": [
+      {
+        "role": "assistant",
+        "at": "2026-08-26T09:02:00Z",
+        "content": "Morning. Six PRs landed overnight, four repos were refused, and one agent is about to ask you for a push."
+      },
+      {
+        "role": "user",
+        "at": "2026-08-26T18:10:00Z",
+        "content": "What is actually blocking the storefront checkout fix?"
+      },
+      {
+        "role": "assistant",
+        "at": "2026-08-26T18:12:00Z",
+        "content": "Nothing in code. #213 landed an hour ago and its PR is clean.\n\nBilling #58 is the real block: the refund policy is a business decision, and the runner refused it twice rather than guess at one. It has had the last word there since yesterday, which is why that desk is red."
+      }
+    ],
+    "release": [
+      {
+        "role": "assistant",
+        "at": "2026-08-26T18:20:00Z",
+        "content": "0.4.2 is staged. Changelog written, tag not cut."
+      },
+      {
+        "role": "user",
+        "at": "2026-08-26T18:36:00Z",
+        "content": "Cut it and push."
+      },
+      {
+        "role": "assistant",
+        "at": "2026-08-26T18:38:00Z",
+        "content": "Asking for the push now. main is protected, so this one comes to you."
+      }
+    ]
+  },
+
+  "gate": {
+    "state": "pending",
+    "id": "a1b2c3d4e5f60718",
+    "permission": "run_bash",
+    "target": "git push origin main --follow-tags",
+    "detail": "Cutting 0.4.2. The tag is written and the changelog is committed. This is the push that makes it real.",
+    "waiting_s": 47,
+    "bot": "release"
+  },
+
+  "world": {
+    "generated": "2026-08-26T18:40:00Z",
+    "heartbeat": "2026-08-26T18:39:00Z",
+    "killed": false,
+    "runtime": {
+      "url": "http://127.0.0.1:8787",
+      "root": "/Users/you/code/checkout-api",
+      "gate": {
+        "state": "pending",
+        "id": "a1b2c3d4e5f60718",
+        "permission": "run_bash",
+        "target": "git push origin main --follow-tags",
+        "detail": "Cutting 0.4.2. The tag is written and the changelog is committed. This is the push that makes it real.",
+        "waiting_s": 47,
+        "bot": "release"
+      }
+    },
+    "stations": [
+      {
+        "repo": "acme/checkout-api",
+        "identity": "demo",
+        "access": true,
+        "outcome": "survey",
+        "detail": "2 open: 1 to work, 1 waiting on a human",
+        "at": "2026-08-26T18:33:00Z",
+        "runs": [{ "at": "2026-08-26T18:33:00Z", "outcome": "survey", "issue": "", "detail": "2 open" }],
+        "issues": [
+          {
+            "number": 77,
+            "title": "Tag 0.4.2 and push the changelog",
+            "body": "The changelog is committed and the tag is written locally. All that is left is the push, and `main` is protected, so a person has to say yes.",
+            "labels": ["release"],
+            "url": "https://github.com/acme/checkout-api/issues/77",
+            "updatedAt": "2026-08-26T18:36:00Z",
+            "bot_last": false,
+            "last_word": ""
+          }
+        ],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "acme/storefront",
+        "identity": "demo",
+        "access": true,
+        "outcome": "landed",
+        "detail": "pipeline/auto/push",
+        "at": "2026-08-26T18:18:00Z",
+        "runs": [
+          { "at": "2026-08-26T18:18:00Z", "outcome": "landed", "issue": "213", "detail": "pipeline/auto/push" },
+          { "at": "2026-08-26T16:52:00Z", "outcome": "survey", "issue": "", "detail": "3 open: 2 to work, 1 waiting on a human" }
+        ],
+        "issues": [
+          {
+            "number": 214,
+            "title": "Checkout drops the host name on mobile Safari",
+            "body": "The `host_name` field is captured on desktop and lost on iOS.\n\n- reproduced on iOS 18\n- serialiser fixed in #213\n- regression test still open\n\nThe **serialiser** was writing an empty string rather than omitting the key, which the collector then read as a real value. See [the receipt](https://github.com/acme/storefront/pull/215).",
+            "labels": ["bug", "mobile"],
+            "url": "https://github.com/acme/storefront/issues/214",
+            "updatedAt": "2026-08-26T18:16:00Z",
+            "bot_last": false,
+            "last_word": ""
+          },
+          {
+            "number": 211,
+            "title": "Add a cheap doctor command",
+            "body": "Prints what is configured and what is reachable, with a remedy beside anything broken. `office doctor` should exit non zero when something is actually wrong, so a launchd job can use it.",
+            "labels": [],
+            "url": "https://github.com/acme/storefront/issues/211",
+            "updatedAt": "2026-08-26T15:20:00Z",
+            "bot_last": false,
+            "last_word": ""
+          }
+        ],
+        "issues_error": null,
+        "prs": [
+          {
+            "number": 215,
+            "title": "#213: stop the checkout serialiser dropping host_name",
+            "head": "pipeline/auto-issue-213",
+            "base": "main",
+            "url": "https://github.com/acme/storefront/pull/215",
+            "draft": false,
+            "mergeable": "MERGEABLE",
+            "state": "CLEAN",
+            "closes": [213],
+            "updatedAt": "2026-08-26T18:19:00Z"
+          },
+          {
+            "number": 212,
+            "title": "#209: retry the webhook once before giving up",
+            "head": "pipeline/auto-issue-209",
+            "base": "main",
+            "url": "https://github.com/acme/storefront/pull/212",
+            "draft": false,
+            "mergeable": "CONFLICTING",
+            "state": "DIRTY",
+            "closes": [209],
+            "updatedAt": "2026-08-26T13:10:00Z"
+          }
+        ],
+        "prs_error": null
+      },
+      {
+        "repo": "acme/billing",
+        "identity": "demo",
+        "access": true,
+        "outcome": "refused",
+        "detail": "needs a human decision, not code",
+        "at": "2026-08-26T17:39:00Z",
+        "runs": [{ "at": "2026-08-26T17:39:00Z", "outcome": "refused", "issue": "58", "detail": "needs a human decision, not code" }],
+        "issues": [
+          {
+            "number": 61,
+            "title": "Invoice PDFs render the wrong currency symbol in the EU",
+            "body": "Everything is stamped with a dollar sign regardless of the account's locale. The template hardcodes it.",
+            "labels": ["bug"],
+            "url": "https://github.com/acme/billing/issues/61",
+            "updatedAt": "2026-08-26T12:44:00Z",
+            "bot_last": false,
+            "last_word": ""
+          }
+        ],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "acme/website",
+        "identity": "demo",
+        "access": true,
+        "outcome": "deferred",
+        "detail": "4 issues not reached this run",
+        "at": "2026-08-26T18:25:00Z",
+        "runs": [{ "at": "2026-08-26T18:25:00Z", "outcome": "deferred", "issue": "", "detail": "4 issues not reached this run" }],
+        "issues": [
+          {
+            "number": 90,
+            "title": "Dark mode flashes white on first paint",
+            "body": "The theme is applied after hydration, so the first frame is the light one. Move it into the head.",
+            "labels": [],
+            "url": "https://github.com/acme/website/issues/90",
+            "updatedAt": "2026-08-26T18:24:00Z",
+            "bot_last": false,
+            "last_word": ""
+          },
+          {
+            "number": 88,
+            "title": "Compress the hero image",
+            "body": "It is 2.4MB and it is the largest thing on the page by an order of magnitude.",
+            "labels": ["performance"],
+            "url": "https://github.com/acme/website/issues/88",
+            "updatedAt": "2026-08-26T11:02:00Z",
+            "bot_last": false,
+            "last_word": ""
+          }
+        ],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "acme/docs",
+        "identity": "demo",
+        "access": true,
+        "outcome": "caught-up",
+        "detail": "nothing open",
+        "at": "2026-08-26T17:55:00Z",
+        "runs": [{ "at": "2026-08-26T17:55:00Z", "outcome": "caught-up", "issue": "", "detail": "nothing open" }],
+        "issues": [],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "acme/legacy-import",
+        "identity": "demo",
+        "access": true,
+        "outcome": "parked",
+        "detail": "PARKED: a duplicate clone of a client production repo",
+        "at": "2026-08-26T16:40:00Z",
+        "runs": [{ "at": "2026-08-26T16:40:00Z", "outcome": "parked", "issue": "", "detail": "parked by its own config" }],
+        "issues": [],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "acme/mobile",
+        "identity": "demo",
+        "access": true,
+        "outcome": "landed",
+        "detail": "pipeline/auto/push",
+        "at": "2026-08-26T18:30:00Z",
+        "runs": [{ "at": "2026-08-26T18:30:00Z", "outcome": "landed", "issue": "30", "detail": "pipeline/auto/push" }],
+        "issues": [
+          {
+            "number": 31,
+            "title": "Crash on cold start when the cache is empty",
+            "body": "Happens exactly once per install, which is why nobody on the team ever sees it. The guard landed in #33; what is left is a decision about whether to ship a hotfix or wait for the next release.",
+            "labels": ["crash"],
+            "url": "https://github.com/acme/mobile/issues/31",
+            "updatedAt": "2026-08-26T18:29:00Z",
+            "bot_last": true,
+            "last_word": "Guard is in and the test reproduces the old crash. Hotfix now or wait for 0.5? Say which and I will carry on."
+          }
+        ],
+        "issues_error": null,
+        "prs": [
+          {
+            "number": 33,
+            "title": "#30: guard the cold-start cache read",
+            "head": "pipeline/auto-issue-30",
+            "base": "main",
+            "url": "https://github.com/acme/mobile/pull/33",
+            "draft": true,
+            "mergeable": "MERGEABLE",
+            "state": "CLEAN",
+            "closes": [30],
+            "updatedAt": "2026-08-26T18:28:00Z"
+          }
+        ],
+        "prs_error": null
+      },
+      {
+        "repo": "northwind/api",
+        "identity": "demo",
+        "access": true,
+        "outcome": "survey",
+        "detail": "9 open: 4 to work, 5 waiting on a human",
+        "at": "2026-08-26T18:07:00Z",
+        "runs": [{ "at": "2026-08-26T18:07:00Z", "outcome": "survey", "issue": "", "detail": "9 open" }],
+        "issues": [
+          {
+            "number": 402,
+            "title": "Rate limiting returns 500 instead of 429",
+            "body": "Hammer `/v1/search` and the status code is a 500 with an empty body. It should be a `429` with a `Retry-After`.\n\nThe cap itself works: it is named `dailyTurnsPerUser` in the config, which is why nobody found it by grepping for rate limit.",
+            "labels": ["bug", "waiting on human"],
+            "url": "https://github.com/northwind/api/issues/402",
+            "updatedAt": "2026-08-26T18:05:00Z",
+            "bot_last": true,
+            "last_word": "Two ways to do this and they differ on whether existing clients break. Which one?"
+          },
+          {
+            "number": 398,
+            "title": "Document the webhook retry schedule",
+            "body": "Support keeps getting asked and there is no answer written down anywhere.",
+            "labels": ["docs"],
+            "url": "https://github.com/northwind/api/issues/398",
+            "updatedAt": "2026-08-25T21:14:00Z",
+            "bot_last": false,
+            "last_word": ""
+          }
+        ],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "northwind/warehouse",
+        "identity": "demo",
+        "access": true,
+        "outcome": "deferred",
+        "detail": "2 issues not reached this run",
+        "at": "2026-08-26T17:12:00Z",
+        "runs": [{ "at": "2026-08-26T17:12:00Z", "outcome": "deferred", "issue": "", "detail": "2 issues not reached this run" }],
+        "issues": [
+          {
+            "number": 77,
+            "title": "Stock counts drift after a partial return",
+            "body": "Off by exactly the returned quantity, every time. The ledger is written twice and only one of the writes is idempotent.",
+            "labels": [],
+            "url": "https://github.com/northwind/warehouse/issues/77",
+            "updatedAt": "2026-08-26T17:10:00Z",
+            "bot_last": false,
+            "last_word": ""
+          }
+        ],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "northwind/internal-tools",
+        "identity": "",
+        "access": false,
+        "outcome": "",
+        "detail": "no account we hold a token for can push here",
+        "at": "2026-08-26T10:00:00Z",
+        "runs": [],
+        "issues": [],
+        "issues_error": "no account holds push here",
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "northwind/analytics",
+        "identity": "demo",
+        "access": true,
+        "outcome": "no-issues",
+        "detail": "issues are disabled on this repo",
+        "at": "2026-08-26T09:41:00Z",
+        "runs": [{ "at": "2026-08-26T09:41:00Z", "outcome": "no-issues", "issue": "", "detail": "issues are disabled on this repo" }],
+        "issues": [],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      },
+      {
+        "repo": "tiny/scratch",
+        "identity": "demo",
+        "access": true,
+        "outcome": "report-only",
+        "detail": "issue_only",
+        "at": "2026-08-25T19:30:00Z",
+        "runs": [{ "at": "2026-08-25T19:30:00Z", "outcome": "report-only", "issue": "4", "detail": "issue_only" }],
+        "issues": [
+          {
+            "number": 4,
+            "title": "Should this repo exist at all?",
+            "body": "Three files, none of them imported anywhere, last touched fourteen months ago. Archive it or adopt it.",
+            "labels": ["question"],
+            "url": "https://github.com/tiny/scratch/issues/4",
+            "updatedAt": "2026-08-25T19:28:00Z",
+            "bot_last": true,
+            "last_word": "I am not going to delete a repo on my own initiative. Say archive and I will open the PR that does it."
+          }
+        ],
+        "issues_error": null,
+        "prs": [],
+        "prs_error": null
+      }
+    ]
+  }
+}

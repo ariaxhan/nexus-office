@@ -1,0 +1,62 @@
+name: Office
+options:
+  bundleIdPrefix: app.nexusoffice
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    PRODUCT_NAME: Office
+    PRODUCT_BUNDLE_IDENTIFIER: app.nexusoffice.Office
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    GENERATE_INFOPLIST_FILE: NO
+    INFOPLIST_FILE: Office/Resources/Info.plist
+    # Personal tool on your own machine: ad-hoc signed, non-sandboxed, no
+    # hardened runtime. It talks to 127.0.0.1 and nothing else.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    ENABLE_APP_SANDBOX: NO
+targets:
+  Office:
+    type: application
+    platform: macOS
+    sources:
+      - path: Office
+      # The demo fixture ships inside the bundle too, so the app has a floor to
+      # draw even when `--demo` points at a path that has moved.
+      - path: Demo
+        buildPhase: resources
+  # Standalone unit-test bundle: no app host, no signing, no AppKit. It compiles
+  # only the two Foundation-only files, so the rules that decide what a desk is
+  # are provable headlessly and cannot quietly start depending on a view.
+  OfficeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: OfficeTests
+      - path: Office/Model/StateRules.swift
+      - path: Office/Model/Models.swift
+    settings:
+      base:
+        PRODUCT_NAME: OfficeTests
+        PRODUCT_BUNDLE_IDENTIFIER: app.nexusoffice.OfficeTests
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ""
+schemes:
+  Office:
+    build:
+      targets:
+        Office: [run, build, archive]
+    run:
+      config: Debug
+  OfficeTests:
+    build:
+      targets:
+        OfficeTests: [test]
+    test:
+      targets:
+        - OfficeTests
