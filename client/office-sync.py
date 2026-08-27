@@ -595,6 +595,157 @@ def fetch_issues(nwo, token):
     return None, errors.get(nwo) or fatal or "GitHub returned nothing for this repo"
 
 
+def _group_by_token(visible, tokens, errors) -> dict:
+    """{token: [repos]} for the desks somebody can push to; the rest get an error."""
+    by_token = {}
+    for repo in visible:
+        who, tok = tokens.get(repo) or (None, None)
+        if not tok:
+            errors[repo] = "no account holds push here"
+            continue
+        by_token.setdefault(tok, []).append(repo)
+    return by_token
+
+
+def _batches(by_token: dict) -> list:
+    return [(tok, group[i:i + BATCH_SIZE])
+            for tok, group in by_token.items()
+            for i in range(0, len(group), BATCH_SIZE)]
+
+
+def _blame_batch(chunk, rows, errors, fatal) -> None:
+    """The batch as a whole is unusable, so every desk in it wears the same
+    line. None of them is blanked; they keep what they had."""
+    for repo in chunk:
+        if repo not in rows:
+            errors.setdefault(repo, fatal)
+
+
+def _fetch_batches(batches, fresh, errors):
+    """Run the batches in order, filling `fresh` and `errors`.
+
+    Returns (cost, gh_error, stopped). Sequential on purpose. The reserve is
+    only a reserve if the decision to stop is made before the next query goes
+    out, not after eight of them already did.
+    """
+    cost, gh_error, stopped = 0, "", ""
+    for tok, chunk in batches:
+        left = BUDGET["remaining"]
+        if isinstance(left, int) and left < GH_RESERVE:
+            stopped = pause(f"only {left} graphql points left, reserve is {GH_RESERVE}",
+                            BUDGET["reset_at"])
+            break
+        rows, errs, rate, fatal = fetch_batch(chunk, tok)
+        cost += note_rate(rate)
+        fresh.update(rows)
+        errors.update(errs)
+        if fatal:
+            gh_error = fatal
+            _blame_batch(chunk, rows, errors, fatal)
+            if RATE_WORDS in fatal.lower():
+                stopped = pause(fatal, BUDGET["reset_at"])
+                break
+    return cost, gh_error, stopped
+
+
+def _fetch_visible(visible, tokens, fresh, errors):
+    """Ask GitHub about every visible desk unless the budget says wait.
+
+    Returns (cost, gh_error). A desk that got no fresh rows because the build
+    was paused says so instead of blanking.
+    """
+    stopped = paused_until()
+    cost, gh_error = 0, ""
+    if not stopped:
+        by_token = _group_by_token(visible, tokens, errors)
+        cost, gh_error, stopped = _fetch_batches(_batches(by_token), fresh, errors)
+    if stopped:
+        for repo in visible:
+            if repo not in fresh:
+                errors[repo] = f"GitHub paused until {stopped}"
+    return cost, gh_error
+
+
+def _remember_fresh(cache: dict, fresh: dict, desks, hidden, stamp: str) -> dict:
+    """Fold this build's rows into the on-disk cache and forget lost desks."""
+    for repo, rows in fresh.items():
+        cache[repo] = {"fetched_at": stamp, "issues": rows["issues"], "prs": rows["prs"]}
+    keep = set(desks) | hidden
+    cache = {r: v for r, v in cache.items() if r in keep}
+    if fresh:
+        write_desks(cache)
+    return cache
+
+
+def _desk_access(repo, hidden, access, tokens):
+    """(identity, access) for one desk: who can push there, and whether anyone can."""
+    if repo in hidden:
+        # Never probed this build, so the answer is whatever we already knew.
+        # `None` access means "the snapshot did not say", which is not the
+        # same as "locked" and must not render as it.
+        hit = access.cache.get(repo)
+        return (hit or None), (None if hit is None else bool(hit))
+    who = (tokens.get(repo) or (None, None))[0]
+    return who, bool(who)
+
+
+def _stale_reason(repo, errors, fresh) -> str:
+    """Why a desk is showing last-good data, or "" when it heard from GitHub."""
+    if repo in fresh:
+        return ""
+    return errors.get(repo) or ""
+
+
+def _station(repo, runs, who, can, hidden: bool, pins, kept: dict, stale: str) -> dict:
+    head = headline(runs)
+    st = {
+        "repo": repo,
+        "identity": who,
+        "access": can,
+        "outcome": head.get("outcome", ""),
+        "detail": head.get("detail", ""),
+        "at": head.get("at", ""),
+        "runs": runs[:10],
+        # Put away, but still here, still carrying what it last showed, so
+        # the app can list it and bring it back. Never fetched while hidden.
+        "hidden": hidden,
+        # Its rank at the top of the roster, or null when it is not pinned.
+        # The order itself is `world.pins`; this is the same fact per desk.
+        "pinned": pins.index(repo) if repo in pins else None,
+        # When this desk last heard from GitHub. "" means never.
+        "fetched_at": kept.get("fetched_at", ""),
+        "issues": list(kept.get("issues") or []),
+        "issues_error": None,
+        "prs": list(kept.get("prs") or []),
+        "prs_error": None,
+    }
+    if stale:
+        # Last-good data AND the reason it is last-good. A desk that blanks
+        # because GitHub said no is a lie; a stale desk that says so is not.
+        st["issues_error"] = stale
+        st["prs_error"] = stale
+    return st
+
+
+def _heartbeat() -> str:
+    if not HEARTBEAT:
+        return ""
+    try:
+        return HEARTBEAT.read_text().strip()[:40]
+    except Exception:
+        return ""
+
+
+def _log_room(stations, cost, run) -> None:
+    waiting = sum(1 for s in stations for i in s["issues"] if i["bot_last"])
+    log(f"{len(stations)} desks, "
+        f"{sum(len(s['issues']) for s in stations)} open issues, {waiting} waiting on you, "
+        f"{cost} graphql points this build")
+    gate = run.get("gate") or {}
+    if gate.get("state") == "pending":
+        log(f"A GATE IS OPEN: {gate.get('permission')} {gate.get('target', '')[:60]}")
+
+
 def build_snapshot(access: Access):
     by_repo, counts = receipts()
     hidden = set(read_hidden())
@@ -610,121 +761,25 @@ def build_snapshot(access: Access):
     with ThreadPoolExecutor(max_workers=8) as pool:
         tokens = dict(zip(visible, pool.map(access.token_for, visible)))
 
-    cost = 0
-    gh_error = ""
     fresh, errors = {}, {}
-    stopped = paused_until()
-    if not stopped:
-        by_token = {}
-        for repo in visible:
-            who, tok = tokens.get(repo) or (None, None)
-            if not tok:
-                errors[repo] = "no account holds push here"
-                continue
-            by_token.setdefault(tok, []).append(repo)
-        batches = [(tok, group[i:i + BATCH_SIZE])
-                   for tok, group in by_token.items()
-                   for i in range(0, len(group), BATCH_SIZE)]
-
-        # Sequential on purpose. The reserve is only a reserve if the decision to
-        # stop is made before the next query goes out, not after eight of them
-        # already did.
-        for tok, chunk in batches:
-            left = BUDGET["remaining"]
-            if isinstance(left, int) and left < GH_RESERVE:
-                stopped = pause(f"only {left} graphql points left, reserve is {GH_RESERVE}",
-                                BUDGET["reset_at"])
-                break
-            rows, errs, rate, fatal = fetch_batch(chunk, tok)
-            cost += note_rate(rate)
-            fresh.update(rows)
-            errors.update(errs)
-            if fatal:
-                # The batch as a whole is unusable, so every desk in it wears the
-                # same line. None of them is blanked; they keep what they had.
-                gh_error = fatal
-                for repo in chunk:
-                    if repo not in rows:
-                        errors.setdefault(repo, fatal)
-                if RATE_WORDS in fatal.lower():
-                    stopped = pause(fatal, BUDGET["reset_at"])
-                    break
-    if stopped:
-        for repo in visible:
-            if repo not in fresh:
-                errors[repo] = f"GitHub paused until {stopped}"
+    cost, gh_error = _fetch_visible(visible, tokens, fresh, errors)
 
     stamp = NOW.strftime(ISO)
-    for repo, rows in fresh.items():
-        cache[repo] = {"fetched_at": stamp, "issues": rows["issues"], "prs": rows["prs"]}
-    keep = set(desks) | hidden
-    cache = {r: v for r, v in cache.items() if r in keep}
-    if fresh:
-        write_desks(cache)
+    cache = _remember_fresh(cache, fresh, desks, hidden, stamp)
 
     stations = []
     for repo in desks:
-        runs = by_repo[repo]
-        head = headline(runs)
-        if repo in hidden:
-            # Never probed this build, so the answer is whatever we already knew.
-            # `None` access means "the snapshot did not say", which is not the
-            # same as "locked" and must not render as it.
-            hit = access.cache.get(repo)
-            who, can = (hit or None), (None if hit is None else bool(hit))
-        else:
-            who = (tokens.get(repo) or (None, None))[0]
-            can = bool(who)
-        kept = cache.get(repo) or {}
-        st = {
-            "repo": repo,
-            "identity": who,
-            "access": can,
-            "outcome": head.get("outcome", ""),
-            "detail": head.get("detail", ""),
-            "at": head.get("at", ""),
-            "runs": runs[:10],
-            # Put away, but still here, still carrying what it last showed, so
-            # the app can list it and bring it back. Never fetched while hidden.
-            "hidden": repo in hidden,
-            # Its rank at the top of the roster, or null when it is not pinned.
-            # The order itself is `world.pins`; this is the same fact per desk.
-            "pinned": pins.index(repo) if repo in pins else None,
-            # When this desk last heard from GitHub. "" means never.
-            "fetched_at": kept.get("fetched_at", ""),
-            "issues": list(kept.get("issues") or []),
-            "issues_error": None,
-            "prs": list(kept.get("prs") or []),
-            "prs_error": None,
-        }
-        err = errors.get(repo)
-        if err and repo not in fresh:
-            # Last-good data AND the reason it is last-good. A desk that blanks
-            # because GitHub said no is a lie; a stale desk that says so is not.
-            st["issues_error"] = err
-            st["prs_error"] = err
-        stations.append(st)
+        who, can = _desk_access(repo, hidden, access, tokens)
+        stations.append(_station(repo, by_repo[repo], who, can, repo in hidden, pins,
+                                 cache.get(repo) or {}, _stale_reason(repo, errors, fresh)))
 
     access.save()
-    hb = ""
-    if HEARTBEAT:
-        try:
-            hb = HEARTBEAT.read_text().strip()[:40]
-        except Exception:
-            pass
-
-    waiting = sum(1 for s in stations for i in s["issues"] if i["bot_last"])
-    log(f"{len(stations)} desks, "
-        f"{sum(len(s['issues']) for s in stations)} open issues, {waiting} waiting on you, "
-        f"{cost} graphql points this build")
     run = rt.snapshot()
-    gate = run.get("gate") or {}
-    if gate.get("state") == "pending":
-        log(f"A GATE IS OPEN: {gate.get('permission')} {gate.get('target', '')[:60]}")
+    _log_room(stations, cost, run)
 
     return {
         "generated": stamp,
-        "heartbeat": hb,
+        "heartbeat": _heartbeat(),
         "killed": bool(KILLSWITCH and KILLSWITCH.exists()),
         "today": counts,
         "stations": stations,
