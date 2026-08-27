@@ -650,7 +650,163 @@ final class StateRulesTests: XCTestCase {
         XCTAssertTrue(empty.hidden.isEmpty)
     }
 
+    // MARK: - the wall
+
+    /// A source that ships before its card does still gets a name and a
+    /// sentence. This is the exact state the live door is in while the python
+    /// side is still being written, and a wall of blank rows is a wall a person
+    /// stops believing.
+    func testASectionWithNoCardStillHasSomethingToSay() throws {
+        let world = try JSONDecoder().decode(World.self, from: Data(#"""
+        {"generated":"g","stations":[],
+         "sections":{"leads":{"state":"missing","detail":"no gig desk at /Users/x/leads"},
+                     "cost":{"state":"ok","by_family":{"opus":3},"rows":91}}}
+        """#.utf8))
+
+        let leads = try XCTUnwrap(world.sections.first { $0.id == "leads" })
+        XCTAssertEqual(leads.title, "Leads")
+        XCTAssertEqual(leads.headline, "no gig desk at /Users/x/leads",
+                       "the detail is the sentence when the card did not write one")
+        XCTAssertEqual(leads.needs, 0)
+        XCTAssertTrue(leads.card.facts.isEmpty)
+
+        let cost = try XCTUnwrap(world.sections.first { $0.id == "cost" })
+        XCTAssertEqual(cost.title, "Cost")
+        XCTAssertEqual(cost.headline, "ok",
+                       "with no detail either, the state is the only honest sentence")
+    }
+
+    /// The bag of source-specific keys is ignored, and no shape of it is fatal.
+    func testNothingInASectionCanTakeTheWallDown() throws {
+        let world = try JSONDecoder().decode(World.self, from: Data(#"""
+        {"generated":"g","stations":[],
+         "sections":{"odd":{"state":42,"detail":["a","b"],
+                            "card":{"title":"Odd","headline":"fine","needs":"lots",
+                                    "as_of":null,
+                                    "facts":[{"label":"count","value":91,"tone":"nonsense"},
+                                             {"label":"ratio","value":0.5},
+                                             {"label":"on","value":true,"tone":"ok"}]},
+                            "whatever":{"deeply":{"nested":[1,2,3]}}}}}
+        """#.utf8))
+
+        let odd = try XCTUnwrap(world.sections.first)
+        XCTAssertEqual(odd.state, "ok", "a state that is not a string is no state at all")
+        XCTAssertEqual(odd.needs, 0, "a count that is not a number does not become one")
+        XCTAssertEqual(odd.card.asOf, "")
+        XCTAssertEqual(odd.card.facts.map(\.value), ["91", "0.5", "yes"],
+                       "a value written as a number is still a value")
+        XCTAssertEqual(StateRules.tone(odd.card.facts[0]), .plain,
+                       "a tone nobody defined paints nothing")
+        XCTAssertEqual(StateRules.tone(odd.card.facts[2]), .ok)
+    }
+
+    func testANegativeCountIsNotABadge() throws {
+        let world = try JSONDecoder().decode(World.self, from: Data(#"""
+        {"generated":"g","stations":[],
+         "sections":{"x":{"state":"ok","card":{"title":"X","headline":"h","needs":-3}}}}
+        """#.utf8))
+        XCTAssertEqual(world.sections.first?.needs, 0)
+        XCTAssertNil(StateRules.sectionBadge(try XCTUnwrap(world.sections.first)))
+    }
+
+    /// A JSON object has no order, so the wall has to make one. Without this
+    /// the roster reshuffles its own rows under a person every ten seconds.
+    func testTheWallArrivesInAStableOrder() throws {
+        let json = #"""
+        {"generated":"g","stations":[],
+         "sections":{"pipeline":{"state":"ok","card":{"title":"Pipeline","headline":"h"}},
+                     "clock":{"state":"ok","card":{"title":"Clock","headline":"h"}},
+                     "mail":{"state":"ok","card":{"title":"Mail","headline":"h"}},
+                     "cost":{"state":"ok","card":{"title":"Cost","headline":"h"}}}}
+        """#
+        for _ in 0..<12 {
+            let world = try JSONDecoder().decode(World.self, from: Data(json.utf8))
+            XCTAssertEqual(world.sections.map(\.title), ["Clock", "Cost", "Mail", "Pipeline"])
+        }
+    }
+
+    /// The same ordering a desk gets, for the same reason: a wall sorted
+    /// alphabetically buries the one source that needed you behind four that
+    /// did not.
+    func testWhatWantsAPersonComesFirstThenWhatIsBroken() {
+        let ordered = StateRules.sectionOrder([
+            section("cost", state: "ok"),
+            section("pipeline", state: "unconfigured"),
+            section("clock", state: "ok", needs: 5),
+            section("library", state: "stale"),
+            section("mail", state: "error", needs: 2)
+        ])
+
+        XCTAssertEqual(ordered.map(\.title),
+                       ["Clock", "Mail", "Library", "Pipeline", "Cost"])
+        XCTAssertEqual(StateRules.mood(ordered[0]), .needs)
+        XCTAssertEqual(StateRules.mood(ordered[1]), .needs,
+                       "broken AND wanted is still wanted: the reason waits until you are there")
+        XCTAssertEqual(StateRules.mood(ordered[2]), .off)
+        XCTAssertEqual(StateRules.mood(ordered[4]), .quiet)
+    }
+
+    func testTiesGoByTitleAndNeverWobble() {
+        let a = section("bbb", state: "ok", needs: 1)
+        let b = section("aaa", state: "ok", needs: 1)
+        XCTAssertEqual(StateRules.sectionOrder([a, b]).map(\.id), ["aaa", "bbb"])
+        XCTAssertEqual(StateRules.sectionOrder([b, a]).map(\.id), ["aaa", "bbb"])
+    }
+
+    func testTheWallTotalAndItsLine() {
+        let wall = [section("clock", state: "ok", needs: 5),
+                    section("mail", state: "error", needs: 2),
+                    section("cost", state: "ok")]
+        XCTAssertEqual(StateRules.wallNeeds(wall), 7)
+        XCTAssertEqual(StateRules.wallLine(wall), "the wall needs 7")
+
+        let quiet = [section("cost", state: "ok"), section("mail", state: "stale")]
+        XCTAssertEqual(StateRules.wallNeeds(quiet), 0)
+        XCTAssertEqual(StateRules.wallLine(quiet), "",
+                       "nothing at all rather than a nought: a zero is a roster shouting")
+    }
+
+    func testTheFilterAndTheSearchReadTheCardAndNothingElse() {
+        let wall = [section("clock", state: "ok", needs: 5,
+                            headline: "5 jobs need a look"),
+                    section("cost", state: "ok", headline: "$18.42 today"),
+                    section("mail", state: "error", headline: "the host refused the token")]
+
+        XCTAssertEqual(StateRules.visibleSections(wall, needsOnly: true).map(\.id), ["clock"])
+        XCTAssertEqual(StateRules.visibleSections(wall, query: "cost").map(\.id), ["cost"],
+                       "the title is searchable")
+        XCTAssertEqual(StateRules.visibleSections(wall, query: "token").map(\.id), ["mail"],
+                       "so is the sentence under it")
+        XCTAssertEqual(StateRules.visibleSections(wall, query: "  ").map(\.id).count, 3,
+                       "whitespace is not a search")
+        XCTAssertTrue(StateRules.visibleSections(wall, query: "zzz").isEmpty)
+    }
+
+    func testTheSubtitleIsOneLineNoMatterWhatTheSourceWrote() {
+        let noisy = section("x", state: "ok",
+                            headline: "line one\n\nline two   with   gaps\tand a tab")
+        let said = StateRules.sectionSubtitle(noisy)
+        XCTAssertFalse(said.contains("\n"))
+        XCTAssertEqual(said, "line one line two with gaps and a tab")
+
+        let long = section("y", state: "ok", headline: String(repeating: "word ", count: 60))
+        XCTAssertLessThanOrEqual(StateRules.sectionSubtitle(long, limit: 40).count, 41)
+    }
+
+    func testTheBadgeIsTheCountOrNothing() {
+        XCTAssertEqual(StateRules.sectionBadge(section("a", state: "ok", needs: 5)), "5")
+        XCTAssertNil(StateRules.sectionBadge(section("b", state: "error")),
+                     "broken is not a count, and a badge saying nothing is worse than none")
+    }
+
     // MARK: - helpers
+
+    private func section(_ id: String, state: String, needs: Int = 0,
+                         headline: String = "h", facts: [SectionFact] = []) -> Section {
+        Section(id: id, state: state,
+                card: SectionCard(title: id.capitalized, headline: headline,
+                                  needs: needs, facts: facts))
+    }
 
     /// The snapshot everything in the freshness tests is measured against, and
     /// a fixed "now" so no assertion here can pass at one time of day and fail

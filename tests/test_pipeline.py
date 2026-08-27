@@ -26,6 +26,8 @@ import tempfile
 import time
 import unittest
 
+from test_sections import assert_card
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
 JOB_ID = "com.nexus.issue-dispatch"
@@ -35,7 +37,7 @@ def _iso(epoch: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
 
 
-class PipelineTest(unittest.TestCase):
+class PipelineBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.tmp.name)
@@ -120,6 +122,7 @@ class PipelineTest(unittest.TestCase):
         self.spawned.append(proc)
         return proc.pid
 
+class PipelineTest(PipelineBase):
     # -- the one that matters --------------------------------------------------
 
     def test_a_stale_pid_file_never_reports_a_run(self):
@@ -300,5 +303,73 @@ class PipelineTest(unittest.TestCase):
             self.assertIsInstance(out["running"], bool)
 
 
+class CardTest(PipelineBase):
+    """`detail` is already the sentence this source exists to write, so the card
+    repeats it rather than inventing a second one that can disagree."""
+
+    def test_the_card_carries_the_sentence_the_source_already_wrote(self):
+        self.heartbeat(60)
+        self.log([f"[{_iso(time.time() - 120)}] looked, nothing to do"])
+        data = self.mod.read()
+        card = self.mod.card(data)
+
+        assert_card(self, card)
+        self.assertEqual(card["headline"], data["detail"])
+        self.assertEqual(card["needs"], 0)
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertEqual(facts["running"], "no")
+        self.assertEqual(facts["pid"], "nobody claims a run")
+        self.assertIn("next look", facts)
+
+    def test_a_pid_file_that_is_lying_is_a_thing_that_needs_a_person(self):
+        # `running` stays false, which is the point of the source. The card is
+        # the only place that says somebody should go and look at it.
+        self.pid_path.write_text(str(self.dead_pid()))
+        self.heartbeat(60)
+        self.log([f"[{_iso(time.time() - 120)}] ran"])
+        card = self.mod.card(self.mod.read())
+
+        assert_card(self, card)
+        self.assertEqual(card["needs"], 1)
+        self.assertIn("stale pid", [f["label"] for f in card["facts"]])
+
+    def test_a_log_nobody_can_read_needs_a_person_even_when_all_is_calm(self):
+        self.heartbeat(60)
+        self.log(["[2026-08-26T05:00:00Z] fine"])
+        self.log_path.chmod(0o000)
+        card = self.mod.card(self.mod.read())
+
+        assert_card(self, card)
+        self.assertEqual(card["needs"], 1)
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertIn("unreadable", facts["last said"])
+
+    def test_a_pipeline_switched_off_on_purpose_wants_nobody(self):
+        (self.root / "_meta" / "state" / "pipeline-off").touch()
+        self.heartbeat(60)
+        self.log([f"[{_iso(time.time() - 120)}] looked, nothing to do"])
+        card = self.mod.card(self.mod.read())
+
+        assert_card(self, card)
+        self.assertIn("switched off", card["headline"])
+        self.assertEqual(card["needs"], 0)
+        self.assertIn("kill switch", [f["label"] for f in card["facts"]])
+
+    def test_an_unconfigured_office_still_produces_a_card(self):
+        os.environ.pop("OFFICE_RUNTIME_ROOT", None)
+        card = self.reload().card(self.reload().read())
+        assert_card(self, card)
+        self.assertEqual(card["needs"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class OffCardTest(PipelineBase):
+    def test_a_pipeline_switched_off_with_no_log_is_not_an_alarm(self):
+        # Off on purpose, never ran: nothing to look at, so nothing needs a person.
+        (self.root / "_meta" / "state" / "pipeline-off").write_text("", encoding="utf-8")
+        out = self.mod.read()
+        self.assertEqual(out["state"], "off")
+        self.assertEqual(self.mod.card(out)["needs"], 0)

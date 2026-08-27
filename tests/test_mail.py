@@ -19,6 +19,8 @@ import sys
 import tempfile
 import unittest
 
+from test_sections import assert_card
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
 
@@ -31,7 +33,7 @@ import json, sys, time
 """
 
 
-class MailTest(unittest.TestCase):
+class MailBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.tmp.name)
@@ -73,6 +75,7 @@ class MailTest(unittest.TestCase):
         base.update(over)
         return base
 
+class MailTest(MailBase):
     # -- the staleness rule, which is the whole point --------------------------
 
     def test_a_stale_summary_says_so_and_carries_its_reason(self):
@@ -240,6 +243,49 @@ class SectionsTest(unittest.TestCase):
         out = rt.read_all()
         self.assertIn("mail", out)
         self.assertIn("state", out["mail"])
+
+
+class CardTest(MailBase):
+    def card(self):
+        return self.mail.card(self.mail.read())
+
+    def test_the_card_counts_everything_waiting_across_the_pigeonholes(self):
+        self.prints(self.summary())
+        self.snapshot(covered={"granola": 47})
+        card = self.card()
+        assert_card(self, card)
+        # 3 granola still uncovered, plus the 2 captures the last run never
+        # looked at. Email is unknown and is not counted as zero.
+        self.assertEqual(card["headline"], "5 waiting to be filed")
+        self.assertEqual(card["needs"], 5)
+        self.assertEqual(card["as_of"], "2026-08-25T18:30:44Z")
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertEqual(facts["granola"], "3 waiting, 0 filed")
+        self.assertTrue(facts["email"].startswith("unknown"))
+
+    def test_a_stale_summary_takes_the_headline_off_the_counts(self):
+        self.prints(self.summary(stale=True, stale_reason="granola: 12 of 50 on disk"))
+        self.snapshot(covered={"granola": 12})
+        card = self.card()
+        assert_card(self, card)
+        self.assertTrue(card["headline"].startswith("behind:"), card["headline"])
+        self.assertIn("12 of 50", card["headline"])
+
+    def test_an_empty_mailroom_says_so(self):
+        self.prints(self.summary(sources=["granola", "capture"]))
+        self.snapshot(covered={"granola": 50, "capture": 2})
+        card = self.card()
+        assert_card(self, card)
+        self.assertEqual(card["headline"], "nothing waiting to be filed")
+        self.assertEqual(card["needs"], 0)
+
+    def test_an_intake_that_would_not_run_says_that_and_wants_a_person(self):
+        # Nothing installed: the mailroom cannot be counted, and an uncounted
+        # mailroom must never draw as an empty one.
+        card = self.card()
+        assert_card(self, card)
+        self.assertIn("intake", card["headline"])
+        self.assertEqual(card["needs"], 1)
 
 
 if __name__ == "__main__":

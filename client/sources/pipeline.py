@@ -50,7 +50,12 @@ import re
 import subprocess
 import time
 
+from sources import _card
+
 KEY = "pipeline"
+# The human name of the fixture, fixed. A card whose title moves is a
+# card the eye has to find again every time it is drawn.
+TITLE = "Pipeline"
 
 JOB_ID = "com.nexus.issue-dispatch"
 PIPELINE = "_meta/services/issue-pipeline"
@@ -80,18 +85,9 @@ def _root() -> pathlib.Path | None:
     return pathlib.Path(v).expanduser() if v else None
 
 
-def _human(seconds: float) -> str:
-    """A duration the way a person says it. Never a bare number of seconds."""
-    s = int(abs(seconds))
-    if s < 60:
-        return f"{s}s"
-    if s < 3600:
-        return f"{s // 60}m"
-    if s < 86400:
-        h, m = divmod(s // 60, 60)
-        return f"{h}h{m}m" if m else f"{h}h"
-    d, h = divmod(s // 3600, 24)
-    return f"{d}d{h}h" if h else f"{d}d"
+# How long is that, in words. One implementation, shared with every card in the
+# office, so two fixtures never say the same gap two different ways.
+_human = _card.human
 
 
 def _epoch(iso: str | None) -> float | None:
@@ -452,3 +448,80 @@ def read() -> dict:
         # Without this an hourly deferral is indistinguishable from an idle hour.
         "deferring": bool(power == "battery" and "battery" in (log["doing"] or "").lower()),
     }
+
+
+# Only the four states `_cannot` can return. `ok` and `off` come out of the full
+# read, which fills in every field the card below reads, and `off` is a decision
+# that wants nobody rather than a fault that does.
+TROUBLE = {
+    "unconfigured": 0,
+    "missing-root": 1,
+    "missing": 1,
+    "unreadable": 1,
+}
+
+
+def card(data: dict) -> dict:
+    """Is the pipeline working right now, in one line.
+
+    `detail` is already the sentence this source exists to produce, so the card
+    does not write a second one. What it adds is `needs`: a pid file that is
+    lying, or a log nobody can read, is a thing a person has to go and look at,
+    and neither of those is visible in `running`.
+    """
+    state = data.get("state")
+    detail = str(data.get("detail") or "")
+    if state not in ("ok", "off"):
+        needs = TROUBLE.get(state, 1)
+        facts = [_card.fact("state", str(state), "bad" if needs else "dim")]
+        if detail:
+            facts.append(_card.fact("detail", detail, "dim"))
+        return _card.build(TITLE, detail or str(state), needs, "", facts)
+
+    stale = data.get("stale_pid")
+    log_state = data.get("log_state")
+    running = bool(data.get("running"))
+    running_for = data.get("running_for")
+
+    facts = [_card.fact("running",
+                        (f"yes, for {running_for}" if running_for else "yes") if running else "no",
+                        "ok" if running else "dim")]
+    if data.get("doing"):
+        facts.append(_card.fact("doing", data["doing"]))
+
+    if data.get("overdue"):
+        # Past due is never "in 0 minutes". A scheduler that quietly stopped
+        # firing is only ever noticed because a card said this out loud.
+        facts.append(_card.fact("next look",
+                                f"overdue by {data.get('late_by') or 'a while'}", "warn"))
+    elif data.get("next_in"):
+        facts.append(_card.fact("next look", data["next_in"]))
+    else:
+        facts.append(_card.fact("next look", "could not be worked out", "warn"))
+
+    age = data.get("last_said_age_s")
+    if log_state == "ok":
+        facts.append(_card.fact("last said",
+                                f"{_human(age)} ago" if age is not None else "no timestamp on it",
+                                "dim"))
+    else:
+        facts.append(_card.fact("last said", f"the log is {log_state}", "bad"))
+
+    pid = data.get("pid")
+    if pid is None:
+        facts.append(_card.fact("pid", "nobody claims a run", "dim"))
+    elif data.get("pid_verified"):
+        facts.append(_card.fact("pid", f"{pid}, checked against ps", "ok"))
+    else:
+        facts.append(_card.fact("pid", f"{pid}, not checked for recycling", "warn"))
+
+    if stale:
+        facts.append(_card.fact("stale pid", stale.get("why") or stale.get("pid"), "bad"))
+    if data.get("kill_switch"):
+        facts.append(_card.fact("kill switch", "on", "warn"))
+
+    # A missing log is a break only when the pipeline is supposed to be running:
+    # one switched off on purpose has no log to speak of, and no alarm to raise.
+    broken = bool(stale) or (data.get("state") == "ok" and log_state != "ok")
+    return _card.build(TITLE, detail, 1 if broken else 0,
+                       _card.zulu(data.get("last_said_at")), facts)

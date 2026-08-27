@@ -21,6 +21,8 @@ import sys
 import tempfile
 import unittest
 
+from test_sections import assert_card
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
 
@@ -67,7 +69,7 @@ def rows(today: str, older: str):
     ]
 
 
-class LedgerTest(unittest.TestCase):
+class LedgerBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.tmp.name)
@@ -97,6 +99,7 @@ class LedgerTest(unittest.TestCase):
         # A line that is not JSON at all. Counted, never skipped in silence.
         return body[:4] + ["{ this is not json"] + body[4:] + [""]
 
+class LedgerTest(LedgerBase):
     # -- the states ------------------------------------------------------------
 
     def test_no_root_configured_is_not_zero(self):
@@ -252,6 +255,51 @@ class LedgerTest(unittest.TestCase):
         self.write(self.full())
         vals = [r["value"] for r in self.read()["by_family"]]
         self.assertEqual(vals, sorted(vals, reverse=True))
+
+
+class CardTest(LedgerBase):
+    """The one rule with money on it: the headline is measured money, and the
+    estimate is a row of its own that says so in the label."""
+
+    def card(self):
+        from sources import cost
+        mod = importlib.reload(cost)
+        return mod.card(mod.read())
+
+    def test_the_headline_is_measured_money_and_never_the_three_bands_summed(self):
+        self.write(self.full())
+        card = self.card()
+        assert_card(self, card)
+        self.assertEqual(card["headline"], "$3.75 measured in 14 days")
+        self.assertEqual(card["as_of"], f"{datetime.date.today().isoformat()}T00:00:00Z")
+
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertEqual(facts["14 days, measured"], "$3.75")
+        self.assertEqual(facts["estimated (not measured)"], "$5.00")
+        # Written before the flag existed, so neither. Its own row rather than
+        # quietly added to the measured total.
+        self.assertEqual(facts["unflagged (band unknown)"], "$0.85")
+
+    def test_a_row_nobody_can_read_is_a_thing_that_needs_a_person(self):
+        self.write(self.full())
+        card = self.card()
+        self.assertEqual(card["needs"], 1)
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertEqual(facts["rows that would not parse"], "1")
+
+    def test_a_clean_ledger_needs_nobody(self):
+        self.write([{"timestamp": _local_iso(0), "total_cost": 2.0, "estimate": False}])
+        card = self.card()
+        assert_card(self, card)
+        self.assertEqual(card["needs"], 0)
+        self.assertEqual(card["headline"], "$2.00 measured in 14 days")
+
+    def test_a_ledger_that_was_never_written_is_not_a_ledger_reading_zero(self):
+        card = self.card()
+        assert_card(self, card)
+        self.assertIn("has ever been written", card["headline"])
+        # Nothing has been spent and nothing is broken. Nobody is needed.
+        self.assertEqual(card["needs"], 0)
 
 
 if __name__ == "__main__":

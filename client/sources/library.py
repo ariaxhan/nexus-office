@@ -37,7 +37,12 @@ import sqlite3
 import urllib.error
 import urllib.request
 
+from sources import _card
+
 KEY = "library"
+# The human name of the fixture, fixed. A card whose title moves is a
+# card the eye has to find again every time it is drawn.
+TITLE = "Library"
 
 DEFAULT_URL = "http://127.0.0.1:8787"
 DB_REL = "_meta/agentdb/agent.db"
@@ -274,3 +279,78 @@ def read() -> dict:
     out["semantic"] = read_semantic()
     out["url"] = _url()
     return out
+
+
+# `absent` is a vault that has never learned anything, which is a real and
+# blameless state. Only a store that will not open wants a person.
+TROUBLE = {
+    "unconfigured": ("not configured", 0),
+    "absent": ("no agentdb on disk yet", 0),
+    "error": ("the store would not open", 1),
+}
+
+
+def _review_row(review: dict) -> tuple:
+    """The review cart as (what to say, tone).
+
+    Down is the normal case and it is NOT an empty queue: the cart lives only in
+    the runtime, so when the runtime is closed the honest word is "unknown".
+    """
+    state = review.get("state")
+    if state == "up":
+        n = int(review.get("count") or 0)
+        return f"{_card.count(n)} pending", ("warn" if n else "ok")
+    if state == "down":
+        return "unknown, the runtime is closed", "dim"
+    return _card.clip(review.get("detail") or state, _card.FACT_CHARS), "bad"
+
+
+def _semantic_row(semantic: dict) -> tuple:
+    state = semantic.get("state")
+    if state == "up":
+        return "serving", "ok"
+    if state == "down":
+        return "the runtime is closed", "dim"
+    return _card.clip(semantic.get("detail") or state, _card.FACT_CHARS), "bad"
+
+
+def card(data: dict) -> dict:
+    """What memory holds, in one line, plus whether anything is waiting on you.
+
+    The shelves are on disk and the review cart is not, so the two are reported
+    apart: a closed runtime leaves the cart unknown and must never draw as an
+    empty one, and it never takes the shelf counts down with it.
+    """
+    if data.get("state") != "ok":
+        return _card.trouble(TITLE, data.get("state"), data.get("detail"), TROUBLE)
+
+    store = data.get("store") or {}
+    live = int(store.get("live") or 0)
+    hits = int(store.get("hits") or 0)
+    review = data.get("review") or {}
+    semantic = data.get("semantic") or {}
+
+    facts = [
+        _card.fact("live", _card.count(live), "ok" if live else "dim"),
+        _card.fact("archived", _card.count(store.get("archived") or 0), "dim"),
+        _card.fact("domains", _card.count(store.get("domains") or 0), "dim"),
+    ]
+    # The biggest shelves, named. One row rather than one row per type, so the
+    # card has room left for the two states that can actually want a person.
+    top = sorted((data.get("shelves") or []),
+                 key=lambda s: -int(s.get("count") or 0))[:3]
+    by_type = ", ".join(f"{s.get('type')} {_card.count(s.get('count') or 0)}"
+                        for s in top if int(s.get("count") or 0))
+    if by_type:
+        facts.append(_card.fact("by type", by_type, "dim"))
+    facts.append(_card.fact("review queue", *_review_row(review)))
+    facts.append(_card.fact("semantic memory", *_semantic_row(semantic)))
+
+    return _card.build(
+        TITLE,
+        f"{_card.count(live)} {_card.plural(live, 'learning')}, "
+        f"{_card.count(hits)} {_card.plural(hits, 'recall')}",
+        1 if review.get("state") == "error" else 0,
+        _card.zulu(store.get("newest")),
+        facts,
+    )

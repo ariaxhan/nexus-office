@@ -50,7 +50,12 @@ import pathlib
 import subprocess
 import sys
 
+from sources import _card
+
 KEY = "mail"
+# The human name of the fixture, fixed. A card whose title moves is a
+# card the eye has to find again every time it is drawn.
+TITLE = "Mail"
 
 SERVICE = "_meta/services/intake"
 
@@ -223,3 +228,68 @@ def read() -> dict:
         # Deliberate, named, and never folded into the numbers above.
         "excluded": _excluded(state),
     }
+
+
+TROUBLE = {
+    "unconfigured": ("not configured", 0),
+    "missing": ("intake is not installed", 1),
+    "timeout": ("intake did not answer", 1),
+    "unreadable": ("intake printed something that was not JSON", 1),
+    "error": ("intake would not run", 1),
+}
+
+# Held back for three different reasons, and they are never added up. Declined
+# is a decision, blocked is a gate, rate limited is a failure that LOOKS like an
+# absence, and no transcript is a meeting nobody wrote down.
+HELD = (("declined", "declined"), ("blocked", "blocked"),
+        ("rate_limited", "rate limited"), ("no_transcript", "no transcript"))
+
+
+def card(data: dict) -> dict:
+    """What is sitting in the mailroom, and whether the count can be trusted.
+
+    Staleness outranks every number below it. If the last run does not cover
+    what is on disk then the counts describe a moment that has passed, so the
+    headline says so where the count would have gone.
+    """
+    if data.get("state") != "ok":
+        return _card.trouble(TITLE, data.get("state"), data.get("detail"), TROUBLE)
+
+    holes = data.get("pigeonholes") or []
+    waiting = sum(int(h.get("waiting") or 0) for h in holes)
+    stale = bool(data.get("stale"))
+
+    if stale:
+        headline = "behind: " + (data.get("stale_reason")
+                                 or "the last run does not cover what is on disk")
+    elif waiting:
+        headline = f"{_card.count(waiting)} waiting to be filed"
+    else:
+        headline = "nothing waiting to be filed"
+
+    facts = []
+    for hole in holes:
+        n = hole.get("waiting")
+        filed = _card.count(hole.get("filed") or 0)
+        if n is None:
+            # Email lives on a server. Unknown, never zero, and drawn as such.
+            value, tone = f"unknown, {filed} filed", "dim"
+        else:
+            n = int(n)
+            value = f"{_card.count(n)} waiting, {filed} filed"
+            tone = "warn" if n else "ok"
+        facts.append(_card.fact(hole.get("label") or hole.get("key") or "feed", value, tone))
+
+    last_run = data.get("last_run")
+    facts.append(_card.fact("last run", _card.ago(last_run) or "never",
+                            "warn" if stale else "dim"))
+
+    held = data.get("held") or {}
+    counted = {**held, "blocked": sum(int(v or 0) for v in (held.get("blocked") or {}).values())}
+    parts = [f"{_card.count(int(counted.get(key) or 0))} {label}"
+             for key, label in HELD if int(counted.get(key) or 0)]
+    if parts:
+        facts.append(_card.fact("held back", ", ".join(parts),
+                                "warn" if int(counted.get("rate_limited") or 0) else "dim"))
+
+    return _card.build(TITLE, headline, waiting, _card.zulu(last_run), facts)

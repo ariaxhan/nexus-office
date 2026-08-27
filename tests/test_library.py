@@ -18,6 +18,8 @@ import sys
 import tempfile
 import unittest
 
+from test_sections import assert_card
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
 SCHEMA = """
@@ -286,6 +288,37 @@ class SectionsTest(LibraryBase):
         got = importlib.reload(sections).read_all()
         self.assertIn("library", got)
         self.assertEqual(got["library"]["state"], "ok")
+
+
+class CardTest(LibraryBase):
+    def card(self):
+        return self.lib.card(self.lib.read())
+
+    def test_the_card_counts_the_shelves_and_the_recalls(self):
+        seed(self.db, [row(0, "failure", 3), row(1, "failure", 4),
+                       row(2, "gotcha", 1),
+                       row(3, "pattern", 2, archived="2026-01-01T00:00:00Z")])
+        card = self.card()
+        assert_card(self, card)
+        self.assertEqual(card["headline"], "3 learnings, 10 recalls")
+        self.assertEqual(card["needs"], 0)
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertEqual(facts["live"], "3")
+        self.assertEqual(facts["archived"], "1")
+        self.assertIn("failure 2", facts["by type"])
+
+    def test_a_closed_runtime_leaves_the_review_queue_unknown_not_empty(self):
+        seed(self.db, [row(0, "failure", 1)])
+        facts = {f["label"]: f["value"] for f in self.card()["facts"]}
+        self.assertIn("unknown", facts["review queue"])
+        # ... and a closed runtime is the normal case, so it needs nobody.
+        self.assertEqual(self.card()["needs"], 0)
+
+    def test_a_vault_that_has_never_learned_anything_is_not_a_broken_one(self):
+        card = self.card()
+        assert_card(self, card)
+        self.assertIn("no agentdb on disk", card["headline"])
+        self.assertEqual(card["needs"], 0)
 
 
 if __name__ == "__main__":

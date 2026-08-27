@@ -44,6 +44,8 @@ struct RosterView: View {
                     }
 
                     putAway
+
+                    wall
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 16)
@@ -54,6 +56,15 @@ struct RosterView: View {
             .onChange(of: store.putAwayOpen) { _, opened in
                 guard opened else { return }
                 withAnimation { scroll.scrollTo(putAwayAnchor, anchor: .bottom) }
+            }
+            // The wall is under every desk on the floor, so a wall row can be
+            // selected while sitting a long way below what a person is looking
+            // at. A selected row nobody can see reads as a click that did not
+            // land, which is the same failure the drawer anchor above exists
+            // to prevent.
+            .onChange(of: store.selection) { _, now in
+                guard case .section(let id)? = now else { return }
+                withAnimation { scroll.scrollTo(rowID(section: id), anchor: .center) }
             }
             }
         }
@@ -87,6 +98,42 @@ struct RosterView: View {
     }
 
     private var putAwayAnchor: String { "put-away-drawer" }
+
+    private func rowID(section id: String) -> String { "wall:" + id }
+
+    /// The wall: everything this machine can say about itself that is not a
+    /// repo and not a colleague.
+    ///
+    /// Every row here is drawn from the card its source wrote, and nothing in
+    /// this file knows what any one of them measures. A new source is a new
+    /// python file and no Swift at all, which is the only way six of them stay
+    /// cheap to keep.
+    @ViewBuilder private var wall: some View {
+        if !store.sections.isEmpty {
+            header("wall", trailing: wallCount)
+                .padding(.top, 14)
+            ForEach(store.visibleSections) { section in
+                SectionRow(section: section,
+                           selected: store.selection == .section(section.id))
+                    .contentShape(Rectangle())
+                    .onTapGesture { store.select(.section(section.id)) }
+                    .id(rowID(section: section.id))
+            }
+            if store.visibleSections.isEmpty {
+                notary(store.needsOnly ? "nothing on the wall needs you" : "nothing matches")
+            }
+        }
+    }
+
+    private var wallCount: AnyView? {
+        let line = store.wallLine
+        guard !line.isEmpty else { return nil }
+        return AnyView(
+            Text(line)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.amber)
+        )
+    }
 
     /// The desks a person moved out of the way.
     ///
@@ -312,5 +359,53 @@ struct DeskRow: View {
         if state == .gated { return StateRules.line(gate?.permission ?? "", limit: 40) }
         if !station.detail.isEmpty { return StateRules.line(station.detail, limit: 48) }
         return StateRules.line(station.problems.first ?? "", limit: 48)
+    }
+}
+
+/// One thing on the wall, drawn the same shape as a desk and a colleague.
+///
+/// Title, the source's own sentence under it, a count on the right when
+/// something wants a person. Nothing in here is specific to any source: every
+/// word on the row came out of the card.
+struct SectionRow: View {
+    let section: Section
+    let selected: Bool
+
+    private var mood: StateRules.SectionMood { StateRules.mood(section) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            MoodDot(mood: mood)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(section.title)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    // The count, or nothing. A column of noughts is a roster
+                    // shouting that nothing is happening.
+                    if let badge = StateRules.sectionBadge(section) {
+                        Pill(text: badge, color: Theme.amber)
+                    } else {
+                        Text(StateRules.stamp(section.card.asOf))
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.faint)
+                    }
+                }
+                Text(StateRules.sectionSubtitle(section))
+                    .font(.system(size: 12))
+                    .foregroundStyle(section.isOK ? Theme.dim : Theme.amber.opacity(0.85))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selected ? Theme.selected : Color.clear)
+        )
     }
 }

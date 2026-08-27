@@ -26,13 +26,15 @@ import sys
 import textwrap
 import unittest
 
+from test_sections import assert_card
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
 JOBCTL_REL = "_meta/services/jobs/jobctl"
 REGISTRY_REL = "_meta/services/jobs/registry.jsonl"
 
 
-class ClockTest(unittest.TestCase):
+class ClockBase(unittest.TestCase):
     """Each test builds a whole fake vault root: a jobctl that prints what we
     want, and a registry beside it. Faking the subprocess rather than mocking it
     keeps the timeout and the exit code honest, and those are the two things
@@ -95,6 +97,7 @@ class ClockTest(unittest.TestCase):
     def by_id(self, sec):
         return {j["id"]: j for j in sec["jobs"]}
 
+class ClockTest(ClockBase):
     # -- the four states, which is the whole point ------------------------------
 
     def test_a_job_that_has_never_run_is_never_not_stale(self):
@@ -279,6 +282,65 @@ class ClockTest(unittest.TestCase):
                       self.reg("com.x.c-stale"))
         states = [j["state"] for j in self.clock.read()["jobs"]]
         self.assertEqual(states, ["stale", "off", "ok"])
+
+
+class CardTest(ClockBase):
+    """The card is the only thing most people will ever read off this source, so
+    the number on it has to be the same alarm the wall is sorted by."""
+
+    def card(self):
+        return self.clock.card(self.clock.read())
+
+    def test_the_card_says_how_many_jobs_need_a_look(self):
+        self.status([
+            self.row("good", "OK", attempt="2026-08-26T05:00:00Z",
+                     success="2026-08-26T05:00:00Z", rc=0),
+            self.row("fine", "OK", attempt="2026-08-26T06:00:00Z",
+                     success="2026-08-26T06:00:00Z", rc=0),
+            self.row("stopped", "STALE", attempt="2026-08-20T05:00:00Z",
+                     success="2026-08-20T05:00:00Z", rc=0),
+        ], unhealthy=1)
+        self.registry(self.reg("good"), self.reg("fine"), self.reg("stopped"))
+
+        card = self.card()
+        assert_card(self, card)
+        self.assertEqual(card["headline"], "1 of 3 jobs needs a look")
+        self.assertEqual(card["needs"], 1)
+        # The freshest attempt any job made, not the moment the card was built.
+        self.assertEqual(card["as_of"], "2026-08-26T06:00:00Z")
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertEqual(facts["ok"], "2")
+        self.assertEqual(facts["stale"], "1")
+
+    def test_a_wall_with_nothing_wrong_says_so_rather_than_going_quiet(self):
+        self.status([self.row("good", "OK", attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0)])
+        self.registry(self.reg("good"))
+
+        card = self.card()
+        assert_card(self, card)
+        self.assertEqual(card["headline"], "1 job, all fine")
+        self.assertEqual(card["needs"], 0)
+
+    def test_a_switched_off_job_is_counted_and_never_leads(self):
+        self.status([self.row("paused", "OFF"),
+                     self.row("good", "OK", attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0)], off=1)
+        self.registry(self.reg("paused"), self.reg("good"))
+
+        card = self.card()
+        self.assertEqual(card["needs"], 0)
+        self.assertEqual(card["headline"], "2 jobs, all fine")
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertEqual(facts["off"], "1")
+
+    def test_a_broken_jobctl_card_says_what_is_wrong_and_wants_a_person(self):
+        # No jobctl installed at all: the source cannot tell, and the card has
+        # to say so where the count would have gone.
+        card = self.card()
+        assert_card(self, card)
+        self.assertIn("jobctl", card["headline"])
+        self.assertEqual(card["needs"], 1)
 
 
 if __name__ == "__main__":

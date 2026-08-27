@@ -25,6 +25,21 @@ enum Theme {
     static let blue = Color(hex: "#4c8dff")
 
     static let rosterWidth: CGFloat = 296
+
+    /// A fact's colour, from the tone its source put on it.
+    ///
+    /// The vocabulary is closed in `StateRules`, so a word nobody defined lands
+    /// on the ordinary text colour rather than painting a number a meaning it
+    /// was never given.
+    static func tone(_ tone: StateRules.SectionTone) -> Color {
+        switch tone {
+        case .ok: return green
+        case .warn: return amber
+        case .bad: return red
+        case .dim: return faint
+        case .plain: return text
+        }
+    }
 }
 
 extension Color {
@@ -89,22 +104,40 @@ struct BotAvatar: View {
     }
 }
 
-/// The desk's one glyph. Same footprint as an avatar so the two groups line up,
-/// and a ring rather than a face, because a repo is not a person.
-struct StateDot: View {
-    let state: DeskState
+/// A ring with a filled centre, at avatar size. Same footprint as a face so
+/// every group in the roster lines up down one edge, and not a face, because
+/// neither a repo nor a source is a person.
+struct Dot: View {
+    let hex: String
     var size: CGFloat = 34
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color(hex: state.hex).opacity(0.16))
+                .fill(Color(hex: hex).opacity(0.16))
             Circle()
-                .fill(Color(hex: state.hex))
+                .fill(Color(hex: hex))
                 .frame(width: size * 0.32, height: size * 0.32)
         }
         .frame(width: size, height: size)
     }
+}
+
+/// The desk's one glyph.
+struct StateDot: View {
+    let state: DeskState
+    var size: CGFloat = 34
+
+    var body: some View { Dot(hex: state.hex, size: size) }
+}
+
+/// The wall's one glyph. Three states rather than eight: something wants you,
+/// something is not answering, or it is quiet.
+struct MoodDot: View {
+    let mood: StateRules.SectionMood
+    var size: CGFloat = 34
+
+    var body: some View { Dot(hex: mood.hex, size: size) }
 }
 
 /// The raised hand, drawn rather than lettered.

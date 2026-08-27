@@ -37,7 +37,12 @@ import json
 import os
 import pathlib
 
+from sources import _card
+
 KEY = "cost"
+# The human name of the fixture, fixed. A card whose title moves is a
+# card the eye has to find again every time it is drawn.
+TITLE = "Cost"
 
 LEDGER = "_meta/logs/costs.jsonl"
 
@@ -226,3 +231,64 @@ def read() -> dict:
         "by_family": _rank(families),
         "by_source": _rank(sources),
     }
+
+
+# `missing-ledger` and `empty` want nobody: nothing has been written yet, and
+# that is a fact about the vault rather than a fault in it.
+TROUBLE = {
+    "unconfigured": ("not configured", 0),
+    "missing-root": ("the vault root is not there", 1),
+    "missing-ledger": ("no ledger has ever been written here", 0),
+    "empty": ("the ledger is there and holds nothing", 0),
+    "error": ("ledger unreadable", 1),
+}
+
+
+def card(data: dict) -> dict:
+    """The spend in one line, and never one number for three different bands.
+
+    The headline is the MEASURED money in the window. Estimated money is its own
+    row and says so in the label, and rows written before the flag existed are a
+    third row again: folding either into the headline would print a guess with a
+    dollar sign in front of it.
+    """
+    if data.get("state") != "ok":
+        return _card.trouble(TITLE, data.get("state"),
+                             data.get("detail") or data.get("path"), TROUBLE)
+
+    days = data.get("days") or []
+    window = int(data.get("window_days") or len(days))
+    measured = sum(float(d.get("measured") or 0) for d in days)
+    estimated = sum(float(d.get("estimated") or 0) for d in days)
+    unflagged = sum(float(d.get("unflagged") or 0) for d in days)
+    today = days[-1] if days else {}
+    lifetime = data.get("lifetime") or {}
+
+    unpriced = int(data.get("unpriced") or 0)
+    unparseable = int(data.get("unparseable") or 0)
+
+    facts = [
+        _card.fact("today, measured", _card.money(today.get("measured") or 0)),
+        _card.fact(f"{window} days, measured", _card.money(measured)),
+        _card.fact("estimated (not measured)", _card.money(estimated),
+                   "warn" if estimated else "dim"),
+    ]
+    if unflagged:
+        # Written before the estimate flag existed. Nobody now knows which they
+        # were, so they are neither, and they are shown rather than absorbed.
+        facts.append(_card.fact("unflagged (band unknown)", _card.money(unflagged), "warn"))
+    facts += [
+        _card.fact("lifetime, measured", _card.money(lifetime.get("measured") or 0), "dim"),
+        _card.fact("rows with no price", _card.count(unpriced), "warn" if unpriced else "dim"),
+        _card.fact("rows that would not parse", _card.count(unparseable),
+                   "bad" if unparseable else "dim"),
+    ]
+
+    latest = data.get("latest_day")
+    return _card.build(
+        TITLE,
+        f"{_card.money(measured)} measured in {window} days",
+        unpriced + unparseable,
+        f"{latest}T00:00:00Z" if latest else "",
+        facts,
+    )
