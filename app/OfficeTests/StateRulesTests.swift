@@ -241,6 +241,21 @@ final class StateRulesTests: XCTestCase {
                        ["acme/checkout-api"])
     }
 
+    func testTheDeskTheAgentIsAtOutranksADeskTheCommandMerelyNames() {
+        // A path argument is a string; the runtime root is where the agent is.
+        // `cp ~/acme/docs/x ~/acme/website/` must not move the hand off
+        // checkout-api onto two desks it never touched.
+        let gate = Gate(state: "pending", id: "q9",
+                        target: "cp ~/code/acme/docs/readme.md ~/code/acme/website/",
+                        detail: "")
+        let floor = StateRules.attachGate(stations: [Station(repo: "acme/checkout-api"),
+                                                     Station(repo: "acme/docs"),
+                                                     Station(repo: "acme/website")],
+                                          runtime: RuntimeInfo(root: "/Users/you/code/checkout-api"),
+                                          gate: gate)
+        XCTAssertEqual(StateRules.gateDesks(gate: gate, stations: floor), ["acme/checkout-api"])
+    }
+
     func testAGateNobodyCanPlaceIsShownAtEveryDeskRatherThanNone() {
         // No repo named, and no desk holding it yet: the world poll has not come
         // round since this question opened. It is never the answer to hide it.
