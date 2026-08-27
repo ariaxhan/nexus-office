@@ -574,6 +574,58 @@ details.away > summary .wants { color: var(--amber); }
   color: var(--blue);
 }
 
+/* A turn that carried a picture. The bytes were carried and never written down,
+ * so this is a mark and not a thumbnail: there is nothing left to show. */
+.photomark {
+  font-size: 11px;
+  color: var(--faint);
+  padding: 0 4px;
+}
+
+.photomark.me { align-self: flex-end; }
+.photomark.them { align-self: flex-start; }
+
+/* The picture picked and not yet sent. Its size is the one after the shrink,
+ * because the number that matters is the one leaving the phone. */
+.chip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  border-top: 0.5px solid var(--hairline);
+  background: var(--roster);
+  font-size: 12px;
+}
+
+.chipname {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipsize {
+  color: var(--faint);
+  flex: none;
+}
+
+.chipout {
+  margin-left: auto;
+  flex: none;
+}
+
+/* The file inputs. `hidden` alone is not enough on every phone browser, and an
+ * input that is merely off screen still takes a tap somewhere. */
+.hiddenfile {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.composer .attach { flex: none; align-self: stretch; }
+
 .composer {
   display: flex;
   gap: 8px;

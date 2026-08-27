@@ -12,8 +12,8 @@
         "busy": false,
         "last": {
           "role": "assistant",
-          "at": "2026-08-26T18:12:00Z",
-          "text": "Nothing in code. #213 landed an hour ago and its PR is clean. Billing #58 is the real block."
+          "at": "2026-08-26T18:42:00Z",
+          "text": "That is the old total, so the fix is not on the box you photographed."
         }
       },
       {
@@ -66,6 +66,23 @@
         "role": "assistant",
         "at": "2026-08-26T18:12:00Z",
         "content": "Nothing in code. #213 landed an hour ago and its PR is clean.\n\nBilling #58 is the real block: the refund policy is a business decision, and the runner refused it twice rather than guess at one. It has had the last word there since yesterday, which is why that desk is red."
+      },
+      {
+        "role": "user",
+        "at": "2026-08-26T18:41:00Z",
+        "content": "This is what the checkout looks like now.",
+        "_note": "A turn that carried a picture. The bytes are not here and were never anywhere: the office is a courier for them and the harness never writes them down, so what survives a turn is the fact that a photo went with it. That is exactly what the mark in the thread claims.",
+        "attachments": [
+          {
+            "name": "checkout.jpg",
+            "mime_type": "image/jpeg"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "at": "2026-08-26T18:42:00Z",
+        "content": "That is the old total, so the fix is not on the box you photographed. #213 landed an hour ago and the deploy has not run since."
       }
     ],
     "release": [
@@ -280,6 +297,58 @@
           "needs": 0,
           "as_of": "",
           "facts": []
+        }
+      },
+      "flows": {
+        "state": "ok",
+        "detail": "",
+        "card": {
+          "title": "Flows",
+          "headline": "1 of 8 flows needs a look: Inbox did nothing (rc 0)",
+          "needs": 1,
+          "as_of": "2026-08-27T09:05:20Z",
+          "facts": [
+            {
+              "label": "Inbox",
+              "value": "did nothing (rc 0) \u00b7 18h39m ago",
+              "tone": "bad"
+            },
+            {
+              "label": "Distillations",
+              "value": "ok \u00b7 8h9m ago",
+              "tone": "ok"
+            },
+            {
+              "label": "Granola",
+              "value": "ok \u00b7 1h13m ago",
+              "tone": "ok"
+            },
+            {
+              "label": "Issue pipeline",
+              "value": "ok \u00b7 1h2m ago",
+              "tone": "ok"
+            },
+            {
+              "label": "Mobile capture",
+              "value": "ok \u00b7 3m ago",
+              "tone": "ok"
+            },
+            {
+              "label": "Money swarm",
+              "value": "ok \u00b7 2h2m ago",
+              "tone": "ok"
+            },
+            {
+              "label": "Morning briefing",
+              "value": "ok \u00b7 19h9m ago",
+              "tone": "ok"
+            },
+            {
+              "label": "Outbound",
+              "value": "ok \u00b7 16h46m ago",
+              "tone": "ok"
+            }
+          ]
         }
       }
     },

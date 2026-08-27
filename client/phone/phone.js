@@ -34,6 +34,32 @@ const THREAD_EVERY_MS = 4000;
  * the failure to avoid is not a long band, it is a quiet one. */
 const NEEDS_SHOWN = 20;
 
+/* A picture, on the way to a door that takes one attachment of at most half a
+ * megabyte. A phone camera hands over four megabytes, so the page shrinks it
+ * here rather than finding out on the send: the longest side comes down to 1200,
+ * it goes out as a JPEG, and the quality drops a rung at a time until the base64
+ * fits. 480 KB leaves the door's 512 KB some headroom for the JSON and for the
+ * message going with it. All of it is canvas and FileReader, because nothing on
+ * this page is ever allowed to load code from anywhere. */
+const PHOTO_LONGEST = 1200;
+const PHOTO_CEILING = 480 * 1024;
+const PHOTO_LADDER = [
+  { side: PHOTO_LONGEST, quality: 0.8 },
+  { side: PHOTO_LONGEST, quality: 0.6 },
+  { side: PHOTO_LONGEST, quality: 0.45 },
+  { side: 1000, quality: 0.5 },
+  { side: 800, quality: 0.5 },
+  { side: 640, quality: 0.45 },
+  { side: 480, quality: 0.4 },
+  { side: 360, quality: 0.35 },
+];
+
+/* An iPhone hands the photo library's own HEIC straight to the page, and no
+ * browser will decode one. The page says which door to use instead rather than
+ * sending nothing and looking like it worked. */
+const CANNOT_READ =
+  "this phone gave a format the page cannot read; take the photo with the camera option";
+
 /* One snapshot interval of slack, exactly as StateRules has it: `fetched_at`
  * and `generated` are never equal even on a healthy pull, and a warning that is
  * always on is a warning nobody reads. */
@@ -71,6 +97,15 @@ const state = {
   turns: [],
   threadError: "",
   drafts: Object.create(null),
+  /* A picture picked and not yet sent, under the same key as the draft: coming
+   * back to a composer that kept the sentence and threw away the screenshot is
+   * the draft bug wearing a different hat. */
+  photos: Object.create(null),
+  /* What this page sent a photo with, this visit. The mark on a turn is a fact
+   * off the wire when the harness echoes `attachments`, and this when it does
+   * not. The weaker claim is why the mark says a photo went and never offers to
+   * show one: the bytes were carried and never written down. */
+  sentPhotos: Object.create(null),
   commenting: Object.create(null),
   busy: Object.create(null),
 };
@@ -718,6 +753,109 @@ function drawWall() {
   });
 }
 
+/* ── a picture, made small enough to send ────────────────────────────────── */
+
+/* Bytes to base64 is four characters for every three, rounded up. Checking the
+ * raw length instead is how a payload gets a third bigger than the ceiling it
+ * was measured against. */
+function base64Length(bytes) {
+  return Math.ceil(bytes / 3) * 4;
+}
+
+function readable(bytes) {
+  if (bytes < 1024) return bytes + " bytes";
+  const kb = bytes / 1024;
+  if (kb < 1000) return Math.round(kb) + " KB";
+  return (kb / 1024).toFixed(1) + " MB";
+}
+
+function asBlob(canvas, quality) {
+  return new Promise(function (done) {
+    canvas.toBlob(function (blob) { done(blob); }, "image/jpeg", quality);
+  });
+}
+
+/* FileReader rather than fetch, because the answer wanted is base64 and this is
+ * the one API that hands it over without a round trip through a URL. The prefix
+ * comes off: the door takes strict base64 and nothing else. */
+function asBase64(blob) {
+  return new Promise(function (done, fail) {
+    const reader = new FileReader();
+    reader.onload = function () {
+      const text = String(reader.result || "");
+      const comma = text.indexOf(",");
+      done(comma >= 0 ? text.slice(comma + 1) : "");
+    };
+    reader.onerror = function () { fail(new Error("unreadable")); };
+    reader.readAsDataURL(blob);
+  });
+}
+
+/* (photo, why not). Exactly one is filled in.
+ *
+ * `budget` is what the base64 may weigh once the message going with it has had
+ * its share, because the door measures the whole request and not the picture. */
+async function shrink(file, budget) {
+  let bitmap = null;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch (err) {
+    // A HEIC off the camera roll lands here, and so does anything else no
+    // browser can decode. Saying so is the whole point: a picture that silently
+    // did not go is worse than one that refused out loud.
+    return { photo: null, why: CANNOT_READ };
+  }
+  const room = Math.max(4096, budget);
+  const canvas = document.createElement("canvas");
+  const pen = canvas.getContext("2d");
+  for (let i = 0; i < PHOTO_LADDER.length; i++) {
+    const rung = PHOTO_LADDER[i];
+    const longest = Math.max(bitmap.width, bitmap.height) || 1;
+    const scale = Math.min(1, rung.side / longest);
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    // A JPEG has no alpha, so a transparent PNG turned into one picks a
+    // background whether or not anybody chose it. White is the one a person
+    // would have chosen.
+    pen.fillStyle = "#ffffff";
+    pen.fillRect(0, 0, canvas.width, canvas.height);
+    pen.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await asBlob(canvas, rung.quality);
+    if (!blob) continue;
+    if (base64Length(blob.size) > room) continue;
+    let data = "";
+    try {
+      data = await asBase64(blob);
+    } catch (err) {
+      return { photo: null, why: "that picture could not be read" };
+    }
+    if (!data || data.length > room) continue;
+    return {
+      photo: {
+        name: photoName(file && file.name),
+        mime_type: "image/jpeg",
+        data_base64: data,
+        bytes: blob.size,
+        width: canvas.width,
+        height: canvas.height,
+      },
+      why: "",
+    };
+  }
+  return { photo: null, why: "that picture will not fit, even shrunk" };
+}
+
+/* A file name is something typed on some other machine and it ends up in a JSON
+ * body. What is left is a plain name with the extension of what was actually
+ * encoded, and something with no name left is called photo. */
+function photoName(raw) {
+  const stem = String(raw || "").split("/").pop().split("\\").pop();
+  const dot = stem.lastIndexOf(".");
+  const dropped = dot > 0 ? stem.slice(0, dot) : stem;
+  const kept = dropped.replace(/[^A-Za-z0-9 _-]/g, "").trim().slice(0, 64);
+  return (kept || "photo") + ".jpg";
+}
+
 /* ── a thread ────────────────────────────────────────────────────────────── */
 
 function openThread(id) {
@@ -767,19 +905,54 @@ function drawThread() {
   }
   state.turns.forEach(function (turn) {
     const mine = turn.role === "user";
-    turns.appendChild(el("p", "bubble " + (mine ? "me" : "them"),
-                         turn.content || turn.text || ""));
+    const words = turn.content || turn.text || "";
+    const photo = carriedPhoto(turn, bot.id);
+    if (words || !photo) {
+      turns.appendChild(el("p", "bubble " + (mine ? "me" : "them"), words));
+    }
+    // The picture itself is gone. The office carried the bytes and nothing
+    // wrote them down, so this says a photo went and stops there rather than
+    // offering to show one it cannot produce.
+    if (photo) {
+      turns.appendChild(el("p", "photomark " + (mine ? "me" : "them"), "with a photo"));
+    }
   });
   if (bot.busy) turns.appendChild(el("p", "working", bot.name + " is working"));
   panel.appendChild(turns);
 
+  // A picture picked and not yet sent, above the box: it has a name, a size
+  // after the shrink and a way out, and all three have to be legible before a
+  // send that cannot be taken back.
+  const picked = state.photos[key];
+  if (picked) {
+    const chip = el("div", "chip");
+    chip.appendChild(el("span", "chipname", picked.name));
+    chip.appendChild(el("span", "chipsize", readable(picked.bytes) + " after downscale"));
+    chip.appendChild(button("remove", "chipout", function () {
+      delete state.photos[key];
+      drawThread();
+    }));
+    panel.appendChild(chip);
+  }
+
   const composer = el("div", "composer");
+  // Created here rather than sitting in the HTML: the page has one file input
+  // and it belongs to whichever thread is open. `accept="image/*"` is what puts
+  // the photo library and the camera in the same sheet on a phone.
+  const library = photoPicker(key, false);
+  const camera = photoPicker(key, true);
+  composer.appendChild(library);
+  composer.appendChild(camera);
+  composer.appendChild(button("photo", "attach", function () { library.click(); }));
+  composer.appendChild(button("camera", "attach", function () { camera.click(); }));
   const box = el("textarea");
   box.value = state.drafts[key] || "";
   box.placeholder = bot.busy ? "busy with a turn" : "Message " + bot.name;
   box.addEventListener("input", function () { state.drafts[key] = box.value; });
   composer.appendChild(box);
-  const send = button("send", "send", function () { sayTo(bot.id, box.value); });
+  const send = button("send", "send", function () {
+    sayTo(bot.id, box.value, state.photos[key]);
+  });
   send.disabled = bot.busy === true;
   composer.appendChild(send);
   panel.appendChild(composer);
@@ -792,11 +965,70 @@ function drawThread() {
   }
 }
 
-async function sayTo(id, message) {
-  if (!String(message || "").trim()) return;
-  const sent = await write("/api/chat", { message: message, bot: id });
+/* One picture at a time, hidden, and rebuilt with the panel. `capture` is what
+ * separates the two buttons: without it the sheet offers the photo library, with
+ * it the camera opens straight away, which is the door the HEIC message points
+ * a person at when the library hands over something no browser can read. */
+function photoPicker(key, capture) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  if (capture) input.capture = "environment";
+  input.className = "hiddenfile";
+  input.addEventListener("change", function () {
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (file) takePhoto(key, file);
+  });
+  return input;
+}
+
+async function takePhoto(key, file) {
+  const typed = new TextEncoder().encode(state.drafts[key] || "").length;
+  const got = await shrink(file, PHOTO_CEILING - typed);
+  if (!got.photo) {
+    say(got.why);
+    return;
+  }
+  // A second picture replaces the first rather than queueing behind it: the
+  // door takes exactly one, and a queue that can only ever be one deep is a lie
+  // about what is going to be sent.
+  state.photos[key] = got.photo;
+  drawThread();
+}
+
+/* Whether a turn carried a picture. The harness's own echo first; this page's
+ * memory of what it sent only when the harness says nothing either way. */
+function carriedPhoto(turn, botId) {
+  if (!turn) return false;
+  const listed = turn.attachments;
+  if (Array.isArray(listed) && listed.length) return true;
+  if (turn.has_photo === true || turn.photo === true) return true;
+  if (turn.role !== "user") return false;
+  const mine = state.sentPhotos[botId];
+  return !!mine && mine.indexOf(String(turn.content || turn.text || "")) >= 0;
+}
+
+async function sayTo(id, message, photo) {
+  // A picture on its own is a whole thing to say, so an empty box is only empty
+  // when nothing is going with it.
+  if (!String(message || "").trim() && !photo) return;
+  const turn = { message: message, bot: id };
+  if (photo) {
+    turn.attachments = [{
+      name: photo.name,
+      mime_type: photo.mime_type,
+      data_base64: photo.data_base64,
+    }];
+  }
+  const sent = await write("/api/chat", turn);
   if (sent.code === 202) {
     delete state.drafts["bot:" + id];
+    delete state.photos["bot:" + id];
+    if (photo) {
+      const said = String(message || "").trim();
+      state.sentPhotos[id] = (state.sentPhotos[id] || []).concat([said]);
+    }
     say("sent; a turn is a whole agent run");
   } else if (sent.code === 409) {
     say("busy with a turn already");
@@ -844,7 +1076,10 @@ async function pollGate() {
       if (was && now) {
         state.gateArmAt = Date.now() + ARM_MS;
         state.gateNotice = "a different question arrived; read it again";
-        setTimeout(drawGate, ARM_MS + 20);
+        setTimeout(function () {
+          if (state.gateNotice === "a different question arrived; read it again") state.gateNotice = "";
+          drawGate();
+        }, ARM_MS + 20);
       }
     }
     drawGate();

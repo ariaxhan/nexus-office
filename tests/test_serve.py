@@ -727,6 +727,16 @@ class ChatTest(unittest.TestCase):
         self.assertEqual(code, 202)
         self.assertEqual(self.last_body("chief")["attachments"], [shot])
 
+    def test_a_picture_with_no_words_is_a_message(self):
+        shot = self.shot(name="desk.png", data_base64="QUJD")
+        code, _ = api_post(self.port, "/api/chat",
+                           {"bot": "chief", "message": "", "attachments": [shot]})
+        self.assertEqual(code, 202)
+        self.assertEqual(self.last_body("chief")["attachments"], [shot])
+        code, body = api_post(self.port, "/api/chat", {"bot": "inbox", "message": ""})
+        self.assertEqual(code, 400)
+        self.assertEqual(body["error"], "a message is required")
+
     def test_an_empty_attachment_list_is_a_turn_with_no_picture(self):
         code, _ = api_post(self.port, "/api/chat",
                            {"bot": "chief", "message": "hi", "attachments": []})

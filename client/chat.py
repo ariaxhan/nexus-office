@@ -198,13 +198,18 @@ class Chatroom:
         message = body.get("message")
         if not BOT_RE.match(bot):
             return 400, {"error": BAD_BOT}
-        if not isinstance(message, str) or not message.strip():
+        if message is None:
+            message = ""
+        if not isinstance(message, str):
             return 400, {"error": NO_MESSAGE}
         if len(message) > MAX_MESSAGE:
             return 400, {"error": LONG_MESSAGE}
         attachments, why = check_attachments(body.get("attachments"))
         if why:
             return 400, {"error": why}
+        # A picture with no words is a message; no words and no picture is not.
+        if not message.strip() and not attachments:
+            return 400, {"error": NO_MESSAGE}
         # Refused now rather than thirty seconds from now. A typo would otherwise
         # come back only as an `error` on a desk, long after the app moved on.
         known = read_bots()
