@@ -74,6 +74,59 @@ whether there is a public mount at all, and a door with no Funnel in front of it
 reports `unreachable` with the reason written on the Webhooks card and on the
 automation page, instead of `silent`, which is what a quiet Sunday looks like.
 
+## Status, 2026-08-27 later the same day: the hooks exist, the path still does not resolve
+
+Serve and Funnel were enabled on the tailnet, the mount went up, and 28 hooks
+were registered. GitHub still cannot reach the door, and the reason is one line:
+
+```sh
+dig +short @1.1.1.1 arias-macbook-pro-2.tail4f309a.ts.net    # -> nothing. No A, no AAAA.
+```
+
+**The public DNS record for the Funnel host is not published.** From this Mac the
+name resolves to `100.87.127.43` through MagicDNS, which is why a `curl` from
+here answers 403 and proves nothing: it never left the tailnet. That is the trap
+this whole file exists to name, walked into once more. The authoritative caller
+is GitHub, and every one of the 28 hooks records the same thing:
+
+```
+connection_error 502 failed to connect to host
+```
+
+`tailscale funnel status` says `Funnel on` and the node holds both the `funnel`
+and the `https` capability, with `funnel-ports?ports=443,8443,10000`. So the
+mount is real and the tailnet allows it; what is missing is the record that
+lets the outside world find it, and Tailscale publishes that only once the
+node's HTTPS certificate has actually been provisioned.
+
+**The one thing left, and it must be run by Aria in a normal terminal**, because
+an agent sandbox cannot write the certificate files:
+
+```sh
+/Applications/Tailscale.app/Contents/MacOS/Tailscale cert arias-macbook-pro-2.tail4f309a.ts.net
+dig +short @1.1.1.1 arias-macbook-pro-2.tail4f309a.ts.net    # should answer now
+```
+
+Then redeliver any hook's ping from GitHub, or:
+
+```sh
+gh api -X POST repos/ariaxhan/nexus-office/hooks/671237896/pings
+gh api repos/ariaxhan/nexus-office/hooks/671237896 --jq .last_response
+```
+
+A green ping means the whole path works. Until then the 28 hooks sit there
+failing; GitHub disables a hook only after repeated failures over days, so there
+is no rush and nothing to undo.
+
+**The office cannot see this failure, and here is the honest limit.** `reach()`
+asks the local daemon whether a mount exists, which is a fact about this machine
+and never a claim that the internet can reach it. That is stated in its
+docstring and it is why the Webhooks card now reads `silent` rather than
+`unreachable`: from in here, a mounted door with nothing arriving and a working
+door on a quiet Sunday are the same picture. The thing that would tell them
+apart is GitHub's own `last_response`, which costs a REST call per repo and is
+not worth putting on a snapshot push.
+
 ## What Aria has to click
 
 Two things, and only these two.
