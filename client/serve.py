@@ -586,6 +586,27 @@ class Handler(BaseHTTPRequestHandler):
         ok, result = office_sync.apply_decision(d, self.world.access(), dry=False)
         self.world.record(d["kind"], d["repo"], d["issue"], ok, result)
         log(f"{d['kind']} {d['repo']}#{d['issue'] or '-'}: {'ok' if ok else 'FAILED'} {result}")
+        # The issue on GitHub has just moved, so the desk in the snapshot is now
+        # wrong about it, and the room would go on showing a closed issue until
+        # the next minute's build. Refetching that one desk costs about two
+        # GraphQL points and lands before the answer goes out, so the app's
+        # refresh straight afterwards already sees the shorter list.
+        #
+        # Only when something actually changed: a decision that failed left
+        # GitHub exactly as it was, and a runtime kind never asked it anything.
+        #
+        # And it can never unsay the decision. The refetch reaches GitHub again
+        # on its own, past the one guard `refresh_desk` has, so it can time out
+        # or throw while the issue is already closed. Letting that become a 500
+        # would tell a person their close failed when it did not, and what a
+        # person does with a button that failed is press it again. A stale desk
+        # for one more minute is the entire cost of this going wrong.
+        if ok and d["kind"] in GITHUB_KINDS:
+            try:
+                self.world.refresh_desk(d["repo"])
+            except Exception as exc:  # noqa: BLE001 - the decision already landed
+                log(f"{d['repo']} was decided but could not be refetched: "
+                    f"{type(exc).__name__}: {exc}")
         # A permit that did not apply means the gate is closed or has moved on.
         # That is a conflict, not a server fault, and the room has to say which.
         if not ok and d["kind"] == "permit":

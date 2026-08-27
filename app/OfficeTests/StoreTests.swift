@@ -271,6 +271,40 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.section("clock")?.card.facts.first?.label, "ok")
     }
 
+    // MARK: - the automation page gives the detail pane back
+
+    /// The automation page is a whole screen, so while it is open it owns the
+    /// detail pane and every click in the roster underneath it landed on a
+    /// selection nobody could see. The room read as frozen: the only way out
+    /// was to find the close button on the page itself.
+    ///
+    /// Choosing something IS choosing to leave the page. Merely opening it is
+    /// not choosing anything, so what was selected underneath stays selected.
+    func testChoosingAnythingLeavesTheAutomationPage() async throws {
+        let store = try floor()
+        await store.refreshBots()
+        await store.refreshWorld()
+
+        store.select(.desk("acme/storefront"))
+        store.automationOpen = true
+        XCTAssertEqual(store.selection, .desk("acme/storefront"),
+                       "opening the page decides nothing about what is underneath it")
+
+        store.select(.bot("chief"))
+        XCTAssertFalse(store.automationOpen, "a bot is a thing to look at, not to look at behind a page")
+        XCTAssertEqual(store.selection, .bot("chief"))
+
+        store.automationOpen = true
+        store.select(.desk("acme/website"))
+        XCTAssertFalse(store.automationOpen, "so is a desk")
+        XCTAssertEqual(store.selection, .desk("acme/website"))
+
+        store.automationOpen = true
+        store.select(.section("clock"))
+        XCTAssertFalse(store.automationOpen, "and so is a thing on the wall")
+        XCTAssertEqual(store.selection, .section("clock"))
+    }
+
     // MARK: - two hands in the air at once
 
     /// The M3 check, driven through the real store against a real fixture:

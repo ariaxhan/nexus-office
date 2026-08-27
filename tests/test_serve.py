@@ -284,6 +284,78 @@ class ServeTest(unittest.TestCase):
             self.assertIn("moved on", body["result"])
             self.assertEqual(gate.read_bytes(), before)
 
+    # ── the desk is right the moment the decision lands ──────────────────────
+    def decide_with_a_fake_github(self, body, applied=(True, "done"), raises=None):
+        """Post one decision with GitHub replaced, and report which desks were
+        refetched. Nothing here may reach a network or a keychain."""
+        asked = []
+
+        def refresh(nwo):
+            asked.append(nwo)
+            if raises is not None:
+                raise raises
+            return True
+
+        was_apply = self.serve.office_sync.apply_decision
+        self.serve.office_sync.apply_decision = lambda d, access, dry=False: applied
+        self.world.refresh_desk = refresh
+        try:
+            code, out = self.post("/api/decision", body)
+        finally:
+            self.serve.office_sync.apply_decision = was_apply
+            del self.world.refresh_desk  # back to the real method on the class
+        return code, out, asked
+
+    def test_a_decision_that_landed_refetches_that_one_desk_before_answering(self):
+        """Closing an issue and then watching it sit on the desk for another
+        minute reads as a click that did nothing. The one desk it was about is
+        refetched before the answer goes out, so the app's own refresh straight
+        afterwards already sees the shorter list. One desk, about two GraphQL
+        points, rather than the whole room."""
+        code, out, asked = self.decide_with_a_fake_github(
+            {"kind": "close", "repo": "acme/thing", "issue": "9"})
+        self.assertEqual(code, 200)
+        self.assertTrue(out["ok"])
+        # The answer is already written by the time this list is read, so this
+        # is also the proof that the refetch happened before the answer.
+        self.assertEqual(asked, ["acme/thing"], "that desk, once, and no other")
+
+    def test_a_decision_that_failed_never_spends_a_desk_refresh(self):
+        """Nothing changed on GitHub, so there is nothing to go and read."""
+        code, out, asked = self.decide_with_a_fake_github(
+            {"kind": "close", "repo": "acme/thing", "issue": "9"},
+            applied=(False, "no push access"))
+        self.assertEqual(code, 200)
+        self.assertFalse(out["ok"])
+        self.assertEqual(asked, [])
+
+    def test_a_desk_refresh_that_blew_up_never_unsays_a_decision_that_landed(self):
+        """The sharp edge in refetching here at all. The issue is already closed
+        on GitHub by the time the desk is refetched, and the refetch reaches
+        GitHub again on its own: it can time out, or the rate reader can throw,
+        neither of which is guarded inside `refresh_desk` past the token lookup.
+
+        Letting that become a 500 would tell a person their close failed when it
+        did not, and the thing a person does with a button that failed is press
+        it again. So the answer is the one the decision earned, and the desk
+        being stale is the whole cost of the refetch going wrong."""
+        code, out, asked = self.decide_with_a_fake_github(
+            {"kind": "close", "repo": "acme/thing", "issue": "9"},
+            raises=RuntimeError("GitHub hung up"))
+        self.assertEqual(asked, ["acme/thing"], "it was tried")
+        self.assertEqual(code, 200, "and the close still stands")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["result"], "done", "the applied result is untouched")
+
+    def test_a_runtime_decision_never_spends_a_desk_refresh(self):
+        """A runtime kind carries a repo so the room knows which desk it came
+        from, not because it touched GitHub. It did not."""
+        code, out, asked = self.decide_with_a_fake_github(
+            {"kind": "chat", "repo": "acme/thing", "issue": "9"})
+        self.assertEqual(code, 200)
+        self.assertTrue(out["ok"])
+        self.assertEqual(asked, [])
+
 
 if __name__ == "__main__":
     unittest.main()

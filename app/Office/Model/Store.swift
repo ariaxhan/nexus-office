@@ -534,6 +534,12 @@ public final class Store {
     // MARK: - what a click does
 
     public func select(_ selection: Selection) {
+        // The automation page is a whole screen and owns the detail pane while
+        // it is open, so a click landing underneath it changed a selection
+        // nobody could see and the room read as frozen. Choosing something to
+        // look at is choosing to leave the page. Opening the page is not itself
+        // a choice about anything, so it still leaves the selection alone.
+        automationOpen = false
         self.selection = selection
         if case .bot(let id) = selection {
             Task { await loadChat(id) }
