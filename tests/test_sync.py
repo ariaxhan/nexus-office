@@ -510,5 +510,91 @@ class SingleRepoTest(SyncCase):
         self.assertFalse(hasattr(self.mod, "fetch_prs"))
 
 
+class DecisionTest(SyncCase):
+    """One issue decision becomes an ordered list of gh commands, or a refusal."""
+
+    def setUp(self):
+        super().setUp()
+        self.ran = []
+        self.mod.sh = self.record_sh
+
+    def record_sh(self, cmd, timeout=45, env=None, check=False):
+        self.ran.append(cmd)
+        return 0, "", ""
+
+    def decide(self, kind, issue=7, dry=False, **payload):
+        return self.mod.apply_decision(
+            {"repo": "acme/one", "kind": kind, "issue": issue, "payload": payload},
+            FakeAccess(), dry)
+
+    def test_a_comment_step_needs_words_and_an_issue(self):
+        self.assertEqual(self.mod._comment_step("comment", "7", "acme/one", ""),
+                         (None, "nothing to say"))
+        self.assertEqual(self.mod._comment_step("nudge", "", "acme/one", ""),
+                         (None, "a comment needs an issue"))
+        self.assertEqual(self.mod._comment_step("close", "7", "acme/one", ""), (None, ""))
+        self.assertEqual(self.mod._comment_step("label", "7", "acme/one", "x"), (None, ""))
+        cmd, err = self.mod._comment_step("nudge", "7", "acme/one", "")
+        self.assertEqual(err, "")
+        self.assertEqual(cmd[-1], self.mod.REQUEUE_LINE)
+
+    def test_edit_steps_per_kind(self):
+        steps, err = self.mod._edit_steps("unblock", "7", "acme/one", {})
+        self.assertEqual((err, len(steps)), ("", 1))
+        self.assertIn("--remove-label", steps[0])
+        self.assertEqual(self.mod._edit_steps("label", "7", "acme/one", {"label": " "}),
+                         ([], "no label given"))
+        self.assertEqual(self.mod._edit_steps("close", "", "acme/one", {}), ([], ""))
+        self.assertEqual(self.mod._edit_steps("reopen", "7", "acme/one", {})[0][0][:3],
+                         ["gh", "issue", "reopen"])
+
+    def test_issue_steps_refuses_when_nothing_would_run(self):
+        self.assertEqual(self.mod._issue_steps("bogus", "7", "acme/one", "", {}),
+                         (None, "nothing to do for bogus"))
+        steps, err = self.mod._issue_steps("unblock", "7", "acme/one", "yes", {})
+        self.assertEqual(err, "")
+        self.assertEqual([s[2] for s in steps], ["comment", "edit"])
+
+    def test_a_missing_label_is_not_a_failure(self):
+        self.assertTrue(self.mod._is_missing_label_error(
+            ["gh", "issue", "edit", "7", "--remove-label", "x"], "label not found"))
+        self.assertFalse(self.mod._is_missing_label_error(
+            ["gh", "issue", "comment", "7"], "label not found"))
+        self.assertFalse(self.mod._is_missing_label_error(
+            ["gh", "issue", "edit", "7", "--remove-label", "x"], "permission denied"))
+
+    def test_run_steps_dry_runs_nothing_and_stops_on_the_first_failure(self):
+        steps = [["gh", "issue", "comment", "7"], ["gh", "issue", "close", "7"]]
+        self.assertEqual(self.mod._run_steps(steps, {}, True),
+                         (True, ["would issue comment 7", "would issue close 7"]))
+        self.assertEqual(self.ran, [])
+        self.mod.sh = lambda cmd, timeout=45, env=None, check=False: (1, "", "boom\nmore")
+        self.assertEqual(self.mod._run_steps(steps, {}, False), (False, "issue comment: boom"))
+
+    def test_an_unblock_comments_then_drops_the_label_as_this_login(self):
+        ok, msg = self.decide("unblock", body="answered")
+        self.assertTrue(ok)
+        self.assertEqual(msg, "as ariaxhan: issue comment; issue edit")
+        self.assertEqual([c[:3] for c in self.ran],
+                         [["gh", "issue", "comment"], ["gh", "issue", "edit"]])
+
+    def test_a_repo_level_nudge_requeues_what_the_bot_sits_on(self):
+        self.mod.fetch_issues = lambda repo, tok: (
+            [{"number": 4, "bot_last": True}, {"number": 5, "bot_last": False}], None)
+        ok, msg = self.mod._requeue_stuck_issues("acme/one", "ariaxhan", "tok", True)
+        self.assertEqual((ok, msg), (True, "as ariaxhan: requeued would requeue #4"))
+        self.assertEqual(self.ran, [])
+        self.mod.fetch_issues = lambda repo, tok: ([{"number": 5, "bot_last": False}], None)
+        self.assertEqual(self.mod._requeue_stuck_issues("acme/one", "a", "tok", False),
+                         (False, "nothing here is waiting on a human"))
+
+    def test_refusals_before_any_command_runs(self):
+        self.assertEqual(self.decide("close", issue=None),
+                         (False, "close needs an issue number"))
+        self.assertEqual(self.decide("comment"), (False, "nothing to say"))
+        self.assertEqual(self.decide("label", label=""), (False, "no label given"))
+        self.assertEqual(self.ran, [])
+
+
 if __name__ == "__main__":
     unittest.main()

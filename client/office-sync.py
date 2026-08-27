@@ -872,6 +872,122 @@ def apply_runtime_decision(d, dry: bool):
     return False, f"unknown runtime kind {kind}"
 
 
+REQUEUE_LINE = "Requeued from the office board."
+
+
+def _has_issue_number(issue) -> bool:
+    return bool(issue and str(issue).isdigit())
+
+
+def _first_error_line(err: str, width: int = 160) -> str:
+    return (err.strip().splitlines() or ["failed"])[0][:width]
+
+
+def _requeue_stuck_issues(repo, who, tok, dry: bool):
+    """A repo-level nudge has no issue to speak on, so it means "unblock everything
+    here": post the requeue line on each issue the bot is sitting on. That is the
+    only bounded reading of "work this repo next" that does something real."""
+    issues, err = fetch_issues(repo, tok)
+    if issues is None:
+        return False, f"could not list issues: {err}"
+    stuck = [i for i in issues if i["bot_last"]][:10]
+    if not stuck:
+        return False, "nothing here is waiting on a human"
+    env = {"GH_TOKEN": tok}
+    done = []
+    for i in stuck:
+        n = str(i["number"])
+        if dry:
+            done.append(f"would requeue #{n}")
+            continue
+        rc, _, err = sh(["gh", "issue", "comment", n, "--repo", repo,
+                         "--body", REQUEUE_LINE], timeout=60, env=env)
+        if rc != 0:
+            return False, f"#{n}: {_first_error_line(err, 120)}"
+        sh(["gh", "issue", "edit", n, "--repo", repo,
+            "--remove-label", WAITING_LABEL], timeout=60, env=env)
+        done.append(f"#{n}")
+    return True, f"as {who}: requeued " + ", ".join(done)
+
+
+def _comment_step(kind, num, repo, body):
+    """The comment an issue decision posts, as (command, refusal).
+
+    A comment with no marker is exactly what re-queues an issue, because the
+    runner's whole selection rule is "did the bot have the last word". This
+    is the mechanism, not a side effect: answering a question IS the nudge.
+    """
+    if kind not in ("comment", "unblock", "nudge", "close"):
+        return None, ""
+    text = body or (REQUEUE_LINE if kind == "nudge" else "")
+    if not text:
+        if kind in ("comment", "unblock"):
+            return None, "nothing to say"
+        return None, ""
+    if not num:
+        return None, "a comment needs an issue"
+    return ["gh", "issue", "comment", num, "--repo", repo, "--body", text], ""
+
+
+def _edit_steps(kind, num, repo, payload):
+    """The label, close and reopen commands an issue decision runs, as (commands, refusal)."""
+    if not num:
+        return [], ""
+    steps = []
+    if kind in ("unblock", "nudge"):
+        steps.append(["gh", "issue", "edit", num, "--repo", repo,
+                      "--remove-label", WAITING_LABEL])
+    if kind == "label":
+        label = (payload.get("label") or "").strip()
+        if not label:
+            return [], "no label given"
+        steps.append(["gh", "issue", "edit", num, "--repo", repo, "--add-label", label])
+    if kind == "close":
+        steps.append(["gh", "issue", "close", num, "--repo", repo])
+    if kind == "reopen":
+        steps.append(["gh", "issue", "reopen", num, "--repo", repo])
+    return steps, ""
+
+
+def _issue_steps(kind, num, repo, body, payload):
+    """Every gh command one issue decision turns into, as (commands, refusal)."""
+    comment, err = _comment_step(kind, num, repo, body)
+    if err:
+        return None, err
+    edits, err = _edit_steps(kind, num, repo, payload)
+    if err:
+        return None, err
+    steps = ([comment] if comment else []) + edits
+    if not steps:
+        return None, f"nothing to do for {kind}"
+    return steps, ""
+
+
+def _is_missing_label_error(cmd, msg: str) -> bool:
+    """Removing a label the issue never had is a no-op, not a failure, and
+    failing the whole decision over it would strand a real reply."""
+    return "--remove-label" in cmd and ("not found" in msg.lower() or "label" in msg.lower())
+
+
+def _run_steps(steps, env, dry: bool):
+    """Run the gh commands in order: (True, what was done) or (False, why it stopped)."""
+    done = []
+    for cmd in steps:
+        if dry:
+            done.append("would " + " ".join(cmd[1:4]))
+            continue
+        rc, _, err = sh(cmd, timeout=60, env=env)
+        verb = f"{cmd[1]} {cmd[2]}"
+        if rc != 0:
+            msg = _first_error_line(err)
+            if _is_missing_label_error(cmd, msg):
+                done.append(f"{verb}: label was not set")
+                continue
+            return False, f"{verb}: {msg}"
+        done.append(verb)
+    return True, done
+
+
 def apply_decision(d, access: Access, dry: bool):
     """Re-derive everything from the decision's own fields, trusting the Worker
     for nothing but the words that were typed. The repo is re-probed for push, so a
@@ -895,81 +1011,22 @@ def apply_decision(d, access: Access, dry: bool):
     # re-derived from GitHub here rather than from anything the browser said.
     if kind == "merge":
         return apply_merge(repo, who, tok, payload, dry)
-    if kind != "nudge" and not (issue and str(issue).isdigit()):
+    if kind != "nudge" and not _has_issue_number(issue):
         return False, f"{kind} needs an issue number"
 
-    env = {"GH_TOKEN": tok}
     num = str(issue) if issue else ""
-    steps = []
-
-    # A repo-level nudge has no issue to speak on, so it means "unblock everything
-    # here": post the requeue line on each issue the bot is sitting on. That is the
-    # only bounded reading of "work this repo next" that does something real.
     if kind == "nudge" and not num:
-        issues, err = fetch_issues(repo, tok)
-        if issues is None:
-            return False, f"could not list issues: {err}"
-        stuck = [i for i in issues if i["bot_last"]][:10]
-        if not stuck:
-            return False, "nothing here is waiting on a human"
-        done = []
-        for i in stuck:
-            n = str(i["number"])
-            if dry:
-                done.append(f"would requeue #{n}")
-                continue
-            rc, _, err = sh(["gh", "issue", "comment", n, "--repo", repo,
-                             "--body", "Requeued from the office board."],
-                            timeout=60, env=env)
-            if rc != 0:
-                return False, f"#{n}: {(err.strip().splitlines() or ['failed'])[0][:120]}"
-            sh(["gh", "issue", "edit", n, "--repo", repo,
-                "--remove-label", WAITING_LABEL], timeout=60, env=env)
-            done.append(f"#{n}")
-        return True, f"as {who}: requeued " + ", ".join(done)
+        return _requeue_stuck_issues(repo, who, tok, dry)
 
-    if kind in ("comment", "unblock", "nudge", "close"):
-        # A comment with no marker is exactly what re-queues an issue, because the
-        # runner's whole selection rule is "did the bot have the last word". This
-        # is the mechanism, not a side effect: answering a question IS the nudge.
-        text = body or ("Requeued from the office board." if kind == "nudge" else "")
-        if kind in ("comment", "unblock") and not text:
-            return False, "nothing to say"
-        if text and num:
-            steps.append(["gh", "issue", "comment", num, "--repo", repo, "--body", text])
-        elif text and not num:
-            return False, "a comment needs an issue"
+    return _apply_issue_decision(repo, who, tok, num, kind, body, payload, dry)
 
-    if kind in ("unblock", "nudge") and num:
-        steps.append(["gh", "issue", "edit", num, "--repo", repo,
-                      "--remove-label", WAITING_LABEL])
-    if kind == "label" and num:
-        label = (payload.get("label") or "").strip()
-        if not label:
-            return False, "no label given"
-        steps.append(["gh", "issue", "edit", num, "--repo", repo, "--add-label", label])
-    if kind == "close" and num:
-        steps.append(["gh", "issue", "close", num, "--repo", repo])
-    if kind == "reopen" and num:
-        steps.append(["gh", "issue", "reopen", num, "--repo", repo])
 
-    if not steps:
-        return False, f"nothing to do for {kind}"
-
-    done = []
-    for cmd in steps:
-        if dry:
-            done.append("would " + " ".join(cmd[1:4]))
-            continue
-        rc, _, err = sh(cmd, timeout=60, env=env)
-        verb = f"{cmd[1]} {cmd[2]}"
-        if rc != 0:
-            msg = (err.strip().splitlines() or ["failed"])[0][:160]
-            # Removing a label the issue never had is a no-op, not a failure, and
-            # failing the whole decision over it would strand a real reply.
-            if "--remove-label" in cmd and ("not found" in msg.lower() or "label" in msg.lower()):
-                done.append(f"{verb}: label was not set")
-                continue
-            return False, f"{verb}: {msg}"
-        done.append(verb)
-    return True, f"as {who}: " + "; ".join(done)
+def _apply_issue_decision(repo, who, tok, num, kind, body, payload, dry: bool):
+    """Comment, relabel, close or reopen one issue, in that order, as this login."""
+    steps, err = _issue_steps(kind, num, repo, body, payload)
+    if err:
+        return False, err
+    ok, result = _run_steps(steps, {"GH_TOKEN": tok}, dry)
+    if not ok:
+        return False, result
+    return True, f"as {who}: " + "; ".join(result)
