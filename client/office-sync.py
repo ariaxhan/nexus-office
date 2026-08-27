@@ -896,6 +896,70 @@ def apply_merge(repo, who, tok, payload, dry: bool):
     return True, f"as {who}: squash-merged #{num} ({head}); its Closes line shuts the issue"
 
 
+def _apply_permit(d, payload, dry: bool):
+    """Answer the gate on disk, and only the gate whose id was answered."""
+    root = rt._root()
+    if root is None:
+        return False, "no runtime root configured (OFFICE_RUNTIME_ROOT)"
+    qid = str(payload.get("question_id") or "")
+    answer = payload.get("answer")
+    if answer not in ("allow", "deny"):
+        return False, "a permit must answer allow or deny"
+    if dry:
+        live = rt.read_gate()
+        if live.get("state") != "pending":
+            return False, "nothing is waiting on a gate right now"
+        same = live.get("id") == qid
+        return same, ("would " + answer) if same else "the agent has moved on"
+    return rt.answer_gate(root, qid, answer, bool(payload.get("always")))
+
+
+def _apply_chat(d, payload, dry: bool):
+    text = (payload.get("body") or "").strip()
+    if not text:
+        return False, "nothing to say"
+    if dry:
+        return True, f"would say {text[:60]!r}"
+    try:
+        rt.post("/api/chat", {"message": text})
+    except Exception as exc:
+        return False, f"the runtime did not take it: {exc}"
+    return True, f"said {text[:60]!r}"
+
+
+def _apply_run(d, payload, dry: bool):
+    task = (payload.get("body") or "").strip()
+    repo = d.get("repo") or ""
+    issue = d.get("issue")
+    if not task:
+        task = f"Work {repo}#{issue}" if issue else f"Work on {repo}"
+    if dry:
+        return True, f"would run {task[:70]!r}"
+    try:
+        rt.post("/api/run", {"task": task})
+    except Exception as exc:
+        return False, f"the runtime refused the run: {exc}"
+    return True, f"started {task[:70]!r}"
+
+
+def _apply_stop(d, payload, dry: bool):
+    if dry:
+        return True, "would stop the current run"
+    try:
+        rt.post("/api/run/stop", {"run_id": payload.get("run_id") or ""})
+    except Exception as exc:
+        return False, f"could not stop it: {exc}"
+    return True, "asked the runtime to stop at the next step boundary"
+
+
+RUNTIME_HANDLERS = {
+    "permit": _apply_permit,
+    "chat": _apply_chat,
+    "run": _apply_run,
+    "stop": _apply_stop,
+}
+
+
 def apply_runtime_decision(d, dry: bool):
     """Route a decision at the local runtime rather than at GitHub.
 
@@ -904,60 +968,10 @@ def apply_runtime_decision(d, dry: bool):
     against the gate on disk before a single byte is written.
     """
     kind = d.get("kind")
-    payload = d.get("payload") or {}
-
-    if kind == "permit":
-        root = rt._root()
-        if root is None:
-            return False, "no runtime root configured (OFFICE_RUNTIME_ROOT)"
-        qid = str(payload.get("question_id") or "")
-        answer = payload.get("answer")
-        if answer not in ("allow", "deny"):
-            return False, "a permit must answer allow or deny"
-        if dry:
-            live = rt.read_gate()
-            if live.get("state") != "pending":
-                return False, "nothing is waiting on a gate right now"
-            same = live.get("id") == qid
-            return same, ("would " + answer) if same else "the agent has moved on"
-        return rt.answer_gate(root, qid, answer, bool(payload.get("always")))
-
-    if kind == "chat":
-        text = (payload.get("body") or "").strip()
-        if not text:
-            return False, "nothing to say"
-        if dry:
-            return True, f"would say {text[:60]!r}"
-        try:
-            rt.post("/api/chat", {"message": text})
-        except Exception as exc:
-            return False, f"the runtime did not take it: {exc}"
-        return True, f"said {text[:60]!r}"
-
-    if kind == "run":
-        task = (payload.get("body") or "").strip()
-        repo = d.get("repo") or ""
-        issue = d.get("issue")
-        if not task:
-            task = f"Work {repo}#{issue}" if issue else f"Work on {repo}"
-        if dry:
-            return True, f"would run {task[:70]!r}"
-        try:
-            rt.post("/api/run", {"task": task})
-        except Exception as exc:
-            return False, f"the runtime refused the run: {exc}"
-        return True, f"started {task[:70]!r}"
-
-    if kind == "stop":
-        if dry:
-            return True, "would stop the current run"
-        try:
-            rt.post("/api/run/stop", {"run_id": payload.get("run_id") or ""})
-        except Exception as exc:
-            return False, f"could not stop it: {exc}"
-        return True, "asked the runtime to stop at the next step boundary"
-
-    return False, f"unknown runtime kind {kind}"
+    handler = RUNTIME_HANDLERS.get(kind)
+    if handler is None:
+        return False, f"unknown runtime kind {kind}"
+    return handler(d, d.get("payload") or {}, dry)
 
 
 REQUEUE_LINE = "Requeued from the office board."
