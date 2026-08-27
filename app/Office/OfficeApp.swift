@@ -34,6 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before the window exists, so the framing it is photographed in is the
+        // one it was built under rather than one applied to it afterwards.
+        ShotHarness.forceAppearanceIfAsked()
         // The poll loop belongs to the app, not to the window. A closed window
         // must never stop the dot noticing a raised hand.
         Store.shared.start()
@@ -67,11 +70,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // toolbar, because everything on this screen is content.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.backgroundColor = .black
+        // The one pixel SwiftUI does not paint: what is behind the content view
+        // while the window resizes. A literal black here was a black flash on
+        // every drag in the light room.
+        window.backgroundColor = Palette.ink.nsColor
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 900, height: 560)
-        window.contentView = NSHostingView(
-            rootView: RootView(store: .shared).preferredColorScheme(.dark))
+        // No `preferredColorScheme` any more. The office follows the machine:
+        // every colour it draws is a light/dark pair in `Palette`, resolved per
+        // draw, so System Settings switching to Light Appearance switches this
+        // window under it with nothing restarted.
+        window.contentView = NSHostingView(rootView: RootView(store: .shared))
         window.setFrameAutosaveName("office")
         if window.frame.origin == .zero { window.center() }
         window.makeKeyAndOrderFront(nil)
@@ -159,12 +168,18 @@ enum MenuDot {
     /// apart in a sixteen point strip out of the corner of an eye, and colour is
     /// the only channel that survives that.
     static func image(for state: DotState) -> NSImage {
-        let color: NSColor
+        // Resolved by hand rather than left to a dynamic `NSColor`, because
+        // this is drawn into a bitmap with `lockFocus` and a bitmap has no
+        // appearance to ask. The menu bar in the light room is a light strip,
+        // and the greys that read on a dark one vanish on it.
+        let swatch: Palette.Swatch
         switch state {
-        case .idle: color = NSColor(calibratedWhite: 0.55, alpha: 1)
-        case .working: color = NSColor(srgbRed: 0.30, green: 0.55, blue: 1.0, alpha: 1)
-        case .needsYou: color = NSColor(srgbRed: 1.0, green: 0.69, blue: 0.13, alpha: 1)
+        case .idle: swatch = Palette.dotIdle
+        case .working: swatch = Palette.dotWorking
+        case .needsYou: swatch = Palette.dotNeedsYou
         }
+        let rgb = swatch.value(dark: NSApp?.effectiveAppearance.isDark ?? true)
+        let color = NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
         let size = NSSize(width: 14, height: 14)
         let image = NSImage(size: size)
         image.lockFocus()

@@ -68,7 +68,7 @@ struct GateSheet: View {
                         .padding(12)
                 }
                 .frame(maxHeight: 180)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black))
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.well))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(Theme.hairline, lineWidth: 1)
@@ -154,7 +154,7 @@ struct SheetButton: View {
         Button(action: action) {
             Text(busy ? "sending" : title)
                 .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(filled ? Color.black : tint)
+                .foregroundStyle(filled ? Theme.onFilled : tint)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
                 .background(

@@ -182,6 +182,8 @@ class MappingTest(SyncCase):
         self.assertEqual(pr["head"], "pipeline/auto-issue-9")
         self.assertEqual(pr["base"], "main")
         self.assertEqual(pr["closes"], [9])
+        # The body travels with the PR so the desk pane can show why.
+        self.assertIn("#9", pr["body"])
         self.assertEqual(pr["mergeable"], "MERGEABLE")
         self.assertEqual(pr["state"], "CLEAN")
         self.assertFalse(pr["draft"])

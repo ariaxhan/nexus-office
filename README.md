@@ -110,17 +110,19 @@ a thing. That check is why the page has nothing to log in to.
 
 ```sh
 npm test        # the python door + the Swift state rules, headless
-npm run shot    # builds the app, photographs seven framings, then LOOK
+npm run shot    # builds the app, photographs eight framings, then LOOK
 ```
 
-`scripts/shoot.sh` writes seven PNGs into `shots/`: `app-roster.png` (bots above
+`scripts/shoot.sh` writes eight PNGs into `shots/`: `app-roster.png` (bots above
 desks), `app-desk.png` (a desk thread), `app-gate.png` (the sheet over the room),
 `app-needs.png` (the "needs me" filter), `app-wall.png` (the local sources, and
 the one that says something needs a person), `app-putaway.png` (the desks a
 person put away, and a desk saying out loud that what you are reading is the last
 thing it managed to pull) and `app-attach.png` (a picture picked and not yet
 sent: the chip, its size after the downscale, and the mark on the turn above it
-that already carried one). They are not committed, because a screenshot in a repo is
+that already carried one). The eighth, `app-light.png`, is the roster with the
+lights on: the office follows the system appearance, and it comes from a second
+run because there is no way to be in two appearances at once. They are not committed, because a screenshot in a repo is
 stale the day after it lands. Run it and open them: every defect this project has
 had was invisible in source and obvious on screen.
 

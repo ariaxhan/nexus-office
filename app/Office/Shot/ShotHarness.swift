@@ -6,7 +6,13 @@ import SwiftUI
 /// A build passing proves nothing about a room. Every defect this project has
 /// had was invisible in source and obvious on screen, so the app can photograph
 /// itself: `--demo <fixture> --shot-mode` opens the window at a fixed size,
-/// walks six framings, and writes each one to `shots/app-<framing>.png`.
+/// walks seven framings, and writes each one to `shots/app-<framing>.png`.
+///
+/// `--light` is the eighth. The office follows the system appearance, and a
+/// machine set to Dark would photograph the light room never, so that run
+/// forces `.aqua` on the whole app before the window is built and takes one
+/// picture of the roster. The roster is where the most colours are on screen
+/// at once: a palette that fails, fails there first.
 ///
 /// The capture is a region rather than `screencapture -l <windowid>` for one
 /// reason: a sheet is its own window, so a window capture of the gate framing
@@ -16,6 +22,25 @@ import SwiftUI
 @MainActor
 enum ShotHarness {
     static var isOn: Bool { CommandLine.arguments.contains("--shot-mode") }
+
+    /// Photograph the light room instead of the dark one.
+    static var isLight: Bool { CommandLine.arguments.contains("--light") }
+
+    /// Pin the room a shoot is photographed in, before the window exists.
+    ///
+    /// Both ways round, and that is the point. The app follows the machine now,
+    /// so without this the seven framings would come out light on a Mac set to
+    /// Light Appearance and the pictures would silently stop being comparable
+    /// with the ones in the last commit. A shoot decides its own appearance;
+    /// only a person running the app for real gets the system's.
+    ///
+    /// Before the window rather than after: an appearance applied to a window
+    /// that has already drawn itself once is a race between the redraw and the
+    /// shutter.
+    static func forceAppearanceIfAsked() {
+        guard isOn else { return }
+        NSApp.appearance = NSAppearance(named: isLight ? .aqua : .darkAqua)
+    }
 
     private static var started = false
     private static let framing = NSSize(width: 1440, height: 900)
@@ -32,8 +57,8 @@ enum ShotHarness {
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
 
         // The gate sheet is the loudest thing this app does and it would sit on
-        // top of every other framing. It is parked for the three pictures that
-        // are not about it, and only for those.
+        // top of every other framing. It is parked for the pictures that are
+        // not about it, and only for those.
         store.suppressGateSheet = true
         await settle(2.0)
 
@@ -53,6 +78,16 @@ enum ShotHarness {
             // rather than a thread for a bot that does not exist.
             store.select(.desk(deskWithWork(store)))
         }
+
+        // One picture, and out. The other seven are the same room and would
+        // only double the wall clock of every shoot to say the same thing
+        // twice.
+        if isLight {
+            await frame(store, window, directory, "light", settling: 1.4)
+            NSApp.terminate(nil)
+            return
+        }
+
         await frame(store, window, directory, "roster")
 
         store.select(.desk(deskWithWork(store)))
@@ -78,7 +113,7 @@ enum ShotHarness {
         store.select(.section(sectionNeedingAPerson(store)))
         await frame(store, window, directory, "wall", settling: 1.4)
 
-        // The two things the other five framings cannot show at once: the
+        // The two things the other framings cannot show at once: the
         // desks a person put away, which live in a section that is shut by
         // default, and a desk saying out loud that what you are reading is the
         // last thing it managed to pull.

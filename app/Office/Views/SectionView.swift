@@ -50,7 +50,7 @@ struct SectionView: View {
             // The state in the source's own word. `ok` is not worth a badge,
             // so only the states that mean something get one.
             if !section.isOK {
-                Pill(text: section.state, color: Color(hex: mood.hex))
+                Pill(text: section.state, color: Theme.color(mood))
             }
             if section.needs > 0 {
                 Pill(text: "\(section.needs) need you", color: Theme.amber)

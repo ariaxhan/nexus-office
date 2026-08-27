@@ -34,6 +34,7 @@ struct DeskThreadView: View {
         VStack(spacing: 0) {
             head
             Divider().overlay(Theme.hairline)
+            ScrollViewReader { scroll in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if let gate {
@@ -44,6 +45,7 @@ struct DeskThreadView: View {
                     }
                     ForEach(station.issues) { issue in
                         IssueCard(store: store, repo: station.repo, issue: issue)
+                            .id(Self.cardID(issue: issue.number))
                     }
                     if !station.prs.isEmpty {
                         Text("pull requests")
@@ -52,7 +54,17 @@ struct DeskThreadView: View {
                             .padding(.top, 8)
                     }
                     ForEach(station.prs) { pr in
-                        PullRequestCard(store: store, repo: station.repo, pr: pr)
+                        // "closes #213" is only a link if #213 is a place you
+                        // can get to. The card knows which issues are on this
+                        // desk, so the ones that are scroll to their card and
+                        // the ones that are not stay plain rather than
+                        // pretending to be a button that does nothing.
+                        PullRequestCard(store: store, repo: station.repo, pr: pr,
+                                        openIssues: Set(station.issues.map(\.number))) { number in
+                            withAnimation {
+                                scroll.scrollTo(Self.cardID(issue: number), anchor: .top)
+                            }
+                        }
                     }
                     if station.issues.isEmpty && station.prs.isEmpty
                         && notice == nil && gate == nil {
@@ -67,12 +79,16 @@ struct DeskThreadView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollContentBackground(.hidden)
+            }
             if let toast = store.toast {
                 ToastBar(text: toast) { store.toast = nil }
             }
         }
         .background(Theme.ink)
     }
+
+    /// Where an issue card sits, so a PR that closes it can point at it.
+    static func cardID(issue number: Int) -> String { "issue-\(number)" }
 
     private var head: some View {
         HStack(spacing: 9) {
@@ -82,7 +98,7 @@ struct DeskThreadView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Theme.text)
                 HStack(spacing: 5) {
-                    Text(state.label).foregroundStyle(Color(hex: state.hex))
+                    Text(state.label).foregroundStyle(Theme.color(state))
                     if !station.detail.isEmpty {
                         Text(station.detail).foregroundStyle(Theme.faint)
                     }
@@ -236,7 +252,7 @@ struct IssueCard: View {
                         .lineLimit(2...8)
                         .padding(9)
                         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.black))
+                            .fill(Theme.well))
                     HStack {
                         Spacer()
                         CardButton(title: "send comment", tint: Theme.green, busy: busy) {
@@ -281,8 +297,19 @@ struct PullRequestCard: View {
     @Bindable var store: Store
     let repo: String
     let pr: PullRequest
+    /// The issue numbers that have a card on this desk right now.
+    var openIssues: Set<Int> = []
+    /// Take me to that issue's card.
+    var jump: (Int) -> Void = { _ in }
 
     @State private var busy = false
+    /// Whether the whole body is showing. Shut by default: a desk with nine
+    /// PRs on it is a list, and a list where every row is an essay is a list
+    /// nobody scrolls.
+    @State private var expanded = false
+
+    /// Whether there is anything behind the opening paragraph.
+    private var hasMore: Bool { Markdown.blocks(pr.body).count > 1 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -305,6 +332,53 @@ struct PullRequestCard: View {
                 Pill(text: pr.mergeable.lowercased(),
                      color: pr.canMerge ? Theme.green : Theme.amber)
             }
+
+            // What the PR says about itself. The office's own PRs are written
+            // by the runner, so this is the note from whoever did the work, and
+            // reading it is most of deciding whether to press the one button on
+            // this card that cannot be taken back.
+            if !pr.body.isEmpty {
+                MarkdownText(raw: pr.body, size: 12.5, color: Theme.dim,
+                             limit: expanded ? nil : 1)
+                    .lineSpacing(2)
+            }
+
+            // The rest of the body, what lands when this merges, and when it
+            // was last touched: one row, because three rows of small print
+            // above the merge button pushes the merge button off the screen,
+            // and this card exists to get somebody to that button.
+            //
+            // The header's clock says "6:19 PM"; this says which day that was,
+            // because a PR sitting open across a night is the ordinary case.
+            HStack(spacing: 10) {
+                if hasMore {
+                    Button(expanded ? "less" : "more") {
+                        withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.blue)
+                }
+                ForEach(pr.closes, id: \.self) { number in
+                    if openIssues.contains(number) {
+                        Button("closes #\(number)") { jump(number) }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.blue)
+                    } else {
+                        Text("closes #\(number)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.faint)
+                    }
+                }
+                if !StateRules.moment(pr.updatedAt).isEmpty {
+                    Text("updated \(StateRules.moment(pr.updatedAt))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.faint)
+                }
+                Spacer(minLength: 0)
+            }
+
             HStack(spacing: 7) {
                 if pr.canMerge {
                     CardButton(title: "merge", tint: Theme.green, busy: busy) {
@@ -382,31 +456,5 @@ struct ToastBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Theme.raised)
-    }
-}
-
-/// Issue bodies are written by anyone who can open an issue, so only http and
-/// https survive as links. Everything else is left as plain text rather than
-/// rendered into something clickable.
-enum Markdown {
-    static func render(_ raw: String) -> AttributedString {
-        var attributed: AttributedString
-        do {
-            attributed = try AttributedString(
-                markdown: raw,
-                options: AttributedString.MarkdownParsingOptions(
-                    allowsExtendedAttributes: true,
-                    interpretedSyntax: .inlineOnlyPreservingWhitespace,
-                    failurePolicy: .returnPartiallyParsedIfPossible))
-        } catch {
-            return AttributedString(raw)
-        }
-        let unsafe = attributed.runs.compactMap { run -> Range<AttributedString.Index>? in
-            guard let link = run.link else { return nil }
-            let scheme = link.scheme?.lowercased()
-            return (scheme == "http" || scheme == "https") ? nil : run.range
-        }
-        for range in unsafe { attributed[range].link = nil }
-        return attributed
     }
 }

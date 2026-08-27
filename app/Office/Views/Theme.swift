@@ -1,28 +1,42 @@
+import AppKit
 import SwiftUI
 
 /// The look, in one place.
 ///
-/// Pure black, light text, and nothing else: no toolbar, no sidebar chrome, no
-/// borders drawn for their own sake. The only lines on screen are the ones that
-/// separate two things a person actually reads apart.
+/// No toolbar, no sidebar chrome, no borders drawn for their own sake. The only
+/// lines on screen are the ones that separate two things a person actually
+/// reads apart.
 ///
 /// System font throughout. A chat app that ships its own typeface is a chat app
 /// that looks like every other one.
+///
+/// **The room follows the machine.** Every colour here is a pair out of
+/// `Palette`, resolved per draw against the appearance the view is actually in,
+/// so switching the Mac to Light Appearance switches this app with it and
+/// nothing has to be restarted or re-read. The dark half of each pair is the
+/// number that was already here, unchanged.
 enum Theme {
-    static let ink = Color.black
-    static let roster = Color(white: 0.055)
-    static let raised = Color(white: 0.105)
-    static let selected = Color(white: 0.165)
-    static let hairline = Color(white: 0.13)
+    static let ink = Palette.ink.color
+    static let roster = Palette.roster.color
+    static let raised = Palette.raised.color
+    static let selected = Palette.selected.color
+    static let hairline = Palette.hairline.color
+    /// The recess a command or a half-written comment sits in. This used to be
+    /// a literal `Color.black` at three call sites, which is a colour that
+    /// means "below the page" in one room and "a hole in the paper" in the
+    /// other.
+    static let well = Palette.well.color
 
-    static let text = Color(white: 0.94)
-    static let dim = Color(white: 0.54)
-    static let faint = Color(white: 0.36)
+    static let text = Palette.text.color
+    static let dim = Palette.dim.color
+    static let faint = Palette.faint.color
+    /// The word on a filled accent button.
+    static let onFilled = Palette.onFilled.color
 
-    static let amber = Color(hex: "#ffb020")
-    static let red = Color(hex: "#ff5d5d")
-    static let green = Color(hex: "#39d98a")
-    static let blue = Color(hex: "#4c8dff")
+    static let amber = Palette.amber.color
+    static let red = Palette.red.color
+    static let green = Palette.green.color
+    static let blue = Palette.blue.color
 
     static let rosterWidth: CGFloat = 296
 
@@ -40,22 +54,54 @@ enum Theme {
         case .plain: return text
         }
     }
+
+    /// A desk's colour, and a wall row's. Both are drawn as a ring AND written
+    /// as a word, which is why neither can be read off `hex` alone any more.
+    static func color(_ state: DeskState) -> Color { state.swatch.color }
+    static func color(_ mood: StateRules.SectionMood) -> Color { mood.swatch.color }
+}
+
+extension Palette.Swatch {
+    /// One colour that knows which room it is in.
+    ///
+    /// `NSColor(name:dynamicProvider:)` rather than two `Color`s and a branch:
+    /// the provider is asked again every time anything redraws, so a person
+    /// changing the system appearance while the office is open watches it
+    /// change, and a view that draws itself into an appearance it was not built
+    /// under still comes out right.
+    var color: Color { Color(nsColor: nsColor) }
+
+    var nsColor: NSColor {
+        NSColor(name: nil) { appearance in
+            let rgb = self.value(dark: appearance.isDark)
+            return NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+        }
+    }
+}
+
+extension NSAppearance {
+    /// Dark, in the only way that is safe to ask. The name can be
+    /// `darkAqua`, `vibrantDark`, or an accessibility variant of either, so
+    /// comparing `name` against one constant answers the wrong question.
+    var isDark: Bool { bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
 }
 
 extension Color {
     /// `#rrggbb`, the way `_meta/bots.json` writes it. An unreadable colour is
     /// not a crash and not a blank: it falls back to something visible.
+    ///
+    /// One parse, in `Palette.RGB`, so the string a bot picked for itself and
+    /// the strings this app picked for its own states cannot start disagreeing
+    /// about what `#39d98a` means.
     init(hex: String, fallback: Color = Color(white: 0.42)) {
         var raw = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("#") { raw.removeFirst() }
-        guard raw.count == 6, let value = UInt64(raw, radix: 16) else {
+        guard raw.count == 6, UInt64(raw, radix: 16) != nil else {
             self = fallback
             return
         }
-        self.init(.sRGB,
-                  red: Double((value >> 16) & 0xff) / 255,
-                  green: Double((value >> 8) & 0xff) / 255,
-                  blue: Double(value & 0xff) / 255)
+        let rgb = Palette.RGB(hex: hex)
+        self.init(.sRGB, red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 
     /// A stable colour for a bot whose roster row did not carry one. Derived
@@ -108,15 +154,15 @@ struct BotAvatar: View {
 /// every group in the roster lines up down one edge, and not a face, because
 /// neither a repo nor a source is a person.
 struct Dot: View {
-    let hex: String
+    let color: Color
     var size: CGFloat = 34
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color(hex: hex).opacity(0.16))
+                .fill(color.opacity(0.16))
             Circle()
-                .fill(Color(hex: hex))
+                .fill(color)
                 .frame(width: size * 0.32, height: size * 0.32)
         }
         .frame(width: size, height: size)
@@ -128,7 +174,7 @@ struct StateDot: View {
     let state: DeskState
     var size: CGFloat = 34
 
-    var body: some View { Dot(hex: state.hex, size: size) }
+    var body: some View { Dot(color: Theme.color(state), size: size) }
 }
 
 /// The wall's one glyph. Three states rather than eight: something wants you,
@@ -137,7 +183,7 @@ struct MoodDot: View {
     let mood: StateRules.SectionMood
     var size: CGFloat = 34
 
-    var body: some View { Dot(hex: mood.hex, size: size) }
+    var body: some View { Dot(color: Theme.color(mood), size: size) }
 }
 
 /// The raised hand, drawn rather than lettered.

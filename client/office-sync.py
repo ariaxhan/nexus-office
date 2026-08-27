@@ -463,6 +463,9 @@ def _pr_rows(nodes) -> list:
         prs.append({
             "number": pr.get("number"),
             "title": pr.get("title") or "",
+            # The body travels: the desk pane shows its first paragraph and the
+            # closes list, and a reviewer should not need GitHub to read why.
+            "body": body[:4000],
             "head": head,
             "base": pr.get("baseRefName") or "",
             "url": pr.get("url") or "",
