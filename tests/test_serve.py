@@ -310,6 +310,64 @@ class DoorTest(ServeTest):
         self.assertEqual(code, 403)
         self.assertNotIn("hidden", body)
 
+    # ── M2: the phone over Tailscale ────────────────────────────────────────
+    # Tailscale Serve stamps Tailscale-User-Login on tailnet traffic, including
+    # shared-device users. Loopback is the Mac app and has no such header; a
+    # forged one there must not become a login.
+
+    TAILNET = "this-mac.tailnet.ts.net"
+
+    def _as_tailnet(self, login="aria"):
+        was_hosts, was_login = set(self.serve.TRUSTED_HOSTS), self.serve.LOGIN
+        self.serve.TRUSTED_HOSTS = was_hosts | {self.TAILNET}
+        self.serve.LOGIN = login
+        return was_hosts, was_login
+
+    def test_a_tailnet_request_with_the_right_login_is_let_through(self):
+        was_hosts, was_login = self._as_tailnet()
+        try:
+            code, body = self.raw("GET", "/api/health", {
+                "host": self.TAILNET, "tailscale-user-login": "aria"})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["ok"])
+        finally:
+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
+
+    def test_a_tailnet_request_with_the_wrong_login_is_refused(self):
+        was_hosts, was_login = self._as_tailnet()
+        try:
+            code, body = self.raw("GET", "/api/health", {
+                "host": self.TAILNET, "tailscale-user-login": "tim"})
+            self.assertEqual(code, 403)
+            self.assertNotIn("ok", body)
+        finally:
+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
+
+    def test_a_tailnet_request_without_a_login_is_refused(self):
+        was_hosts, was_login = self._as_tailnet()
+        try:
+            code, body = self.raw("GET", "/api/health", {"host": self.TAILNET})
+            self.assertEqual(code, 403)
+            self.assertEqual(body.get("error"), "not you")
+        finally:
+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
+
+    def test_a_forged_login_header_on_loopback_is_ignored(self):
+        code, body = self.raw("GET", "/api/health",
+                              {"tailscale-user-login": "not-aria"})
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+
+    def test_a_tailnet_write_without_a_login_is_refused(self):
+        was_hosts, was_login = self._as_tailnet()
+        try:
+            code, _ = self.raw("POST", "/api/desks", {"host": self.TAILNET},
+                               {"repo": "acme/thing", "hidden": True})
+            self.assertEqual(code, 403)
+            self.assertEqual(self.get("/api/desks")[1]["hidden"], [])
+        finally:
+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
+
     def test_validation_matches_the_worker_not_python(self):
         v = self.serve.validate
         self.assertIsNotNone(v({"kind": "comment", "repo": "a/b\n", "issue": 7, "body": "x"})[0])

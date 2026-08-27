@@ -76,7 +76,15 @@ NUM_RE = re.compile(r"\d+\Z", re.ASCII)
 # preflight. So every request must name this door as its Host, and a write must
 # come from this origin (or from no page at all: curl, the app) as JSON. A name
 # that fronts this server (tailscale serve, M2) is added through OFFICE_TRUSTED_HOSTS.
+# When the Host is one of those names, Tailscale Serve is in front: the request must
+# carry Tailscale-User-Login equal to OFFICE_LOGIN, or it is 403. Loopback (the Mac
+# app) never sends that header, and a forged one on loopback is ignored.
 TRUSTED_HOSTS = {h.strip().lower() for h in os.environ.get("OFFICE_TRUSTED_HOSTS", "").split(",") if h.strip()}
+LOGIN = os.environ.get("OFFICE_LOGIN", "").strip().lower()
+
+
+def _loopback_hosts(port: int) -> set[str]:
+    return {f"127.0.0.1:{port}", f"localhost:{port}"}
 
 BAD_ID = "permit needs the question id it is answering"
 BAD_ANSWER = "permit answer must be allow or deny"
@@ -262,7 +270,19 @@ class Handler(BaseHTTPRequestHandler):
     def _host_ok(self) -> bool:
         host = (self.headers.get("host") or "").lower()
         port = self.server.server_address[1]
-        return host in {f"127.0.0.1:{port}", f"localhost:{port}"} or host in TRUSTED_HOSTS
+        return host in _loopback_hosts(port) or host in TRUSTED_HOSTS
+
+    def _identity_ok(self) -> bool:
+        """Loopback is this Mac. Anything else is the tailnet, and must be Aria."""
+        host = (self.headers.get("host") or "").lower()
+        port = self.server.server_address[1]
+        if host in _loopback_hosts(port):
+            return True
+        expected = LOGIN
+        if not expected:
+            return False
+        got = (self.headers.get("tailscale-user-login") or "").strip().lower()
+        return got == expected
 
     def _write_ok(self) -> str | None:
         """None when a write may proceed, else the reason it may not."""
@@ -275,8 +295,7 @@ class Handler(BaseHTTPRequestHandler):
         origin = (self.headers.get("origin") or "").lower()
         if origin:
             host = origin.split("://", 1)[-1]
-            if host not in {f"127.0.0.1:{self.server.server_address[1]}",
-                            f"localhost:{self.server.server_address[1]}"} and host not in TRUSTED_HOSTS:
+            if host not in _loopback_hosts(self.server.server_address[1]) and host not in TRUSTED_HOSTS:
                 return "cross-origin write refused"
         return None
 
@@ -308,6 +327,8 @@ class Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         if not self._host_ok():
             return self._json({"error": "wrong host"}, 403)
+        if not self._identity_ok():
+            return self._json({"error": "not you"}, 403)
         try:
             if path == "/api/world":
                 fresh = False
@@ -341,6 +362,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.partition("?")[0]
         if not self._host_ok():
             return self._json({"error": "wrong host"}, 403)
+        if not self._identity_ok():
+            return self._json({"error": "not you"}, 403)
         why = self._write_ok()
         if why:
             return self._json({"error": why}, 403)
