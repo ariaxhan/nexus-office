@@ -1,4 +1,4 @@
-import { token, clearToken, login, getWorld } from "./api.js";
+import { getWorld } from "./api.js";
 import { Office } from "./scene/office.js";
 import { Panel, needsHuman } from "./ui/panel.js";
 import * as view from "./ui/filters.js";
@@ -74,9 +74,9 @@ function paintStats() {
   // The trailing bit has an empty value; drop its stray leading space.
   s.lastChild.firstChild.remove();
 
-  // Every intent you have queued, and what became of it. The Worker has always
-  // returned this and the browser used to throw it away, so a click produced a
-  // toast and then silence: a FAILED order looked exactly like a working one.
+  // Every intent you have sent, and what became of it. The office returns this
+  // and the browser used to throw it away, so a click produced a toast and then
+  // silence: a FAILED order looked exactly like a working one.
   const orders = $("orders");
   const queued = (world.decisions || []).filter((d) => d.status === "pending");
   const failed = (world.decisions || []).filter((d) => d.status === "failed");
@@ -238,7 +238,7 @@ async function pull({ quiet = false } = {}) {
   try {
     const res = await getWorld();
     if (!res.world) {
-      $("boot").textContent = "The office is built, but home has not sent a snapshot yet.";
+      $("boot").textContent = "The office is up. It is building its first snapshot.";
       $("boot").hidden = false;
       return;
     }
@@ -246,43 +246,13 @@ async function pull({ quiet = false } = {}) {
     applyWorld({ ...res.world, at: res.at, decisions: res.decisions || [],
                 server_time: res.server_time });
   } catch (err) {
-    if (err.unauthorized) { clearToken(); return gate("Your session expired. Password again?"); }
+    // The office is a process on this machine. "Could not reach it" means it is
+    // not running, which is a fact worth saying rather than a spinner forever.
+    $("boot").textContent = "The office is not running. Start it with "
+      + "python3 client/serve.py";
+    $("boot").hidden = false;
     if (!quiet) toast(err.message || "could not reach the office", true);
   }
-}
-
-function gate(message) {
-  $("boot").hidden = true;
-  $("gate").hidden = false;
-  const note = $("gate-note");
-  const field = $("gate-key");
-  const go = $("gate-go");
-  note.textContent = message || "";
-  note.hidden = !message;
-
-  const submit = async () => {
-    const v = field.value;
-    if (!v) return;
-    go.disabled = true;
-    go.textContent = "checking";
-    try {
-      await login(v);
-      field.value = "";
-      $("gate").hidden = true;
-      note.hidden = true;
-      pull();
-    } catch (err) {
-      note.textContent = err.message || "that did not work";
-      note.hidden = false;
-      field.select();
-    } finally {
-      go.disabled = false;
-      go.textContent = "Open the office";
-    }
-  };
-  go.onclick = submit;
-  field.onkeydown = (e) => { if (e.key === "Enter") submit(); };
-  field.focus();
 }
 
 function boot() {
@@ -366,15 +336,9 @@ function boot() {
     return;
   }
 
-  if (!token()) return gate();
   pull();
   setInterval(() => pull({ quiet: true }), POLL_MS);
   addEventListener("visibilitychange", () => { if (!document.hidden) pull({ quiet: true }); });
 }
-
-// A session that stopped working should not leave anyone at a dead door.
-addEventListener("unhandledrejection", (e) => {
-  if (e.reason && e.reason.unauthorized) { clearToken(); gate("Your session expired. Password again?"); }
-});
 
 boot();
