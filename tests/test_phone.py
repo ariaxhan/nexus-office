@@ -214,6 +214,13 @@ class SourceTest(unittest.TestCase):
         lead = js[:js.index("pollWorld(true)")]
         self.assertIn('getElementById("refresh").addEventListener', lead[-200:])
 
+    def test_the_page_reads_every_raised_hand_and_not_only_the_oldest(self):
+        """Two bots can be waiting at once. A page that asks for one of them
+        cannot know a second is there, and a hand nobody can see is the single
+        failure this surface is not allowed to have."""
+        js = JS.read_text(encoding="utf-8")
+        self.assertIn('read("/api/gates")', js)
+
     def test_the_gate_answer_carries_the_id_the_card_drew(self):
         """The sharpest edge in the project, on the smallest screen. Between a
         gate being shown and being tapped the agent can time out and a different

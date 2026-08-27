@@ -35,6 +35,39 @@ final class GateAnswerTests: XCTestCase {
                        "a blank id would answer whatever the door happens to have open")
     }
 
+    // MARK: - two hands up at once
+
+    /// The floor is a room, not a queue of one. A person can read the second
+    /// question and answer it while the first is still waiting, so "is this
+    /// still the question on the floor" is a question about the whole room.
+    func testTheSecondHandsIdIsPostedWhileTheFirstIsStillWaiting() {
+        let room = [gate("q-AAAA"), gate("q-BBBB", target: "rm -rf node_modules")]
+        XCTAssertEqual(GateAnswer.decide(displayedId: "q-BBBB", liveGates: room), .post("q-BBBB"))
+        XCTAssertEqual(GateAnswer.decide(displayedId: "q-AAAA", liveGates: room), .post("q-AAAA"))
+    }
+
+    func testAnIdNobodyInTheRoomIsAskingIsNeverPosted() {
+        let room = [gate("q-AAAA"), gate("q-BBBB")]
+        XCTAssertEqual(GateAnswer.decide(displayedId: "q-CCCC", liveGates: room), .movedOn,
+                       "a click aimed at a question that has left must not land on either of these")
+        XCTAssertEqual(GateAnswer.decide(displayedId: "", liveGates: room), .movedOn)
+        XCTAssertEqual(GateAnswer.decide(displayedId: "q-AAAA", liveGates: []), .movedOn)
+    }
+
+    /// The exact drift, with company. The oldest question is answered and gone,
+    /// the second moves up, and the click that was already on its way down was
+    /// aimed at the one that left.
+    func testAQuestionThatLeftTakesItsClickWithItRatherThanHandingItToTheNextOne() {
+        let after = [gate("q-BBBB", target: "rm -rf ~/Documents/Vaults")]
+        XCTAssertEqual(GateAnswer.decide(displayedId: "q-AAAA", liveGates: after), .movedOn)
+    }
+
+    func testOnlyAPendingHandCountsAsAQuestion() {
+        let room = [gate("q-AAAA", state: "error"), gate("q-BBBB")]
+        XCTAssertEqual(GateAnswer.decide(displayedId: "q-AAAA", liveGates: room), .movedOn)
+        XCTAssertEqual(GateAnswer.decide(displayedId: "q-BBBB", liveGates: room), .post("q-BBBB"))
+    }
+
     // MARK: - helpers
 
     private func gate(_ id: String, state: String = "pending",

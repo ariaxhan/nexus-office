@@ -13,6 +13,11 @@ import SwiftUI
 ///   * **It cannot be dismissed without an answer.** No close button, no click
 ///     outside, and Escape does nothing. The sheet leaves when the gate is no
 ///     longer pending, which is a fact about the agent and not about this window.
+///
+/// Two bots can be standing there at once. The sheet draws the oldest, says how
+/// many are behind it and who is next, and answering one moves it to the one
+/// after rather than closing: it leaves when the room is empty, not when one
+/// question is.
 struct GateSheet: View {
     @Bindable var store: Store
     @State private var elapsed: Double = 0
@@ -33,6 +38,15 @@ struct GateSheet: View {
                 Text("waiting \(StateRules.waited(seconds: waiting))")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(Theme.amber)
+            }
+
+            if let queue = store.gateQueueLine {
+                // Quiet on purpose. It says how much is left, and answering the
+                // question in front of you must never become a guess about how
+                // many more there are.
+                Text(queue)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.faint)
             }
 
             if !gate.permission.isEmpty {
@@ -100,6 +114,14 @@ struct GateSheet: View {
         .frame(width: 520)
         .background(Theme.roster)
         .onReceive(clock) { _ in elapsed += 1 }
+        // A new question under the same sheet is a new clock. Carrying the old
+        // one over would say a question that opened a second ago has been
+        // waiting four minutes, which is the sheet lying about the one number
+        // it exists to keep running.
+        .onChange(of: gate.id) { _, _ in
+            elapsed = 0
+            sending = false
+        }
         // No close button, no click outside, and Escape does nothing. The only
         // way out of this sheet is an answer, or the agent giving up on its own.
         .interactiveDismissDisabled()

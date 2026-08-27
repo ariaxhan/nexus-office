@@ -59,6 +59,9 @@ const state = {
   generated: "",
   github: null,
   gate: { state: "clear" },
+  // Every hand in the air, oldest first. The card draws the oldest; the rest
+  // are why it says how many are left instead of pretending it is the only one.
+  gates: [],
   gateNotice: "",
   gateDrawn: "",
   bots: [],
@@ -350,6 +353,10 @@ function drawGate() {
   asking.appendChild(el("span", "waited", "waiting " + waited(gate.waiting_s)));
   card.appendChild(asking);
 
+  // Quiet, and never a guess: how many are waiting and who is behind this one.
+  const queue = gateQueueLine();
+  if (queue) card.appendChild(el("p", "label queue", queue));
+
   if (gate.permission) card.appendChild(el("p", "permission", gate.permission));
 
   card.appendChild(el("p", "label", "it wants to run"));
@@ -383,6 +390,18 @@ function drawGate() {
   card.appendChild(answers);
 
   band.appendChild(card);
+}
+
+/* "1 of 3, Release is next", or nothing at all when only one hand is up:
+ * "1 of 1" is noise, and answering the question in front of you must never be
+ * a guess about how many more there are. */
+function gateQueueLine() {
+  const up = (state.gates || []).filter(function (g) { return g.state === "pending"; });
+  if (up.length < 2) return "";
+  const id = String(up[1].bot || "");
+  const named = state.bots.filter(function (b) { return b.id === id; })[0];
+  const who = (named && named.name) || id;
+  return "1 of " + up.length + (who ? ", " + who + " is next" : ", another is next");
 }
 
 /* The id of the gate this card DREW, not whatever is live when the tap lands.
@@ -805,10 +824,17 @@ async function pollThread() {
 
 async function pollGate() {
   try {
-    const got = await read("/api/gate");
+    // The whole room, oldest first. A door that answers one hand cannot say
+    // whether a second one is up behind it, and a hand nobody can see is the
+    // one failure this surface is not allowed to have.
+    const got = await read("/api/gates");
     if (got.code !== 200) return;
+    const listed = ((got.body || {}).gates || []).filter(function (g) {
+      return g && g.state === "pending";
+    });
     const was = String((state.gate || {}).id || "");
-    state.gate = got.body || { state: "clear" };
+    state.gates = listed;
+    state.gate = listed[0] || { state: "clear" };
     const now = String(state.gate.id || "");
     if (now !== was) {
       state.gateNotice = "";

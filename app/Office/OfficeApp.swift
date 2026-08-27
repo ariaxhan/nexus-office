@@ -190,6 +190,11 @@ struct MenuBarContents: View {
         Text(store.dot.title)
         if store.gate.isPending {
             Text("permission: \(StateRules.line(store.gate.permission, limit: 40))")
+            // Two hands up and a menu that mentions one of them is a menu that
+            // hides the other.
+            if store.gates.count > 1 {
+                Text("\(store.gates.count) agents are waiting on you")
+            }
         }
         if store.waitingCount > 0 {
             Text("\(store.waitingCount) issues waiting on you")

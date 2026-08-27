@@ -470,6 +470,59 @@ public struct Gate: Decodable, Hashable {
     public static let clear = Gate(state: "clear")
 }
 
+/// Every hand in the air, oldest first.
+///
+/// The floor is a room, not a queue of one. Two bots can be standing there at
+/// the same time, and the failure this shape exists to prevent is the second
+/// one being invisible until the first is answered: a raised hand nobody can
+/// find is the one thing this app is not allowed to do.
+///
+/// Decoded defensively on purpose. A door that answers without a `gates` key is
+/// a floor with nothing pending, not a crash, and one malformed entry drops
+/// itself rather than taking every other raised hand down with it.
+public struct GatesResponse: Decodable {
+    /// When the door looked, as it said it.
+    public var at: String
+    /// The harness's own word when there is nothing to list: `""` normally,
+    /// `"down"` when the runtime is not there to ask. Never `pending`, so it can
+    /// only ever make the floor quieter, never louder.
+    public var state: String
+    public var gates: [Gate]
+
+    public init(at: String = "", state: String = "", gates: [Gate] = []) {
+        self.at = at
+        self.state = state
+        self.gates = gates
+    }
+
+    enum CodingKeys: String, CodingKey { case at, state, gates }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        at = c.str(.at) ?? ""
+        state = c.str(.state) ?? ""
+        gates = c.list(.gates, Lenient<Gate>.self).compactMap(\.value)
+    }
+
+    /// What the floor is when this list is empty: the door's own word for why,
+    /// and never a state that could be mistaken for a question.
+    public var quiet: Gate { Gate(state: state.isEmpty ? "clear" : state) }
+}
+
+/// One element of a list, decoded or dropped, never fatal.
+///
+/// A bad entry in an array of gates must cost that entry and nothing else.
+/// `[Gate]` would throw on the first one and take the whole raised-hand list
+/// with it, which turns one malformed record into an office that says nobody
+/// is waiting.
+public struct Lenient<T: Decodable>: Decodable {
+    public let value: T?
+
+    public init(from decoder: Decoder) throws {
+        value = try? T(from: decoder)
+    }
+}
+
 public struct RuntimeInfo: Decodable, Hashable {
     public var gate: Gate?
     public var url: String

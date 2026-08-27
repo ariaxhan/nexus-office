@@ -196,6 +196,126 @@ final class StateRulesTests: XCTestCase {
         XCTAssertEqual(twice.filter(\.synthetic).count, 1)
     }
 
+    // MARK: - two hands in the air at once
+
+    /// One desk can only draw one question, so two questions need two desks.
+    /// The world snapshot knows where exactly one agent is, so that root goes to
+    /// the oldest hand and the second is placed by what it says out loud.
+    func testTwoGatesGetADeskEachRatherThanSharingOne() {
+        let floor = [Station(repo: "acme/checkout-api"), Station(repo: "acme/storefront"),
+                     Station(repo: "acme/docs")]
+        let out = StateRules.attachGates(stations: floor,
+                                         runtime: RuntimeInfo(root: "/Users/you/code/checkout-api"),
+                                         gates: [pendingGate(), secondGate()])
+        XCTAssertEqual(out.first { $0.gate?.id == pendingGate().id }?.repo, "acme/checkout-api")
+        XCTAssertEqual(out.first { $0.gate?.id == secondGate().id }?.repo, "acme/storefront")
+        XCTAssertEqual(out.filter { $0.gate?.isPending == true }.count, 2)
+        XCTAssertEqual(out.count, 3, "neither of them needed a desk inventing")
+    }
+
+    func testASecondGateNamingNobodyStillGetsADeskOfItsOwn() throws {
+        let floor = [Station(repo: "acme/checkout-api")]
+        let homeless = Gate(state: "pending", id: "q-homeless", permission: "run_bash",
+                            target: "make deploy", bot: "chief")
+        let out = StateRules.attachGates(stations: floor,
+                                         runtime: RuntimeInfo(root: "/Users/you/code/checkout-api"),
+                                         gates: [pendingGate(), homeless])
+        XCTAssertEqual(out.count, 2, "the second hand is never dropped on the floor")
+        let host = try XCTUnwrap(out.first { $0.gate?.id == "q-homeless" })
+        XCTAssertEqual(host.repo, "runtime/chief")
+        XCTAssertTrue(host.synthetic)
+    }
+
+    func testAttachingTwoTwiceLeavesTheSameFloor() {
+        let homeless = Gate(state: "pending", id: "q-homeless", target: "make deploy", bot: "chief")
+        let once = StateRules.attachGates(stations: [Station(repo: "acme/docs")],
+                                          runtime: RuntimeInfo(root: ""),
+                                          gates: [pendingGate(), homeless])
+        let twice = StateRules.attachGates(stations: once, runtime: RuntimeInfo(root: ""),
+                                           gates: [pendingGate(), homeless])
+        XCTAssertEqual(once.map(\.repo), twice.map(\.repo),
+                       "the roster must not grow one row every two seconds")
+        XCTAssertEqual(twice.filter { $0.gate?.isPending == true }.count, 2)
+    }
+
+    /// The point of the whole change. A desk that owns the second question draws
+    /// the second question; a desk that owns the first draws the first.
+    func testEachDeskDrawsItsOwnQuestionAndNotOnlyTheOldest() throws {
+        let floor = StateRules.attachGates(
+            stations: [Station(repo: "acme/checkout-api"), Station(repo: "acme/storefront")],
+            runtime: RuntimeInfo(root: "/Users/you/code/checkout-api"),
+            gates: [pendingGate(), secondGate()])
+        let room = [pendingGate(), secondGate()]
+
+        let first = try XCTUnwrap(floor.first { $0.repo == "acme/checkout-api" })
+        let second = try XCTUnwrap(floor.first { $0.repo == "acme/storefront" })
+        XCTAssertEqual(StateRules.gateShown(gates: room, at: first, stations: floor)?.id,
+                       pendingGate().id)
+        XCTAssertEqual(StateRules.gateShown(gates: room, at: second, stations: floor)?.id,
+                       secondGate().id)
+    }
+
+    /// A gate nobody can place is shown everywhere, and that fallback must not
+    /// paint over a desk that actually owns a later question.
+    func testAnUnplaceableGateNeverCoversADeskThatOwnsALaterOne() {
+        let floor = [Station(repo: "acme/checkout-api"),
+                     Station(repo: "acme/storefront", gate: secondGate())]
+        let room = [pendingGate(), secondGate()]
+        XCTAssertEqual(StateRules.gateShown(gates: room, at: floor[1], stations: floor)?.id,
+                       secondGate().id, "the desk that owns it beats the one nobody could place")
+        XCTAssertEqual(StateRules.gateShown(gates: room, at: floor[0], stations: floor)?.id,
+                       pendingGate().id, "and the one nobody could place is still shown somewhere")
+    }
+
+    func testNoHandsUpMeansNoDeskDrawsOne() {
+        let floor = [Station(repo: "acme/docs")]
+        XCTAssertNil(StateRules.gateShown(gates: [], at: floor[0], stations: floor))
+        XCTAssertNil(StateRules.gateShown(gates: [.clear], at: floor[0], stations: floor))
+    }
+
+    // MARK: - whose hand is up
+
+    func testABotSecondInLineStillHasItsOwnRaisedHand() {
+        let room = [pendingGate(), secondGate()]
+        XCTAssertEqual(StateRules.gate(in: room, for: "chief")?.id, secondGate().id)
+        XCTAssertEqual(StateRules.gate(in: room, for: "release")?.id, pendingGate().id)
+        XCTAssertTrue(StateRules.gateBelongsTo(gates: room, bot: "chief"))
+        XCTAssertTrue(StateRules.gateBelongsTo(gates: room, bot: "release"))
+        XCTAssertFalse(StateRules.gateBelongsTo(gates: room, bot: "inbox"))
+        XCTAssertFalse(StateRules.gateBelongsTo(gates: room, bot: ""),
+                       "a gate the door could not name a bot for belongs to nobody's thread")
+    }
+
+    func testAHandThatIsNoLongerPendingBelongsToNobody() {
+        let stale = Gate(state: "clear", id: "q-old", bot: "release")
+        XCTAssertNil(StateRules.gate(in: [stale], for: "release"))
+    }
+
+    // MARK: - the line that says how many are left
+
+    func testOneHandUpSaysNothingAboutAQueue() {
+        XCTAssertNil(StateRules.gateQueueLine([]))
+        XCTAssertNil(StateRules.gateQueueLine([pendingGate()]), "\"1 of 1\" is noise")
+        XCTAssertNil(StateRules.gateQueueLine([pendingGate(), Gate(state: "clear", id: "x")]),
+                     "a gate that is not pending is not somebody waiting")
+    }
+
+    func testTwoHandsUpSayHowManyAndWhoIsNext() {
+        let room = [pendingGate(), secondGate()]
+        XCTAssertEqual(StateRules.gateQueueLine(room) { $0 == "chief" ? "Chief" : nil },
+                       "1 of 2, Chief is next")
+        XCTAssertEqual(StateRules.gateQueueLine(room), "1 of 2, chief is next",
+                       "with no roster to ask, the id it was given is still a name")
+        XCTAssertEqual(StateRules.gateQueueLine(room + [pendingGate()]) { _ in "Chief" },
+                       "1 of 3, Chief is next")
+    }
+
+    func testAQueueBehindANamelessGateStillSaysHowManyAreLeft() {
+        let nameless = Gate(state: "pending", id: "q-nameless", target: "make deploy")
+        XCTAssertEqual(StateRules.gateQueueLine([pendingGate(), nameless]),
+                       "1 of 2, another is next")
+    }
+
     // MARK: - which desks draw the raised hand
 
     func testAGateNamingARepoIsShownAtThatDeskAlone() {
@@ -844,5 +964,12 @@ final class StateRulesTests: XCTestCase {
     private func pendingGate() -> Gate {
         Gate(state: "pending", id: "a1b2c3d4e5f60718", permission: "run_bash",
              target: "git push origin main --follow-tags", waitingS: 47, bot: "release")
+    }
+
+    /// A second hand, up while the first is still waiting, and one that says a
+    /// desk's name out loud so it has somewhere of its own to stand.
+    private func secondGate() -> Gate {
+        Gate(state: "pending", id: "f7e6d5c4b3a29180", permission: "run_bash",
+             target: "rm -rf ~/code/acme/storefront/node_modules", waitingS: 12, bot: "chief")
     }
 }

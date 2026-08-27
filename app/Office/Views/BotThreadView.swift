@@ -115,8 +115,13 @@ struct BotThreadView: View {
                     // The gate lands in the thread of the bot that asked, because
                     // that is where a person is already looking. The sheet is the
                     // interruption; this is the record.
-                    if store.gateBelongsTo(bot: bot.id) {
-                        GateCard(store: store, gate: store.gate)
+                    // This bot's own question, which is not always the oldest
+                    // one on the floor. A bot second in the queue still draws
+                    // its raised hand here, because a thread that says nothing
+                    // is happening while its bot waits is the hand going
+                    // missing.
+                    if let raised = store.gate(for: bot.id) {
+                        GateCard(store: store, gate: raised)
                             .id("gate")
                     }
                     if let error = bot.error {

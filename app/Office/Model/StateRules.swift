@@ -104,22 +104,67 @@ public enum StateRules {
     /// holds the desk this made last time, and a second desk of its own every
     /// two seconds would be a roster that grows while you watch it.
     public static func attachGate(stations: [Station], runtime: RuntimeInfo?, gate: Gate?) -> [Station] {
+        attachGates(stations: stations, runtime: runtime, gates: gate.map { [$0] } ?? [])
+    }
+
+    /// The same, for every hand that is up at once.
+    ///
+    /// Two bots can be waiting, and each of them needs a desk of its own: two
+    /// questions sharing one row is a row that can only draw one of them, and
+    /// the other becomes a raised hand nobody can find.
+    ///
+    /// The world snapshot carries exactly ONE runtime root, so it can only ever
+    /// say where one agent is. That root goes to the oldest question, which is
+    /// the one the runtime is actually blocked on, and is the whole of the old
+    /// single-gate rule kept intact. Every later hand is placed by what it says
+    /// out loud: a free desk it names, and failing that a desk of its own named
+    /// after the bot that raised it, so the placement is the same on every pass
+    /// and the roster cannot grow while you watch it.
+    public static func attachGates(stations: [Station], runtime: RuntimeInfo?,
+                                   gates: [Gate]) -> [Station] {
         var out = stations
-        guard let gate, gate.isPending else {
-            for index in out.indices { out[index].gate = nil }
-            return out
-        }
+        for index in out.indices { out[index].gate = nil }
+        let pending = gates.filter(\.isPending)
+        guard !pending.isEmpty else { return out }
+
         let rootName = (runtime?.root ?? "").split(separator: "/").last.map(String.init) ?? ""
-        var hostIndex = out.firstIndex { $0.shortName == rootName && !rootName.isEmpty }
-            ?? out.firstIndex { $0.synthetic }
-        if hostIndex == nil {
-            let repo = rootName.isEmpty ? "runtime/agent" : "runtime/\(rootName)"
-            out.append(Station(repo: repo, access: true,
-                               detail: "the local agent runtime", synthetic: true))
-            hostIndex = out.indices.last
+        var taken = Set<Int>()
+
+        for (rank, gate) in pending.enumerated() {
+            var host: Int?
+            if rank == 0 {
+                host = out.indices.first { !taken.contains($0) && !rootName.isEmpty
+                                           && out[$0].shortName == rootName }
+                    ?? out.indices.first { !taken.contains($0) && out[$0].synthetic }
+            } else {
+                host = out.indices.first { !taken.contains($0) && names(gate, station: out[$0]) }
+            }
+            if host == nil {
+                let repo = deskOfItsOwn(gate: gate, rank: rank, rootName: rootName)
+                if let existing = out.indices.first(where: { out[$0].repo == repo }) {
+                    host = taken.contains(existing) ? nil : existing
+                }
+                if host == nil {
+                    out.append(Station(repo: repo, access: true,
+                                       detail: "the local agent runtime", synthetic: true))
+                    host = out.indices.last
+                }
+            }
+            guard let index = host else { continue }
+            taken.insert(index)
+            out[index].gate = gate
         }
-        for index in out.indices { out[index].gate = index == hostIndex ? gate : nil }
         return out
+    }
+
+    /// The name of the desk a homeless gate stands at. Derived, never invented
+    /// fresh each pass: the same question must land on the same row every two
+    /// seconds or the roster grows one row per poll.
+    private static func deskOfItsOwn(gate: Gate, rank: Int, rootName: String) -> String {
+        if rank == 0 { return rootName.isEmpty ? "runtime/agent" : "runtime/\(rootName)" }
+        let bot = (gate.bot ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !bot.isEmpty { return "runtime/\(bot)" }
+        return "runtime/gate-\(gate.id.prefix(8))"
     }
 
     /// Which desks show the raised hand.
@@ -135,14 +180,70 @@ public enum StateRules {
     /// the one failure this surface is not allowed to have.
     public static func gateDesks(gate: Gate?, stations: [Station]) -> Set<String> {
         guard let gate, gate.isPending else { return [] }
+        return placement(gate: gate, stations: stations).desks
+    }
 
+    /// Where a gate goes, and whether anybody actually claimed it.
+    ///
+    /// `placed` is the difference between "this desk owns this question" and
+    /// "nobody owns it, so everybody shows it". With one hand up that
+    /// difference is invisible; with two it decides which question a desk
+    /// draws, because a desk that owns the second one must not be covered by
+    /// the first one's fallback.
+    private static func placement(gate: Gate, stations: [Station]) -> (desks: Set<String>, placed: Bool) {
         let hosts = stations.filter { $0.gate?.id == gate.id }
-        if !hosts.isEmpty { return Set(hosts.map(\.repo)) }
+        if !hosts.isEmpty { return (Set(hosts.map(\.repo)), true) }
 
         let named = stations.filter { names(gate, station: $0) }
-        if !named.isEmpty { return Set(named.map(\.repo)) }
+        if !named.isEmpty { return (Set(named.map(\.repo)), true) }
 
-        return Set(stations.map(\.repo))
+        return (Set(stations.map(\.repo)), false)
+    }
+
+    /// The one question this desk may draw, out of every hand in the air.
+    ///
+    /// A desk that owns a question shows that question, however many older ones
+    /// are waiting elsewhere. Only when no gate is actually placed here does the
+    /// oldest unplaceable one fall back onto this desk, because a gate the app
+    /// cannot place is shown everywhere rather than nowhere.
+    public static func gateShown(gates: [Gate], at station: Station,
+                                 stations: [Station]) -> Gate? {
+        var fallback: Gate?
+        for gate in gates where gate.isPending {
+            let (desks, placed) = placement(gate: gate, stations: stations)
+            guard desks.contains(station.repo) else { continue }
+            if placed { return gate }
+            if fallback == nil { fallback = gate }
+        }
+        return fallback
+    }
+
+    /// The hand this bot has up, if it has one. The door names the bot on the
+    /// gate, so this needs no desks and no runtime: a bot is either standing
+    /// there waiting or it is not.
+    public static func gate(in gates: [Gate], for bot: String) -> Gate? {
+        guard !bot.isEmpty else { return nil }
+        return gates.first { $0.isPending && $0.bot == bot }
+    }
+
+    public static func gateBelongsTo(gates: [Gate], bot: String) -> Bool {
+        gate(in: gates, for: bot) != nil
+    }
+
+    /// The quiet line under a gate when it is not the only one.
+    ///
+    /// Says where in the queue you are and who is behind it, so answering the
+    /// question in front of you is not a guess about how many are left. Silent
+    /// when there is only one hand up, because "1 of 1" is noise.
+    public static func gateQueueLine(_ gates: [Gate],
+                                     name: (String) -> String? = { _ in nil }) -> String? {
+        let pending = gates.filter(\.isPending)
+        guard pending.count > 1 else { return nil }
+        let head = "1 of \(pending.count)"
+        let bot = pending[1].bot ?? ""
+        let who = (name(bot) ?? (bot.isEmpty ? nil : bot))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return who.isEmpty ? head + ", another is next" : head + ", \(who) is next"
     }
 
     /// Does the gate say this desk's name out loud?
