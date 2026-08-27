@@ -62,6 +62,9 @@ public final class Store {
     public var suppressGateSheet = false
 
     private var lastAnnouncedGate: String?
+    /// Where the runtime is working, kept from the last world poll so the gate
+    /// poll can re-seat the raised hand without waiting ten seconds for one.
+    private var runtime: RuntimeInfo?
     private var loops: [Task<Void, Never>] = []
 
     public init(api: Api) {
@@ -97,6 +100,22 @@ public final class Store {
     /// it. When it does not, it still gets a desk, and it is still never hidden.
     public func gateBelongsTo(bot id: String) -> Bool {
         gate.isPending && gate.bot == id
+    }
+
+    /// The one gate a desk may draw, and the only one it may answer.
+    ///
+    /// Every gate on screen comes from here, which is the two second
+    /// `/api/gate` poll and nothing else. The copy of the gate carried in the
+    /// ten second world snapshot is a photograph of a moment that has already
+    /// passed: rendering it put an old question's text above a new question's
+    /// buttons, which is how a person approves a command they never read.
+    public func gateShown(at station: Station) -> Gate? {
+        guard gate.isPending else { return nil }
+        return gateDesks.contains(station.repo) ? gate : nil
+    }
+
+    private var gateDesks: Set<String> {
+        StateRules.gateDesks(gate: gate, stations: stations)
     }
 
     // MARK: - the loop
@@ -151,30 +170,46 @@ public final class Store {
 
     public func refreshGate() async {
         do {
-            let next = try await api.gate()
-            gate = next
-            if next.isPending {
-                if lastAnnouncedGate != next.id {
-                    lastAnnouncedGate = next.id
-                    announce(next)
-                }
-            } else {
-                lastAnnouncedGate = nil
-                gateNotice = nil
-            }
+            apply(try await api.gate())
         } catch {
             // A gate that cannot be read is not a gate that is clear. The last
             // known state is kept rather than quietly downgraded to "fine".
-            gateNotice = nil
+        }
+    }
+
+    /// Take the gate the door just reported, and make the whole floor agree.
+    ///
+    /// One id at a time. When it changes, the notice about the old question goes
+    /// with it, because an answer to a question that is gone reads as an answer
+    /// to the one that replaced it, and the desks are re-seated on the spot
+    /// rather than eight seconds later when the world poll happens to come round.
+    private func apply(_ next: Gate) {
+        let moved = next.id != gate.id
+        gate = next
+        if moved { gateNotice = nil }
+        stations = StateRules.attachGate(stations: stations, runtime: runtime,
+                                         gate: next.isPending ? next : nil)
+        guard next.isPending else {
+            lastAnnouncedGate = nil
+            return
+        }
+        if lastAnnouncedGate != next.id {
+            lastAnnouncedGate = next.id
+            announce(next)
         }
     }
 
     public func refreshWorld() async {
         do {
             let world = try await api.world()
+            runtime = world.runtime
+            // The gate comes from the gate poll. `world.runtime.gate` is a
+            // cached snapshot of it and is never read: it has been up to ten
+            // seconds behind the truth, which is long enough for the question
+            // on screen to be one the agent has already given up on.
             stations = StateRules.attachGate(stations: world.stations.sorted { $0.repo < $1.repo },
                                              runtime: world.runtime,
-                                             gate: gate.isPending ? gate : world.runtime?.gate)
+                                             gate: gate.isPending ? gate : nil)
             worldNotice = world.killed ? "the kill switch is on: nothing will run" : nil
         } catch let error as ApiError {
             worldNotice = error.message
@@ -225,22 +260,45 @@ public final class Store {
         }
     }
 
-    public func answerGate(_ answer: String, always: Bool) async {
-        let id = gate.id
-        guard !id.isEmpty else { return }
-        do {
-            let ack = try await api.answerGate(id: id, answer: answer, always: always)
-            gateNotice = ack.spoken
-            await refreshGate()
-        } catch let error as ApiError {
-            // A conflict means the agent moved on. It is shown and never retried
-            // with another id: answering by anything but the id that was on
-            // screen would approve a command nobody saw.
-            gateNotice = error.message
-            await refreshGate()
-        } catch {
-            gateNotice = error.localizedDescription
+    /// Answer the question that was on screen, by its id, or answer nothing.
+    ///
+    /// `id` is the id of the gate the view actually drew. If the floor has moved
+    /// to another question since it was drawn, this posts nothing at all and
+    /// says so: sending the click to whatever gate happens to be live now would
+    /// approve a command nobody ever read.
+    public func answerGate(id: String, answer: String, always: Bool) async {
+        switch GateAnswer.decide(displayedId: id, liveGate: gate) {
+        case .movedOn:
+            say(movedOn)
+            return
+        case .post(let asked):
+            do {
+                let ack = try await api.answerGate(id: asked, answer: answer, always: always)
+                say(ack.spoken)
+                await refreshGate()
+            } catch let error as ApiError {
+                // A conflict means the agent moved on. It is shown and never
+                // retried with another id.
+                say(error.message)
+                await refreshGate()
+            } catch {
+                say(error.localizedDescription)
+            }
         }
+    }
+
+    /// What happened to the gate, said in both places a person could be looking.
+    /// The notice rides with the card and the sheet; the toast outlives them,
+    /// which matters exactly when the gate they were drawing has gone.
+    private func say(_ line: String) {
+        gateNotice = line
+        toast = line
+    }
+
+    private var movedOn: String {
+        guard gate.isPending else { return "that question has moved on" }
+        return "that question has moved on. the floor is now asking about "
+            + StateRules.line(gate.target, limit: 80)
     }
 
     public func decide(kind: String, repo: String, issue: String,

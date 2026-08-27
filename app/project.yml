@@ -31,8 +31,9 @@ targets:
       - path: Demo
         buildPhase: resources
   # Standalone unit-test bundle: no app host, no signing, no AppKit. It compiles
-  # only the two Foundation-only files, so the rules that decide what a desk is
-  # are provable headlessly and cannot quietly start depending on a view.
+  # only the Foundation-only files, so the rules that decide what a desk is, and
+  # which question an answer belongs to, are provable headlessly and cannot
+  # quietly start depending on a view.
   OfficeTests:
     type: bundle.unit-test
     platform: macOS
@@ -40,6 +41,7 @@ targets:
       - path: OfficeTests
       - path: Office/Model/StateRules.swift
       - path: Office/Model/Models.swift
+      - path: Office/Model/GateAnswer.swift
     settings:
       base:
         PRODUCT_NAME: OfficeTests

@@ -20,6 +20,12 @@ struct BotThreadView: View {
             head
             Divider().overlay(Theme.hairline)
             transcript
+            // A question that moved on takes its card with it, so what happened
+            // to the answer has to survive the card. Without this the whole
+            // reply to a click in here is a gate quietly vanishing.
+            if let toast = store.toast {
+                ToastBar(text: toast) { store.toast = nil }
+            }
             composer
         }
         .background(Theme.ink)
@@ -69,10 +75,8 @@ struct BotThreadView: View {
                     // that is where a person is already looking. The sheet is the
                     // interruption; this is the record.
                     if store.gateBelongsTo(bot: bot.id) {
-                        GateCard(gate: store.gate, notice: store.gateNotice) { answer, always in
-                            Task { await store.answerGate(answer, always: always) }
-                        }
-                        .id("gate")
+                        GateCard(store: store, gate: store.gate)
+                            .id("gate")
                     }
                     if let error = bot.error {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -186,10 +190,20 @@ struct WorkingBubble: View {
 
 /// The raised hand, in the thread. Same three properties as the sheet: the
 /// target verbatim, the clock running, and an answer that carries the id.
+///
+/// The card is handed the gate it draws and answers that gate by its own id,
+/// which is what makes the id on the buttons and the text above them the same
+/// question. It never reaches for whatever gate is live at the moment of the
+/// click, and there is nowhere else in this view to get one from.
 struct GateCard: View {
+    @Bindable var store: Store
     let gate: Gate
-    let notice: String?
-    let answer: (String, Bool) -> Void
+
+    private var notice: String? { store.gateNotice }
+
+    private func answer(_ verdict: String, _ always: Bool) {
+        Task { await store.answerGate(id: gate.id, answer: verdict, always: always) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {

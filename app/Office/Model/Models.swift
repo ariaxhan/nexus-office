@@ -128,9 +128,9 @@ public struct Issue: Decodable, Hashable, Identifiable {
     public var labels: [String]
     public var url: String
     public var updatedAt: String
-    /// Computed by the runner from the comments themselves. `nil` means the
-    /// snapshot predates the field, which is the only case where a label is
-    /// allowed to answer the question instead.
+    /// Computed by the runner from the comments themselves, and the whole of
+    /// what "waiting on you" means. `nil` is the snapshot declining to say, and
+    /// is never read as yes.
     public var botLast: Bool?
     public var lastWord: String
 

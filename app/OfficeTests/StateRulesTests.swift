@@ -69,17 +69,25 @@ final class StateRulesTests: XCTestCase {
                        "a label must not resurrect an issue the bot did not have the last word on")
     }
 
-    func testLabelsAnswerOnlyWhenTheFieldIsAbsent() {
+    func testAMissingFieldIsNotAYesAndNoLabelCanMakeItOne() {
+        // The ported rule is `bot_last === true`. A snapshot that does not say
+        // is not a snapshot that says yes, and a label a human typed is not
+        // evidence about who spoke last.
+        XCTAssertFalse(StateRules.needsHuman(issue: Issue(number: 6, title: "x", botLast: nil)))
         for label in ["waiting on human", "needs you", "needs-decision", "blocked", "question",
-                      "Waiting On Someone", "NEEDS HUMAN"] {
-            XCTAssertTrue(StateRules.needsHuman(issue: Issue(number: 4, title: "x", labels: [label])),
-                          "\(label) should read as waiting on a person")
+                      "Waiting On Someone", "NEEDS HUMAN", "bug", "docs"] {
+            XCTAssertFalse(StateRules.needsHuman(issue: Issue(number: 4, title: "x", labels: [label])),
+                           "\(label) is a hint a person typed, not the comment history")
         }
-        for label in ["bug", "docs", "performance", "good first issue"] {
-            XCTAssertFalse(StateRules.needsHuman(issue: Issue(number: 5, title: "x", labels: [label])),
-                           "\(label) should not")
-        }
-        XCTAssertFalse(StateRules.needsHuman(issue: Issue(number: 6, title: "x", labels: [])))
+    }
+
+    func testANullOnTheWireIsNotWaiting() throws {
+        // The exact shape that read as "waiting on you" before: the field
+        // arrives, explicitly null, next to a label that looks urgent.
+        let json = #"{"number":9,"title":"t","bot_last":null,"labels":["waiting on human"]}"#
+        let issue = try JSONDecoder().decode(Issue.self, from: Data(json.utf8))
+        XCTAssertNil(issue.botLast)
+        XCTAssertFalse(StateRules.needsHuman(issue: issue))
     }
 
     func testWaitingCountAddsUpIssuesNotDesks() {
@@ -177,6 +185,87 @@ final class StateRulesTests: XCTestCase {
         XCTAssertEqual(out.count, 1)
     }
 
+    func testAttachingTwiceLeavesTheSameFloor() {
+        // The gate poll is five times faster than the world poll, so this runs
+        // against a list that already holds the desk it invented last time.
+        let once = StateRules.attachGate(stations: [Station(repo: "acme/docs")],
+                                         runtime: RuntimeInfo(root: ""), gate: pendingGate())
+        let twice = StateRules.attachGate(stations: once,
+                                          runtime: RuntimeInfo(root: ""), gate: pendingGate())
+        XCTAssertEqual(once.map(\.repo), twice.map(\.repo), "the roster must not grow while you watch it")
+        XCTAssertEqual(twice.filter(\.synthetic).count, 1)
+    }
+
+    // MARK: - which desks draw the raised hand
+
+    func testAGateNamingARepoIsShownAtThatDeskAlone() {
+        let floor = [Station(repo: "acme/checkout-api"), Station(repo: "acme/docs")]
+        let gate = Gate(state: "pending", id: "q1", permission: "run_bash",
+                        target: "gh pr merge 12 --repo acme/checkout-api")
+        XCTAssertEqual(StateRules.gateDesks(gate: gate, stations: floor), ["acme/checkout-api"])
+    }
+
+    func testAShortNameCountsOnlyAsAWholeWordAndOnlyWhenItIsAWord() {
+        let floor = [Station(repo: "acme/storefront"), Station(repo: "acme/docs")]
+
+        let substring = Gate(state: "pending", id: "q1", target: "python capitalise.py",
+                             detail: "docstrings only, no storefronts")
+        XCTAssertEqual(StateRules.gateDesks(gate: substring, stations: floor),
+                       ["acme/storefront", "acme/docs"],
+                       "a substring is not a name: it names nobody, so it is shown at every desk")
+
+        let word = Gate(state: "pending", id: "q2", target: "cd ~/code/storefront && make release")
+        XCTAssertEqual(StateRules.gateDesks(gate: word, stations: floor), ["acme/storefront"])
+    }
+
+    func testANameTooShortToMeanAnythingNeverClaimsTheGate() {
+        // `api` is three characters and turns up in every second URL. Claiming
+        // the gate on that would take it off the desk it actually belongs to,
+        // which is worse than showing it at all of them.
+        let floor = [Station(repo: "northwind/api"), Station(repo: "acme/docs")]
+        let url = Gate(state: "pending", id: "q1", target: "curl https://api.example.com/v1/orders")
+        XCTAssertEqual(StateRules.gateDesks(gate: url, stations: floor),
+                       ["northwind/api", "acme/docs"])
+
+        let spelled = Gate(state: "pending", id: "q2", target: "gh issue list -R northwind/api")
+        XCTAssertEqual(StateRules.gateDesks(gate: spelled, stations: floor), ["northwind/api"],
+                       "written out in full it is a name, however short")
+    }
+
+    func testAGateNamingNobodyFallsBackToTheDeskTheRuntimeIsAt() {
+        let floor = StateRules.attachGate(stations: [Station(repo: "acme/checkout-api"),
+                                                     Station(repo: "acme/docs")],
+                                          runtime: RuntimeInfo(root: "/Users/you/code/checkout-api"),
+                                          gate: pendingGate())
+        XCTAssertEqual(StateRules.gateDesks(gate: pendingGate(), stations: floor),
+                       ["acme/checkout-api"])
+    }
+
+    func testAGateNobodyCanPlaceIsShownAtEveryDeskRatherThanNone() {
+        // No repo named, and no desk holding it yet: the world poll has not come
+        // round since this question opened. It is never the answer to hide it.
+        let floor = [Station(repo: "acme/checkout-api"), Station(repo: "acme/docs")]
+        XCTAssertEqual(StateRules.gateDesks(gate: pendingGate(), stations: floor),
+                       ["acme/checkout-api", "acme/docs"])
+    }
+
+    func testAClearGateIsShownNowhere() {
+        let floor = [Station(repo: "acme/docs", gate: pendingGate())]
+        XCTAssertTrue(StateRules.gateDesks(gate: .clear, stations: floor).isEmpty)
+        XCTAssertTrue(StateRules.gateDesks(gate: nil, stations: floor).isEmpty)
+    }
+
+    func testTheDeskShownADifferentQuestionsGateIsNotTheStaleOne() {
+        // The exact drift the verifier caught: the station still carries q-AAAA
+        // from the world snapshot while the door has moved to q-BBBB.
+        let stale = Gate(state: "pending", id: "q-AAAA", target: "rm -rf ~/Documents/Vaults")
+        let live = Gate(state: "pending", id: "q-BBBB", target: "git push --force origin main")
+        let floor = [Station(repo: "acme/checkout-api", gate: stale), Station(repo: "acme/docs")]
+        XCTAssertEqual(StateRules.gateDesks(gate: live, stations: floor),
+                       ["acme/checkout-api", "acme/docs"],
+                       "the stale attachment must not claim the new question for itself")
+    }
+
     // MARK: - clocks
 
     func testWaitedReadsAsTime() {
@@ -216,6 +305,22 @@ final class StateRulesTests: XCTestCase {
         XCTAssertEqual(station.repo, "a/b")
         XCTAssertEqual(station.issues.first?.botLast, true)
         XCTAssertEqual(state(station), .waiting)
+    }
+
+    func testAGateCarriesTheBotThatRaisedItWhenTheDoorKnows() throws {
+        let json = #"""
+        {"state":"pending","id":"q-AAAA","permission":"run_bash","target":"git push",
+         "detail":"cutting 0.4.2","waiting_s":47,"bot":"release"}
+        """#
+        let named = try JSONDecoder().decode(Gate.self, from: Data(json.utf8))
+        XCTAssertEqual(named.bot, "release")
+        XCTAssertTrue(named.isPending)
+
+        // Absent means the shared session, which is a thread this app can still
+        // draw. It is never read as a bot called "".
+        let shared = try JSONDecoder().decode(
+            Gate.self, from: Data(#"{"state":"pending","id":"q-B","target":"ls"}"#.utf8))
+        XCTAssertNil(shared.bot)
     }
 
     func testOnlyMergeableNonDraftPullRequestsOfferAMerge() {

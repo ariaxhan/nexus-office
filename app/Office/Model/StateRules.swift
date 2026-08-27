@@ -75,20 +75,16 @@ public enum StateRules {
 
     // MARK: - waiting on you
 
-    private static let needsHumanPattern = "waiting on|needs.?(human|you|decision)|blocked|question"
-
     /// The runner's own rule, not a second opinion on it: an issue is waiting on
     /// a person exactly when the bot had the last word.
     ///
-    /// A label is a hint that can go stale behind the truth; `bot_last` is
-    /// computed from the comments themselves, so it cannot. The label check
-    /// survives only as a fallback for a snapshot old enough to predate the field.
+    /// `bot_last` is computed from the comments themselves and is the whole
+    /// answer. Anything else, a missing field or a null, is the snapshot
+    /// declining to say, and a snapshot that does not say is not evidence that
+    /// somebody is blocked. Labels are hints a human types and they go stale
+    /// behind the truth, so they never get a vote here.
     public static func needsHuman(issue: Issue) -> Bool {
-        if let botLast = issue.botLast { return botLast }
-        return issue.labels.contains { label in
-            label.range(of: needsHumanPattern,
-                        options: [.regularExpression, .caseInsensitive]) != nil
-        }
+        issue.botLast == true
     }
 
     public static func waitingCount(_ stations: [Station]) -> Int {
@@ -102,6 +98,11 @@ public enum StateRules {
     /// The runtime is not a repo. The gate goes to the station whose repo shares
     /// a name with the runtime root when there is one, and otherwise gets a desk
     /// of its own rather than being dropped on the floor.
+    ///
+    /// Applying this twice must leave the same floor. The gate poll is five
+    /// times faster than the world poll, so it runs against a list that already
+    /// holds the desk this made last time, and a second desk of its own every
+    /// two seconds would be a roster that grows while you watch it.
     public static func attachGate(stations: [Station], runtime: RuntimeInfo?, gate: Gate?) -> [Station] {
         var out = stations
         guard let gate, gate.isPending else {
@@ -110,6 +111,7 @@ public enum StateRules {
         }
         let rootName = (runtime?.root ?? "").split(separator: "/").last.map(String.init) ?? ""
         var hostIndex = out.firstIndex { $0.shortName == rootName && !rootName.isEmpty }
+            ?? out.firstIndex { $0.synthetic }
         if hostIndex == nil {
             let repo = rootName.isEmpty ? "runtime/agent" : "runtime/\(rootName)"
             out.append(Station(repo: repo, access: true,
@@ -118,6 +120,61 @@ public enum StateRules {
         }
         for index in out.indices { out[index].gate = index == hostIndex ? gate : nil }
         return out
+    }
+
+    /// Which desks show the raised hand.
+    ///
+    /// A gate carries a command, not a repo, so where it belongs has to be read
+    /// off what it does say. In order: a desk the gate names outright, then the
+    /// desk the runtime root put it at, then, when neither answers, **every**
+    /// desk. The last one is the whole point. A gate the app cannot place is
+    /// shown everywhere rather than nowhere, because a raised hand nobody can
+    /// find is the one failure this surface is not allowed to have.
+    public static func gateDesks(gate: Gate?, stations: [Station]) -> Set<String> {
+        guard let gate, gate.isPending else { return [] }
+
+        let named = stations.filter { names(gate, station: $0) }
+        if !named.isEmpty { return Set(named.map(\.repo)) }
+
+        let hosts = stations.filter { $0.gate?.id == gate.id }
+        if !hosts.isEmpty { return Set(hosts.map(\.repo)) }
+
+        return Set(stations.map(\.repo))
+    }
+
+    /// Does the gate say this desk's name out loud?
+    ///
+    /// The full `owner/name` counts anywhere. A bare short name has to stand on
+    /// its own as a word and be long enough to mean something, because a desk
+    /// called `northwind/api` must not claim every command with the word "api"
+    /// in it: a wrong desk is worse than no desk, since it takes the gate off
+    /// the right one.
+    private static func names(_ gate: Gate, station: Station) -> Bool {
+        let haystack = (gate.target + " " + gate.detail).lowercased()
+        if haystack.contains(station.repo.lowercased()) { return true }
+        let short = station.shortName.lowercased()
+        guard short.count >= 4 else { return false }
+        return contains(word: short, in: haystack)
+    }
+
+    /// `word` present with something that is not a letter or a digit on each
+    /// side of it, so `api` does not match `capital` and `docs` does not match
+    /// `docstring`.
+    private static func contains(word: String, in haystack: String) -> Bool {
+        var searched = haystack[...]
+        while let found = searched.range(of: word) {
+            let before = found.lowerBound == haystack.startIndex
+                ? nil : haystack[haystack.index(before: found.lowerBound)]
+            let after = found.upperBound == haystack.endIndex ? nil : haystack[found.upperBound]
+            if edge(before) && edge(after) { return true }
+            searched = haystack[found.upperBound...]
+        }
+        return false
+    }
+
+    private static func edge(_ character: Character?) -> Bool {
+        guard let character else { return true }
+        return !character.isLetter && !character.isNumber
     }
 
     // MARK: - what is on the roster
