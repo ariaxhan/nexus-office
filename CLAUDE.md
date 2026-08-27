@@ -101,10 +101,16 @@ wrong, and it is worth fixing once for everyone.
 ## Shape of the thing
 
 ```
-client/serve.py       the whole API, on this machine. Loopback only.
+client/serve.py       the whole API, on this machine. Loopback only, plus the
+                      one public path: `POST /webhook`, signed.
 client/chat.py        the chatroom: bots, one history each
 client/office-sync.py the only process that holds credentials
 client/runtime.py     the local agent runtime adapter: gates, runs, cost
+client/sessions.py    the Claude Code and Codex sessions running in a folder
+client/automation.py  the hourly runner: schedule, sweep, what it touched
+client/webhook.py     one GitHub delivery, verified, into the drainer
+client/buzz.py        one notification out per event
+client/sections.py    the wall: every `sources/*.py` card, in order
 client/phone/         the page served at `/`: three files, no build step
 app/Office/           the Mac app: roster, threads, gate sheet, menu bar dot
 scripts/shoot.sh      the eyes
