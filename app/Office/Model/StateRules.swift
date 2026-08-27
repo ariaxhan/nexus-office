@@ -28,7 +28,8 @@ public enum DeskState: String, CaseIterable {
         }
     }
 
-    /// The dot. Amber shouts, red asks, blue works, green landed, grey rests.
+    /// The dot, in the dark room. Amber shouts, red asks, blue works, green
+    /// landed, grey rests.
     public var hex: String {
         switch self {
         case .gated: return "#ffb020"
@@ -41,6 +42,27 @@ public enum DeskState: String, CaseIterable {
         case .idle: return "#3a3a42"
         }
     }
+
+    /// The same dot on paper.
+    ///
+    /// Not the dark one dimmed. This colour is also the words `state.label` is
+    /// written in, on a roster row and in a desk header, so it has to be
+    /// readable rather than merely recognisable: `#39d98a` is a fine green on
+    /// black and 1.9:1 on paper, which is a word nobody can read.
+    public var lightHex: String {
+        switch self {
+        case .gated: return "#845200"
+        case .waiting: return "#b81d1d"
+        case .locked: return "#4f4f59"
+        case .parked: return "#565663"
+        case .refused: return "#954100"
+        case .landed: return "#0d6a3d"
+        case .working: return "#1854c4"
+        case .idle: return "#5c5c67"
+        }
+    }
+
+    public var swatch: Palette.Swatch { Palette.Swatch(light: lightHex, dark: hex) }
 
     /// Whether a person has to do something. Drives the menu bar dot and the
     /// "needs me" filter, and nothing else.
@@ -362,6 +384,18 @@ public enum StateRules {
             case .quiet: return "#3a3a42"
             }
         }
+
+        /// The same three, on paper. A wall row draws this as the word in its
+        /// state pill, not only as the ring beside it.
+        public var lightHex: String {
+            switch self {
+            case .needs: return "#845200"
+            case .off: return "#4f4f59"
+            case .quiet: return "#5c5c67"
+            }
+        }
+
+        public var swatch: Palette.Swatch { Palette.Swatch(light: lightHex, dark: hex) }
     }
 
     public static func mood(_ section: Section) -> SectionMood {
@@ -467,7 +501,109 @@ public enum StateRules {
     /// either push every other row down or get clipped mid-glyph, so it is
     /// collapsed and cut here rather than left to the layout to survive.
     public static func lastLine(bot: Bot, limit: Int = 78) -> String {
-        line(bot.last?.content ?? "", limit: limit)
+        line(plain(bot.last?.content ?? ""), limit: limit)
+    }
+
+    // MARK: - markdown, taken off
+
+    /// A bot's sentence with its markup removed, for the one line a roster row
+    /// has.
+    ///
+    /// The thread renders the markdown. A roster row cannot: it is one line
+    /// tall, so a reply that opens `**Nothing in code.**` would read as a row
+    /// full of asterisks, and a fenced block would put three backticks where the
+    /// answer should be. This takes the syntax off and keeps every word.
+    ///
+    /// Hand-rolled rather than `AttributedString(markdown:)` on purpose. The
+    /// `.full` parser drops block boundaries, so two paragraphs come back welded
+    /// into one word, and `.inlineOnlyPreservingWhitespace` leaves the list
+    /// markers and the fences exactly where they were. Neither does the job this
+    /// does, and both need a throw site for a string that has to survive.
+    public static func plain(_ raw: String) -> String {
+        var out: [String] = []
+        var fenced = false
+        for piece in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = String(piece).trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                fenced.toggle()
+                continue
+            }
+            // Inside a fence the text is code and none of it is syntax, so it
+            // goes through untouched rather than having its underscores eaten.
+            if fenced {
+                out.append(trimmed)
+                continue
+            }
+            if isRule(trimmed) { continue }
+            out.append(inlineSyntaxOff(blockMarkerOff(trimmed)))
+        }
+        return out.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    /// `---`, `***`, `___`: a line that is only a rule carries no words.
+    private static func isRule(_ line: String) -> Bool {
+        guard line.count >= 3 else { return false }
+        return ["-", "*", "_"].contains { mark in line.allSatisfy { String($0) == mark } }
+    }
+
+    /// The thing at the start of a line that says what kind of line it is: a
+    /// heading's hashes, a quote's chevron, a bullet, an ordinal.
+    private static func blockMarkerOff(_ line: String) -> String {
+        var out = line
+        for pattern in [#"^#{1,6}\s+"#, #"^>\s?"#, #"^[-*+]\s+"#, #"^\d+[.)]\s+"#] {
+            out = replace(pattern, in: out, with: "")
+        }
+        return out
+    }
+
+    /// Emphasis, code spans, links, images. Order matters: an image is a link
+    /// with a bang on it, and `**` has to go before `*` or the pair is read as
+    /// two separate italics.
+    private static func inlineSyntaxOff(_ line: String) -> String {
+        var out = line
+        out = replace(#"!\[([^\]]*)\]\([^)]*\)"#, in: out, with: "$1")
+        out = replace(#"\[([^\]]*)\]\([^)]*\)"#, in: out, with: "$1")
+        out = replace("`+([^`]*)`+", in: out, with: "$1")
+        out = replace(#"(\*\*|__)(.+?)\1"#, in: out, with: "$2")
+        out = replace(#"~~(.+?)~~"#, in: out, with: "$1")
+        out = replace(#"(?<![\w*])[*_](?=\S)(.+?)(?<=\S)[*_](?![\w*])"#, in: out, with: "$1")
+        return out
+    }
+
+    private static func replace(_ pattern: String, in subject: String,
+                                with template: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return subject }
+        let whole = NSRange(subject.startIndex..., in: subject)
+        return regex.stringByReplacingMatches(in: subject, range: whole, withTemplate: template)
+    }
+
+    // MARK: - whether a thread follows the newest turn
+
+    /// How close to the bottom still counts as being at the bottom.
+    ///
+    /// Not zero. A thread that has just been scrolled to the end sits a pixel or
+    /// two off it, and a rule that demanded exactly zero would decide a person
+    /// had wandered off every time they had not.
+    public static let bottomSlack: Double = 48
+
+    /// Should a new turn pull the thread down to it?
+    ///
+    /// Only when the person is already at the bottom. Somebody reading four
+    /// replies back while an agent finishes a two minute run must not have the
+    /// screen yanked out from under them: that is a reply arriving and the
+    /// sentence they were halfway through disappearing, which reads as the app
+    /// losing their place. Their own message is the exception, and the view
+    /// handles that one by saying so out loud rather than by widening this.
+    public static func shouldFollow(distanceFromBottom: Double,
+                                    slack: Double = bottomSlack) -> Bool {
+        distanceFromBottom <= slack
+    }
+
+    /// The pill that appears when a reply landed somewhere a person is not
+    /// looking. Nothing at all when nothing arrived behind their back.
+    public static func newRepliesLine(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1 ? "new reply below" : "\(count) new replies below"
     }
 
     /// What a bot's row says under its name.

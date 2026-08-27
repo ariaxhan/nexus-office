@@ -330,7 +330,7 @@ struct DeskRow: View {
                 }
                 HStack(spacing: 5) {
                     Text(state.label)
-                        .foregroundStyle(Color(hex: state.hex))
+                        .foregroundStyle(Theme.color(state))
                     if !detail.isEmpty {
                         Text(detail).foregroundStyle(Theme.dim)
                     }

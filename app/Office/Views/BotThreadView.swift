@@ -20,6 +20,14 @@ struct BotThreadView: View {
     /// a keystroke going somewhere nobody is looking.
     @State private var pasteWatch: Any?
 
+    /// Where the bottom of the transcript is, and how tall the window onto it
+    /// is, both in the scroll view's own coordinates. Their difference is how
+    /// far from the newest turn a person is standing.
+    @State private var contentBottom: Double = 0
+    @State private var viewport: Double = 0
+    /// How many turns landed while she was reading something further up.
+    @State private var unread = 0
+
     private var turns: [ChatTurn] { store.chats[bot.id] ?? [] }
     private var color: Color { bot.color.isEmpty ? .derived(from: bot.id) : Color(hex: bot.color) }
 
@@ -96,6 +104,10 @@ struct BotThreadView: View {
 
     // MARK: - transcript
 
+    /// How far from the newest turn the thread is scrolled, in points. Zero
+    /// when it is sitting on the bottom.
+    private var distance: Double { max(0, contentBottom - viewport) }
+
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -148,13 +160,70 @@ struct BotThreadView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Where the bottom of everything sits, measured against the
+                // window onto it. `onScrollGeometryChange` would say this in one
+                // line and is macOS 15; this is the same fact, read the way a
+                // macOS 14 app has to read it.
+                .background(
+                    GeometryReader { inner in
+                        Color.clear.preference(key: ThreadBottom.self,
+                                               value: inner.frame(in: .named(Self.threadSpace)).maxY)
+                    }
+                )
             }
             .scrollContentBackground(.hidden)
-            .onChange(of: turns.count) { _, _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            .coordinateSpace(name: Self.threadSpace)
+            .background(
+                GeometryReader { outer in
+                    Color.clear.preference(key: ThreadViewport.self, value: outer.size.height)
+                }
+            )
+            .onPreferenceChange(ThreadBottom.self) { contentBottom = $0 }
+            .onPreferenceChange(ThreadViewport.self) { viewport = $0 }
+            // A reply is only allowed to move the screen when the screen is
+            // already on the newest turn, or when the newest turn is hers. A
+            // person four replies back reading why something was refused, and
+            // an agent finishing a two minute run under her, must not be the
+            // same event: yanking her to the bottom loses the sentence she was
+            // halfway through and reads as the app losing her place.
+            .onChange(of: turns.count) { was, now in
+                guard now > was else {
+                    unread = 0
+                    return
+                }
+                if turns.last?.isUser == true
+                    || StateRules.shouldFollow(distanceFromBottom: distance) {
+                    unread = 0
+                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                } else {
+                    unread += now - was
+                }
+            }
+            // Scrolling back down by hand is the same answer as tapping the
+            // pill, so the pill goes when she arrives rather than waiting to
+            // be dismissed.
+            .onChange(of: distance) { _, now in
+                if StateRules.shouldFollow(distanceFromBottom: now) { unread = 0 }
+            }
+            // Another name is another thread. Nothing about this one carries.
+            .onChange(of: bot.id) { _, _ in
+                unread = 0
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .overlay(alignment: .bottom) {
+                if let line = StateRules.newRepliesLine(unread) {
+                    NewRepliesPill(text: line) {
+                        unread = 0
+                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                    .padding(.bottom, 10)
+                }
             }
         }
     }
+
+    private static let threadSpace = "thread"
 
     // MARK: - composer
 
@@ -180,7 +249,9 @@ struct BotThreadView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text)
-                    .lineLimit(1...5)
+                    // Six lines and then it scrolls inside itself. A composer
+                    // that keeps growing eats the transcript it is a reply to.
+                    .lineLimit(1...6)
                     .focused($composing)
                     .onSubmit(send)
                     .padding(.horizontal, 12)
@@ -368,6 +439,48 @@ struct AttachmentChip: View {
 
 // MARK: - pieces
 
+/// How far down the transcript sits, and how big the window onto it is.
+///
+/// Two numbers rather than one because neither means anything alone: the bottom
+/// of the content is only "off screen" relative to a viewport, and the viewport
+/// changes when the composer grows.
+private struct ThreadBottom: PreferenceKey {
+    static let defaultValue: Double = 0
+    static func reduce(value: inout Double, nextValue: () -> Double) { value = nextValue() }
+}
+
+private struct ThreadViewport: PreferenceKey {
+    static let defaultValue: Double = 0
+    static func reduce(value: inout Double, nextValue: () -> Double) { value = nextValue() }
+}
+
+/// A reply landed behind you. Small, above the composer, and the only thing on
+/// this screen that moves the transcript without being asked twice.
+struct NewRepliesPill: View {
+    let text: String
+    let go: () -> Void
+
+    var body: some View {
+        Button(action: go) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(text)
+                    .font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundStyle(Theme.text)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Theme.selected)
+                    .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 1))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct Bubble: View {
     let turn: ChatTurn
     let color: Color
@@ -377,10 +490,7 @@ struct Bubble: View {
             if turn.isUser { Spacer(minLength: 60) }
             VStack(alignment: turn.isUser ? .trailing : .leading, spacing: 3) {
                 if !turn.content.isEmpty || !turn.hasPhoto {
-                    Text(turn.content)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.text)
-                        .textSelection(.enabled)
+                    said
                         .padding(.horizontal, 13)
                         .padding(.vertical, 9)
                         .background(
@@ -400,6 +510,24 @@ struct Bubble: View {
             }
             .frame(maxWidth: 560, alignment: turn.isUser ? .trailing : .leading)
             if !turn.isUser { Spacer(minLength: 60) }
+        }
+    }
+
+    /// A bot writes markdown; a person writes a sentence.
+    ///
+    /// Aria's own turns stay plain on purpose. What she typed is what she meant,
+    /// including the asterisks, and a composer that quietly reinterprets her
+    /// punctuation on the way into the transcript is a composer she cannot
+    /// predict. A reply is the other way round: an agent writes lists and
+    /// fenced commands because that is how the answer is shaped.
+    @ViewBuilder private var said: some View {
+        if turn.isUser {
+            Text(turn.content)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.text)
+                .textSelection(.enabled)
+        } else {
+            MarkdownText(raw: turn.content, size: 13)
         }
     }
 }
@@ -471,7 +599,7 @@ struct GateCard: View {
                 .textSelection(.enabled)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.black))
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.well))
             if !gate.detail.isEmpty {
                 Text(gate.detail)
                     .font(.system(size: 12))

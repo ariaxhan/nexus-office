@@ -21,7 +21,12 @@
         "name": "Inbox",
         "color": "#8b7cf6",
         "purpose": "What arrived and what needs you today: mail, meetings, captures, issues waiting on a person.",
-        "busy": false
+        "busy": false,
+        "last": {
+          "role": "assistant",
+          "at": "2026-08-26T18:31:00Z",
+          "content": "**Two** things came in: `deploy-prod` failed on [northwind/api](https://example.com/a) and a human replied on #58"
+        }
       },
       {
         "id": "release",
@@ -83,6 +88,12 @@
         "role": "assistant",
         "at": "2026-08-26T18:42:00Z",
         "content": "That is the old total, so the fix is not on the box you photographed. #213 landed an hour ago and the deploy has not run since."
+      },
+      {
+        "role": "assistant",
+        "at": "2026-08-26T18:44:00Z",
+        "_note": "A reply written the way an agent writes one. The thread renders it as a page: a list is a list, the fenced block is monospace on the recessed surface, and the roster row under this bot's name shows the words with none of the syntax.",
+        "content": "Three things are still open on **storefront**, in the order they block each other:\n\n- `host_name` is dropped by the checkout serialiser when the cart is empty\n- billing #58 needs a *human* decision about the refund window\n- the deploy has not run since #213 landed, so the box you photographed is old\n\nThe serialiser is one guard:\n\n```swift\nguard let host = order.host, !host.isEmpty else {\n    return .failure(.missingHost)\n}\n```\n\nThe refund window is written down in [the billing runbook](https://example.com/runbook) and I am not going to guess at it."
       }
     ],
     "release": [
@@ -310,42 +321,42 @@
           "facts": [
             {
               "label": "Inbox",
-              "value": "did nothing (rc 0) \u00b7 18h39m ago",
+              "value": "did nothing (rc 0) · 18h39m ago",
               "tone": "bad"
             },
             {
               "label": "Distillations",
-              "value": "ok \u00b7 8h9m ago",
+              "value": "ok · 8h9m ago",
               "tone": "ok"
             },
             {
               "label": "Granola",
-              "value": "ok \u00b7 1h13m ago",
+              "value": "ok · 1h13m ago",
               "tone": "ok"
             },
             {
               "label": "Issue pipeline",
-              "value": "ok \u00b7 1h2m ago",
+              "value": "ok · 1h2m ago",
               "tone": "ok"
             },
             {
               "label": "Mobile capture",
-              "value": "ok \u00b7 3m ago",
+              "value": "ok · 3m ago",
               "tone": "ok"
             },
             {
               "label": "Money swarm",
-              "value": "ok \u00b7 2h2m ago",
+              "value": "ok · 2h2m ago",
               "tone": "ok"
             },
             {
               "label": "Morning briefing",
-              "value": "ok \u00b7 19h9m ago",
+              "value": "ok · 19h9m ago",
               "tone": "ok"
             },
             {
               "label": "Outbound",
-              "value": "ok \u00b7 16h46m ago",
+              "value": "ok · 16h46m ago",
               "tone": "ok"
             }
           ]
@@ -448,9 +459,11 @@
             "mergeable": "MERGEABLE",
             "state": "CLEAN",
             "closes": [
-              213
+              213,
+              214
             ],
-            "updatedAt": "2026-08-26T18:19:00Z"
+            "updatedAt": "2026-08-26T18:19:00Z",
+            "body": "The checkout serialiser dropped `host_name` whenever the cart came back empty, so every empty-cart webhook arrived at billing with no host on it and was silently binned.\n\nThe guard now runs before the early return rather than after it, which is where it was always meant to be. One line moved, one test added:\n\n- `test_empty_cart_keeps_host` fails on main and passes here\n- the webhook replay for the four binned events is in the issue, not in this PR\n\nCloses #213 and #214."
           },
           {
             "number": 212,
@@ -464,7 +477,8 @@
             "closes": [
               209
             ],
-            "updatedAt": "2026-08-26T13:10:00Z"
+            "updatedAt": "2026-08-26T13:10:00Z",
+            "body": "One retry, one second apart, then the same give-up it always had. Closes #209.\n\nRebase needed: main moved under this."
           }
         ],
         "prs_error": null
@@ -627,6 +641,21 @@
         "issues_error": null,
         "prs": [
           {
+            "number": 34,
+            "title": "#31: do not read the cache before it exists",
+            "head": "pipeline/auto-issue-31",
+            "base": "main",
+            "url": "https://github.com/acme/mobile/pull/34",
+            "draft": false,
+            "mergeable": "MERGEABLE",
+            "state": "CLEAN",
+            "closes": [
+              31
+            ],
+            "updatedAt": "2026-08-26T18:33:00Z",
+            "body": "The cold-start read happened before the store had finished opening, so the first launch after an install read a file that was not there yet.\n\nCloses #31. The hotfix-or-wait decision in the issue is yours and this does not make it."
+          },
+          {
             "number": 33,
             "title": "#30: guard the cold-start cache read",
             "head": "pipeline/auto-issue-30",
@@ -638,7 +667,8 @@
             "closes": [
               30
             ],
-            "updatedAt": "2026-08-26T18:28:00Z"
+            "updatedAt": "2026-08-26T18:28:00Z",
+            "body": "Draft while the cold-start numbers come back. Closes #30."
           }
         ],
         "prs_error": null

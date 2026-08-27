@@ -238,13 +238,22 @@ public struct PullRequest: Decodable, Hashable, Identifiable {
     public var state: String
     public var closes: [Int]
     public var updatedAt: String
+    /// What the PR says about itself.
+    ///
+    /// The office's own PRs are written by the runner, so this is the closest
+    /// thing to a note from the agent that did the work, and reading it is most
+    /// of deciding whether to press merge. Empty is the ordinary case for a PR
+    /// opened with no description, and is drawn as nothing rather than as a
+    /// blank panel.
+    public var body: String
 
     public var id: Int { number }
     public var canMerge: Bool { mergeable == "MERGEABLE" && !draft }
 
     public init(number: Int, title: String, head: String = "", base: String = "main",
                 url: String = "", draft: Bool = false, mergeable: String = "UNKNOWN",
-                state: String = "UNKNOWN", closes: [Int] = [], updatedAt: String = "") {
+                state: String = "UNKNOWN", closes: [Int] = [], updatedAt: String = "",
+                body: String = "") {
         self.number = number
         self.title = title
         self.head = head
@@ -255,10 +264,11 @@ public struct PullRequest: Decodable, Hashable, Identifiable {
         self.state = state
         self.closes = closes
         self.updatedAt = updatedAt
+        self.body = body
     }
 
     enum CodingKeys: String, CodingKey {
-        case number, title, head, base, url, draft, mergeable, state, closes, updatedAt
+        case number, title, head, base, url, draft, mergeable, state, closes, updatedAt, body
     }
 
     public init(from decoder: Decoder) throws {
@@ -273,6 +283,7 @@ public struct PullRequest: Decodable, Hashable, Identifiable {
         state = c.str(.state) ?? "UNKNOWN"
         closes = c.list(.closes, Int.self)
         updatedAt = c.str(.updatedAt) ?? ""
+        body = c.str(.body) ?? ""
     }
 }
 

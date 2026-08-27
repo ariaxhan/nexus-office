@@ -46,6 +46,12 @@ targets:
       - path: OfficeTests
       - path: Office/Model/StateRules.swift
       - path: Office/Model/Models.swift
+      # The palette, as numbers. Whether a person can read a grey on a paper
+      # background is arithmetic on three channels, and arithmetic is the one
+      # thing about a colour that must not be settled by looking at it: two
+      # greys that are obviously different on the machine that picked them are
+      # one grey on a laptop at an angle in a bright room.
+      - path: Office/Model/Palette.swift
       # Shrinking a picture to fit the door is arithmetic on bytes, and the
       # failure is a payload a hundred kilobytes too big that only says so on a
       # real send. ImageIO and CoreGraphics, no AppKit, so it stays provable here.
