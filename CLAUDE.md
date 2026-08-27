@@ -3,42 +3,40 @@
 Read this before changing anything. It is short because only a few things here
 are non-obvious, and all of them have already cost a day.
 
-## The one rule: a build passing proves nothing about a room
+## The one rule: a build passing proves nothing about a screen
 
-This is a 3D surface. Almost every defect this project has had was **invisible in
-source and obvious on screen**:
+Almost every defect this project has had was **invisible in source and obvious
+on screen**:
 
-| defect | `npm run build` | tests | a picture |
-| --- | --- | --- | --- |
-| lock screen covering a working office | passed | passed | obvious |
-| near wing rendered 3x closer than the far one | passed | passed | obvious |
-| villagers with black holes for heads | passed | passed | obvious |
-| face plate hidden inside its own skull | passed | passed | obvious |
-| name plaque parked across the face | passed | passed | obvious |
-| raised hand reading as a shrug | passed | passed | obvious |
+| defect | `npm test` | a picture |
+| --- | --- | --- |
+| lock screen covering a working office | passed | obvious |
+| villagers with black holes for heads | passed | obvious |
+| the app launching with no window at all | passed | obvious |
+| a stray keystroke filtering four desks out of a framing | passed | obvious |
 
-So: **after any change that could alter what the room looks like, take pictures
+So: **after any change that could alter what the app looks like, take pictures
 and look at them.**
 
 ```sh
-npm run build && npm run shot        # every framing into shots/
-npm run shot -- gate desk            # just those two
+npm run shot        # builds the app, runs it on the fixture, four framings into shots/
 ```
 
-`shots/*.png` are real images. Open them. If you are an agent, **read the PNG
-files** — you can see them, and that is the entire point of this harness existing.
+`shots/app-*.png` are real images. Open them. If you are an agent, **read the PNG
+files**: you can see them, and that is the entire point of this harness existing.
 
-It runs against `?demo=1`, so it needs no account, no session, no pipeline and no
-network. A check that needs credentials is a check that stops running.
+It runs against `app/Demo/demo.json`, so it needs no account, session, pipeline
+or network: a check that needs credentials is a check that stops running. It does
+need a screen that is awake, which is why it caffeinates. `screencapture` returns
+a black frame from a sleeping display and no error.
 
-Add a framing to `scripts/shoot.mjs` when you add a feature the existing shots
+Add a framing to `scripts/shoot.sh` when you add something the existing four
 would not reveal. A framing nobody looks at is a framing that rots.
 
 ## Verify gates
 
 ```sh
-npm test        # node tests + python tests
-npm run build
+npm test        # python door + Swift state rules, both headless
 npm run shot    # then LOOK
 ```
 
@@ -47,65 +45,65 @@ Do not weaken them to make a change pass.
 
 ## Things that are load bearing and look like they are not
 
-- **`[hidden] { display: none !important; }`** in `styles.css`. An id selector
-  with a `display` outranks the user agent's `[hidden]` rule, so without this the
-  DOM reports `hidden === true` while the element sits there in full view.
-- **`this.scene.updateMatrixWorld(true)` before raycasting** in `office.js`.
-  Raycasting reads `matrixWorld`, which only the renderer refreshes. Without it
-  every click on a desk silently finds nothing, with no error.
-- **The face plate at z 0.36, tilted -0.3** in `villager.js`. The head sphere has
-  radius 0.34; anything closer is inside it and loses the depth test. Tilting it
-  further swings its lower edge into the skull and eats the mouth.
+- **The window is AppKit, not a SwiftUI `Window` scene** (`OfficeApp.swift`). A
+  `Window` scene decides for itself whether to restore, and it intermittently
+  launched with nothing on screen. Owning the window means it opens every time.
+- **`screencapture -R` on the window's frame, never `-l <windowid>`**
+  (`Shot/ShotHarness.swift`). A sheet is its own window, so a window capture of
+  the gate framing photographs an office with no gate in it, which is the exact
+  lie the harness exists to catch.
+- **`.interactiveDismissDisabled()` on the gate sheet** (`Views/GateSheet.swift`).
+  No close button, no click outside, Escape does nothing. The sheet leaves when
+  the gate stops being pending, which is a fact about the agent and not about
+  this window.
+- **The one ordering in `Model/StateRules.swift`**: gate, waiting, locked,
+  parked, refused, landed, working, idle. A repo that both landed a PR and is
+  blocked on a question is blocked. Foundation only, so it tests with no app host.
 - **The question id in a permit** (`client/runtime.py`). Between a gate being
   shown and answered, the agent can time out and a *different* gate can open.
   Answering by position instead of by id would approve a command nobody saw.
-- **Escaping before markup** in `ui/markdown.js`. Issue bodies are written by
-  anyone who can open an issue and render into a page holding a session token.
+- **The `Host` and origin checks on writes** (`client/serve.py`). The bind address
+  keeps the network out, not the browser: any page you have open can POST to
+  `127.0.0.1`, and a `text/plain` form post needs no preflight. So a write must
+  name this door as its Host and be JSON, from this origin or from no page at all.
 
-## Adding something to the room
+## Adding something to the app
 
-Anything that is not a desk is a **fixture**: the clock, the cost chart, the
-mailroom. One fixture, one file, so several can be built at once without anyone
-stepping on anyone.
+One thing, one file, so several can be built at once without collisions.
 
 ```
-src/scene/fixtures/<id>.js   the 3D object and its panel      (the contract is in all.js)
-client/sources/<id>.py       the local data, if it needs any  (listed in client/sections.py)
-tests/<id>.test.js           or tests/test_<id>.py
+client/sources/<id>.py       the local data                  (listed in client/sections.py)
+app/Office/Views/<Id>.swift  what it looks like
+scripts/shoot.sh             a framing, if the four would not reveal it
+tests/test_<id>.py           or app/OfficeTests/<Id>Tests.swift
 ```
 
-The data lands in the snapshot at `world.sections.<id>`. `scripts/shoot.mjs`
-discovers fixtures from the directory and takes a picture of each, so a new
-fixture cannot ship without one, and its shot stays red until it is built.
+The data lands in the snapshot at `world.sections.<id>`.
 
-Nothing else needs editing. If a fixture makes you want to change `office.js`,
-`panel.js` or `styles.css`, say so rather than doing it quietly: that is a seam
-being wrong, and it is worth fixing once for everyone.
+If a new thing makes you want to change `Model/Store.swift`, `Views/RosterView.swift`
+or `Model/Api.swift`, say so rather than doing it quietly: that is a seam being
+wrong, and it is worth fixing once for everyone.
 
 ## Shape of the thing
 
 ```
 client/serve.py       the whole API, on this machine. Loopback only.
-src/scene/            the room: layout, furniture, camera, picking, characters
-src/ui/               panel, markdown, filters
-src/demo.js           the fake floor behind ?demo=1
+client/chat.py        the chatroom: bots, one history each
 client/office-sync.py the only process that holds credentials
 client/runtime.py     the local agent runtime adapter: gates, runs, cost
-scripts/shoot.mjs     the eyes
+app/Office/           the Mac app: roster, threads, gate sheet, menu bar dot
+scripts/shoot.sh      the eyes
 ```
-
-`window.office` is exposed in the browser on purpose. A 3D surface that can only
-be inspected by squinting at screenshots is a surface nobody can debug.
 
 ## Rules that are not negotiable
 
 - **The server binds loopback only.** Anything that needs it on the network goes
   through Tailscale Serve, never a bind address.
 - **A gate is never hidden.** No filter, no "put this away", nothing removes a
-  raised hand from the room.
+  raised hand.
 - **Hidden is never silent.** If something put away starts needing a human, the
-  room says so.
-- **No hand-maintained lists.** Villagers are a pure function of the repo path.
+  app says so.
+- **No hand-maintained lists.** Desks are a pure function of the repo path.
 - **Never present an estimate as a measurement.** The cost ledger has an
   `estimate` flag; a graph edge has a `confidence`. Flattening either is a lie
   with a decimal point on it.
