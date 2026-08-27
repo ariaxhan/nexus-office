@@ -465,27 +465,40 @@ def batch_query(n: int) -> str:
             f"{lines}\n}}\n{DESK_FRAGMENT}")
 
 
+def _bot_last_word(node) -> str:
+    """The bot's comment when it had the last word on this issue, else "".
+
+    THE rule, copied from dispatch.sh on purpose: the bot having the last
+    word is what "waiting on a human" mechanically means. A label is a hint
+    that can go stale; this cannot.
+    """
+    comments = ((node.get("comments") or {}).get("nodes")) or []
+    if not comments:
+        return ""
+    body = comments[-1].get("body") or ""
+    if BOT_MARKER not in body:
+        return ""
+    return body
+
+
+def _issue_row(i) -> dict:
+    last_word = _bot_last_word(i)
+    return {
+        "number": i.get("number"),
+        "title": i.get("title") or "",
+        "body": (i.get("body") or "")[:4000],
+        "labels": [l.get("name") for l in ((i.get("labels") or {}).get("nodes") or [])],
+        "url": i.get("url") or "",
+        "updatedAt": i.get("updatedAt") or "",
+        "bot_last": bool(last_word),
+        # When the bot spoke last, its words ARE the question a human has to
+        # answer, so they travel with the issue instead of behind a click.
+        "last_word": last_word[:1500],
+    }
+
+
 def _issue_rows(nodes) -> list:
-    issues = []
-    for i in nodes or []:
-        comments = ((i.get("comments") or {}).get("nodes")) or []
-        last = comments[-1] if comments else None
-        # THE rule, copied from dispatch.sh on purpose: the bot having the last
-        # word is what "waiting on a human" mechanically means. A label is a hint
-        # that can go stale; this cannot.
-        bot_last = bool(last and BOT_MARKER in (last.get("body") or ""))
-        issues.append({
-            "number": i.get("number"),
-            "title": i.get("title") or "",
-            "body": (i.get("body") or "")[:4000],
-            "labels": [l.get("name") for l in ((i.get("labels") or {}).get("nodes") or [])],
-            "url": i.get("url") or "",
-            "updatedAt": i.get("updatedAt") or "",
-            "bot_last": bot_last,
-            # When the bot spoke last, its words ARE the question a human has to
-            # answer, so they travel with the issue instead of behind a click.
-            "last_word": (last.get("body") or "")[:1500] if bot_last else "",
-        })
+    issues = [_issue_row(i) for i in nodes or []]
     issues.sort(key=lambda x: (not x["bot_last"], -(x["number"] or 0)))
     return issues
 
