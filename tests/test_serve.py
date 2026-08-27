@@ -153,3 +153,77 @@ class ServeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DoorTest(ServeTest):
+    """The bind address keeps the network out; these keep the browser out."""
+
+    def raw(self, method, path, headers=None, body=None):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        h = {"host": f"127.0.0.1:{self.port}", "content-type": "application/json"}
+        h.update(headers or {})
+        c.request(method, path, body=json.dumps(body).encode() if body is not None else None, headers=h)
+        r = c.getresponse()
+        data = json.loads(r.read().decode() or "{}")
+        c.close()
+        return r.status, data
+
+    def test_a_request_for_another_host_is_refused(self):
+        """DNS rebinding: an attacker's name resolving to 127.0.0.1 must read nothing."""
+        code, body = self.raw("GET", "/api/world", {"host": "evil.example.com"})
+        self.assertEqual(code, 403)
+        self.assertNotIn("world", body)
+
+    def test_a_cross_site_write_is_refused(self):
+        code, _ = self.raw("POST", "/api/gate", {"sec-fetch-site": "cross-site"},
+                           {"question_id": "deadbeefcafe", "answer": "allow"})
+        self.assertEqual(code, 403)
+
+    def test_a_write_from_another_origin_is_refused(self):
+        code, _ = self.raw("POST", "/api/decision", {"origin": "https://evil.example.com"},
+                           {"kind": "comment", "repo": "a/b", "issue": 1, "body": "x"})
+        self.assertEqual(code, 403)
+
+    def test_a_form_post_is_refused(self):
+        """text/plain needs no preflight, so a plain HTML form could reach here."""
+        code, _ = self.raw("POST", "/api/gate", {"content-type": "text/plain"},
+                           {"question_id": "deadbeefcafe", "answer": "allow"})
+        self.assertEqual(code, 403)
+
+    def test_a_same_origin_write_still_works(self):
+        code, body = self.raw("POST", "/api/decision",
+                              {"origin": f"http://127.0.0.1:{self.port}", "sec-fetch-site": "same-origin"},
+                              {"kind": "nope"})
+        self.assertEqual(code, 400)  # past the door, refused by validation as before
+        self.assertIn("error", body)
+
+    def test_validation_matches_the_worker_not_python(self):
+        v = self.serve.validate
+        self.assertIsNotNone(v({"kind": "comment", "repo": "a/b\n", "issue": 7, "body": "x"})[0])
+        self.assertIsNotNone(v({"kind": "merge", "repo": "a/b", "pr": "7\n"})[0])
+        self.assertIsNotNone(v({"kind": "merge", "repo": "a/b", "pr": "١٢"})[0])
+        self.assertIsNone(v({"kind": "merge", "repo": "a/b", "pr": "7"})[0])
+
+
+class StaticTest(unittest.TestCase):
+    def test_a_sibling_directory_named_like_dist_is_not_served(self):
+        import tempfile, http.client, serve
+        serve.log = lambda msg: None
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        (tmp / "dist").mkdir(); (tmp / "dist-orders").mkdir()
+        (tmp / "dist" / "index.html").write_text("<!doctype html>ROOM")
+        (tmp / "dist-orders" / "index.html").write_text("<!doctype html>SIBLING")
+        world = serve.World()
+        httpd = serve.make_server(world, tmp / "dist", 0)
+        port = httpd.server_address[1]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True); t.start()
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            c.request("GET", "/../dist-orders/index.html", headers={"host": f"127.0.0.1:{port}"})
+            r = c.getresponse(); body = r.read().decode(); c.close()
+            self.assertEqual(r.status, 200)
+            self.assertIn("ROOM", body)
+            self.assertNotIn("SIBLING", body)
+        finally:
+            httpd.shutdown(); httpd.server_close()
