@@ -875,28 +875,13 @@ def apply_merge(repo, who, tok, payload, dry: bool):
         return False, "a merge needs a PR number"
 
     env = {"GH_TOKEN": tok}
-    rc, out, err = sh(["gh", "pr", "view", num, "--repo", repo, "--json",
-                       "headRefName,isDraft,mergeable,state,title"],
-                      timeout=60, env=env)
-    if rc != 0:
-        return False, f"could not read PR #{num}: {(err.strip().splitlines() or ['failed'])[0][:120]}"
-    try:
-        pr = json.loads(out or "{}")
-    except Exception as exc:
-        return False, f"could not read PR #{num}: {exc}"
-
+    pr, err = _read_pr(repo, num, env)
+    if err:
+        return False, err
     head = pr.get("headRefName") or ""
-    if not head.startswith(PR_PREFIX):
-        # The refusal names the branch on purpose. A silent no here would look
-        # exactly like a failure to reach GitHub.
-        return False, (f"refusing: PR #{num} is on {head!r}, which is not a pipeline "
-                       f"branch. The office only merges branches starting {PR_PREFIX!r}.")
-    if (pr.get("state") or "").upper() != "OPEN":
-        return False, f"PR #{num} is {pr.get('state', 'not open').lower()}"
-    if pr.get("isDraft"):
-        return False, f"PR #{num} is a draft; a draft says it is not ready"
-    if (pr.get("mergeable") or "").upper() == "CONFLICTING":
-        return False, f"PR #{num} conflicts with its base and needs a human"
+    refusal = _merge_refusal(pr, num, head)
+    if refusal:
+        return False, refusal
 
     if dry:
         return True, f"would squash-merge #{num} ({head})"
@@ -907,6 +892,35 @@ def apply_merge(repo, who, tok, payload, dry: bool):
         msg = (err.strip().splitlines() or ["failed"])[0][:160]
         return False, f"merge refused by GitHub: {msg}"
     return True, f"as {who}: squash-merged #{num} ({head}); its Closes line shuts the issue"
+
+
+def _read_pr(repo, num, env):
+    """The PR as GitHub describes it right now, as (pr, error)."""
+    rc, out, err = sh(["gh", "pr", "view", num, "--repo", repo, "--json",
+                       "headRefName,isDraft,mergeable,state,title"],
+                      timeout=60, env=env)
+    if rc != 0:
+        return None, f"could not read PR #{num}: {(err.strip().splitlines() or ['failed'])[0][:120]}"
+    try:
+        return json.loads(out or "{}"), ""
+    except Exception as exc:
+        return None, f"could not read PR #{num}: {exc}"
+
+
+def _merge_refusal(pr: dict, num: str, head: str) -> str:
+    """Why this PR must not be merged, or "" when it may."""
+    if not head.startswith(PR_PREFIX):
+        # The refusal names the branch on purpose. A silent no here would look
+        # exactly like a failure to reach GitHub.
+        return (f"refusing: PR #{num} is on {head!r}, which is not a pipeline "
+                f"branch. The office only merges branches starting {PR_PREFIX!r}.")
+    if (pr.get("state") or "").upper() != "OPEN":
+        return f"PR #{num} is {pr.get('state', 'not open').lower()}"
+    if pr.get("isDraft"):
+        return f"PR #{num} is a draft; a draft says it is not ready"
+    if (pr.get("mergeable") or "").upper() == "CONFLICTING":
+        return f"PR #{num} conflicts with its base and needs a human"
+    return ""
 
 
 def _apply_permit(d, payload, dry: bool):
