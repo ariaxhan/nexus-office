@@ -5,10 +5,10 @@
   "identity": "ariaxhan",
   "engine": "claude",
   "capability": "commit_and_pr",
-  "enabled": false,
+  "enabled": true,
   "_cap_minutes": "25 rather than the vault's 12, because these issues are room-building rather than bug-fixing and a lane needs time to build, shoot, LOOK at the pictures, and fix what it sees. Not higher: run_budget_minutes is 45 across all 71 repos, and a lane that eats most of a run starves everyone else.",
   "cap_minutes": 25,
   "_max_issues_per_run": "One. Each remaining issue is a substantial piece of the room, and a lane that rushes three of them produces three PRs nobody wants to review.",
   "max_issues_per_run": 1,
-  "note": "PARKED again 2026-08-26 evening: the roadmap epic and milestone issues for the Mac app were filed and must not be built by a lane until Aria says go on a milestone; flip to true per milestone. Earlier: Unparked 2026-08-26 once the repo could be SEEN: `npm run shot` renders the demo floor headless and writes PNGs a lane can read, and CLAUDE.md tells a lane to read them. Milestone 2 (#9 to #15) was then built by hand across seven lanes and merged, so the repo was briefly parked again while that was in flight. What is left is #18, which is ready, and #17, which needs a decision and should be refused rather than guessed at."
+  "note": "UNPARKED 2026-08-27 on Aria's say-so, so the lane may work this repo again. READ THIS BEFORE ASSUMING EVERY OPEN ISSUE IS FAIR GAME: selection is `did the bot have the last word`, and nothing else, so unparking made all 16 open issues eligible, including the roadmap epic #16 and the milestone issues #20 (M0), #22 (M2), #24 (M4) and #25 (M5). M0, M2 and M4 are SHIPPED; a lane picking one up would rebuild something that already exists. Close them or answer them so the bot holds the last word. What Aria actually wanted worked when she unparked this was #43 (Sorting/Filters) and #44 (Settings page). Earlier: PARKED 2026-08-26 evening because the roadmap epic and milestone issues were filed and must not be built by a lane until Aria says go on a milestone. Before that: unparked 2026-08-26 once the repo could be SEEN, because `npm run shot` renders the demo floor headless and writes PNGs a lane can read, and CLAUDE.md tells a lane to read them."
 }
