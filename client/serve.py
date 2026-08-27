@@ -37,7 +37,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import runtime as rt  # noqa: E402  (needs the path above)
+import chat  # noqa: E402  (needs the path above)
+import runtime as rt  # noqa: E402
 
 # The command is hyphenated because it is a command first and a module second.
 # Loading it by path is what the tests do too; renaming it would rename the thing
@@ -210,6 +211,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     world = None
     dist = None
+    chatroom = None
 
     def log_message(self, fmt, *args):
         # One line per API call, on stderr. Every asset in dist/ is noise.
@@ -275,6 +277,12 @@ class Handler(BaseHTTPRequestHandler):
                                    "server_time": now_iso()})
             if path == "/api/gate":
                 return self._json(rt.read_gate())
+            if path == "/api/bots":
+                return self._json(self.chatroom.roster())
+            if path == "/api/chat":
+                bot = (urllib.parse.parse_qs(query).get("bot") or [""])[0]
+                code, body = self.chatroom.history(bot)
+                return self._json(body, code)
             if path == "/api/health":
                 return self._json({"ok": True, "snapshot_at": self.world.at,
                                    "server_time": now_iso()})
@@ -298,6 +306,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._decision(self._read_json())
             if path == "/api/gate":
                 return self._gate(self._read_json())
+            if path == "/api/chat":
+                # Returns before the turn has run: a chat turn is an agent run,
+                # and nothing on the other end of this socket waits two minutes.
+                code, body = self.chatroom.say(self._read_json())
+                return self._json(body, code)
             return self._json({"error": "not found"}, 404)
         except ValueError as exc:
             self._json({"error": str(exc)[:200]}, 400)
@@ -350,7 +363,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(world: World, dist: pathlib.Path | None = None, port: int = 8790):
     """Loopback only. Never 0.0.0.0: the bind address IS the security model."""
-    handler = type("BoundHandler", (Handler,), {"world": world, "dist": dist})
+    handler = type("BoundHandler", (Handler,),
+                   {"world": world, "dist": dist, "chatroom": chat.Chatroom()})
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
 
 

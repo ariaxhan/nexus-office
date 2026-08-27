@@ -227,3 +227,310 @@ class StaticTest(unittest.TestCase):
             self.assertNotIn("SIBLING", body)
         finally:
             httpd.shutdown(); httpd.server_close()
+
+
+# ── the chatroom ────────────────────────────────────────────────────────────
+# Four bots you talk to like colleagues. Two things here are worth a test more
+# than the happy path is. The roster has to survive the harness being closed,
+# because a chatroom whose desks vanish when a dev server stops is a chatroom
+# nobody trusts. And a turn takes a minute, so the office must answer at once
+# and refuse a second turn for the same bot rather than let two agents write
+# one transcript.
+
+
+def free_port() -> int:
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def api_get(port, path):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=15) as r:
+            return r.status, json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode()
+        exc.close()
+        return exc.code, json.loads(raw or "{}")
+
+
+def api_post(port, path, body):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
+                                 data=json.dumps(body).encode(), method="POST",
+                                 headers={"content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode()
+        exc.close()
+        return exc.code, json.loads(raw or "{}")
+
+
+class FakeHarness:
+    """The agent runtime, small enough to hold still.
+
+    The real one runs a whole agent per turn. This one records what it was told,
+    can be held open on demand so "busy" is a fact rather than a race, and knows
+    exactly two bots so an unknown one still 404s.
+    """
+
+    BOTS = ("chief", "inbox")
+
+    def __init__(self):
+        import urllib.parse as up
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.lock = threading.Lock()
+        self.turns = {b: [] for b in self.BOTS}
+        self.received = []
+        self.hold = None  # an Event a test sets to keep a turn in flight
+        outer = self
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def reply(self, obj, code=200):
+                raw = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                path, _, query = self.path.partition("?")
+                bot = (up.parse_qs(query).get("bot") or [""])[0]
+                if path == "/api/bots":
+                    return self.reply({"bots": [outer.row(b) for b in outer.BOTS]})
+                if path == "/api/chat":
+                    if bot not in outer.turns:
+                        return self.reply({"error": "no such bot"}, 404)
+                    with outer.lock:
+                        return self.reply({"bot": bot, "turns": list(outer.turns[bot])})
+                self.reply({"error": "not found"}, 404)
+
+            def do_POST(self):
+                n = int(self.headers.get("content-length") or 0)
+                body = json.loads(self.rfile.read(n).decode() or "{}")
+                if outer.hold is not None:
+                    outer.hold.wait(20)
+                bot, msg = body.get("bot"), body.get("message")
+                if bot not in outer.turns:
+                    return self.reply({"error": "no such bot"}, 404)
+                with outer.lock:
+                    outer.received.append((bot, msg))
+                    outer.turns[bot].append({"role": "user", "text": msg, "at": "then"})
+                    outer.turns[bot].append({"role": "assistant", "text": f"heard {msg}",
+                                             "at": "then"})
+                self.reply({"ok": True, "bot": bot})
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def row(self, bot):
+        with self.lock:
+            turns = self.turns[bot]
+            return {"id": bot, "name": bot.title(), "color": "#111",
+                    "last": turns[-1] if turns else None, "busy": False}
+
+    def url(self):
+        return f"http://127.0.0.1:{self.port}"
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+class ChatTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import serve
+
+        cls.serve = serve
+        serve.log = lambda msg: None
+        serve.office_sync.Access = lambda: object()
+        serve.office_sync.build_snapshot = lambda access: dict(SNAP)
+
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = pathlib.Path(cls.tmp.name)
+        (root / "_meta").mkdir(parents=True)
+        # `identity` is the whole persona and must never reach the wire.
+        (root / "_meta" / "bots.json").write_text(json.dumps({"bots": [
+            {"id": "chief", "name": "Chief", "color": "#8FD3C7",
+             "identity": "SECRET-PERSONA-CHIEF"},
+            {"id": "inbox", "name": "Inbox", "color": "#B7A8F0",
+             "identity": "SECRET-PERSONA-INBOX"},
+        ]}))
+
+        cls.env = {k: os.environ.get(k) for k in ("OFFICE_RUNTIME_ROOT", "OFFICE_RUNTIME_URL")}
+        os.environ["OFFICE_RUNTIME_ROOT"] = str(root)
+        cls.harness = FakeHarness()
+        cls.nowhere = f"http://127.0.0.1:{free_port()}"
+
+        cls.world = serve.World()
+        cls.world.build()
+        cls.httpd = serve.make_server(cls.world, None, 0)
+        cls.port = cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        cls.harness.close()
+        cls.tmp.cleanup()
+        for k, v in cls.env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def setUp(self):
+        os.environ["OFFICE_RUNTIME_URL"] = self.harness.url()
+        # Every test starts from an empty transcript, so none of them can pass
+        # because of what an earlier one happened to say.
+        with self.harness.lock:
+            self.harness.turns = {b: [] for b in self.harness.BOTS}
+            self.harness.received = []
+
+    def tearDown(self):
+        self.harness.hold = None
+        os.environ["OFFICE_RUNTIME_URL"] = self.harness.url()
+        # No test may leave a bot mid-turn for the next one to trip over.
+        self.assertTrue(self.until(lambda: not any(
+            b["busy"] for b in api_get(self.port, "/api/bots")[1]["bots"])))
+
+    def until(self, fn, timeout=20):
+        end = time.time() + timeout
+        while time.time() < end:
+            if fn():
+                return True
+            time.sleep(0.02)
+        return False
+
+    def bot(self, bot_id):
+        code, body = api_get(self.port, "/api/bots")
+        self.assertEqual(code, 200)
+        return body, next(b for b in body["bots"] if b["id"] == bot_id)
+
+    # ── the roster ──────────────────────────────────────────────────────────
+    def test_the_roster_survives_the_harness_being_closed(self):
+        """Four desks with nobody home reads completely differently from an
+        empty floor, and only one of the two is the truth."""
+        os.environ["OFFICE_RUNTIME_URL"] = self.nowhere
+        code, body = api_get(self.port, "/api/bots")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["runtime"], "down")
+        self.assertTrue(body["at"])
+        self.assertEqual([b["id"] for b in body["bots"]], ["chief", "inbox"])
+        self.assertEqual([b["name"] for b in body["bots"]], ["Chief", "Inbox"])
+        for b in body["bots"]:
+            self.assertIsNone(b["last"])
+            self.assertFalse(b["busy"])
+
+    def test_the_roster_carries_the_last_word_when_the_harness_is_up(self):
+        with self.harness.lock:
+            self.harness.turns["inbox"] = [{"role": "assistant", "text": "two waiting",
+                                            "at": "then"}]
+        body, inbox = self.bot("inbox")
+        self.assertEqual(body["runtime"], "up")
+        self.assertEqual(inbox["last"]["text"], "two waiting")
+        # A bot who has said nothing has no last word, rather than someone else's.
+        self.assertIsNone(self.bot("chief")[1]["last"])
+
+    def test_a_persona_never_leaves_the_machine(self):
+        """`identity` is the script the harness feeds a turn. The office ships
+        the name, not the script."""
+        for url in (self.harness.url(), self.nowhere):
+            os.environ["OFFICE_RUNTIME_URL"] = url
+            _, body = api_get(self.port, "/api/bots")
+            raw = json.dumps(body)
+            self.assertNotIn("identity", raw)
+            self.assertNotIn("SECRET-PERSONA", raw)
+
+    # ── the conversation ────────────────────────────────────────────────────
+    def test_history_is_proxied_from_the_harness(self):
+        with self.harness.lock:
+            self.harness.turns["chief"] = [{"role": "user", "text": "morning", "at": "then"}]
+        code, body = api_get(self.port, "/api/chat?bot=chief")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["bot"], "chief")
+        self.assertEqual(body["turns"][0]["text"], "morning")
+
+    def test_history_says_the_harness_is_down_rather_than_showing_silence(self):
+        os.environ["OFFICE_RUNTIME_URL"] = self.nowhere
+        code, body = api_get(self.port, "/api/chat?bot=chief")
+        self.assertEqual(code, 503)
+        self.assertEqual(body["error"], "the harness is not running")
+
+    def test_a_bad_bot_id_is_refused_before_the_harness_is_touched(self):
+        for q in ("", "?bot=", "?bot=../../etc/passwd", "?bot=Chief", "?bot=" + "a" * 33):
+            code, body = api_get(self.port, "/api/chat" + q)
+            self.assertEqual(code, 400, q)
+            self.assertIn("error", body)
+
+    def test_a_message_reaches_the_bot_and_becomes_its_last_word(self):
+        code, body = api_post(self.port, "/api/chat", {"bot": "chief", "message": "status?"})
+        self.assertEqual(code, 202)  # answered before the turn has run
+        self.assertEqual(body, {"ok": True, "bot": "chief"})
+        self.assertTrue(self.until(lambda: ("chief", "status?") in self.harness.received))
+        self.assertTrue(self.until(lambda: self.bot("chief")[1]["last"] is not None))
+        self.assertEqual(self.bot("chief")[1]["last"]["text"], "heard status?")
+
+    def test_a_second_message_while_the_bot_is_busy_is_refused(self):
+        """Two agents writing one session file is a corrupted transcript, not a
+        fast conversation."""
+        self.harness.hold = threading.Event()
+        code, _ = api_post(self.port, "/api/chat", {"bot": "inbox", "message": "one"})
+        self.assertEqual(code, 202)
+        self.assertTrue(self.bot("inbox")[1]["busy"])
+
+        code, body = api_post(self.port, "/api/chat", {"bot": "inbox", "message": "two"})
+        self.assertEqual(code, 409)
+        self.assertEqual(body["error"], "busy")
+        # A different bot is not blocked by this one.
+        code, _ = api_post(self.port, "/api/chat", {"bot": "chief", "message": "meanwhile"})
+        self.assertEqual(code, 202)
+
+        self.harness.hold.set()
+        self.assertTrue(self.until(lambda: not self.bot("inbox")[1]["busy"]))
+        self.assertNotIn(("inbox", "two"), self.harness.received)
+
+    def test_an_empty_or_oversized_message_is_refused(self):
+        for message in ("", "   ", "x" * 8001):
+            code, body = api_post(self.port, "/api/chat",
+                                  {"bot": "chief", "message": message})
+            self.assertEqual(code, 400, repr(message[:12]))
+            self.assertIn("error", body)
+        code, _ = api_post(self.port, "/api/chat", {"bot": "chief", "message": "x" * 8000})
+        self.assertEqual(code, 202)
+
+    def test_a_message_to_a_bot_nobody_has_is_refused_at_once(self):
+        code, body = api_post(self.port, "/api/chat", {"bot": "nope", "message": "hi"})
+        self.assertEqual(code, 404)
+        self.assertEqual(body["error"], "no such bot")
+        code, body = api_post(self.port, "/api/chat", {"bot": "NOPE!", "message": "hi"})
+        self.assertEqual(code, 400)
+
+    def test_a_turn_that_failed_is_still_on_the_desk_afterwards(self):
+        """The bot is free again, and the room still says the last try broke.
+        A failure that clears itself on the next poll is one nobody ever sees."""
+        os.environ["OFFICE_RUNTIME_URL"] = self.nowhere
+        code, _ = api_post(self.port, "/api/chat", {"bot": "chief", "message": "into the void"})
+        self.assertEqual(code, 202)
+        os.environ["OFFICE_RUNTIME_URL"] = self.harness.url()
+        self.assertTrue(self.until(lambda: "error" in self.bot("chief")[1]))
+        self.assertFalse(self.bot("chief")[1]["busy"])
+
+        # And it is gone once the bot manages a whole turn.
+        code, _ = api_post(self.port, "/api/chat", {"bot": "chief", "message": "again"})
+        self.assertEqual(code, 202)
+        self.assertTrue(self.until(lambda: "error" not in self.bot("chief")[1]))
