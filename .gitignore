@@ -1,13 +1,13 @@
 node_modules/
-dist/
-.wrangler/
-.dev.vars
 .env*
 
-# Your deployment, not the framework. scripts/setup.sh writes this.
-wrangler.jsonc
+# client/serve.py still serves dist/ if it is there. Nothing builds one today;
+# the phone page lands here in milestone 2.
+dist/
+
+# the shot harness rewrites these on every run, and a screenshot in a repo is
+# stale the day after it lands
 shots/
-dist-*/
 
 # vault runtime state (agentdb, logs, chronicles) lives beside the code but never in it
 _meta/

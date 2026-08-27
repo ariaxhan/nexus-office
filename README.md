@@ -1,63 +1,24 @@
 # nexus-office
 
-**A room you can walk into, containing everything your agents are working on.**
+**A Mac app for the agents that are already running without you watching.**
 
-One villager per repo, one desk per villager, one wing per GitHub owner. What a
-character is doing with its body is that repo's real state, and clicking a desk
-opens its issues inline with buttons that do something. It runs on your own
-machine, and a click is applied the moment you make it.
+A roster on the left: your bots first, then one row per repo you can push to. A
+thread on the right. You message a bot like a colleague, and you open a desk to
+read that repo's issues with buttons that act. It runs on your own machine, and a
+click is applied the moment you make it.
 
-Built for [issue-to-PR pipelines](#what-feeds-it): the kind of automation that
-files issues, works them, opens PRs, and periodically gets stuck and needs a
-person. Those pipelines are invisible by nature. This makes them a place.
+Built for [issue-to-PR pipelines](#what-feeds-it): automation that files issues,
+works them, opens PRs, and periodically gets stuck and needs a person. Those
+pipelines are invisible by nature. This gives them a face.
 
 ```mermaid
 flowchart LR
   R[your pipeline<br/>receipts + live issues] --> S
-  S[client/serve.py<br/>127.0.0.1:8790] -->|world| B[browser on this machine]
-  B -->|a click| S
-  S -->|applied now: comment / label / merge| G[GitHub]
+  S[client/serve.py<br/>127.0.0.1:8790] -->|world · bots · gates| A[the Office app]
+  A -->|a click| S
+  S -->|applied now: comment · close · merge · permit| G[GitHub · your runtime]
   G --> R
 ```
-
-## The security model, in three sentences
-
-The server binds loopback only, never `0.0.0.0`, so the door is the machine:
-nobody else can reach the port at all, and reaching it from a phone goes through
-Tailscale Serve in front of it rather than a wider bind. Everything that touches
-GitHub still happens in `client/office-sync.py`, which re-derives every intent
-from its own fields and re-probes push access before acting. The one thing still
-checked in software is the gate: a permission answer carries the id of the
-question it is answering, and is refused if the agent has moved on.
-
-## See it without setting anything up
-
-Append `?demo=1` and the room runs on a fabricated floor: no account, no session,
-no pipeline. Twelve desks across three owners, and every state below appears at
-least once, because a demo that only shows the happy path lets the ugly cases rot.
-
-```sh
-npm install && npm run build && python3 client/serve.py
-# then open http://127.0.0.1:8790/?demo=1
-```
-
-## Reading the room
-
-| villager | means |
-| --- | --- |
-| standing, wide eyes, red `?` | your bot spoke last, so it is waiting on a human |
-| standing, orange `!` | the runner refused this one |
-| typing, blue screen | working, issues open |
-| arms up, green screen | landed a PR in the last day |
-| slumped, eyes shut, `z` | parked by its own config |
-| empty chair | no account you hold a token for can push here |
-| **hand up, amber `!`** | **an agent is blocked on a permission gate and a clock is running** |
-
-"Waiting on you" is not a label lookup. It is recomputed from the comments:
-**did the bot have the last word?** That is also why answering re-queues the
-issue automatically, since a reply without the bot's marker is exactly what makes
-a marker-based runner pick it up again. The dashboard and the runner cannot
-disagree, because they are running the same sentence.
 
 ## The raised hand
 
@@ -66,11 +27,10 @@ and waits for a person. Normally that is a line in a log nobody is watching, or 
 prompt in a terminal that is not on screen: work silently stops and you find out
 later.
 
-In the room that agent **stands up and puts its hand up.** You see it from across
-the floor, or from a phone. Tap it, read the literal command it wants to run, and
-answer allow once, allow always, or deny.
-
-Three properties this has to hold, and does:
+Here it is a message in that bot's thread, a **sheet you cannot dismiss without
+answering**, an OS notification, and an amber menu-bar dot that stays amber with
+the window closed. Read the literal command, then answer allow once, allow
+always, or deny. Three properties this has to hold, and does:
 
 - **The target is shown verbatim.** Never summarised, never truncated into
   ambiguity. A gate you approve without reading the command is a rubber stamp.
@@ -79,30 +39,61 @@ Three properties this has to hold, and does:
   position rather than by id would approve a command nobody ever saw, so a
   mismatched answer is refused out loud.
 - **A gate is never hidden.** No filter, no "put this away", nothing removes a
-  raised hand from the room.
+  raised hand. It is read from a **file** rather than an API, so a blocked agent
+  is visible whether or not the runtime's own dashboard is running.
 
-The gate is read from a **file** rather than an API, so a blocked agent is visible
-whether or not the runtime's dashboard happens to be running. And while a gate is
-open the sync client polls fast instead of on its usual minutes-long cycle,
-because against a gate that fails closed the poll interval *is* the answer window.
+## The security model, in three sentences
 
-## Setup
+The door binds loopback only, never `0.0.0.0`, so the machine *is* the perimeter:
+nobody else can reach the port at all, and a phone reaching it (milestone 2) goes
+through Tailscale Serve in front rather than a wider bind. Every write must name
+that door as its `Host`, arrive as `application/json`, and carry either this
+origin or no origin at all, because a page you have open elsewhere can post to
+`127.0.0.1` without a preflight. Everything that touches GitHub happens in
+`client/office-sync.py`, and a permission answer carries the id of the question
+it is answering, so it is refused if the agent has moved on.
 
-You need Node, Python 3, and the GitHub CLI logged in. Nothing else, and no
-account anywhere.
+## See it without setting anything up
+
+The app takes a fixture instead of the network: no account, no session, no
+pipeline. Every desk state appears in it at least once, because a demo that only
+shows the happy path lets the ugly cases rot.
 
 ```sh
-git clone https://github.com/YOUR-NAME/nexus-office && cd nexus-office
-npm install && npm run build
-
-export OFFICE_OWNERS=your-github-username,your-org
-python3 client/serve.py                  # then open http://127.0.0.1:8790/
-python3 client/serve.py --once           # one snapshot as JSON, for a script
+brew install xcodegen
+cd app && xcodegen generate && open Office.xcodeproj   # then Run
+./scripts/shoot.sh                                     # or: build it and photograph it
 ```
 
-The snapshot rebuilds in the background at most once a minute, so the page never
-waits on GitHub. Leave the server running (a launchd job works) and the room
-stays live.
+`--demo app/Demo/demo.json` is what puts the real views on the fake floor.
+
+## Run it for real
+
+You need Xcode, Python 3, and the GitHub CLI logged in. No account anywhere.
+
+```sh
+export OFFICE_OWNERS=your-github-username,your-org
+python3 client/serve.py --root ~/path/to/your/vault    # the door, and the runtime root
+python3 client/serve.py --once                         # one snapshot as JSON, for a script
+```
+
+Then open the app. `--root` is where the agent runtime keeps its gates, runs and
+cost, and where `_meta/bots.json` names your bots. The snapshot rebuilds in the
+background at most once a minute, so nothing waits on GitHub. Leave the door
+running (a launchd job works) and the roster stays live.
+
+## Verify gates
+
+```sh
+npm test        # the python door + the Swift state rules, headless
+npm run shot    # builds the app, photographs four framings, then LOOK
+```
+
+`scripts/shoot.sh` writes four PNGs into `shots/`: `app-roster.png` (bots above
+desks), `app-desk.png` (a desk thread), `app-gate.png` (the sheet over the room)
+and `app-needs.png` (the "needs me" filter). They are not committed, because a
+screenshot in a repo is stale the day after it lands. Run it and open them: every
+defect this project has had was invisible in source and obvious on screen.
 
 ## What feeds it
 
@@ -116,40 +107,13 @@ and the desks become a record of real work instead of a repo list:
 {"at":"2026-08-25T23:14:38Z","repo":"owner/name","issue":"42","outcome":"landed","detail":"opened a PR"}
 ```
 
-`outcome` is free text. `landed`, `refused` and `parked` drive the villagers;
-anything describing a run rather than a repo (`survey`, `deferred`, `dry-run`,
-`caught-up`) is skipped when picking a desk's headline.
+`outcome` is free text. `landed`, `refused` and `parked` drive the desk states;
+anything describing a run rather than a repo (`survey`, `deferred`, `dry-run`) is
+skipped when picking a desk's headline. Full configuration is documented at the
+top of `client/office-sync.py`.
 
-Full configuration is documented at the top of `client/office-sync.py`.
+## The map, and the licence
 
-## Building on it
-
-```
-client/serve.py      the whole API, on this machine. Loopback only.
-src/scene/office.js  the room: layout, furniture, camera, picking
-src/scene/villager.js one character, and the state to body mapping
-src/scene/kit.js     shared art supplies: toon materials, faces, sprites
-src/ui/panel.js      the inline issue viewer and every button that acts
-client/office-sync.py the only thing that holds credentials
-client/runtime.py    the local agent runtime adapter: gates, runs, cost
-```
-
-`window.office` is exposed in the browser on purpose. A 3D surface that can only
-be inspected by squinting at screenshots is a surface nobody can debug.
-
-Three.js, Vite, and the Python standard library. No framework, no CDN, no
-service to sign up for. The whole front end is about 1,500 lines.
-
-## Where this is going
-
-[`docs/architecture.md`](docs/architecture.md) is the map, and
+[`docs/architecture.md`](docs/architecture.md) is where this is going;
 [issue #16](https://github.com/ariaxhan/nexus-office/issues/16) is the index.
-
-The short version: the office is a face for machinery that already runs and is
-currently invisible. It adapts an issue pipeline, a local agent runtime, a memory
-store and a scheduler rather than building any of them, and every feature has to
-survive a server with no login in front of it.
-
-## License
-
-MIT.
+MIT licensed.

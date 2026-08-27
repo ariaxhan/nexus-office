@@ -70,6 +70,7 @@ TRUSTED_HOSTS = {h.strip().lower() for h in os.environ.get("OFFICE_TRUSTED_HOSTS
 BAD_ID = "permit needs the question id it is answering"
 BAD_ANSWER = "permit answer must be allow or deny"
 NO_ROOT = "no runtime root configured (OFFICE_RUNTIME_ROOT)"
+NO_PAGE = "no web page here; open the Office app, or the phone page arrives in milestone 2"
 
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
          ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
@@ -347,16 +348,18 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": ok, "message": message}, 200 if ok else 409)
 
     def _static(self, path):
-        """The built room. Anything that is not a file falls back to index.html."""
+        """A built page, if one exists. Anything that is not a file falls back to
+        index.html. There is no web build today: the surface is the Mac app, and
+        `dist/` is where the phone page will land in milestone 2."""
         if not self.dist or not self.dist.is_dir():
-            return self._json({"error": "no dist/ yet; run `npm run build` first"}, 404)
+            return self._json({"error": NO_PAGE}, 404)
         rel = urllib.parse.unquote(path).lstrip("/")
         root = self.dist.resolve()
         target = (root / rel).resolve() if rel else (root / "index.html")
         if not target.is_relative_to(root) or not target.is_file():
             target = root / "index.html"
         if not target.is_file():
-            return self._json({"error": "no index.html; run `npm run build` first"}, 404)
+            return self._json({"error": NO_PAGE}, 404)
         self._send(200, target.read_bytes(),
                    TYPES.get(target.suffix, "application/octet-stream"))
 
