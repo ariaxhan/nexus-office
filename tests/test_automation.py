@@ -140,6 +140,24 @@ class ActivityTest(unittest.TestCase):
             self.assertIn(row["tone"], ("ok", "warn", "bad", "dim", ""))
             self.assertTrue(row["means"], f"{outcome} has no plain-words meaning")
 
+    def test_a_lane_that_never_ran_is_never_described_as_a_decision(self):
+        """Vaults#51: a lane returning in one second against a twelve minute cap
+        read nothing. The office must not repeat the runner's old claim that a
+        person looked at it, and the row has to read worse than a real refusal,
+        not better, because a refusal that never happened is the more expensive
+        of the two."""
+        page = self.build({"a/one": [receipt("a/one", "5", "no-run", "2026-08-27T21:00:00Z",
+                                             "codex returned in 1s against a 12m cap")]})
+        row = page["activity"][0]
+        self.assertIn("never started", row["means"])
+        self.assertIn("nothing read", row["means"],
+                      "it has to deny the reading, not merely omit it")
+        # Worse than `refused`, never better. `refused` is amber because a person
+        # has to look; this is red because the runner lied about having looked.
+        self.assertEqual(row["tone"], "bad")
+        self.assertEqual(automation.OUTCOMES["refused"][0], "warn",
+                         "the comparison this test rests on")
+
     def test_an_outcome_nobody_has_seen_before_is_a_row_not_a_crash(self):
         page = self.build({"a/one": [receipt("a/one", "1", "invented", "2026-08-27T21:00:00Z")]})
         self.assertEqual(page["activity"][0]["outcome"], "invented")

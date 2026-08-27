@@ -64,6 +64,11 @@ OUTCOMES = {
     "refused": ("warn", "would not touch it, and said why"),
     "deferred": ("dim", "ran out of run, will pick it up next sweep"),
     "timeout": ("bad", "hit its per-issue cap and was stopped"),
+    # Not a decision about the issue. The lane came back in seconds against a cap
+    # measured in minutes, so nothing read it: the runner is broken, and the issue
+    # is still untouched work. Deliberately `bad` rather than `warn`, because a
+    # refusal that never happened is worse than one that did.
+    "no-run": ("bad", "the lane never started; nothing read this issue"),
     "report-only": ("dim", "reviewed and commented; this repo grants no code change"),
     "dry-run": ("dim", "decided everything, changed nothing"),
     "no-access": ("warn", "no account here can push, so nothing was attempted"),
