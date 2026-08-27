@@ -169,7 +169,7 @@ false green this project exists to kill.
 
 ```sh
 npm test        # the python door + the Swift state rules, headless
-npm run shot    # builds the app, photographs ten framings, then LOOK
+npm run shot    # builds the app, photographs eleven framings, then LOOK
 ```
 
 `scripts/shoot.sh` writes ten PNGs into `shots/`: `app-roster.png` (bots above
