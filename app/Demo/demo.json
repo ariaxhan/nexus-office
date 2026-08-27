@@ -328,42 +328,42 @@
           "facts": [
             {
               "label": "Inbox",
-              "value": "did nothing (rc 0) · 18h39m ago",
+              "value": "did nothing (rc 0) \u00b7 18h39m ago",
               "tone": "bad"
             },
             {
               "label": "Distillations",
-              "value": "ok · 8h9m ago",
+              "value": "ok \u00b7 8h9m ago",
               "tone": "ok"
             },
             {
               "label": "Granola",
-              "value": "ok · 1h13m ago",
+              "value": "ok \u00b7 1h13m ago",
               "tone": "ok"
             },
             {
               "label": "Issue pipeline",
-              "value": "ok · 1h2m ago",
+              "value": "ok \u00b7 1h2m ago",
               "tone": "ok"
             },
             {
               "label": "Mobile capture",
-              "value": "ok · 3m ago",
+              "value": "ok \u00b7 3m ago",
               "tone": "ok"
             },
             {
               "label": "Money swarm",
-              "value": "ok · 2h2m ago",
+              "value": "ok \u00b7 2h2m ago",
               "tone": "ok"
             },
             {
               "label": "Morning briefing",
-              "value": "ok · 19h9m ago",
+              "value": "ok \u00b7 19h9m ago",
               "tone": "ok"
             },
             {
               "label": "Outbound",
-              "value": "ok · 16h46m ago",
+              "value": "ok \u00b7 16h46m ago",
               "tone": "ok"
             }
           ]
@@ -441,8 +441,10 @@
             ],
             "url": "https://github.com/acme/storefront/issues/214",
             "updatedAt": "2026-08-26T18:16:00Z",
-            "bot_last": false,
-            "last_word": ""
+            "bot_last": true,
+            "last_word": "The automated pass landed a fix. **Merging this PR closes the issue.**",
+            "last_word_url": "https://github.com/acme/storefront/issues/214#issuecomment-900301",
+            "last_word_at": "2026-08-26T18:31:00Z"
           },
           {
             "number": 211,
@@ -845,6 +847,263 @@
         "prs_error": null,
         "pinned": null
       }
+    ],
+    "automation": {
+      "state": "ok",
+      "headline": "idle, next look in 21 minutes; 6 issues touched recently",
+      "how": [
+        "A launchd job wakes the runner on the interval below. It sweeps every repo the office has a desk for, one at a time.",
+        "On each repo it lists the open issues and picks the ones the bot did NOT comment on last. An issue the bot spoke on last is waiting on you, and it is left alone until you reply. No label gates anything.",
+        "It runs one agent lane against one issue at a time, capped in minutes. What it is allowed to do is that repo's capability: most can open a branch and a PR, none can merge, none can push to a default branch.",
+        "Every issue it touches gets a comment carrying the bot marker, even when the lane failed. An issue with no marker would be retried forever.",
+        "A webhook does the same thing without waiting for the hour: GitHub posts to the door the moment an issue or comment changes, and the door asks the runner to look at that one repo."
+      ],
+      "schedule": {
+        "every": "1 hour",
+        "next_in": "21 minutes",
+        "next_at": "2026-08-26T19:01:00Z",
+        "overdue": false,
+        "late_by": null,
+        "enabled": true,
+        "kill_switch": false,
+        "power": "ac",
+        "deferring": false,
+        "last_full_run": "2026-08-26T18:12:09Z",
+        "last_full_run_age_s": 1671
+      },
+      "now": {
+        "running": false,
+        "for": null,
+        "doing": "",
+        "last_said": "acme/storefront: landed pipeline/auto-issue-84",
+        "last_said_at": "2026-08-26T18:12:09Z",
+        "last_said_age_s": 1671,
+        "stale_pid": null,
+        "detail": "nothing running; next look 21 minutes"
+      },
+      "trigger": {
+        "state": "unreachable",
+        "reachable": false,
+        "deliveries": 0,
+        "today": 0,
+        "last_at": "",
+        "last_age_s": null,
+        "runs_today": 0,
+        "queued": 0,
+        "detail": "",
+        "blocked_by": "no Tailscale Funnel mount, so nothing on the internet can reach /webhook (docs/webhooks.md has the two steps)"
+      },
+      "reached": {
+        "repos": 34,
+        "receipts": 291,
+        "window": "24h",
+        "state": "ok"
+      },
+      "counts": {
+        "survey": 249,
+        "landed": 3,
+        "refused": 2,
+        "parked": 1,
+        "deferred": 1
+      },
+      "activity": [
+        {
+          "at": "2026-08-26T18:12:09Z",
+          "ago": "28 minutes",
+          "repo": "acme/storefront",
+          "issue": "84",
+          "outcome": "landed",
+          "tone": "ok",
+          "means": "opened a PR that closes the issue",
+          "detail": "opened pipeline/auto-issue-84",
+          "title": "Cart total drops the last line item",
+          "issue_url": "https://github.com/acme/storefront/issues/84",
+          "comment_url": "https://github.com/acme/storefront/issues/84#issuecomment-900301",
+          "comment_at": "2026-08-26T18:12:09Z"
+        },
+        {
+          "at": "2026-08-26T18:06:44Z",
+          "ago": "33 minutes",
+          "repo": "acme/billing",
+          "issue": "31",
+          "outcome": "refused",
+          "tone": "warn",
+          "means": "would not touch it, and said why",
+          "detail": "no commit",
+          "title": "Proration is off by a day on annual plans",
+          "issue_url": "https://github.com/acme/billing/issues/31",
+          "comment_url": "https://github.com/acme/billing/issues/31#issuecomment-900288",
+          "comment_at": "2026-08-26T18:06:44Z"
+        },
+        {
+          "at": "2026-08-26T17:58:02Z",
+          "ago": "42 minutes",
+          "repo": "northwind/api",
+          "issue": "212",
+          "outcome": "timeout",
+          "tone": "bad",
+          "means": "hit its per-issue cap and was stopped",
+          "detail": "20m",
+          "title": "Rewrite the auth middleware",
+          "issue_url": "https://github.com/northwind/api/issues/212",
+          "comment_url": "",
+          "comment_at": ""
+        },
+        {
+          "at": "2026-08-26T17:41:19Z",
+          "ago": "59 minutes",
+          "repo": "acme/website",
+          "issue": "9",
+          "outcome": "deferred",
+          "tone": "dim",
+          "means": "ran out of run, will pick it up next sweep",
+          "detail": "3 issues not reached this run",
+          "title": "Pricing page 404s from the footer",
+          "issue_url": "https://github.com/acme/website/issues/9",
+          "comment_url": "",
+          "comment_at": ""
+        },
+        {
+          "at": "2026-08-26T17:12:55Z",
+          "ago": "an hour",
+          "repo": "acme/mobile",
+          "issue": "58",
+          "outcome": "landed",
+          "tone": "ok",
+          "means": "opened a PR that closes the issue",
+          "detail": "opened pipeline/auto-issue-58",
+          "title": "Push token refresh loops on cold start",
+          "issue_url": "https://github.com/acme/mobile/issues/58",
+          "comment_url": "https://github.com/acme/mobile/issues/58#issuecomment-899714",
+          "comment_at": "2026-08-26T17:12:55Z"
+        },
+        {
+          "at": "2026-08-26T16:44:03Z",
+          "ago": "2 hours",
+          "repo": "acme/legacy-import",
+          "issue": "4",
+          "outcome": "parked",
+          "tone": "dim",
+          "means": "left alone on purpose: this repo is configured to park",
+          "detail": "frozen until the migration lands",
+          "title": "Importer drops rows with unicode names",
+          "issue_url": "https://github.com/acme/legacy-import/issues/4",
+          "comment_url": "",
+          "comment_at": ""
+        }
+      ],
+      "activity_dropped": 12
+    }
+  },
+  "sessions": {
+    "state": "ok",
+    "detail": "",
+    "at": "2026-08-26T18:39:40Z",
+    "live": 3,
+    "blocked": 1,
+    "sessions": [
+      {
+        "name": "veru",
+        "tool": "claude",
+        "status": "blocked",
+        "doing": "blocked: waiting on a tool approval",
+        "detail": "git push --set-upstream origin pipeline/auto-issue-84",
+        "directory": "/Users/aria/code/storefront",
+        "repo": "acme/storefront",
+        "branch": "pipeline/auto-issue-84",
+        "unread": 1,
+        "headless": false,
+        "reachable": true,
+        "session_id": "s-veru",
+        "age_s": 96,
+        "started_at": "2026-08-26T17:52:00Z"
+      },
+      {
+        "name": "lamo",
+        "tool": "codex",
+        "status": "active",
+        "doing": "active: Bash",
+        "detail": "npm test -- --runInBand",
+        "directory": "/Users/aria/code/storefront",
+        "repo": "acme/storefront",
+        "branch": "main",
+        "unread": 0,
+        "headless": false,
+        "reachable": true,
+        "session_id": "s-lamo",
+        "age_s": 14,
+        "started_at": "2026-08-26T18:20:00Z"
+      },
+      {
+        "name": "muse",
+        "tool": "claude",
+        "status": "listening",
+        "doing": "listening: idle",
+        "detail": "",
+        "directory": "/Users/aria/code/billing",
+        "repo": "acme/billing",
+        "branch": "main",
+        "unread": 0,
+        "headless": false,
+        "reachable": true,
+        "session_id": "s-muse",
+        "age_s": 220,
+        "started_at": "2026-08-26T16:10:00Z"
+      },
+      {
+        "name": "orin",
+        "tool": "codex",
+        "status": "inactive",
+        "doing": "inactive: stale",
+        "detail": "",
+        "directory": "/Users/aria/code/website",
+        "repo": "acme/website",
+        "branch": "main",
+        "unread": 0,
+        "headless": false,
+        "reachable": false,
+        "session_id": "s-orin",
+        "age_s": 19800,
+        "started_at": "2026-08-26T12:40:00Z"
+      }
     ]
+  },
+  "transcripts": {
+    "veru": {
+      "name": "veru",
+      "at": "2026-08-26T18:39:40Z",
+      "exchanges": [
+        {
+          "position": 1,
+          "files": [
+            "src/cart/total.ts",
+            "src/cart/total.test.ts"
+          ],
+          "at": "2026-08-26T18:02:00Z",
+          "you": "fix the cart total bug in #84",
+          "them": "Reproduced it: the last line item is dropped when the cart has an odd count, because the loop ends at count - 1. Fixed, and added a regression test that fails on the old code."
+        },
+        {
+          "position": 2,
+          "files": [],
+          "at": "2026-08-26T18:31:00Z",
+          "you": "green?",
+          "them": "All 412 tests pass. I want to push the branch and open the PR, which needs your approval because it is the first push to this remote from this session."
+        }
+      ]
+    },
+    "lamo": {
+      "name": "lamo",
+      "at": "2026-08-26T18:39:40Z",
+      "exchanges": [
+        {
+          "position": 1,
+          "files": [],
+          "at": "2026-08-26T18:20:00Z",
+          "you": "run the suite serially, the parallel run is flaky",
+          "them": "Running with --runInBand now. 190 of 412 so far, nothing failing."
+        }
+      ]
+    }
   }
 }

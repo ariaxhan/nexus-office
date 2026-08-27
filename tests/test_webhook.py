@@ -771,8 +771,18 @@ class SectionTest(unittest.TestCase):
         wh.SECRET = self.was_secret
         wh.BAD_SIGNATURES = 0
 
-    def source(self):
+    def source(self, reach=None):
+        """The section module, with its one call to the outside world pinned.
+
+        `reach()` shells out to Tailscale, so left alone this whole class would
+        pass or fail on whether the machine running it happens to have a Funnel
+        up. A test that reads the developer's own network is not a test.
+        """
         from sources import webhook as src
+        was = src.reach
+        self.addCleanup(lambda: setattr(src, "reach", was))
+        answer = reach or {"state": "unknown", "detail": "not asked in tests"}
+        src.reach = lambda: dict(answer)
         return src
 
     def test_unconfigured_says_so_and_asks_nobody_for_anything(self):
@@ -791,6 +801,39 @@ class SectionTest(unittest.TestCase):
         data = src.read()
         self.assertEqual(data["state"], "silent")
         self.assertEqual(src.card(data)["needs"], 1)
+        self.assertEqual(data["blocked_by"], "",
+                         "nothing is proven to be blocking; the check did not complete")
+
+    def test_no_public_path_is_not_the_same_room_as_silence(self):
+        """The state this fixture went weeks without having.
+
+        Silence with a Funnel up is a quiet Sunday. Silence with no Funnel at
+        all is a door nothing can reach, and it will stay silent forever without
+        anybody being told why.
+        """
+        src = self.source({"state": "off", "detail": "no Tailscale Funnel mount"})
+        data = src.read()
+        self.assertEqual(data["state"], "unreachable")
+        self.assertEqual(data["public_path"], "off")
+        self.assertIn("Funnel", data["blocked_by"])
+        card = src.card(data)
+        self.assertEqual(card["needs"], 1)
+        self.assertIn("no public path", card["headline"])
+        self.assertTrue(any(f["label"] == "blocked by" for f in card["facts"]),
+                        "the reason has to be on the card, not only in the state")
+
+    def test_a_door_with_deliveries_is_never_asked_about_its_path(self):
+        """The proof is the deliveries. Asking Tailscale again would be a
+        subprocess on every snapshot push to re-learn what the data says."""
+        box = wh.Mailbox(self.dir)
+        box.append(wh.parse("issue_comment", "d1", issue_comment()), trigger=True)
+        asked = []
+        src = self.source()
+        src.reach = lambda: asked.append(1) or {"state": "off", "detail": "x"}
+        data = src.read()
+        self.assertEqual(data["state"], "ok")
+        self.assertEqual(asked, [], "reach() must not run when events exist")
+        self.assertEqual(data["public_path"], "not-asked")
 
     def test_a_delivered_event_shows_up_with_its_age(self):
         box = wh.Mailbox(self.dir)

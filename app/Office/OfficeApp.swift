@@ -120,6 +120,18 @@ struct RootView: View {
     }
 
     @ViewBuilder private var detail: some View {
+        // The automation page is a whole screen, not a card, and it is about the
+        // room rather than about whatever is selected. So it takes the detail
+        // pane while it is open and gives it straight back, which keeps the
+        // selection underneath it exactly where it was.
+        if store.automationOpen {
+            AutomationView(store: store)
+        } else {
+            selected
+        }
+    }
+
+    @ViewBuilder private var selected: some View {
         switch store.selection {
         case .bot(let id):
             if let bot = store.bot(id) {

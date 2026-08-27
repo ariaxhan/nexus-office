@@ -54,6 +54,7 @@ sys.path.insert(0, str(HERE))
 import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import runtime as rt  # noqa: E402
+import sessions  # noqa: E402
 import webhook  # noqa: E402
 
 # The command is hyphenated because it is a command first and a module second.
@@ -475,6 +476,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(body, code)
             if path == "/api/webhook":
                 return self._json(self._webhook_status())
+            if path == "/api/automation":
+                # Straight off the snapshot, never a rebuild: every number on
+                # this page was measured when the room was built, and a page
+                # that re-measures on open would disagree with the card that
+                # sent you to it.
+                return self._json({"at": self.world.at,
+                                   "automation": self.world.snapshot.get("automation") or {}})
+            if path == "/api/sessions":
+                repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
+                return self._json(sessions.read(repo))
+            if path == "/api/session":
+                q = urllib.parse.parse_qs(query)
+                code, body = sessions.transcript((q.get("name") or [""])[0],
+                                                 (q.get("last") or [""])[0]
+                                                 or sessions.DEFAULT_EXCHANGES)
+                return self._json(body, code)
+            if path == "/api/session/screen":
+                name = (urllib.parse.parse_qs(query).get("name") or [""])[0]
+                code, body = sessions.screen(name)
+                return self._json(body, code)
             if path == "/api/health":
                 return self._json({"ok": True, "snapshot_at": self.world.at,
                                    "server_time": now_iso()})
@@ -530,6 +551,17 @@ class Handler(BaseHTTPRequestHandler):
                 # Returns before the turn has run: a chat turn is an agent run,
                 # and nothing on the other end of this socket waits two minutes.
                 code, body = self.chatroom.say(self._read_json(limit=CHAT_LIMIT))
+                return self._json(body, code)
+            if path == "/api/session/say":
+                code, body = sessions.say(self._read_json(limit=CHAT_LIMIT))
+                return self._json(body, code)
+            if path == "/api/session/start":
+                # This starts a real agent with Aria's credentials, so it is the
+                # one write on this door that runs a program. Everything that
+                # makes that safe is in sessions.start(): the engine is one of
+                # two exact names, and the directory is one the office already
+                # knows about. Nothing from this body is interpolated anywhere.
+                code, body = sessions.start(self._read_json())
                 return self._json(body, code)
             return self._json({"error": "not found"}, 404)
         except ValueError as exc:

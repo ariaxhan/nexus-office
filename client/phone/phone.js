@@ -25,6 +25,12 @@
 const GATE_EVERY_MS = 3000;
 const ARM_MS = 1500;  // how long a swapped question keeps its buttons disarmed
 const WORLD_EVERY_MS = 30000;
+/* An agent's status changes on the scale of a tool call: slower than the gate,
+ * which is a question waiting on a person, and faster than the world, which is
+ * a GitHub budget. It costs one local subprocess and no network at all. */
+const SESSION_EVERY_MS = 6000;
+/* One screen of a conversation. The whole run is a terminal's job. */
+const SESSION_TURNS = 4;
 const THREAD_EVERY_MS = 4000;
 
 /* How many things to answer the band actually puts on screen. The office has
@@ -108,6 +114,12 @@ const state = {
   sentPhotos: Object.create(null),
   commenting: Object.create(null),
   busy: Object.create(null),
+  /* The agents running on the machine, and the one whose thread is open. Its
+   * own poll, because it is measured by asking hcom rather than by building a
+   * snapshot: it moves on the scale of a tool call, not of a GitHub budget. */
+  sessions: null,
+  openSession: "",
+  scripts: Object.create(null),
 };
 
 let toastTimer = null;
@@ -753,6 +765,328 @@ function drawWall() {
   });
 }
 
+/* ── the automation, as one band ─────────────────────────────────────────── */
+
+/* The phone's answer to "there is an hourly cron; show me how it works, when it
+ * is processing, which issues, and links to the comments".
+ *
+ * Every word here was measured by the server and arrives inside the world
+ * snapshot. Nothing on this page derives a state, picks a headline or decides
+ * whether a number is bad: the Mac app draws the same fields, and two renderers
+ * each deciding "is this fine" is two places for it to go wrong, in two
+ * languages, that drift the first time a state is added.
+ */
+function drawAutomation() {
+  const band = document.getElementById("automation");
+  clear(band);
+  const page = (state.world && state.world.automation) || null;
+  if (!page || !page.headline) {
+    band.hidden = true;
+    return;
+  }
+  band.hidden = false;
+
+  const hurt = automationNeedsSomebody(page);
+  band.appendChild(head("automation", hurt ? "needs you" : "", hurt));
+
+  const card = el("div", "card");
+  card.appendChild(el("p", "headline" + (hurt ? " off" : ""), page.headline));
+
+  const sched = page.schedule || {};
+  const now = page.now || {};
+  const reach = page.reached || {};
+  const rows = el("div", "facts");
+  rows.appendChild(fact("schedule", automationSchedule(sched), sched.overdue ? "warn" : "plain"));
+  rows.appendChild(fact("last full sweep", automationSweep(sched, reach),
+                        reach.repos ? "dim" : "warn"));
+  rows.appendChild(fact("doing",
+                        now.running ? (now.doing || "a run is in flight")
+                                    : (now.last_said ? "last: " + now.last_said : "nothing"),
+                        now.running ? "ok" : "dim"));
+  if (sched.deferring) rows.appendChild(fact("power", "on battery, deferring every run", "warn"));
+  card.appendChild(rows);
+
+  /* The webhook path, and above all WHY nothing is arriving when nothing is.
+   * "Quiet" and "nothing can reach us" read identically from inside a quiet
+   * room, and the second one lasts for weeks. */
+  const trig = page.trigger || {};
+  const blocked = String(trig.blocked_by || "");
+  const hook = el("div", "card sub");
+  const hookHead = el("div", "head");
+  hookHead.appendChild(el("span", "title", "webhooks"));
+  hookHead.appendChild(el("span", "pill" + (blocked ? " wants" : ""), trig.state || "unknown"));
+  if (trig.queued > 0) hookHead.appendChild(el("span", "pill", trig.queued + " queued"));
+  hook.appendChild(hookHead);
+  hook.appendChild(el("p", blocked ? "headline off" : "detail",
+                      blocked || automationTriggerLine(trig)));
+  card.appendChild(hook);
+
+  band.appendChild(card);
+  band.appendChild(automationActivity(page));
+}
+
+function automationNeedsSomebody(page) {
+  const sched = page.schedule || {};
+  const now = page.now || {};
+  return Boolean(sched.overdue || sched.deferring || now.stale_pid
+                 || (page.trigger && page.trigger.blocked_by)
+                 || page.state === "unreadable");
+}
+
+function automationSchedule(sched) {
+  const parts = [];
+  if (sched.every) parts.push("every " + sched.every);
+  if (sched.overdue) parts.push("overdue by " + (sched.late_by || "a while"));
+  else if (sched.next_in) parts.push("next look " + sched.next_in);
+  return parts.join(", ") || "unknown";
+}
+
+function automationSweep(sched, reach) {
+  if (reach.repos === null || reach.repos === undefined) {
+    return "receipts " + (reach.state || "unknown");
+  }
+  const said = moment(sched.last_full_run) || "never";
+  return said + ", " + reach.repos + " repos in " + (reach.window || "24h");
+}
+
+function automationTriggerLine(trig) {
+  const today = trig.today || 0;
+  if (trig.last_age_s === null || trig.last_age_s === undefined) {
+    return today + " today; nothing has ever arrived";
+  }
+  return today + " today, last " + waited(trig.last_age_s) + " ago, "
+         + (trig.runs_today || 0) + " runs";
+}
+
+/* What the runner touched, and the way to what it said about it.
+ *
+ * The label on each link says WHICH link it is. "read the comment" when the
+ * office knows exactly where the runner's words are; "open the issue" when a
+ * human has replied since, which moves the last comment and would make a deep
+ * link point at somebody else's words wearing the runner's label. */
+function automationActivity(page) {
+  const wrap = el("div", "card");
+  const bar = el("div", "head");
+  bar.appendChild(el("span", "title", "what it touched"));
+  /* Never a silent cap: a list that quietly stops reads as "that is everything
+   * that happened". */
+  if (page.activity_dropped > 0) {
+    bar.appendChild(el("span", "count",
+                       "newest " + page.activity.length + " of "
+                       + (page.activity.length + page.activity_dropped)));
+  }
+  wrap.appendChild(bar);
+
+  const rows = page.activity || [];
+  if (!rows.length) {
+    wrap.appendChild(el("p", "empty",
+      "no issue touched in the last day. The sweeps that only counted open "
+      + "issues are not listed here."));
+    return wrap;
+  }
+  rows.forEach(function (row) {
+    const item = el("div", "run");
+    const top = el("div", "head");
+    top.appendChild(el("span", "title", row.repo + "#" + row.issue));
+    const raw = String(row.tone || "").trim().toLowerCase();
+    top.appendChild(el("span", "pill t-" + (TONES.indexOf(raw) >= 0 ? raw : "plain"),
+                       row.outcome || ""));
+    top.appendChild(el("span", "count", row.ago || ""));
+    item.appendChild(top);
+    if (row.title) item.appendChild(el("p", "detail", row.title));
+    item.appendChild(el("p", "asof", row.detail || row.means || ""));
+    const href = row.comment_url || row.issue_url;
+    if (href) {
+      const link = el("a", "link", row.comment_url ? "read the comment" : "open the issue");
+      link.href = href;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      item.appendChild(link);
+    }
+    wrap.appendChild(item);
+  });
+  return wrap;
+}
+
+function fact(label, value, tone) {
+  const row = el("div", "fact");
+  row.appendChild(el("span", "label", label));
+  row.appendChild(el("span", "value t-" + (tone || "plain"), String(value)));
+  return row;
+}
+
+/* ── the agents running on this machine ──────────────────────────────────── */
+
+/* Read and answer a live Claude Code or Codex session without opening a
+ * terminal.
+ *
+ * A reply is a MESSAGE, never a keystroke. It lands in the agent's queue and it
+ * reads it at its next hook. Nothing on this page types into a live terminal:
+ * a message arriving mid-prompt would be submitted into whatever was
+ * half-typed there.
+ *
+ * The office cannot see a session that never joined hcom, and says so. `canSee`
+ * false means "we do not know", which draws as its own sentence rather than as
+ * an empty list, because an empty list is a claim that nothing is running. */
+function drawSessions() {
+  const band = document.getElementById("sessions");
+  clear(band);
+  const roster = state.sessions;
+  if (!roster) {
+    band.hidden = true;
+    return;
+  }
+  const seen = roster.state === "ok" || roster.state === "empty";
+  const rows = roster.sessions || [];
+  /* A machine with no hcom on it is not worth a band on a phone. A machine that
+   * HAS one and could not be asked is, because that is a thing that broke. */
+  if (roster.state === "unavailable" && !rows.length) {
+    band.hidden = true;
+    return;
+  }
+  band.hidden = false;
+  band.appendChild(head("sessions",
+                        roster.blocked ? roster.blocked + " waiting on you"
+                                       : (roster.live ? roster.live + " running" : ""),
+                        roster.blocked > 0));
+
+  if (!seen) {
+    band.appendChild(el("p", "empty",
+      roster.detail || "the office cannot see the sessions on this machine right now"));
+    return;
+  }
+  if (!rows.length) {
+    band.appendChild(el("p", "empty",
+      "nothing running. Only sessions connected to hcom are visible here."));
+    return;
+  }
+  rows.forEach(function (session) { band.appendChild(sessionCard(session)); });
+}
+
+function sessionCard(session) {
+  const open = state.openSession === session.name;
+  const card = el("div", "card");
+
+  const top = el("div", "head");
+  top.appendChild(el("span", "dot m-" + sessionMood(session)));
+  top.appendChild(el("span", "title", session.name));
+  if (session.tool) top.appendChild(el("span", "pill", session.tool));
+  if (session.status === "blocked") top.appendChild(el("span", "pill wants", "waiting on you"));
+  if (session.unread > 0) top.appendChild(el("span", "pill", session.unread + " unread"));
+  card.appendChild(top);
+
+  card.appendChild(el("p", "detail", session.repo || session.directory || ""));
+  card.appendChild(el("p", "asof", session.doing || session.status));
+
+  card.appendChild(button(open ? "hide" : "open", "chipout", function () {
+    if (open) {
+      state.openSession = "";
+      drawSessions();
+    } else {
+      openSessionThread(session.name);
+    }
+  }));
+
+  if (open) {
+    const script = state.scripts[session.name];
+    const turns = (script && script.exchanges) || [];
+    if (turns.length) {
+      const thread = el("div", "card sub");
+      turns.slice(-SESSION_TURNS).forEach(function (turn) {
+        if (turn.you) thread.appendChild(el("p", "headline", turn.you));
+        if (turn.them) thread.appendChild(el("p", "detail", turn.them));
+      });
+      card.appendChild(thread);
+    } else if (script) {
+      card.appendChild(el("p", "empty", "nothing said yet"));
+    }
+    card.appendChild(sessionComposer(session));
+  }
+  return card;
+}
+
+/* The page's own three-word mood vocabulary, not a fourth one invented here:
+ * `needs` is amber and means a person, `quiet` is working, `off` is not. */
+function sessionMood(session) {
+  if (session.status === "blocked") return "needs";
+  if (session.status === "active" || session.status === "listening") return "quiet";
+  return "off";
+}
+
+/* The box. Absent, with the reason written instead, when the agent would never
+ * read what was typed: a send button over a dead session is a button that lies
+ * about where the words went. */
+function sessionComposer(session) {
+  const key = "session:" + session.name;
+  const wrap = el("div", "composer");
+  if (!session.reachable) {
+    wrap.appendChild(el("p", "empty",
+      session.name + " is " + session.status + ", so it would never read this"));
+    return wrap;
+  }
+  const box = el("textarea", "");
+  box.rows = 2;
+  box.placeholder = "answer " + session.name;
+  box.value = state.drafts[key] || "";
+  box.addEventListener("input", function () { state.drafts[key] = box.value; });
+  wrap.appendChild(box);
+  wrap.appendChild(button("send", "primary", function () {
+    replyToSession(session.name, state.drafts[key] || "");
+  }));
+  return wrap;
+}
+
+function openSessionThread(name) {
+  state.openSession = name;
+  drawSessions();
+  loadSessionScript(name);
+}
+
+async function loadSessionScript(name) {
+  const got = await read("/api/session?name=" + encodeURIComponent(name));
+  if (got.code === 200) {
+    state.scripts[name] = got.body;
+    drawSessions();
+  } else if (!state.scripts[name]) {
+    /* Whatever was last read stays on screen. A conversation that empties
+     * itself because hcom blinked is a lie about what was said. */
+    say(got.body.error || "could not read that session");
+  }
+}
+
+async function replyToSession(name, text) {
+  const words = String(text || "").trim();
+  if (!words) return;
+  const key = "session:" + name;
+  state.drafts[key] = "";
+  drawSessions();
+  const got = await write("/api/session/say", { name: name, text: words });
+  if (got.code === 200) {
+    say("sent to " + name);
+    await loadSessionScript(name);
+    await pollSessions();
+  } else {
+    /* Put the words back in the box. A refused message that also vanished is a
+     * message a person has to retype from memory. */
+    state.drafts[key] = words;
+    say(got.body.error || ("the door said " + got.code));
+    drawSessions();
+  }
+}
+
+async function pollSessions() {
+  try {
+    const got = await read("/api/sessions");
+    if (got.code === 200) {
+      state.sessions = got.body;
+      drawSessions();
+    }
+  } catch (err) {
+    /* The last roster stays. The office not being able to ask is not the same
+     * as nothing running, and it must not empty a list a person is reading. */
+  }
+}
+
 /* ── a picture, made small enough to send ────────────────────────────────── */
 
 /* Bytes to base64 is four characters for every three, rounded up. Checking the
@@ -1130,6 +1464,7 @@ async function pollWorld(nowPlease) {
       drawStamp();
       drawNeeds();
       drawDesks();
+      drawAutomation();
       drawWall();
     } else {
       // The door answered, but not with a world. The last picture stays up
@@ -1152,7 +1487,14 @@ function start() {
   pollGate();
   pollWorld(false);
   pollBots();
+  pollSessions();
   setInterval(pollGate, GATE_EVERY_MS);
+  setInterval(function () {
+    /* Only while a thread is open does the conversation reload; the roster
+     * always does. An agent's status is what the band is for. */
+    pollSessions();
+    if (state.openSession) loadSessionScript(state.openSession);
+  }, SESSION_EVERY_MS);
   setInterval(function () { pollWorld(false); pollBots(); }, WORLD_EVERY_MS);
   setInterval(pollThread, THREAD_EVERY_MS);
 }

@@ -768,11 +768,16 @@ public struct World: Decodable {
     public var owners: [String]
     public var runtime: RuntimeInfo?
     public var github: GitHubBudget?
+    /// What the automation is doing, as one page. Assembled by the server out of
+    /// the same receipts and desks this snapshot already carries, so the app and
+    /// the phone read one answer rather than each deriving their own.
+    public var automation: Automation = Automation()
 
     public init(generated: String = "", heartbeat: String = "", killed: Bool = false,
                 stations: [Station] = [], sections: [Section] = [],
                 pins: [String] = [], owners: [String] = [],
-                runtime: RuntimeInfo? = nil, github: GitHubBudget? = nil) {
+                runtime: RuntimeInfo? = nil, github: GitHubBudget? = nil,
+                automation: Automation = Automation()) {
         self.generated = generated
         self.heartbeat = heartbeat
         self.killed = killed
@@ -782,10 +787,12 @@ public struct World: Decodable {
         self.owners = owners
         self.runtime = runtime
         self.github = github
+        self.automation = automation
     }
 
     enum CodingKeys: String, CodingKey {
         case generated, heartbeat, killed, stations, sections, pins, owners, runtime, github
+        case automation
     }
 
     public init(from decoder: Decoder) throws {
@@ -806,6 +813,10 @@ public struct World: Decodable {
         owners = c.list(.owners, String.self)
         runtime = (try? c.decodeIfPresent(RuntimeInfo.self, forKey: .runtime)) ?? nil
         github = (try? c.decodeIfPresent(GitHubBudget.self, forKey: .github)) ?? nil
+        // A server that has not learned this block yet draws an empty page, not
+        // a failed world.
+        automation = ((try? c.decodeIfPresent(Automation.self, forKey: .automation)) ?? nil)
+            ?? Automation()
     }
 
     /// By title, then by id, so two sources that chose the same title still
@@ -814,6 +825,21 @@ public struct World: Decodable {
         sections.sorted {
             ($0.title.lowercased(), $0.id) < ($1.title.lowercased(), $1.id)
         }
+    }
+}
+
+/// `/api/automation`: the page, and the snapshot it was taken from.
+public struct AutomationResponse: Decodable {
+    public var at: String = ""
+    public var automation: Automation = Automation()
+
+    enum CodingKeys: String, CodingKey { case at, automation }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        at = c.str(.at) ?? ""
+        automation = ((try? c.decodeIfPresent(Automation.self, forKey: .automation)) ?? nil)
+            ?? Automation()
     }
 }
 

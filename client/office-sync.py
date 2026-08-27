@@ -52,6 +52,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import runtime as rt  # noqa: E402  (needs the path above)
+import automation  # noqa: E402  (needs the path above)
 import sections as sections_mod  # noqa: E402  (needs the path above)
 
 def _env_path(name):
@@ -443,7 +444,7 @@ fragment Desk on Repository {
     nodes {
       number title body url updatedAt
       labels(first: 20) { nodes { name } }
-      comments(last: 1) { nodes { body } }
+      comments(last: 1) { nodes { body url createdAt } }
     }
   }
   pullRequests(first: 40, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -465,20 +466,26 @@ def batch_query(n: int) -> str:
             f"{lines}\n}}\n{DESK_FRAGMENT}")
 
 
-def _bot_last_word(node) -> str:
-    """The bot's comment when it had the last word on this issue, else "".
+def _bot_last_word(node) -> dict:
+    """The bot's comment when it had the last word on this issue, else empty.
 
     THE rule, copied from dispatch.sh on purpose: the bot having the last
     word is what "waiting on a human" mechanically means. A label is a hint
     that can go stale; this cannot.
+
+    `url` and `createdAt` ride along and cost NOTHING: they are scalar fields on
+    a comment node the query already pays for, and GraphQL bills nodes. They are
+    what turns "the pipeline commented on #284 an hour ago" into a link that
+    lands on that comment rather than on the top of a thread with ninety others.
     """
     comments = ((node.get("comments") or {}).get("nodes")) or []
     if not comments:
-        return ""
-    body = comments[-1].get("body") or ""
+        return {}
+    last = comments[-1] or {}
+    body = last.get("body") or ""
     if BOT_MARKER not in body:
-        return ""
-    return body
+        return {}
+    return {"body": body, "url": last.get("url") or "", "at": last.get("createdAt") or ""}
 
 
 def _issue_row(i) -> dict:
@@ -493,7 +500,11 @@ def _issue_row(i) -> dict:
         "bot_last": bool(last_word),
         # When the bot spoke last, its words ARE the question a human has to
         # answer, so they travel with the issue instead of behind a click.
-        "last_word": last_word[:1500],
+        "last_word": str(last_word.get("body") or "")[:1500],
+        # And where that comment is, so the automation overview can link to the
+        # thing the runner actually left rather than to the issue it left it on.
+        "last_word_url": str(last_word.get("url") or ""),
+        "last_word_at": str(last_word.get("at") or "")[:20],
     }
 
 
@@ -823,6 +834,8 @@ def build_snapshot(access: Access):
     run = rt.snapshot()
     _log_room(stations, cost, run)
 
+    fixtures = sections_mod.read_all()
+
     return {
         "generated": stamp,
         "heartbeat": _heartbeat(),
@@ -835,7 +848,13 @@ def build_snapshot(access: Access):
         "pins": pins,
         "owners": list(OWNERS) or list(getattr(access, "mine", None) or []),
         "runtime": run,
-        "sections": sections_mod.read_all(),
+        "sections": fixtures,
+        # The automation, as one page instead of three. Assembled from what this
+        # function already measured: the runner's receipts, the desks (for the
+        # link to the comment it left), and the two fixtures that know whether
+        # anything is scheduled and whether anything can reach the door. No
+        # second measurement of any of it.
+        "automation": automation.build(by_repo, stations, fixtures, counts, stamp),
         "github": {
             "limit": BUDGET["limit"],
             "remaining": BUDGET["remaining"],

@@ -121,6 +121,30 @@ enum ShotHarness {
         store.select(.desk(deskShowingOldData(store)))
         await frame(store, window, directory, "putaway")
 
+        // The automation page: the schedule, the door, and the list of what the
+        // runner touched with the link to what it said. It replaces the detail
+        // pane rather than opening a sheet, so it photographs as the window.
+        store.putAwayOpen = false
+        store.automationOpen = true
+        await frame(store, window, directory, "automation", settling: 1.4)
+        store.automationOpen = false
+
+        // A desk with a session on it, opened. The sessions block sits above the
+        // issues and none of the seven older framings would ever reveal it: it
+        // is drawn from a route the other framings do not read, and its
+        // composer only exists while a thread is open.
+        if let desk = deskWithASession(store) {
+            store.select(.desk(desk.repo))
+            if let session = store.sessions(at: desk.repo).sessions.first {
+                store.openSessionThread(session.name)
+                await settle(0.6)
+                store.drafts[Store.draftKey(session: session.name)] =
+                    "take the second option, and say why in the issue"
+            }
+            await frame(store, window, directory, "sessions", settling: 1.4)
+            store.openSession = nil
+        }
+
         // A picture picked and not yet sent. The composer is the one part of
         // this app whose state nothing else photographs: the chip, the size
         // after the downscale and the way out of it all live for the seconds
@@ -138,6 +162,14 @@ enum ShotHarness {
         }
 
         NSApp.terminate(nil)
+    }
+
+    /// A desk the demo floor has an agent sitting at, preferring one that is
+    /// waiting on a person: that is the row with the amber pill and the reason
+    /// this framing exists.
+    private static func deskWithASession(_ store: Store) -> Station? {
+        let withSessions = store.stations.filter { !store.sessions(at: $0.repo).sessions.isEmpty }
+        return withSessions.first { store.sessions(at: $0.repo).blocked > 0 } ?? withSessions.first
     }
 
     /// One framing: put the room in a known state, let it settle, photograph it.

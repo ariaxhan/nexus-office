@@ -49,6 +49,31 @@ reads both and exports them; the client itself holds nothing.
 hands the same value to GitHub. The second already exists and is shared with
 `thinking-brain-school/buzz`.
 
+## Status, 2026-08-27: nothing has ever arrived, and here is why
+
+Both halves below are still undone, and neither of them failed. They were never
+run. Measured on this machine on 2026-08-27:
+
+| thing | state | how it was checked |
+| --- | --- | --- |
+| the secret | present | keychain `nexus-office/webhook-secret`, and it is byte-identical to the `OFFICE_WEBHOOK_SECRET` the running door holds |
+| the door | healthy | `POST /webhook` unsigned answers 403, which is the correct refusal |
+| Funnel | **absent** | `tailscale funnel status` says `No serve config` |
+| Serve on the tailnet | **not enabled at all** | `tailscale serve --bg --https=443` answers "Serve is not enabled on your tailnet" with an admin-console link |
+| the hooks | **none, on any repo** | `gh api repos/<nwo>/hooks` returns an empty list for every repo checked |
+| deliveries | zero, ever | `~/.local/state/nexus-office/` holds no `webhook-seen.json`, no events file and no runs file |
+
+So the office was not wrong to be quiet. There was no path for anything to
+arrive on, and nothing sending. **Step 1 below is the blocker**, and it is the
+one thing on this page no agent and no script on this machine can do: enabling
+Serve and Funnel is a change to the tailnet's own policy, made while signed in
+to the Tailscale admin console as the tailnet owner.
+
+The office no longer hides this. When nothing has ever arrived it asks Tailscale
+whether there is a public mount at all, and a door with no Funnel in front of it
+reports `unreachable` with the reason written on the Webhooks card and on the
+automation page, instead of `silent`, which is what a quiet Sunday looks like.
+
 ## What Aria has to click
 
 Two things, and only these two.
