@@ -702,16 +702,16 @@ export class Panel {
   }
 
   async _queue(decision, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = "queueing…"; }
+    if (btn) { btn.disabled = true; btn.textContent = "working…"; }
     try {
-      await sendDecision(decision);
-      // Points at the tray rather than making a promise. "Within the minute" was
-      // a claim the browser had no way to keep or to check.
-      this.onToast("Queued. Watch it in \u201cqueued\u201d, top right.");
-      if (btn) btn.textContent = "queued";
+      const done = await sendDecision(decision);
+      // Applied on the spot now, so the toast carries what actually happened,
+      // in the server's own words, rather than a queue position.
+      this.onToast(done.result ? `Done. ${done.result}` : "Done.");
+      if (btn) btn.textContent = "done";
       this.onRefresh?.();
     } catch (err) {
-      this.onToast(err.message || "could not queue", true);
+      this.onToast(err.message || "could not apply", true);
       if (btn) { btn.disabled = false; btn.textContent = "retry"; }
     }
   }

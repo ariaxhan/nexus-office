@@ -4,8 +4,8 @@
 
 One villager per repo, one desk per villager, one wing per GitHub owner. What a
 character is doing with its body is that repo's real state, and clicking a desk
-opens its issues inline with buttons that do something. It runs on Cloudflare and
-opens on a phone.
+opens its issues inline with buttons that do something. It runs on your own
+machine, and a click is applied the moment you make it.
 
 Built for [issue-to-PR pipelines](#what-feeds-it): the kind of automation that
 files issues, works them, opens PRs, and periodically gets stuck and needs a
@@ -13,30 +13,22 @@ person. Those pipelines are invisible by nature. This makes them a place.
 
 ```mermaid
 flowchart LR
-  R[your pipeline<br/>receipts + live issues] -->|push| W
-  W[(Cloudflare Worker<br/>+ D1)] -->|world| B[browser, anywhere]
-  B -->|queued intent| W
-  W -->|drain| L[office-sync.py<br/>the only thing with tokens]
-  L -->|gh comment / label / close| G[GitHub]
+  R[your pipeline<br/>receipts + live issues] --> S
+  S[client/serve.py<br/>127.0.0.1:8790] -->|world| B[browser on this machine]
+  B -->|a click| S
+  S -->|applied now: comment / label / merge| G[GitHub]
   G --> R
 ```
 
-## The security model, in one paragraph
+## The security model, in three sentences
 
-The Worker holds no GitHub credentials and never will. It stores a snapshot and a
-queue of intents. Everything that touches GitHub happens on your machine, in
-`client/office-sync.py`, which re-derives every intent from its own fields and
-re-probes push access before acting. Someone who steals a browser session can
-**queue** an intent and never **execute** one.
-
-| secret | lives in | can |
-| --- | --- | --- |
-| your password | Worker secret + your keychain | open the office in a browser |
-| `VIEW_TOKEN` | Worker secret, issued to browsers on login | read the world, queue an intent |
-| `PUSH_TOKEN` | your keychain only, never sent to a browser | drain the queue, replace the snapshot |
-
-Failed logins are rate limited per IP. Nothing is stored in the repo, and
-`wrangler.jsonc` (which carries your database id) is gitignored by design.
+The server binds loopback only, never `0.0.0.0`, so the door is the machine:
+nobody else can reach the port at all, and reaching it from a phone goes through
+Tailscale Serve in front of it rather than a wider bind. Everything that touches
+GitHub still happens in `client/office-sync.py`, which re-derives every intent
+from its own fields and re-probes push access before acting. The one thing still
+checked in software is the gate: a permission answer carries the id of the
+question it is answering, and is refused if the agent has moved on.
 
 ## See it without setting anything up
 
@@ -45,8 +37,8 @@ no pipeline. Twelve desks across three owners, and every state below appears at
 least once, because a demo that only shows the happy path lets the ugly cases rot.
 
 ```sh
-npm install && npm run dev
-# then open http://127.0.0.1:5173/?demo=1
+npm install && npm run build && python3 client/serve.py
+# then open http://127.0.0.1:8790/?demo=1
 ```
 
 ## Reading the room
@@ -96,30 +88,21 @@ because against a gate that fails closed the poll interval *is* the answer windo
 
 ## Setup
 
-You need Node, a Cloudflare account, and the GitHub CLI logged in.
+You need Node, Python 3, and the GitHub CLI logged in. Nothing else, and no
+account anywhere.
 
 ```sh
 git clone https://github.com/YOUR-NAME/nexus-office && cd nexus-office
-npx wrangler login
-./scripts/setup.sh
-```
+npm install && npm run build
 
-That creates the D1 database, writes `wrangler.jsonc`, applies the schema, mints
-the tokens, asks for a password, builds, and deploys. Then feed it:
-
-```sh
-export OFFICE_URL=https://nexus-office.YOUR-SUBDOMAIN.workers.dev
 export OFFICE_OWNERS=your-github-username,your-org
-
-python3 client/office-sync.py --push     # build a snapshot, send it up
-python3 client/office-sync.py --check    # prove the whole surface, live
-python3 client/office-sync.py --open     # open it in a browser
+python3 client/serve.py                  # then open http://127.0.0.1:8790/
+python3 client/serve.py --once           # one snapshot as JSON, for a script
 ```
 
-Put `python3 client/office-sync.py` on a schedule and the room stays live. Two
-jobs works well: `--drain` every couple of minutes (cheap, one HTTP GET unless
-somebody clicked something) and `--push` every ten (it lists issues, so it is
-not free).
+The snapshot rebuilds in the background at most once a minute, so the page never
+waits on GitHub. Leave the server running (a launchd job works) and the room
+stays live.
 
 ## What feeds it
 
@@ -142,7 +125,7 @@ Full configuration is documented at the top of `client/office-sync.py`.
 ## Building on it
 
 ```
-worker/index.js      the whole API. Two tables, no credentials, ~250 lines.
+client/serve.py      the whole API, on this machine. Loopback only.
 src/scene/office.js  the room: layout, furniture, camera, picking
 src/scene/villager.js one character, and the state to body mapping
 src/scene/kit.js     shared art supplies: toon materials, faces, sprites
@@ -154,8 +137,8 @@ client/runtime.py    the local agent runtime adapter: gates, runs, cost
 `window.office` is exposed in the browser on purpose. A 3D surface that can only
 be inspected by squinting at screenshots is a surface nobody can debug.
 
-Three.js, Vite, a Cloudflare Worker, and D1. No framework, no CDN, no build step
-you have to understand. The whole front end is about 1,500 lines.
+Three.js, Vite, and the Python standard library. No framework, no CDN, no
+service to sign up for. The whole front end is about 1,500 lines.
 
 ## Where this is going
 
@@ -165,7 +148,7 @@ you have to understand. The whole front end is about 1,500 lines.
 The short version: the office is a face for machinery that already runs and is
 currently invisible. It adapts an issue pipeline, a local agent runtime, a memory
 store and a scheduler rather than building any of them, and every feature has to
-survive a Worker that holds no credentials.
+survive a server with no login in front of it.
 
 ## License
 

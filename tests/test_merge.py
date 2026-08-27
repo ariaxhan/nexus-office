@@ -152,11 +152,14 @@ class MergeTest(unittest.TestCase):
 class RoutingTest(unittest.TestCase):
     """A merge must be routed to apply_merge before any issue-shaped handling."""
 
-    def test_merge_is_a_github_kind_in_the_worker(self):
-        worker = (pathlib.Path(__file__).resolve().parents[1] / "worker" / "index.js").read_text()
-        self.assertIn('"merge"', worker)
-        line = next(l for l in worker.splitlines() if "GITHUB_KINDS" in l and "new Set" in l)
-        self.assertIn("merge", line)
+    def test_merge_is_a_github_kind_on_the_local_server(self):
+        import serve
+        self.assertIn("merge", serve.GITHUB_KINDS)
+        self.assertNotIn("merge", serve.RUNTIME_KINDS)
+        # And a merge with nothing to merge never reaches apply_merge at all.
+        err, d = serve.validate({"kind": "merge", "repo": "acme/thing"})
+        self.assertEqual(err, "a merge needs a numeric pr")
+        self.assertIsNone(d)
 
     def test_the_prefix_is_configurable_but_defaults_to_pipeline(self):
         import office_sync_shim

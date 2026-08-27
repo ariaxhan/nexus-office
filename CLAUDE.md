@@ -85,7 +85,7 @@ being wrong, and it is worth fixing once for everyone.
 ## Shape of the thing
 
 ```
-worker/index.js       the whole API. Two tables, no GitHub credentials.
+client/serve.py       the whole API, on this machine. Loopback only.
 src/scene/            the room: layout, furniture, camera, picking, characters
 src/ui/               panel, markdown, filters
 src/demo.js           the fake floor behind ?demo=1
@@ -99,8 +99,8 @@ be inspected by squinting at screenshots is a surface nobody can debug.
 
 ## Rules that are not negotiable
 
-- **The Worker never holds a GitHub credential.** If a feature needs it to, the
-  feature is wrong, not the model.
+- **The server binds loopback only.** Anything that needs it on the network goes
+  through Tailscale Serve, never a bind address.
 - **A gate is never hidden.** No filter, no "put this away", nothing removes a
   raised hand from the room.
 - **Hidden is never silent.** If something put away starts needing a human, the

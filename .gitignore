@@ -8,3 +8,6 @@ dist/
 wrangler.jsonc
 shots/
 dist-*/
+
+# vault runtime state (agentdb, logs, chronicles) lives beside the code but never in it
+_meta/

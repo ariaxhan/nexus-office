@@ -1,27 +1,16 @@
-#!/usr/bin/env python3
-"""Keep the cloud office and the real world pointed at each other.
+"""Build the office's world, and apply what somebody clicked in it.
 
-Two directions, one process, deliberately:
+This is a library now. `client/serve.py` is the only caller: it serves the room
+on this machine, builds the snapshot in process, and applies each decision the
+moment it arrives instead of queueing it for a drain.
 
-  push   what your automation actually did -> a snapshot the browser can render
-  drain  what you clicked in the browser   -> real comments, labels and closes
-
-The Worker holds no credentials and never will. Everything that touches GitHub
-happens here, on the machine that already has a `gh` login, and every intent that
-arrives from the browser is re-checked against the real repo before it is acted
-on. A stolen session can therefore QUEUE an intent and never EXECUTE one.
-
-  office-sync.py            drain, then push
-  office-sync.py --push     push only
-  office-sync.py --drain    drain only
-  office-sync.py --dry-run  say what it would do, touch nothing
-  office-sync.py --check    prove the live surface end to end
-  office-sync.py --open     open the office in a browser
-  office-sync.py --cancel N drop a queued decision
+Everything that touches GitHub happens here, on the machine that already has a
+`gh` login, and every intent is re-derived from its own fields and re-probed for
+push access before it is acted on. The server binds loopback only, so the door is
+the machine; this file is the second lock behind that door.
 
 Configuration, all from the environment so nothing personal lives in this file:
 
-  OFFICE_URL        where the Worker is                  (required)
   OFFICE_RECEIPTS   a JSONL of pipeline receipts         (optional)
   OFFICE_OWNERS     comma separated GitHub owners        (optional; used when
                     there is no receipts file, so every repo you can push to
@@ -30,7 +19,6 @@ Configuration, all from the environment so nothing personal lives in this file:
   OFFICE_KILLSWITCH file whose existence means "the runner is halted" (optional)
   OFFICE_MARKER     the comment marker your bot leaves    (default: pipeline-bot)
   OFFICE_WAITING    the label meaning a human must look   (default: waiting on human)
-  OFFICE_KEYCHAIN   keychain service holding the tokens   (default: nexus-office)
   OFFICE_RUNTIME_ROOT  a local agent runtime's repo root   (optional; enables gates)
   OFFICE_RUNTIME_URL   that runtime's dashboard            (default 127.0.0.1:8787)
 
@@ -45,7 +33,6 @@ repo, and are skipped when picking the headline state for a desk.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import pathlib
@@ -53,8 +40,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -72,7 +57,6 @@ HEARTBEAT = _env_path("OFFICE_HEARTBEAT")
 KILLSWITCH = _env_path("OFFICE_KILLSWITCH")
 OWNERS = [o.strip() for o in os.environ.get("OFFICE_OWNERS", "").split(",") if o.strip()]
 
-KEYCHAIN_SERVICE = os.environ.get("OFFICE_KEYCHAIN", "nexus-office")
 STATE = pathlib.Path.home() / ".local/state/nexus-office"
 ACCESS_CACHE = STATE / "access.json"
 ACCESS_TTL = 6 * 3600
@@ -82,14 +66,13 @@ WAITING_LABEL = os.environ.get("OFFICE_WAITING", "waiting on human")
 
 # THE SAFETY BOUNDARY FOR MERGING.
 #
-# The office may merge a PR the PIPELINE opened, and nothing else. A stolen view
-# token can queue any intent it likes; this is the line that decides which of
-# them can touch code. Every branch the runner creates starts with this prefix,
-# so a PR whose head does not is somebody's own work and is refused here, on the
-# laptop, after re-reading the PR from GitHub. The browser's claim about a PR is
-# never trusted: only this check counts.
+# The office may merge a PR the PIPELINE opened, and nothing else. Anything that
+# reaches the local port can ask for any intent it likes; this is the line that
+# decides which of them can touch code. Every branch the runner creates starts
+# with this prefix, so a PR whose head does not is somebody's own work and is
+# refused here, after re-reading the PR from GitHub. The caller's claim about a
+# PR is never trusted: only this check counts.
 PR_PREFIX = os.environ.get("OFFICE_PR_PREFIX", "pipeline/")
-DEFAULT_URL = os.environ.get("OFFICE_URL", "")
 
 NOW = datetime.now(timezone.utc)
 ISO = "%Y-%m-%dT%H:%M:%SZ"
@@ -110,21 +93,6 @@ def sh(cmd, timeout=45, env=None, check=False):
     if check and p.returncode != 0:
         raise RuntimeError(p.stderr.strip() or f"exit {p.returncode}")
     return p.returncode, p.stdout, p.stderr
-
-
-def keychain(account: str) -> str:
-    """Secrets live in the keychain and nowhere else. Never in a file, ever.
-
-    On a machine without `security`, export OFFICE_PUSH_TOKEN / OFFICE_PASSWORD
-    instead; the environment is checked first so a Linux box or a container can
-    run this unchanged.
-    """
-    env_name = f"OFFICE_{account.upper()}_TOKEN" if account != "password" else "OFFICE_PASSWORD"
-    if os.environ.get(env_name):
-        return os.environ[env_name].strip()
-    rc, out, _ = sh(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE,
-                     "-a", account, "-w"], timeout=10)
-    return out.strip() if rc == 0 else ""
 
 
 # ── who can act where ────────────────────────────────────────────────────────
@@ -414,30 +382,6 @@ def build_snapshot(access: Access):
     }
 
 
-# ── the Worker ───────────────────────────────────────────────────────────────
-
-class Office:
-    def __init__(self, base, token):
-        self.base = base.rstrip("/")
-        self.token = token
-
-    def call(self, path, method="GET", body=None, timeout=45):
-        data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.base + path, data=data, method=method)
-        req.add_header("authorization", f"Bearer {self.token}")
-        req.add_header("content-type", "application/json")
-        # Cloudflare's browser-integrity check answers urllib's default agent with
-        # a 1010 before the request ever reaches the Worker. Naming ourselves
-        # honestly is enough; this is not evasion, it is having a name at all.
-        req.add_header("user-agent", "nexus-office-sync/1.0 (+local vault runner)")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode() or "{}")
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode()[:300]
-            raise RuntimeError(f"{method} {path} -> {e.code}: {detail}") from None
-
-
 # ── applying what was clicked ────────────────────────────────────────────────
 
 RUNTIME_KINDS = {"permit", "chat", "run", "stop"}
@@ -665,222 +609,3 @@ def apply_decision(d, access: Access, dry: bool):
             return False, f"{verb}: {msg}"
         done.append(verb)
     return True, f"as {who}: " + "; ".join(done)
-
-
-# While a gate is open the drain interval is the answer latency, and a two minute
-# loop against a gate that fails closed is a gate that fails closed. So the job
-# stays alive and polls fast, but only while somebody is actually being asked
-# something, and only inside its own bounded window.
-GATE_POLL_S = 8
-GATE_WATCH_S = 150
-
-
-def watch_gate(office: Office, access: Access, dry: bool):
-    """Hold the run open while an agent is blocked, polling for the answer.
-
-    Returns as soon as the gate clears, by any route: answered from here,
-    answered at the terminal, or the runtime giving up and failing closed. It
-    never outlives GATE_WATCH_S, because a job that does not exit is a job that
-    collides with its own next firing.
-    """
-    deadline = time.monotonic() + GATE_WATCH_S
-    served = 0
-    while time.monotonic() < deadline:
-        gate = rt.read_gate()
-        if gate.get("state") != "pending":
-            log("the gate cleared")
-            return served
-        time.sleep(GATE_POLL_S)
-        served += drain_once(office, access, dry, quiet=True)
-    log(f"still waiting on a gate after {GATE_WATCH_S}s; the next run picks it up")
-    return served
-
-
-def drain(office: Office, access: Access, dry: bool):
-    n = drain_once(office, access, dry)
-    gate = rt.read_gate()
-    if gate.get("state") == "pending":
-        log(f"a gate is open ({gate.get('permission')}); watching for an answer")
-        n += watch_gate(office, access, dry)
-    return n
-
-
-def drain_once(office: Office, access: Access, dry: bool, quiet: bool = False):
-    pending = office.call("/api/inbox").get("pending", [])
-    if not pending:
-        if not quiet:
-            log("inbox empty")
-        return 0
-    log(f"{len(pending)} decision(s) waiting")
-    n = 0
-    for d in pending:
-        ok, result = apply_decision(d, access, dry)
-        log(f"  #{d['id']} {d['kind']} {d['repo']}#{d.get('issue') or '-'}: "
-            f"{'ok' if ok else 'FAILED'} — {result}")
-        if not dry:
-            office.call(f"/api/inbox/{d['id']}", "POST",
-                        {"status": "done" if ok else "failed", "result": result})
-        n += ok
-    access.save()
-    return n
-
-
-def open_office(url):
-    """Open the office. It will ask for the password like any other site."""
-    sh(["open", url], timeout=15)
-    log(f"opened {url}")
-    return 0
-
-
-def check(url):
-    """The live end-to-end proof, run from here so the token never crosses a shell.
-
-    It asserts the two halves that actually matter: the view token can SEE the
-    world, and the view token cannot REACH the inbox. If the second one ever
-    passes, a browser can execute rather than merely ask, and that is the whole
-    security model gone."""
-    # The password door, checked from here so the secret never crosses a shell.
-    # A login screen nobody has ever successfully walked through is a locked door
-    # with a nice font, and the only way to know is to open it.
-    pw = keychain("password")
-    if pw:
-        try:
-            r = Office(url, "").call("/api/login", "POST", {"password": pw})
-            log("password opens the office" if r.get("token") else "FAIL: login gave no token")
-            if not r.get("token"):
-                return 1
-        except RuntimeError as e:
-            log(f"FAIL: the stored password was refused: {e}")
-            return 1
-        try:
-            Office(url, "").call("/api/login", "POST", {"password": pw + "x"})
-            log("FAIL: a wrong password was accepted")
-            return 1
-        except RuntimeError as e:
-            if "401" not in str(e) and "429" not in str(e):
-                log(f"FAIL: wrong password refused for the wrong reason: {e}")
-                return 1
-            log("a wrong password is refused")
-    else:
-        log("no password in the keychain; skipping the door check")
-
-    view = keychain("view")
-    if not view:
-        log("no view token in the keychain")
-        return 2
-
-    world = Office(url, view).call("/api/world")
-    w = world.get("world")
-    if not w:
-        log("FAIL: authenticated, but the office holds no snapshot yet")
-        return 1
-    stations = w.get("stations", [])
-    issues = [i for s in stations for i in s.get("issues", [])]
-    waiting = [i for i in issues if i.get("bot_last")]
-    locked = [s for s in stations if not s.get("access")]
-    log(f"view token reads the world: snapshot {world.get('at')}")
-    log(f"  {len(stations)} desks | {len(issues)} open issues | "
-        f"{len(waiting)} waiting on you | {len(locked)} locked")
-    log(f"  today: {w.get('today')}")
-
-    # The runtime's own health is part of the surface being proved. A room that
-    # cannot say "the runtime is down" will happily show an empty floor instead.
-    run = w.get("runtime") or {}
-    gate = (run.get("gate") or {}).get("state", "unconfigured")
-    board = (run.get("board") or {}).get("state", "unconfigured")
-    log(f"  runtime: gate {gate}, board {board}")
-    if gate == "pending":
-        g = run["gate"]
-        log(f"  AN AGENT IS BLOCKED: {g.get('permission')} -> {g.get('target', '')[:70]}")
-    for i in waiting[:5]:
-        log(f"  waiting: #{i['number']} {i['title'][:60]}")
-
-    try:
-        Office(url, view).call("/api/inbox")
-    except RuntimeError as e:
-        if "401" in str(e):
-            log("view token is correctly REFUSED on the runner-only inbox")
-            return 0
-        log(f"FAIL: inbox refused for the wrong reason: {e}")
-        return 1
-    log("FAIL: the view token reached the inbox. A browser could execute intent.")
-    return 1
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--push", action="store_true")
-    ap.add_argument("--drain", action="store_true")
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--open", action="store_true",
-                    help="open the office in a browser, key attached, once")
-    ap.add_argument("--cancel", metavar="ID",
-                    help="drop a queued decision without applying it")
-    ap.add_argument("--check", action="store_true",
-                    help="prove the live surface end to end and print what it holds")
-    ap.add_argument("--url", default=DEFAULT_URL)
-    a = ap.parse_args()
-    if not a.url:
-        log("set OFFICE_URL (or pass --url) to your deployed Worker")
-        return 2
-    # These two never touch GitHub, so they run before anything else is set up.
-    # Both need the VIEW token, which is deliberately the only place in this file
-    # that reads it: it exists to leave the machine, so it leaves from one door.
-    if a.open:
-        return open_office(a.url)
-    if a.check:
-        return check(a.url)
-    if a.cancel:
-        # A queued intent has to be revocable. Anything a click can start and
-        # nothing can stop is a button nobody should be willing to press.
-        tok = keychain("push")
-        if not tok:
-            log("no push token in the keychain")
-            return 2
-        Office(a.url, tok).call(f"/api/inbox/{int(a.cancel)}", "POST",
-                                {"status": "failed", "result": "cancelled before it ran"})
-        log(f"decision {a.cancel} cancelled; it will not be applied")
-        return 0
-
-    do_push = a.push or not a.drain
-    do_drain = a.drain or not a.push
-
-    token = keychain("push")
-    if not token:
-        log(f"no push token found (keychain {KEYCHAIN_SERVICE}/push, or "
-            "$OFFICE_PUSH_TOKEN). Run scripts/mint-tokens.sh first.")
-        return 2
-
-    office = Office(a.url, token)
-    access = Access()
-    if not access.mine:
-        log("gh is not authenticated as anyone; nothing can be read or written")
-        return 2
-    log(f"authenticated as: {', '.join(access.mine)}")
-
-    rc = 0
-    # Drain FIRST. A decision applied before the snapshot is taken shows up in the
-    # very next picture you see; the other order makes your own click look lost
-    # for a whole cycle.
-    if do_drain:
-        try:
-            drain(office, access, a.dry_run)
-        except Exception as e:
-            log(f"drain failed: {e}")
-            rc = 1
-    if do_push:
-        try:
-            snap = build_snapshot(access)
-            if a.dry_run:
-                log(f"would push {len(json.dumps(snap))} bytes")
-            else:
-                office.call("/api/snapshot", "POST", snap, timeout=90)
-                log(f"pushed {len(json.dumps(snap))} bytes to {a.url}")
-        except Exception as e:
-            log(f"push failed: {e}")
-            rc = 1
-    return rc
-
-
-if __name__ == "__main__":
-    sys.exit(main())
