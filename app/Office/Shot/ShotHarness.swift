@@ -6,7 +6,7 @@ import SwiftUI
 /// A build passing proves nothing about a room. Every defect this project has
 /// had was invisible in source and obvious on screen, so the app can photograph
 /// itself: `--demo <fixture> --shot-mode` opens the window at a fixed size,
-/// walks four framings, and writes each one to `shots/app-<framing>.png`.
+/// walks five framings, and writes each one to `shots/app-<framing>.png`.
 ///
 /// The capture is a region rather than `screencapture -l <windowid>` for one
 /// reason: a sheet is its own window, so a window capture of the gate framing
@@ -69,6 +69,15 @@ enum ShotHarness {
         store.needsOnly = true
         store.select(.desk(deskNeedingAPerson(store)))
         await frame(store, window, directory, "needs")
+
+        // The two things the other four framings cannot show at once: the
+        // desks a person put away, which live in a section that is shut by
+        // default, and a desk saying out loud that what you are reading is the
+        // last thing it managed to pull.
+        store.needsOnly = false
+        store.putAwayOpen = true
+        store.select(.desk(deskShowingOldData(store)))
+        await frame(store, window, directory, "putaway")
 
         NSApp.terminate(nil)
     }
@@ -186,6 +195,19 @@ enum ShotHarness {
     private static func deskNeedingAPerson(_ store: Store) -> String {
         let waiting = store.stations.first { StateRules.deskState($0) == .waiting }
         return waiting?.repo ?? deskWithWork(store)
+    }
+
+    /// A desk whose last successful pull is behind the snapshot it arrived in,
+    /// AND which has issues to draw under the notice. A framing of the notice
+    /// over an empty desk proves the sentence renders and proves nothing about
+    /// the thing it exists for, which is last-good data still being there.
+    private static func deskShowingOldData(_ store: Store) -> String {
+        let stale = store.stations.first { station in
+            StateRules.isStale(station: station, generated: store.worldGenerated)
+                && !station.problems.isEmpty
+                && !station.issues.isEmpty
+        }
+        return stale?.repo ?? deskWithWork(store)
     }
 
     private static func settle(_ seconds: Double) async {

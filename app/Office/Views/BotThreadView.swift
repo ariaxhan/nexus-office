@@ -9,11 +9,26 @@ struct BotThreadView: View {
     @Bindable var store: Store
     let bot: Bot
 
-    @State private var draft = ""
     @FocusState private var composing: Bool
 
     private var turns: [ChatTurn] { store.chats[bot.id] ?? [] }
     private var color: Color { bot.color.isEmpty ? .derived(from: bot.id) : Color(hex: bot.color) }
+
+    /// The message being written, kept by the office.
+    ///
+    /// This was `@State`, so switching to another name and back threw it away:
+    /// two sentences in, click Inbox to check something, come back to an empty
+    /// box. A half-written message is work, and the view it happens to be
+    /// displayed in is not where work should live.
+    private var key: String { Store.draftKey(bot: bot.id) }
+
+    private var draft: Binding<String> {
+        Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 })
+    }
+
+    private var typed: String {
+        draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,13 +51,27 @@ struct BotThreadView: View {
     private var head: some View {
         HStack(spacing: 9) {
             BotAvatar(color: color, size: 22)
-            Text(bot.name)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Theme.text)
-            if bot.busy {
-                Text("working")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.blue)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 7) {
+                    Text(bot.name)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                    if bot.busy {
+                        Text("working")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.blue)
+                    }
+                }
+                // What to ask this one for. The paragraph of identity behind it
+                // stays in `_meta/bots.json`: a person picking who to message
+                // needs the job, not the briefing.
+                if !bot.purpose.isEmpty {
+                    Text(bot.purpose)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.faint)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             Spacer()
             if !store.runtimeUp {
@@ -63,10 +92,22 @@ struct BotThreadView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if turns.isEmpty && !store.gateBelongsTo(bot: bot.id) {
-                        Text("Nothing said yet. Type below and this bot picks it up as a run.")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(Theme.faint)
-                            .padding(.top, 24)
+                        // An empty thread is the one place a person is actually
+                        // asking what this bot is for, so it answers that and
+                        // then says how to start.
+                        VStack(alignment: .leading, spacing: 6) {
+                            if !bot.purpose.isEmpty {
+                                Text(bot.purpose)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.dim)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Text("Message \(bot.name) to start.")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(Theme.faint)
+                        }
+                        .frame(maxWidth: 520, alignment: .leading)
+                        .padding(.top, 24)
                     }
                     ForEach(Array(turns.enumerated()), id: \.offset) { index, turn in
                         Bubble(turn: turn, color: color).id(index)
@@ -105,7 +146,7 @@ struct BotThreadView: View {
 
     private var composer: some View {
         HStack(spacing: 8) {
-            TextField("Message \(bot.name)", text: $draft, axis: .vertical)
+            TextField("Message \(bot.name)", text: draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.text)
@@ -120,20 +161,22 @@ struct BotThreadView: View {
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 22))
-                    .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                     ? Theme.faint : color)
+                    .foregroundStyle(typed.isEmpty ? Theme.faint : color)
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.return, modifiers: [])
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(typed.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
     }
 
+    /// Clearing on send stays, and it lives in the store with the draft: the
+    /// box empties on the same line that puts the message in the transcript, so
+    /// what a person sees is the sentence moving rather than disappearing.
     private func send() {
-        let message = draft
-        draft = ""
+        let message = draft.wrappedValue
+        guard !typed.isEmpty else { return }
         Task { await store.send(to: bot.id, message: message) }
     }
 }

@@ -4,7 +4,7 @@
 #
 # A build passing proves nothing about a room. Every defect this project has had
 # was invisible in source and obvious on screen, so this builds the app, runs it
-# against the demo fixture, and photographs four framings into shots/.
+# against the demo fixture, and photographs five framings into shots/.
 #
 #   ./scripts/shoot.sh
 #
@@ -50,7 +50,7 @@ CAFFEINE=$!
 trap 'kill "$CAFFEINE" 2>/dev/null || true' EXIT
 sleep 1
 
-echo "shoot: running the four framings"
+echo "shoot: running the five framings"
 # A watchdog, because a launch that never gets a window produces no output and
 # no error, and a harness that hangs for an hour is worse than one that fails.
 "$APP" --demo "$ROOT/app/Demo/demo.json" --shot-mode --shots "$ROOT/shots" &
@@ -61,7 +61,7 @@ wait "$OFFICE" 2>/dev/null || true
 { kill "$WATCHDOG" 2>/dev/null; wait "$WATCHDOG" 2>/dev/null; } || true
 
 MISSING=0
-for framing in roster desk gate needs; do
+for framing in roster desk gate needs putaway; do
   if [ -f "$ROOT/shots/app-$framing.png" ]; then
     echo "shoot: shots/app-$framing.png"
   else

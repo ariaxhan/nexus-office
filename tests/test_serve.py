@@ -11,6 +11,7 @@ So those are what is tested, along with the plain "does it serve the room".
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import pathlib
@@ -27,9 +28,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 SNAP = {
     "generated": "2026-08-26T12:00:00Z",
     "heartbeat": "", "killed": False, "today": {"landed": 2},
-    "stations": [{"repo": "acme/thing", "issues": [], "prs": []}],
+    "stations": [{"repo": "acme/thing", "issues": [], "prs": [],
+                   "hidden": False, "fetched_at": "2026-08-26T11:59:00Z"}],
     "runtime": {"gate": {"state": "clear"}, "board": {"state": "down"}},
     "sections": {},
+    "github": {"limit": 5000, "remaining": 4800, "reset_at": "2026-08-26T13:00:00Z",
+               "cost": 8, "paused_until": "", "error": ""},
 }
 
 
@@ -43,7 +47,18 @@ class ServeTest(unittest.TestCase):
         # Neither of these may touch GitHub or a keychain from a test. The point
         # of the harness is that it runs anywhere, with no credentials at all.
         serve.office_sync.Access = lambda: object()
-        serve.office_sync.build_snapshot = lambda access: dict(SNAP)
+        serve.office_sync.build_snapshot = lambda access: copy.deepcopy(SNAP)
+
+        # Putting a desk away writes a file. It writes it somewhere disposable
+        # here: a test suite that edits ~/.local/state is a test suite that
+        # changes the room it is supposed to be checking.
+        cls.state = tempfile.TemporaryDirectory()
+        sd = pathlib.Path(cls.state.name)
+        cls.state_was = (serve.office_sync.STATE, serve.office_sync.HIDDEN_FILE,
+                         serve.office_sync.DESKS_CACHE)
+        serve.office_sync.STATE = sd
+        serve.office_sync.HIDDEN_FILE = sd / "hidden.json"
+        serve.office_sync.DESKS_CACHE = sd / "desks.json"
 
         cls.world = serve.World()
         cls.world.build()
@@ -57,6 +72,9 @@ class ServeTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
+        (cls.serve.office_sync.STATE, cls.serve.office_sync.HIDDEN_FILE,
+         cls.serve.office_sync.DESKS_CACHE) = cls.state_was
+        cls.state.cleanup()
 
     # ── plumbing ────────────────────────────────────────────────────────────
     def get(self, path):
@@ -106,6 +124,75 @@ class ServeTest(unittest.TestCase):
         code, body = self.get("/api/gate")
         self.assertEqual(code, 200)
         self.assertIn("state", body)
+
+    # ── the budget ──────────────────────────────────────────────────────────
+    # Every build asks GitHub, and GitHub gives a user 5000 GraphQL points an
+    # hour. Rebuilding every minute spent about seventy times that, so the room
+    # showed "API rate limit already exceeded" on every desk at once. The
+    # interval is a budget, and `?fresh=1` is a button, not a tap dance.
+
+    def test_the_room_rebuilds_on_a_budget_not_every_minute(self):
+        self.assertGreaterEqual(self.serve.POLL_S, 300)
+        self.assertEqual(self.serve.FRESH_MIN_S, 60.0)
+
+    def test_fresh_forces_one_build_a_minute_and_says_which_you_got(self):
+        self.world.fresh_at = None
+        code, body = self.get("/api/world?fresh=1")
+        self.assertEqual(code, 200)
+        self.assertTrue(body["fresh"], "the first one really rebuilds")
+
+        code, body = self.get("/api/world?fresh=1")
+        self.assertEqual(code, 200)
+        self.assertFalse(body["fresh"], "the second one inside the minute does not")
+        self.assertEqual(body["world"], SNAP, "and still hands back the room")
+
+        code, body = self.get("/api/world")
+        self.assertFalse(body["fresh"], "a plain read never claims to be fresh")
+
+    # ── desks you put away ──────────────────────────────────────────────────
+    def test_desks_lists_what_is_put_away(self):
+        code, body = self.get("/api/desks")
+        self.assertEqual(code, 200)
+        self.assertIsInstance(body["hidden"], list)
+
+    def test_putting_a_desk_away_lands_on_the_snapshot_at_once(self):
+        """No fetch, no wait for the next poll. The desk keeps its data so the
+        app can list it and bring it back."""
+        try:
+            code, body = self.post("/api/desks", {"repo": "acme/thing", "hidden": True})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["ok"])
+            self.assertIn("acme/thing", body["hidden"])
+
+            code, world = self.get("/api/world")
+            desk = world["world"]["stations"][0]
+            self.assertTrue(desk["hidden"])
+            self.assertEqual(desk["repo"], "acme/thing")
+            self.assertEqual(self.get("/api/desks")[1]["hidden"], ["acme/thing"])
+        finally:
+            code, body = self.post("/api/desks", {"repo": "acme/thing", "hidden": False})
+        self.assertEqual(code, 200)
+        self.assertEqual(body["hidden"], [])
+        self.assertFalse(self.get("/api/world")[1]["world"]["stations"][0]["hidden"])
+
+    def test_bringing_back_a_desk_that_was_never_away_is_a_no_op(self):
+        code, body = self.post("/api/desks", {"repo": "never/hidden", "hidden": False})
+        self.assertEqual(code, 200)
+        self.assertNotIn("never/hidden", body["hidden"])
+
+    def test_a_malformed_desk_is_refused(self):
+        for repo in ("", "nope", "a/b/c", "a b/c", "../../etc/passwd", "a/b\n"):
+            code, body = self.post("/api/desks", {"repo": repo, "hidden": True})
+            self.assertEqual(code, 400, repr(repo))
+            self.assertEqual(body["error"], "bad repo")
+        self.assertEqual(self.get("/api/desks")[1]["hidden"], [])
+
+    def test_hidden_must_be_a_boolean_and_nothing_else(self):
+        for value in ("true", 1, None, "yes", []):
+            code, body = self.post("/api/desks", {"repo": "acme/thing", "hidden": value})
+            self.assertEqual(code, 400, repr(value))
+            self.assertIn("error", body)
+        self.assertEqual(self.get("/api/desks")[1]["hidden"], [])
 
     # ── refusals ────────────────────────────────────────────────────────────
     def test_an_unknown_kind_is_refused_before_anything_runs(self):
@@ -197,6 +284,31 @@ class DoorTest(ServeTest):
                               {"kind": "nope"})
         self.assertEqual(code, 400)  # past the door, refused by validation as before
         self.assertIn("error", body)
+
+    def test_putting_a_desk_away_obeys_the_same_door_as_every_other_write(self):
+        """It is a write. It writes a file this server reads on every build, so
+        a page you happen to have open must not be able to empty your office."""
+        away = {"repo": "acme/thing", "hidden": True}
+        for headers in ({"content-type": "text/plain"},
+                        {"sec-fetch-site": "cross-site"},
+                        {"origin": "https://evil.example.com"}):
+            code, _ = self.raw("POST", "/api/desks", headers, away)
+            self.assertEqual(code, 403, headers)
+        code, _ = self.raw("POST", "/api/desks", {"host": "evil.example.com"}, away)
+        self.assertEqual(code, 403)
+        self.assertEqual(self.get("/api/desks")[1]["hidden"], [], "and wrote nothing")
+
+        code, body = self.raw("POST", "/api/desks",
+                              {"origin": f"http://127.0.0.1:{self.port}",
+                               "sec-fetch-site": "same-origin"}, away)
+        self.assertEqual(code, 200)
+        self.assertEqual(body["hidden"], ["acme/thing"])
+        self.raw("POST", "/api/desks", {}, {"repo": "acme/thing", "hidden": False})
+
+    def test_reading_the_desk_list_from_another_host_is_refused(self):
+        code, body = self.raw("GET", "/api/desks", {"host": "evil.example.com"})
+        self.assertEqual(code, 403)
+        self.assertNotIn("hidden", body)
 
     def test_validation_matches_the_worker_not_python(self):
         v = self.serve.validate
@@ -357,7 +469,7 @@ class ChatTest(unittest.TestCase):
         cls.serve = serve
         serve.log = lambda msg: None
         serve.office_sync.Access = lambda: object()
-        serve.office_sync.build_snapshot = lambda access: dict(SNAP)
+        serve.office_sync.build_snapshot = lambda access: copy.deepcopy(SNAP)
 
         cls.tmp = tempfile.TemporaryDirectory()
         root = pathlib.Path(cls.tmp.name)

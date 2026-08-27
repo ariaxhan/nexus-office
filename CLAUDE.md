@@ -19,7 +19,7 @@ So: **after any change that could alter what the app looks like, take pictures
 and look at them.**
 
 ```sh
-npm run shot        # builds the app, runs it on the fixture, four framings into shots/
+npm run shot        # builds the app, runs it on the fixture, five framings into shots/
 ```
 
 `shots/app-*.png` are real images. Open them. If you are an agent, **read the PNG
@@ -30,7 +30,7 @@ or network: a check that needs credentials is a check that stops running. It doe
 need a screen that is awake, which is why it caffeinates. `screencapture` returns
 a black frame from a sleeping display and no error.
 
-Add a framing to `scripts/shoot.sh` when you add something the existing four
+Add a framing to `scripts/shoot.sh` when you add something the existing five
 would not reveal. A framing nobody looks at is a framing that rots.
 
 ## Verify gates
@@ -74,7 +74,7 @@ One thing, one file, so several can be built at once without collisions.
 ```
 client/sources/<id>.py       the local data                  (listed in client/sections.py)
 app/Office/Views/<Id>.swift  what it looks like
-scripts/shoot.sh             a framing, if the four would not reveal it
+scripts/shoot.sh             a framing, if the five would not reveal it
 tests/test_<id>.py           or app/OfficeTests/<Id>Tests.swift
 ```
 
@@ -101,9 +101,17 @@ scripts/shoot.sh      the eyes
   through Tailscale Serve, never a bind address.
 - **A gate is never hidden.** No filter, no "put this away", nothing removes a
   raised hand.
-- **Hidden is never silent.** If something put away starts needing a human, the
-  app says so.
-- **No hand-maintained lists.** Desks are a pure function of the repo path.
+- **Put away means not polled.** A desk you put away leaves every GitHub query;
+  that is the whole point of putting it away, and it comes back with the last
+  data it had. A gate is from the runtime, not from a desk, so it still shows.
+- **GitHub is a budget, not a faucet.** 5000 GraphQL points an hour, shared with
+  the pipeline and with Aria's own `gh`. One batched query per ten desks with
+  `comments(last: 1)`, every 300 s, and a pause until `reset_at` when the budget
+  runs low. A failed fetch never blanks a desk: it keeps the last-good data and
+  says "as of" when. Nothing in this repo may call `gh issue list` or `gh pr list`
+  in a loop.
+- **No hand-maintained lists.** Desks are a pure function of the repo path;
+  put-away is a set of exceptions to that list, not a list.
 - **Never present an estimate as a measurement.** The cost ledger has an
   `estimate` flag; a graph edge has a `confidence`. Flattening either is a lie
   with a decimal point on it.

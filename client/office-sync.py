@@ -21,6 +21,12 @@ Configuration, all from the environment so nothing personal lives in this file:
   OFFICE_WAITING    the label meaning a human must look   (default: waiting on human)
   OFFICE_RUNTIME_ROOT  a local agent runtime's repo root   (optional; enables gates)
   OFFICE_RUNTIME_URL   that runtime's dashboard            (default 127.0.0.1:8787)
+  OFFICE_GH_RESERVE the GraphQL points to leave unspent    (default 1000)
+
+Two files on disk under ~/.local/state/nexus-office hold what the office knows
+between builds: `desks.json` is the last good answer for every desk, so GitHub
+saying no leaves a stale room rather than an empty one, and `hidden.json` is the
+desks you put away, which are never fetched at all.
 
 A receipt is one JSON object per line:
 
@@ -39,6 +45,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -229,25 +236,196 @@ def headline(runs):
     return runs[0] if runs else {}
 
 
-# ── the issues on each desk ──────────────────────────────────────────────────
+# ── put away desks ───────────────────────────────────────────────────────────
+# A desk you put away is still a desk. It is never fetched, so it costs nothing
+# against the hour's budget, and it still carries the last data we saw so the
+# app can list it and bring it back. Hiding is a fact about this screen, never a
+# fact about the repo, so it lives here and not on GitHub.
 
-ISSUE_FIELDS = "number,title,body,labels,url,updatedAt,comments"
+HIDDEN_FILE = STATE / "hidden.json"
+DESKS_CACHE = STATE / "desks.json"
+
+# The one shape a repository name is allowed to have. Every name that reaches
+# GitHub passes this first. The batch query names repos in GraphQL VARIABLES
+# rather than in the query text, so this is the belt to that pair of braces: a
+# repo called `a) { viewer { login } } #` is a 404, never a second query.
+NWO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z", re.ASCII)
 
 
-def fetch_issues(nwo, token):
-    rc, out, err = sh(["gh", "issue", "list", "--repo", nwo, "--state", "open",
-                       "--limit", "60", "--json", ISSUE_FIELDS],
-                      timeout=60, env={"GH_TOKEN": token})
-    if rc != 0 or not out.strip():
-        return None, (err.strip().splitlines() or ["empty response"])[0][:140]
+def read_hidden() -> list:
+    """The repos put away, sorted. Never raises: an unreadable list means none."""
     try:
-        raw = json.loads(out)
-    except Exception as e:
-        return None, str(e)[:140]
+        raw = json.loads(HIDDEN_FILE.read_text())
+    except Exception:
+        return []
+    rows = raw.get("repos") if isinstance(raw, dict) else None
+    return sorted({r for r in (rows or []) if isinstance(r, str) and NWO_RE.match(r)})
 
+
+_HIDDEN_LOCK = threading.Lock()
+
+
+def write_hidden(repos) -> list:
+    """Written whole and moved into place: a torn file reads as "nothing put
+    away", which would quietly return every desk to the floor and the bill."""
+    keep = sorted({r for r in repos if isinstance(r, str) and NWO_RE.match(r)})
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = HIDDEN_FILE.with_name(HIDDEN_FILE.name + ".tmp")
+    tmp.write_text(json.dumps({"repos": keep}, indent=1))
+    tmp.replace(HIDDEN_FILE)
+    return keep
+
+
+def set_hidden(nwo: str, hidden: bool) -> list:
+    """Put a desk away, or bring it back. Returns the whole list afterwards.
+
+    Hiding a repo nobody has seen yet is allowed on purpose: a desk appears the
+    first time the runner touches it, and "I do not want that one" has to be
+    sayable before it turns up. Unhiding one that was never hidden is a no-op.
+    """
+    if not NWO_RE.match(nwo or ""):
+        raise ValueError("bad repo")
+    with _HIDDEN_LOCK:
+        now = set(read_hidden())
+        now.add(nwo) if hidden else now.discard(nwo)
+        return write_hidden(now)
+
+
+# ── last known good ──────────────────────────────────────────────────────────
+# GitHub saying no must never blank the room. Every desk that answered is
+# written here, and a desk that could not be reached shows what it showed last,
+# stamped with when that was, next to one line saying what went wrong. A blank
+# office is indistinguishable from an office with nothing to do, and only one of
+# those two is ever true at four in the morning.
+
+def read_desks() -> dict:
+    try:
+        raw = json.loads(DESKS_CACHE.read_text())
+    except Exception:
+        return {}
+    repos = raw.get("repos") if isinstance(raw, dict) else None
+    return dict(repos) if isinstance(repos, dict) else {}
+
+
+def write_desks(repos: dict) -> None:
+    """Written whole and moved into place, so a killed process leaves the last
+    good file rather than half of a new one."""
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        tmp = DESKS_CACHE.with_name(DESKS_CACHE.name + ".tmp")
+        tmp.write_text(json.dumps({"repos": repos}))
+        tmp.replace(DESKS_CACHE)
+    except Exception as exc:  # noqa: BLE001 - a cache that cannot be written is not a dead build
+        log(f"could not write the desk cache: {exc}")
+
+
+# ── the hour's budget ────────────────────────────────────────────────────────
+# GitHub gives a user 5000 GraphQL points an hour. The office used to spend two
+# queries per desk per minute, which is roughly seventy times the budget, and
+# the room's answer to running out was to show every desk blank at once. So: one
+# query per ten desks, the cost of every query read back from GitHub itself, and
+# a hard stop with a reserve left over rather than a wall of errors.
+
+GH_RESERVE = int(os.environ.get("OFFICE_GH_RESERVE", "") or 1000)
+BATCH_SIZE = 10
+PAUSE_FALLBACK_S = 15 * 60
+# GitHub's own wording, matched loosely on purpose: "API rate limit exceeded for
+# user ID ...", "You have exceeded a secondary rate limit". Both mean stop.
+RATE_WORDS = "rate limit"
+
+# What the last query said, and whether we have stopped asking. Module level
+# because a pause outlives one build: it is a fact about the hour.
+BUDGET = {"limit": None, "remaining": None, "reset_at": "", "paused_until": "", "error": ""}
+
+
+def _parse_iso(s: str):
+    try:
+        return datetime.strptime(str(s), ISO).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def paused_until() -> str:
+    """The stamp we are paused until, or "" when GitHub may be asked again."""
+    until = BUDGET.get("paused_until") or ""
+    if not until:
+        return ""
+    when = _parse_iso(until)
+    if when is None or datetime.now(timezone.utc) >= when:
+        BUDGET["paused_until"] = ""
+        BUDGET["error"] = ""
+        # The number that tripped the reserve is an hour old and nothing but a
+        # query can replace it. Forget it, or the pause re-arms on it forever.
+        BUDGET["remaining"] = None
+        log(f"github: resuming, the pause to {until} is over")
+        return ""
+    return until
+
+
+def pause(reason: str, until: str = "") -> str:
+    when = _parse_iso(until) if until else None
+    if when is None or when <= datetime.now(timezone.utc):
+        when = datetime.now(timezone.utc) + timedelta(seconds=PAUSE_FALLBACK_S)
+    stamp = when.strftime(ISO)
+    if BUDGET.get("paused_until") != stamp:
+        log(f"github: pausing until {stamp} ({str(reason)[:120]})")
+    BUDGET["paused_until"] = stamp
+    BUDGET["error"] = str(reason)[:200]
+    return stamp
+
+
+def note_rate(rate) -> int:
+    """Fold one query's `rateLimit` block into the budget; return its cost."""
+    if not isinstance(rate, dict):
+        return 0
+    for field in ("limit", "remaining"):
+        v = rate.get(field)
+        if isinstance(v, int):
+            BUDGET[field] = v
+    reset = str(rate.get("resetAt") or "")
+    if reset:
+        BUDGET["reset_at"] = reset.replace(".000Z", "Z")
+    cost = rate.get("cost")
+    return cost if isinstance(cost, int) else 0
+
+
+# ── the issues and PRs on each desk ──────────────────────────────────────────
+# One query for up to ten desks, not two queries per desk. The repos ride in as
+# variables and the aliases r0..r9 come back in the same order, so a repo that is
+# gone takes its own alias down and leaves the other nine standing.
+
+DESK_FRAGMENT = """
+fragment Desk on Repository {
+  issues(first: 60, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    nodes {
+      number title body url updatedAt
+      labels(first: 20) { nodes { name } }
+      comments(last: 1) { nodes { body } }
+    }
+  }
+  pullRequests(first: 40, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    nodes {
+      number title headRefName baseRefName mergeable mergeStateStatus
+      isDraft url body updatedAt
+    }
+  }
+}
+"""
+
+
+def batch_query(n: int) -> str:
+    decl = ", ".join(f"$o{i}: String!, $n{i}: String!" for i in range(n))
+    lines = "\n".join(f"  r{i}: repository(owner: $o{i}, name: $n{i}) {{ ...Desk }}"
+                      for i in range(n))
+    return (f"query({decl}) {{\n"
+            f"  rateLimit {{ limit cost remaining resetAt }}\n"
+            f"{lines}\n}}\n{DESK_FRAGMENT}")
+
+
+def _issue_rows(nodes) -> list:
     issues = []
-    for i in raw:
-        comments = i.get("comments") or []
+    for i in nodes or []:
+        comments = ((i.get("comments") or {}).get("nodes")) or []
         last = comments[-1] if comments else None
         # THE rule, copied from dispatch.sh on purpose: the bot having the last
         # word is what "waiting on a human" mechanically means. A label is a hint
@@ -257,7 +435,7 @@ def fetch_issues(nwo, token):
             "number": i.get("number"),
             "title": i.get("title") or "",
             "body": (i.get("body") or "")[:4000],
-            "labels": [l.get("name") for l in (i.get("labels") or [])],
+            "labels": [l.get("name") for l in ((i.get("labels") or {}).get("nodes") or [])],
             "url": i.get("url") or "",
             "updatedAt": i.get("updatedAt") or "",
             "bot_last": bot_last,
@@ -266,31 +444,18 @@ def fetch_issues(nwo, token):
             "last_word": (last.get("body") or "")[:1500] if bot_last else "",
         })
     issues.sort(key=lambda x: (not x["bot_last"], -(x["number"] or 0)))
-    return issues, None
+    return issues
 
 
-PR_FIELDS = "number,title,headRefName,baseRefName,mergeable,mergeStateStatus,isDraft,url,body,updatedAt"
-
-
-def fetch_prs(nwo, token):
-    """The pipeline's own open PRs on this repo, and whether they can merge.
+def _pr_rows(nodes) -> list:
+    """The pipeline's own open PRs, and whether they can merge.
 
     Only pipeline PRs. A human's branch is none of the office's business, and
     listing it here would invite a merge button over work nobody asked the
     office to touch.
     """
-    rc, out, err = sh(["gh", "pr", "list", "--repo", nwo, "--state", "open",
-                       "--limit", "40", "--json", PR_FIELDS],
-                      timeout=60, env={"GH_TOKEN": token})
-    if rc != 0 or not out.strip():
-        return None, (err.strip().splitlines() or ["empty response"])[0][:140]
-    try:
-        raw = json.loads(out)
-    except Exception as e:
-        return None, str(e)[:140]
-
     prs = []
-    for pr in raw:
+    for pr in nodes or []:
         head = pr.get("headRefName") or ""
         if not head.startswith(PR_PREFIX):
             continue
@@ -312,47 +477,183 @@ def fetch_prs(nwo, token):
             "updatedAt": pr.get("updatedAt") or "",
         })
     prs.sort(key=lambda x: -(x["number"] or 0))
-    return prs, None
+    return prs
+
+
+def fetch_batch(nwos, token):
+    """(rows, errors, rate, fatal) for up to BATCH_SIZE repos on one token.
+
+    rows    {nwo: {"issues": [...], "prs": [...]}} for every repo that answered
+    errors  {nwo: "one line"} for the repos that did not
+    rate    GitHub's own `rateLimit` block for this query, or {}
+    fatal   a message when the whole batch is unusable, "" otherwise
+    """
+    nwos = [n for n in nwos if NWO_RE.match(n or "")]
+    if not nwos:
+        return {}, {}, {}, ""
+    cmd = ["gh", "api", "graphql", "-f", "query=" + batch_query(len(nwos))]
+    for i, nwo in enumerate(nwos):
+        owner, name = nwo.split("/", 1)
+        cmd += ["-f", f"o{i}={owner}", "-f", f"n{i}={name}"]
+
+    rc, out, err = sh(cmd, timeout=90, env={"GH_TOKEN": token})
+    # gh exits non-zero when ANY alias in the batch errored, and still prints the
+    # whole body. The body is the answer; the exit code is only a summary of it,
+    # so one dead repo must not be read as ten dead repos.
+    try:
+        body = json.loads(out) if out.strip() else {}
+    except Exception:
+        body = {}
+    if not isinstance(body, dict) or not body:
+        return {}, {}, {}, (err.strip().splitlines() or [f"gh exit {rc}"])[0][:160]
+
+    data = body.get("data") or {}
+    rate = data.get("rateLimit") or {}
+    errors, fatal = {}, ""
+    for e in body.get("errors") or []:
+        msg = str(e.get("message") or e.get("type") or "graphql error")[:160]
+        if RATE_WORDS in msg.lower() or str(e.get("type") or "") == "RATE_LIMITED":
+            fatal = msg
+            continue
+        path = e.get("path") or []
+        alias = str(path[0]) if path else ""
+        if alias[:1] == "r" and alias[1:].isdigit() and int(alias[1:]) < len(nwos):
+            errors.setdefault(nwos[int(alias[1:])], msg)
+        else:
+            fatal = fatal or msg
+
+    rows = {}
+    for i, nwo in enumerate(nwos):
+        node = data.get(f"r{i}")
+        if not isinstance(node, dict):
+            errors.setdefault(nwo, fatal or "GitHub returned nothing for this repo")
+            continue
+        rows[nwo] = {"issues": _issue_rows((node.get("issues") or {}).get("nodes")),
+                     "prs": _pr_rows((node.get("pullRequests") or {}).get("nodes"))}
+    return rows, errors, rate, fatal
+
+
+def fetch_issues(nwo, token):
+    """One desk's open issues, for the paths that act on a single repo.
+
+    The room itself never calls this: it fetches in batches. A repo-level nudge
+    does, because it has exactly one repo in hand and needs to know which issues
+    the bot is sitting on before it says anything.
+    """
+    if not NWO_RE.match(nwo or ""):
+        return None, "malformed repo"
+    rows, errors, rate, fatal = fetch_batch([nwo], token)
+    note_rate(rate)
+    if nwo in rows:
+        return rows[nwo]["issues"], None
+    return None, errors.get(nwo) or fatal or "GitHub returned nothing for this repo"
 
 
 def build_snapshot(access: Access):
     by_repo, counts = receipts()
-    log(f"{len(by_repo)} repos in the receipts; fetching issues")
+    hidden = set(read_hidden())
+    cache = read_desks()
+    desks = sorted(by_repo)
+    visible = [r for r in desks if r not in hidden and NWO_RE.match(r)]
+    log(f"{len(desks)} desks, {len(hidden & set(desks))} put away, "
+        f"{len(visible)} to fetch in {-(-len(visible) // BATCH_SIZE)} batches")
 
-    def one(item):
-        repo, runs = item
-        who, tok = access.token_for(repo)
+    # Probing push access is REST and cached for six hours, so it is not what
+    # this rewrite is about. It stays parallel because a cold cache is 72 calls.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        tokens = dict(zip(visible, pool.map(access.token_for, visible)))
+
+    cost = 0
+    gh_error = ""
+    fresh, errors = {}, {}
+    stopped = paused_until()
+    if not stopped:
+        by_token = {}
+        for repo in visible:
+            who, tok = tokens.get(repo) or (None, None)
+            if not tok:
+                errors[repo] = "no account holds push here"
+                continue
+            by_token.setdefault(tok, []).append(repo)
+        batches = [(tok, group[i:i + BATCH_SIZE])
+                   for tok, group in by_token.items()
+                   for i in range(0, len(group), BATCH_SIZE)]
+
+        # Sequential on purpose. The reserve is only a reserve if the decision to
+        # stop is made before the next query goes out, not after eight of them
+        # already did.
+        for tok, chunk in batches:
+            left = BUDGET["remaining"]
+            if isinstance(left, int) and left < GH_RESERVE:
+                stopped = pause(f"only {left} graphql points left, reserve is {GH_RESERVE}",
+                                BUDGET["reset_at"])
+                break
+            rows, errs, rate, fatal = fetch_batch(chunk, tok)
+            cost += note_rate(rate)
+            fresh.update(rows)
+            errors.update(errs)
+            if fatal:
+                # The batch as a whole is unusable, so every desk in it wears the
+                # same line. None of them is blanked; they keep what they had.
+                gh_error = fatal
+                for repo in chunk:
+                    if repo not in rows:
+                        errors.setdefault(repo, fatal)
+                if RATE_WORDS in fatal.lower():
+                    stopped = pause(fatal, BUDGET["reset_at"])
+                    break
+    if stopped:
+        for repo in visible:
+            if repo not in fresh:
+                errors[repo] = f"GitHub paused until {stopped}"
+
+    stamp = NOW.strftime(ISO)
+    for repo, rows in fresh.items():
+        cache[repo] = {"fetched_at": stamp, "issues": rows["issues"], "prs": rows["prs"]}
+    keep = set(desks) | hidden
+    cache = {r: v for r, v in cache.items() if r in keep}
+    if fresh:
+        write_desks(cache)
+
+    stations = []
+    for repo in desks:
+        runs = by_repo[repo]
         head = headline(runs)
+        if repo in hidden:
+            # Never probed this build, so the answer is whatever we already knew.
+            # `None` access means "the snapshot did not say", which is not the
+            # same as "locked" and must not render as it.
+            hit = access.cache.get(repo)
+            who, can = (hit or None), (None if hit is None else bool(hit))
+        else:
+            who = (tokens.get(repo) or (None, None))[0]
+            can = bool(who)
+        kept = cache.get(repo) or {}
         st = {
             "repo": repo,
             "identity": who,
-            "access": bool(who),
+            "access": can,
             "outcome": head.get("outcome", ""),
             "detail": head.get("detail", ""),
             "at": head.get("at", ""),
             "runs": runs[:10],
-            "issues": [],
+            # Put away, but still here, still carrying what it last showed, so
+            # the app can list it and bring it back. Never fetched while hidden.
+            "hidden": repo in hidden,
+            # When this desk last heard from GitHub. "" means never.
+            "fetched_at": kept.get("fetched_at", ""),
+            "issues": list(kept.get("issues") or []),
             "issues_error": None,
-            "prs": [],
+            "prs": list(kept.get("prs") or []),
             "prs_error": None,
         }
-        if not tok:
-            st["issues_error"] = "no account holds push here"
-            return st
-        issues, err = fetch_issues(repo, tok)
-        if issues is None:
+        err = errors.get(repo)
+        if err and repo not in fresh:
+            # Last-good data AND the reason it is last-good. A desk that blanks
+            # because GitHub said no is a lie; a stale desk that says so is not.
             st["issues_error"] = err
-        else:
-            st["issues"] = issues
-        prs, perr = fetch_prs(repo, tok)
-        # An error fetching PRs is its own field. A desk with no pipeline PRs and
-        # a desk whose PR list failed must never render the same.
-        st["prs"] = prs or []
-        st["prs_error"] = perr
-        return st
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        stations = list(pool.map(one, sorted(by_repo.items())))
+            st["prs_error"] = err
+        stations.append(st)
 
     access.save()
     hb = ""
@@ -363,22 +664,30 @@ def build_snapshot(access: Access):
             pass
 
     waiting = sum(1 for s in stations for i in s["issues"] if i["bot_last"])
-
     log(f"{len(stations)} desks, "
-        f"{sum(len(s['issues']) for s in stations)} open issues, {waiting} waiting on you")
+        f"{sum(len(s['issues']) for s in stations)} open issues, {waiting} waiting on you, "
+        f"{cost} graphql points this build")
     run = rt.snapshot()
     gate = run.get("gate") or {}
     if gate.get("state") == "pending":
         log(f"A GATE IS OPEN: {gate.get('permission')} {gate.get('target', '')[:60]}")
 
     return {
-        "generated": NOW.strftime(ISO),
+        "generated": stamp,
         "heartbeat": hb,
         "killed": bool(KILLSWITCH and KILLSWITCH.exists()),
         "today": counts,
         "stations": stations,
         "runtime": run,
         "sections": sections_mod.read_all(),
+        "github": {
+            "limit": BUDGET["limit"],
+            "remaining": BUDGET["remaining"],
+            "reset_at": BUDGET["reset_at"],
+            "cost": cost,
+            "paused_until": BUDGET["paused_until"],
+            "error": BUDGET["error"] if BUDGET["paused_until"] else gh_error,
+        },
     }
 
 

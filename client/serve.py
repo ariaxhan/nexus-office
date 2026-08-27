@@ -18,6 +18,11 @@ bind. The one thing still checked in software is the gate: a permission answer
 carries the id of the question it is answering, and is refused if the agent has
 moved on. Configuration is office-sync.py's, and every call to GitHub is still
 made there, unchanged.
+
+The room rebuilds every OFFICE_POLL_S seconds (default 300). That number is a
+GitHub budget, not a taste: one build asks GitHub once per ten desks, and the
+hour holds 5000 GraphQL points. `?fresh=1` still forces a build, at most once a
+minute, and answers `"fresh": false` when it handed back the cache instead.
 """
 
 from __future__ import annotations
@@ -48,7 +53,13 @@ office_sync = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(office_sync)
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
-MAX_AGE_S = 60
+# How often the room rebuilds itself. Every build asks GitHub, and GitHub gives
+# a user 5000 GraphQL points an hour, so the interval is a budget decision and
+# belongs in the environment rather than in this line.
+POLL_S = float(os.environ.get("OFFICE_POLL_S", "") or 300)
+# `?fresh=1` is the "no, now" button. It stays a button and not a tap dance: a
+# second one inside this window gets the cache and is told so.
+FRESH_MIN_S = 60.0
 FRESH_WAIT_S = 45
 BUILD_WAIT_S = 300
 
@@ -109,6 +120,7 @@ class World:
         self.decisions = []
         self.seq = 0
         self._access = None
+        self.fresh_at = None  # monotonic stamp of the last `?fresh=1` build
 
     def access(self):
         with self.lock:
@@ -140,7 +152,34 @@ class World:
             self.error = None
         return True
 
-    def keep_fresh(self, every: float = MAX_AGE_S) -> None:
+    def fresh_build(self) -> bool:
+        """The `?fresh=1` path: build now, but at most once a minute.
+
+        False means the caller got the cache. It never bypasses a GitHub pause:
+        a build during one reads from disk and asks GitHub nothing, which is the
+        point — the gate, the runtime and the sections stay live while the hour's
+        budget recovers.
+        """
+        now = time.monotonic()
+        with self.lock:
+            if self.fresh_at is not None and now - self.fresh_at < FRESH_MIN_S:
+                return False
+            self.fresh_at = now
+        return self.build(wait=FRESH_WAIT_S)
+
+    def mark_hidden(self, repo: str, hidden: bool) -> None:
+        """Flip the flag on the desk that is already on screen.
+
+        Putting a desk away is a local decision, so it lands now rather than on
+        the next poll. Nothing is fetched: the desk keeps the data it has, which
+        is exactly what makes it listable when you want it back.
+        """
+        with self.lock:
+            for st in ((self.snapshot or {}).get("stations") or []):
+                if st.get("repo") == repo:
+                    st["hidden"] = hidden
+
+    def keep_fresh(self, every: float = POLL_S) -> None:
         while True:
             self.build(wait=BUILD_WAIT_S)
             time.sleep(every)
@@ -271,11 +310,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "wrong host"}, 403)
         try:
             if path == "/api/world":
+                fresh = False
                 if urllib.parse.parse_qs(query).get("fresh"):
-                    self.world.build(wait=FRESH_WAIT_S)
+                    fresh = self.world.fresh_build()
                 return self._json({"at": self.world.at, "world": self.world.snapshot,
                                    "decisions": self.world.recent(),
-                                   "server_time": now_iso()})
+                                   "fresh": fresh, "server_time": now_iso()})
+            if path == "/api/desks":
+                return self._json({"hidden": office_sync.read_hidden()})
             if path == "/api/gate":
                 return self._json(rt.read_gate())
             if path == "/api/bots":
@@ -307,6 +349,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._decision(self._read_json())
             if path == "/api/gate":
                 return self._gate(self._read_json())
+            if path == "/api/desks":
+                return self._desks(self._read_json())
             if path == "/api/chat":
                 # Returns before the turn has run: a chat turn is an agent run,
                 # and nothing on the other end of this socket waits two minutes.
@@ -346,6 +390,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "message": NO_ROOT}, 409)
         ok, message = rt.answer_gate(root, qid, answer, body.get("always") is True)
         return self._json({"ok": ok, "message": message}, 200 if ok else 409)
+
+    def _desks(self, body):
+        """Put a desk away, or bring it back.
+
+        A write like any other: same Host check, same JSON-only rule, same origin
+        rule. It touches GitHub not at all, which is the whole point of it — a
+        hidden desk is never fetched, so putting one away is how you stop paying
+        for a repo you are not watching this month.
+        """
+        repo = str(body.get("repo") or "")
+        if not office_sync.NWO_RE.match(repo):
+            return self._json({"error": "bad repo"}, 400)
+        hidden = body.get("hidden")
+        if hidden is not True and hidden is not False:
+            return self._json({"error": "hidden must be true or false"}, 400)
+        try:
+            rows = office_sync.set_hidden(repo, hidden)
+        except ValueError as exc:
+            return self._json({"error": str(exc)[:120]}, 400)
+        self.world.mark_hidden(repo, hidden)
+        log(f"desk {repo} is now {'put away' if hidden else 'back'}")
+        return self._json({"ok": True, "hidden": rows})
 
     def _static(self, path):
         """A built page, if one exists. Anything that is not a file falls back to

@@ -98,6 +98,14 @@ public final class Api {
         return try await get("/api/chat?bot=\(escaped)", as: ChatResponse.self).turns
     }
 
+    /// Which desks a person has put away. The whole list every time, never a
+    /// delta: a list can be reconciled against the world, a delta can only be
+    /// believed.
+    public func hiddenDesks() async throws -> [String] {
+        if let demo { return try demo.hiddenDesks() }
+        return try await get("/api/desks", as: DesksResponse.self).hidden
+    }
+
     // MARK: - writes
 
     /// Returns as soon as the server has taken the message. A turn is a whole
@@ -115,6 +123,14 @@ public final class Api {
     public func answerGate(id: String, answer: String, always: Bool) async throws -> Ack {
         if let demo { return try demo.answerGate(id: id, answer: answer, always: always) }
         return try await post("/api/gate", ["question_id": id, "answer": answer, "always": always])
+    }
+
+    /// Put a desk away, or bring it back. Answers with the whole put-away list,
+    /// which is what the roster reconciles its optimistic flip against.
+    public func setDesk(repo: String, hidden: Bool) async throws -> [String] {
+        if let demo { return try demo.setDesk(repo: repo, hidden: hidden) }
+        return try await post("/api/desks", ["repo": repo, "hidden": hidden],
+                              as: DesksResponse.self).hidden
     }
 
     public func decide(kind: String, repo: String, issue: String,
@@ -149,6 +165,11 @@ public final class Api {
     }
 
     private func post(_ path: String, _ payload: [String: Any]) async throws -> Ack {
+        try await post(path, payload, as: Ack.self)
+    }
+
+    private func post<T: Decodable>(_ path: String, _ payload: [String: Any],
+                                    as type: T.Type) async throws -> T {
         guard let url = URL(string: path, relativeTo: try base()) else {
             throw ApiError(status: 0, message: "bad path \(path)")
         }
@@ -159,7 +180,7 @@ public final class Api {
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, response) = try await run(request)
         try check(data: data, response: response)
-        return try decode(data, as: Ack.self)
+        return try decode(data, as: type)
     }
 
     private func run(_ request: URLRequest) async throws -> (Data, URLResponse) {
@@ -298,6 +319,22 @@ private final class DemoFloor {
 
     func chat(bot: String) throws -> [ChatTurn] {
         lock.withLock { fixture.chats[bot] ?? [] }
+    }
+
+    func hiddenDesks() throws -> [String] {
+        lock.withLock { fixture.world.stations.filter(\.hidden).map(\.repo) }
+    }
+
+    /// The demo floor flips the fixture in memory, exactly as the real door
+    /// flips its file. A put-away that springs back on the next poll would make
+    /// the demo lie about the one thing this control does.
+    func setDesk(repo: String, hidden: Bool) throws -> [String] {
+        lock.withLock {
+            if let index = fixture.world.stations.firstIndex(where: { $0.repo == repo }) {
+                fixture.world.stations[index].hidden = hidden
+            }
+            return fixture.world.stations.filter(\.hidden).map(\.repo)
+        }
     }
 
     func send(bot: String, message: String) throws {

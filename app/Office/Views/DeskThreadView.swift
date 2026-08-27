@@ -17,6 +17,19 @@ struct DeskThreadView: View {
 
     private var state: DeskState { StateRules.deskState(station: station, gate: gate) }
 
+    /// Why what is on screen is not current, in one sentence. Never two, and
+    /// never red: last-good data is data, and the desk is not broken.
+    private var notice: String? {
+        StateRules.staleNotice(station: station, github: store.github,
+                               generated: store.worldGenerated)
+    }
+
+    /// "as of 5:42 PM", when the last successful pull is older than the
+    /// snapshot this desk arrived in, or when something went wrong reading it.
+    private var asOf: String? {
+        StateRules.asOf(station: station, generated: store.worldGenerated)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             head
@@ -26,8 +39,8 @@ struct DeskThreadView: View {
                     if let gate {
                         GateCard(store: store, gate: gate)
                     }
-                    if let error = station.issuesError {
-                        problem(error)
+                    if let notice {
+                        StaleNotice(text: notice)
                     }
                     ForEach(station.issues) { issue in
                         IssueCard(store: store, repo: station.repo, issue: issue)
@@ -38,14 +51,11 @@ struct DeskThreadView: View {
                             .foregroundStyle(Theme.faint)
                             .padding(.top, 8)
                     }
-                    if let error = station.prsError {
-                        problem(error)
-                    }
                     ForEach(station.prs) { pr in
                         PullRequestCard(store: store, repo: station.repo, pr: pr)
                     }
                     if station.issues.isEmpty && station.prs.isEmpty
-                        && station.issuesError == nil && gate == nil {
+                        && notice == nil && gate == nil {
                         Text(station.detail.isEmpty ? "Nothing open here." : station.detail)
                             .font(.system(size: 12.5))
                             .foregroundStyle(Theme.faint)
@@ -81,19 +91,47 @@ struct DeskThreadView: View {
                 .lineLimit(1)
             }
             Spacer()
-            Text(StateRules.stamp(station.at))
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.faint)
+            // The most recent thing we were able to pull, said where the clock
+            // already is. Without it the desk shows an hours-old GitHub with
+            // the confidence of a live one.
+            if let asOf {
+                Text(asOf)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.amber.opacity(0.85))
+            } else {
+                Text(StateRules.stamp(station.at))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.faint)
+            }
         }
         .padding(.horizontal, 18)
         .frame(height: 44)
         .padding(.top, 8)
     }
+}
 
-    private func problem(_ text: String) -> some View {
-        Label(text, systemImage: "exclamationmark.triangle.fill")
-            .font(.system(size: 12))
-            .foregroundStyle(Theme.red)
+/// The one line about freshness.
+///
+/// Quiet on purpose. This used to be two red `exclamationmark.triangle` rows
+/// carrying the same sentence twice, which read as two faults on a desk that
+/// had one, and read as broken on a desk that was merely old. A rule down the
+/// side and grey text says "this is not current" without saying "something is
+/// wrong with this repo".
+struct StaleNotice: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Rectangle()
+                .fill(Theme.amber.opacity(0.45))
+                .frame(width: 2)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 2)
+        .frame(maxWidth: 720, alignment: .leading)
     }
 }
 
@@ -104,11 +142,23 @@ struct IssueCard: View {
     let repo: String
     let issue: Issue
 
-    @State private var commenting = false
-    @State private var draft = ""
+    @State private var opened = false
     @State private var busy = false
 
     private var needsYou: Bool { StateRules.needsHuman(issue: issue) }
+
+    /// The half-written comment, kept by the office rather than by this card.
+    /// The card is torn down every time the selection changes; the sentence a
+    /// person was in the middle of writing is not.
+    private var key: String { Store.draftKey(repo: repo, issue: issue.number) }
+
+    private var draft: Binding<String> {
+        Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 })
+    }
+
+    /// Open because it was clicked open, or because there is something in it.
+    /// A draft that survives the view has to survive it visibly.
+    private var commenting: Bool { opened || !draft.wrappedValue.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -158,7 +208,12 @@ struct IssueCard: View {
 
             HStack(spacing: 7) {
                 CardButton(title: commenting ? "cancel" : "comment", busy: busy) {
-                    commenting.toggle()
+                    if commenting {
+                        opened = false
+                        store.drafts[key] = nil
+                    } else {
+                        opened = true
+                    }
                 }
                 CardButton(title: "close", busy: busy) { apply("close") }
                 CardButton(title: "reopen", busy: busy) { apply("reopen") }
@@ -174,7 +229,7 @@ struct IssueCard: View {
             if commenting {
                 VStack(alignment: .leading, spacing: 7) {
                     TextField("Answer it. A reply without the bot's marker is what re-queues it.",
-                              text: $draft, axis: .vertical)
+                              text: draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5))
                         .foregroundStyle(Theme.text)
@@ -185,7 +240,7 @@ struct IssueCard: View {
                     HStack {
                         Spacer()
                         CardButton(title: "send comment", tint: Theme.green, busy: busy) {
-                            apply("comment", body: draft)
+                            apply("comment", body: draft.wrappedValue)
                         }
                     }
                 }
@@ -207,10 +262,15 @@ struct IssueCard: View {
         if kind == "comment" && (body ?? "").trimmingCharacters(in: .whitespaces).isEmpty { return }
         busy = true
         Task {
-            _ = await store.decide(kind: kind, repo: repo, issue: String(issue.number), body: body)
+            let sent = await store.decide(kind: kind, repo: repo,
+                                          issue: String(issue.number), body: body)
             busy = false
-            commenting = false
-            draft = ""
+            // The draft is only thrown away once the server has taken it. A
+            // comment cleared by a refused write is a sentence a person has to
+            // type twice, having already watched it disappear once.
+            guard sent else { return }
+            opened = false
+            store.drafts[key] = nil
         }
     }
 }

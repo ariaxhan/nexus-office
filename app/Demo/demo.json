@@ -1,6 +1,5 @@
 {
   "_note": "A fake floor for `--demo`. Every desk state appears at least once on purpose: a demo that only shows the happy path is a demo that lets the ugly cases rot. Timestamps are rebased to now when the fixture loads, so a shot taken next year still reads as a live office.",
-
   "bots": {
     "runtime": "up",
     "at": "2026-08-26T18:40:00Z",
@@ -9,6 +8,7 @@
         "id": "chief",
         "name": "Chief",
         "color": "#4fd1c5",
+        "purpose": "What is running, what is blocked, what was decided. Hands work to the other three.",
         "busy": false,
         "last": {
           "role": "assistant",
@@ -20,17 +20,14 @@
         "id": "inbox",
         "name": "Inbox",
         "color": "#8b7cf6",
-        "busy": false,
-        "last": {
-          "role": "assistant",
-          "at": "2026-08-26T17:30:00Z",
-          "text": "Triaged fourteen new issues. Nine went to the pipeline, five are waiting on a person."
-        }
+        "purpose": "What arrived and what needs you today: mail, meetings, captures, issues waiting on a person.",
+        "busy": false
       },
       {
         "id": "release",
         "name": "Release",
         "color": "#f0a13a",
+        "purpose": "What is green, what can merge, what shipped. Says committed, pushed, merged or live, never just done.",
         "busy": true,
         "last": {
           "role": "assistant",
@@ -42,6 +39,7 @@
         "id": "research",
         "name": "Research",
         "color": "#5b8def",
+        "purpose": "Looks before anyone builds: prior work, failure modes, what was tried. A short map with sources.",
         "busy": false,
         "error": "URLError: the harness stopped answering halfway through the last turn",
         "last": {
@@ -52,7 +50,6 @@
       }
     ]
   },
-
   "chats": {
     "chief": [
       {
@@ -89,7 +86,6 @@
       }
     ]
   },
-
   "gate": {
     "state": "pending",
     "id": "a1b2c3d4e5f60718",
@@ -99,11 +95,18 @@
     "waiting_s": 47,
     "bot": "release"
   },
-
   "world": {
     "generated": "2026-08-26T18:40:00Z",
     "heartbeat": "2026-08-26T18:39:00Z",
     "killed": false,
+    "github": {
+      "limit": 5000,
+      "remaining": 0,
+      "reset_at": "2026-08-26T18:48:00Z",
+      "cost": 4983,
+      "paused_until": "2026-08-26T18:48:00Z",
+      "error": "secondary rate limit: 0 of 5000 points left this hour"
+    },
     "runtime": {
       "url": "http://127.0.0.1:8787",
       "root": "/Users/you/code/checkout-api",
@@ -125,13 +128,24 @@
         "outcome": "survey",
         "detail": "2 open: 1 to work, 1 waiting on a human",
         "at": "2026-08-26T18:33:00Z",
-        "runs": [{ "at": "2026-08-26T18:33:00Z", "outcome": "survey", "issue": "", "detail": "2 open" }],
+        "fetched_at": "2026-08-26T18:40:00Z",
+        "hidden": false,
+        "runs": [
+          {
+            "at": "2026-08-26T18:33:00Z",
+            "outcome": "survey",
+            "issue": "",
+            "detail": "2 open"
+          }
+        ],
         "issues": [
           {
             "number": 77,
             "title": "Tag 0.4.2 and push the changelog",
             "body": "The changelog is committed and the tag is written locally. All that is left is the push, and `main` is protected, so a person has to say yes.",
-            "labels": ["release"],
+            "labels": [
+              "release"
+            ],
             "url": "https://github.com/acme/checkout-api/issues/77",
             "updatedAt": "2026-08-26T18:36:00Z",
             "bot_last": false,
@@ -149,16 +163,31 @@
         "outcome": "landed",
         "detail": "pipeline/auto/push",
         "at": "2026-08-26T18:18:00Z",
+        "fetched_at": "2026-08-26T18:40:00Z",
+        "hidden": false,
         "runs": [
-          { "at": "2026-08-26T18:18:00Z", "outcome": "landed", "issue": "213", "detail": "pipeline/auto/push" },
-          { "at": "2026-08-26T16:52:00Z", "outcome": "survey", "issue": "", "detail": "3 open: 2 to work, 1 waiting on a human" }
+          {
+            "at": "2026-08-26T18:18:00Z",
+            "outcome": "landed",
+            "issue": "213",
+            "detail": "pipeline/auto/push"
+          },
+          {
+            "at": "2026-08-26T16:52:00Z",
+            "outcome": "survey",
+            "issue": "",
+            "detail": "3 open: 2 to work, 1 waiting on a human"
+          }
         ],
         "issues": [
           {
             "number": 214,
             "title": "Checkout drops the host name on mobile Safari",
             "body": "The `host_name` field is captured on desktop and lost on iOS.\n\n- reproduced on iOS 18\n- serialiser fixed in #213\n- regression test still open\n\nThe **serialiser** was writing an empty string rather than omitting the key, which the collector then read as a real value. See [the receipt](https://github.com/acme/storefront/pull/215).",
-            "labels": ["bug", "mobile"],
+            "labels": [
+              "bug",
+              "mobile"
+            ],
             "url": "https://github.com/acme/storefront/issues/214",
             "updatedAt": "2026-08-26T18:16:00Z",
             "bot_last": false,
@@ -186,7 +215,9 @@
             "draft": false,
             "mergeable": "MERGEABLE",
             "state": "CLEAN",
-            "closes": [213],
+            "closes": [
+              213
+            ],
             "updatedAt": "2026-08-26T18:19:00Z"
           },
           {
@@ -198,7 +229,9 @@
             "draft": false,
             "mergeable": "CONFLICTING",
             "state": "DIRTY",
-            "closes": [209],
+            "closes": [
+              209
+            ],
             "updatedAt": "2026-08-26T13:10:00Z"
           }
         ],
@@ -211,13 +244,24 @@
         "outcome": "refused",
         "detail": "needs a human decision, not code",
         "at": "2026-08-26T17:39:00Z",
-        "runs": [{ "at": "2026-08-26T17:39:00Z", "outcome": "refused", "issue": "58", "detail": "needs a human decision, not code" }],
+        "fetched_at": "2026-08-26T18:40:00Z",
+        "hidden": false,
+        "runs": [
+          {
+            "at": "2026-08-26T17:39:00Z",
+            "outcome": "refused",
+            "issue": "58",
+            "detail": "needs a human decision, not code"
+          }
+        ],
         "issues": [
           {
             "number": 61,
             "title": "Invoice PDFs render the wrong currency symbol in the EU",
             "body": "Everything is stamped with a dollar sign regardless of the account's locale. The template hardcodes it.",
-            "labels": ["bug"],
+            "labels": [
+              "bug"
+            ],
             "url": "https://github.com/acme/billing/issues/61",
             "updatedAt": "2026-08-26T12:44:00Z",
             "bot_last": false,
@@ -235,7 +279,16 @@
         "outcome": "deferred",
         "detail": "4 issues not reached this run",
         "at": "2026-08-26T18:25:00Z",
-        "runs": [{ "at": "2026-08-26T18:25:00Z", "outcome": "deferred", "issue": "", "detail": "4 issues not reached this run" }],
+        "fetched_at": "2026-08-26T15:10:00Z",
+        "hidden": false,
+        "runs": [
+          {
+            "at": "2026-08-26T18:25:00Z",
+            "outcome": "deferred",
+            "issue": "",
+            "detail": "4 issues not reached this run"
+          }
+        ],
         "issues": [
           {
             "number": 90,
@@ -251,16 +304,18 @@
             "number": 88,
             "title": "Compress the hero image",
             "body": "It is 2.4MB and it is the largest thing on the page by an order of magnitude.",
-            "labels": ["performance"],
+            "labels": [
+              "performance"
+            ],
             "url": "https://github.com/acme/website/issues/88",
             "updatedAt": "2026-08-26T11:02:00Z",
             "bot_last": false,
             "last_word": ""
           }
         ],
-        "issues_error": null,
+        "issues_error": "GitHub answered 403: the hourly budget for this token is spent",
         "prs": [],
-        "prs_error": null
+        "prs_error": "GitHub answered 403: the hourly budget for this token is spent"
       },
       {
         "repo": "acme/docs",
@@ -269,7 +324,16 @@
         "outcome": "caught-up",
         "detail": "nothing open",
         "at": "2026-08-26T17:55:00Z",
-        "runs": [{ "at": "2026-08-26T17:55:00Z", "outcome": "caught-up", "issue": "", "detail": "nothing open" }],
+        "fetched_at": "2026-08-26T18:40:00Z",
+        "hidden": false,
+        "runs": [
+          {
+            "at": "2026-08-26T17:55:00Z",
+            "outcome": "caught-up",
+            "issue": "",
+            "detail": "nothing open"
+          }
+        ],
         "issues": [],
         "issues_error": null,
         "prs": [],
@@ -282,7 +346,16 @@
         "outcome": "parked",
         "detail": "PARKED: a duplicate clone of a client production repo",
         "at": "2026-08-26T16:40:00Z",
-        "runs": [{ "at": "2026-08-26T16:40:00Z", "outcome": "parked", "issue": "", "detail": "parked by its own config" }],
+        "fetched_at": "2026-08-26T09:15:00Z",
+        "hidden": true,
+        "runs": [
+          {
+            "at": "2026-08-26T16:40:00Z",
+            "outcome": "parked",
+            "issue": "",
+            "detail": "parked by its own config"
+          }
+        ],
         "issues": [],
         "issues_error": null,
         "prs": [],
@@ -295,13 +368,24 @@
         "outcome": "landed",
         "detail": "pipeline/auto/push",
         "at": "2026-08-26T18:30:00Z",
-        "runs": [{ "at": "2026-08-26T18:30:00Z", "outcome": "landed", "issue": "30", "detail": "pipeline/auto/push" }],
+        "fetched_at": "2026-08-26T18:40:00Z",
+        "hidden": false,
+        "runs": [
+          {
+            "at": "2026-08-26T18:30:00Z",
+            "outcome": "landed",
+            "issue": "30",
+            "detail": "pipeline/auto/push"
+          }
+        ],
         "issues": [
           {
             "number": 31,
             "title": "Crash on cold start when the cache is empty",
             "body": "Happens exactly once per install, which is why nobody on the team ever sees it. The guard landed in #33; what is left is a decision about whether to ship a hotfix or wait for the next release.",
-            "labels": ["crash"],
+            "labels": [
+              "crash"
+            ],
             "url": "https://github.com/acme/mobile/issues/31",
             "updatedAt": "2026-08-26T18:29:00Z",
             "bot_last": true,
@@ -319,7 +403,9 @@
             "draft": true,
             "mergeable": "MERGEABLE",
             "state": "CLEAN",
-            "closes": [30],
+            "closes": [
+              30
+            ],
             "updatedAt": "2026-08-26T18:28:00Z"
           }
         ],
@@ -332,13 +418,25 @@
         "outcome": "survey",
         "detail": "9 open: 4 to work, 5 waiting on a human",
         "at": "2026-08-26T18:07:00Z",
-        "runs": [{ "at": "2026-08-26T18:07:00Z", "outcome": "survey", "issue": "", "detail": "9 open" }],
+        "fetched_at": "2026-08-26T18:40:00Z",
+        "hidden": false,
+        "runs": [
+          {
+            "at": "2026-08-26T18:07:00Z",
+            "outcome": "survey",
+            "issue": "",
+            "detail": "9 open"
+          }
+        ],
         "issues": [
           {
             "number": 402,
             "title": "Rate limiting returns 500 instead of 429",
             "body": "Hammer `/v1/search` and the status code is a 500 with an empty body. It should be a `429` with a `Retry-After`.\n\nThe cap itself works: it is named `dailyTurnsPerUser` in the config, which is why nobody found it by grepping for rate limit.",
-            "labels": ["bug", "waiting on human"],
+            "labels": [
+              "bug",
+              "waiting on human"
+            ],
             "url": "https://github.com/northwind/api/issues/402",
             "updatedAt": "2026-08-26T18:05:00Z",
             "bot_last": true,
@@ -348,7 +446,9 @@
             "number": 398,
             "title": "Document the webhook retry schedule",
             "body": "Support keeps getting asked and there is no answer written down anywhere.",
-            "labels": ["docs"],
+            "labels": [
+              "docs"
+            ],
             "url": "https://github.com/northwind/api/issues/398",
             "updatedAt": "2026-08-25T21:14:00Z",
             "bot_last": false,
@@ -366,7 +466,16 @@
         "outcome": "deferred",
         "detail": "2 issues not reached this run",
         "at": "2026-08-26T17:12:00Z",
-        "runs": [{ "at": "2026-08-26T17:12:00Z", "outcome": "deferred", "issue": "", "detail": "2 issues not reached this run" }],
+        "fetched_at": "2026-08-26T18:40:00Z",
+        "hidden": false,
+        "runs": [
+          {
+            "at": "2026-08-26T17:12:00Z",
+            "outcome": "deferred",
+            "issue": "",
+            "detail": "2 issues not reached this run"
+          }
+        ],
         "issues": [
           {
             "number": 77,
@@ -390,6 +499,8 @@
         "outcome": "",
         "detail": "no account we hold a token for can push here",
         "at": "2026-08-26T10:00:00Z",
+        "fetched_at": "",
+        "hidden": false,
         "runs": [],
         "issues": [],
         "issues_error": "no account holds push here",
@@ -403,7 +514,16 @@
         "outcome": "no-issues",
         "detail": "issues are disabled on this repo",
         "at": "2026-08-26T09:41:00Z",
-        "runs": [{ "at": "2026-08-26T09:41:00Z", "outcome": "no-issues", "issue": "", "detail": "issues are disabled on this repo" }],
+        "fetched_at": "2026-08-26T09:41:00Z",
+        "hidden": true,
+        "runs": [
+          {
+            "at": "2026-08-26T09:41:00Z",
+            "outcome": "no-issues",
+            "issue": "",
+            "detail": "issues are disabled on this repo"
+          }
+        ],
         "issues": [],
         "issues_error": null,
         "prs": [],
@@ -416,13 +536,24 @@
         "outcome": "report-only",
         "detail": "issue_only",
         "at": "2026-08-25T19:30:00Z",
-        "runs": [{ "at": "2026-08-25T19:30:00Z", "outcome": "report-only", "issue": "4", "detail": "issue_only" }],
+        "fetched_at": "2026-08-26T18:40:00Z",
+        "hidden": false,
+        "runs": [
+          {
+            "at": "2026-08-25T19:30:00Z",
+            "outcome": "report-only",
+            "issue": "4",
+            "detail": "issue_only"
+          }
+        ],
         "issues": [
           {
             "number": 4,
             "title": "Should this repo exist at all?",
             "body": "Three files, none of them imported anywhere, last touched fourteen months ago. Archive it or adopt it.",
-            "labels": ["question"],
+            "labels": [
+              "question"
+            ],
             "url": "https://github.com/tiny/scratch/issues/4",
             "updatedAt": "2026-08-25T19:28:00Z",
             "bot_last": true,

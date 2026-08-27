@@ -57,27 +57,34 @@ public struct Bot: Decodable, Identifiable, Hashable {
     public var id: String
     public var name: String
     public var color: String
+    /// The one line that says what to ask this bot for. It comes from
+    /// `_meta/bots.json`, where it sits beside a whole paragraph of identity
+    /// that the app deliberately never shows: a person picking who to message
+    /// needs to know what a colleague is for, not how they were told to think.
+    public var purpose: String
     public var last: ChatTurn?
     public var busy: Bool
     public var error: String?
 
-    public init(id: String, name: String, color: String = "",
+    public init(id: String, name: String, color: String = "", purpose: String = "",
                 last: ChatTurn? = nil, busy: Bool = false, error: String? = nil) {
         self.id = id
         self.name = name
         self.color = color
+        self.purpose = purpose
         self.last = last
         self.busy = busy
         self.error = error
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, color, last, busy, error }
+    enum CodingKeys: String, CodingKey { case id, name, color, purpose, last, busy, error }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = c.str(.id) ?? ""
         name = c.str(.name) ?? id
         color = c.str(.color) ?? ""
+        purpose = c.str(.purpose) ?? ""
         last = (try? c.decodeIfPresent(ChatTurn.self, forKey: .last)) ?? nil
         busy = c.bool(.busy) ?? false
         error = c.str(.error)
@@ -252,6 +259,14 @@ public struct Station: Decodable, Hashable, Identifiable {
     public var outcome: String
     public var detail: String
     public var at: String
+    /// The last time GitHub actually answered for this desk. It can be older
+    /// than the world's `generated`, and that gap is the whole point: the rest
+    /// of this station is then last-good data rather than current data, and a
+    /// surface that draws it without saying so is lying about how fresh it is.
+    public var fetchedAt: String
+    /// Put away by a person. Still arrives with its last data, still counted,
+    /// simply not polled and not in the desks list.
+    public var hidden: Bool
     public var runs: [Run]
     public var issues: [Issue]
     public var issuesError: String?
@@ -267,8 +282,22 @@ public struct Station: Decodable, Hashable, Identifiable {
     public var owner: String { repo.split(separator: "/").first.map(String.init) ?? repo }
     public var shortName: String { repo.split(separator: "/").last.map(String.init) ?? repo }
 
+    /// What went wrong reading this desk, said once. The two halves of a pull
+    /// fail together and report the same sentence twice, and printing the same
+    /// red line twice reads as two problems.
+    public var problems: [String] {
+        var seen: [String] = []
+        for candidate in [issuesError, prsError] {
+            guard let text = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty, !seen.contains(text) else { continue }
+            seen.append(text)
+        }
+        return seen
+    }
+
     public init(repo: String, identity: String = "", access: Bool? = true,
                 outcome: String = "", detail: String = "", at: String = "",
+                fetchedAt: String = "", hidden: Bool = false,
                 runs: [Run] = [], issues: [Issue] = [], issuesError: String? = nil,
                 prs: [PullRequest] = [], prsError: String? = nil,
                 gate: Gate? = nil, synthetic: Bool = false) {
@@ -278,6 +307,8 @@ public struct Station: Decodable, Hashable, Identifiable {
         self.outcome = outcome
         self.detail = detail
         self.at = at
+        self.fetchedAt = fetchedAt
+        self.hidden = hidden
         self.runs = runs
         self.issues = issues
         self.issuesError = issuesError
@@ -288,7 +319,8 @@ public struct Station: Decodable, Hashable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case repo, identity, access, outcome, detail, at, runs, issues, prs
+        case repo, identity, access, outcome, detail, at, hidden, runs, issues, prs
+        case fetchedAt = "fetched_at"
         case issuesError = "issues_error"
         case prsError = "prs_error"
     }
@@ -301,11 +333,72 @@ public struct Station: Decodable, Hashable, Identifiable {
         outcome = c.str(.outcome) ?? ""
         detail = c.str(.detail) ?? ""
         at = c.str(.at) ?? ""
+        fetchedAt = c.str(.fetchedAt) ?? ""
+        hidden = c.bool(.hidden) ?? false
         runs = c.list(.runs, Run.self)
         issues = c.list(.issues, Issue.self)
         issuesError = c.str(.issuesError)
         prs = c.list(.prs, PullRequest.self)
         prsError = c.str(.prsError)
+    }
+}
+
+/// What GitHub is willing to answer right now.
+///
+/// `pausedUntil` is the door having stopped asking on purpose rather than
+/// having failed: while it is set, every desk on the floor is showing the last
+/// thing it managed to pull, and that is a fact about the budget and not about
+/// any one repo.
+public struct GitHubBudget: Decodable, Hashable {
+    public var limit: Int?
+    public var remaining: Int?
+    public var resetAt: String
+    public var cost: Int
+    public var pausedUntil: String
+    public var error: String
+
+    public var isPaused: Bool { !pausedUntil.isEmpty }
+
+    public init(limit: Int? = nil, remaining: Int? = nil, resetAt: String = "",
+                cost: Int = 0, pausedUntil: String = "", error: String = "") {
+        self.limit = limit
+        self.remaining = remaining
+        self.resetAt = resetAt
+        self.cost = cost
+        self.pausedUntil = pausedUntil
+        self.error = error
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case limit, remaining, cost, error
+        case resetAt = "reset_at"
+        case pausedUntil = "paused_until"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        limit = c.int(.limit)
+        remaining = c.int(.remaining)
+        resetAt = c.str(.resetAt) ?? ""
+        cost = c.int(.cost) ?? 0
+        pausedUntil = c.str(.pausedUntil) ?? ""
+        error = c.str(.error) ?? ""
+    }
+}
+
+/// `GET /api/desks` and the answer to a `POST` of one: the whole put-away list,
+/// never a delta. A list is reconcilable against the world; a delta is a guess
+/// about what the server already had.
+public struct DesksResponse: Decodable {
+    public var hidden: [String]
+
+    public init(hidden: [String] = []) { self.hidden = hidden }
+
+    enum CodingKeys: String, CodingKey { case hidden }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        hidden = c.list(.hidden, String.self)
     }
 }
 
@@ -389,17 +482,22 @@ public struct World: Decodable {
     public var killed: Bool
     public var stations: [Station]
     public var runtime: RuntimeInfo?
+    public var github: GitHubBudget?
 
     public init(generated: String = "", heartbeat: String = "", killed: Bool = false,
-                stations: [Station] = [], runtime: RuntimeInfo? = nil) {
+                stations: [Station] = [], runtime: RuntimeInfo? = nil,
+                github: GitHubBudget? = nil) {
         self.generated = generated
         self.heartbeat = heartbeat
         self.killed = killed
         self.stations = stations
         self.runtime = runtime
+        self.github = github
     }
 
-    enum CodingKeys: String, CodingKey { case generated, heartbeat, killed, stations, runtime }
+    enum CodingKeys: String, CodingKey {
+        case generated, heartbeat, killed, stations, runtime, github
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -408,6 +506,7 @@ public struct World: Decodable {
         killed = c.bool(.killed) ?? false
         stations = c.list(.stations, Station.self)
         runtime = (try? c.decodeIfPresent(RuntimeInfo.self, forKey: .runtime)) ?? nil
+        github = (try? c.decodeIfPresent(GitHubBudget.self, forKey: .github)) ?? nil
     }
 }
 
