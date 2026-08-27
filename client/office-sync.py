@@ -526,6 +526,65 @@ def _pr_rows(nodes) -> list:
     return prs
 
 
+def _batch_command(nwos) -> list:
+    cmd = ["gh", "api", "graphql", "-f", "query=" + batch_query(len(nwos))]
+    for i, nwo in enumerate(nwos):
+        owner, name = nwo.split("/", 1)
+        cmd += ["-f", f"o{i}={owner}", "-f", f"n{i}={name}"]
+    return cmd
+
+
+def _json_body(out: str) -> dict:
+    """The JSON object gh printed, or {} when it printed nothing usable."""
+    try:
+        body = json.loads(out) if out.strip() else {}
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _is_rate_limited(msg: str, error: dict) -> bool:
+    return RATE_WORDS in msg.lower() or str(error.get("type") or "") == "RATE_LIMITED"
+
+
+def _alias_index(error: dict, n: int) -> int:
+    """Which repo of the batch a GraphQL error is about, or -1 for the whole batch."""
+    path = error.get("path") or []
+    alias = str(path[0]) if path else ""
+    if alias[:1] == "r" and alias[1:].isdigit() and int(alias[1:]) < n:
+        return int(alias[1:])
+    return -1
+
+
+def _sort_errors(body_errors, nwos):
+    """Per-repo errors and the one that sinks the whole batch, as (errors, fatal)."""
+    errors, fatal = {}, ""
+    for e in body_errors:
+        msg = str(e.get("message") or e.get("type") or "graphql error")[:160]
+        if _is_rate_limited(msg, e):
+            fatal = msg
+            continue
+        i = _alias_index(e, len(nwos))
+        if i >= 0:
+            errors.setdefault(nwos[i], msg)
+        else:
+            fatal = fatal or msg
+    return errors, fatal
+
+
+def _desk_rows(data: dict, nwos, errors: dict, fatal: str) -> dict:
+    """{nwo: {"issues", "prs"}} for every repo that answered; the rest get an error."""
+    rows = {}
+    for i, nwo in enumerate(nwos):
+        node = data.get(f"r{i}")
+        if not isinstance(node, dict):
+            errors.setdefault(nwo, fatal or "GitHub returned nothing for this repo")
+            continue
+        rows[nwo] = {"issues": _issue_rows((node.get("issues") or {}).get("nodes")),
+                     "prs": _pr_rows((node.get("pullRequests") or {}).get("nodes"))}
+    return rows
+
+
 def fetch_batch(nwos, token):
     """(rows, errors, rate, fatal) for up to BATCH_SIZE repos on one token.
 
@@ -537,45 +596,19 @@ def fetch_batch(nwos, token):
     nwos = [n for n in nwos if NWO_RE.match(n or "")]
     if not nwos:
         return {}, {}, {}, ""
-    cmd = ["gh", "api", "graphql", "-f", "query=" + batch_query(len(nwos))]
-    for i, nwo in enumerate(nwos):
-        owner, name = nwo.split("/", 1)
-        cmd += ["-f", f"o{i}={owner}", "-f", f"n{i}={name}"]
 
-    rc, out, err = sh(cmd, timeout=90, env={"GH_TOKEN": token})
+    rc, out, err = sh(_batch_command(nwos), timeout=90, env={"GH_TOKEN": token})
     # gh exits non-zero when ANY alias in the batch errored, and still prints the
     # whole body. The body is the answer; the exit code is only a summary of it,
     # so one dead repo must not be read as ten dead repos.
-    try:
-        body = json.loads(out) if out.strip() else {}
-    except Exception:
-        body = {}
-    if not isinstance(body, dict) or not body:
+    body = _json_body(out)
+    if not body:
         return {}, {}, {}, (err.strip().splitlines() or [f"gh exit {rc}"])[0][:160]
 
     data = body.get("data") or {}
     rate = data.get("rateLimit") or {}
-    errors, fatal = {}, ""
-    for e in body.get("errors") or []:
-        msg = str(e.get("message") or e.get("type") or "graphql error")[:160]
-        if RATE_WORDS in msg.lower() or str(e.get("type") or "") == "RATE_LIMITED":
-            fatal = msg
-            continue
-        path = e.get("path") or []
-        alias = str(path[0]) if path else ""
-        if alias[:1] == "r" and alias[1:].isdigit() and int(alias[1:]) < len(nwos):
-            errors.setdefault(nwos[int(alias[1:])], msg)
-        else:
-            fatal = fatal or msg
-
-    rows = {}
-    for i, nwo in enumerate(nwos):
-        node = data.get(f"r{i}")
-        if not isinstance(node, dict):
-            errors.setdefault(nwo, fatal or "GitHub returned nothing for this repo")
-            continue
-        rows[nwo] = {"issues": _issue_rows((node.get("issues") or {}).get("nodes")),
-                     "prs": _pr_rows((node.get("pullRequests") or {}).get("nodes"))}
+    errors, fatal = _sort_errors(body.get("errors") or [], nwos)
+    rows = _desk_rows(data, nwos, errors, fatal)
     return rows, errors, rate, fatal
 
 
