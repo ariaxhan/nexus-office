@@ -15,6 +15,7 @@ import importlib
 import json
 import os
 import pathlib
+import shutil
 import sys
 import tempfile
 import unittest
@@ -41,11 +42,23 @@ class MailBase(unittest.TestCase):
         (self.service / "cache").mkdir(parents=True)
         os.environ["OFFICE_RUNTIME_ROOT"] = str(self.root)
         os.environ.pop("INTAKE_STATE", None)
+        # The capture watcher works OUTSIDE the vault, in iCloud and in
+        # ~/Library/Logs. Without these two the tests would read Aria's real
+        # phone drop folder and pass or fail on what she captured this morning.
+        self.drop = self.root / "drop"
+        self.log = self.root / "ingest.log"
+        os.environ["OFFICE_CAPTURE_DIR"] = str(self.drop)
+        os.environ["OFFICE_CAPTURE_LOG"] = str(self.log)
+        # A healthy vault is the default fixture, so a test that cares about a
+        # dead courier has to say so.
+        self.capture(queued=0, ever=1, last="2026-08-25T18:00:00Z")
+        self.granola(synced=50, last_run="2026-08-25T18:20:00+00:00")
         import sources.mail as mail
         self.mail = importlib.reload(mail)
 
     def tearDown(self):
-        os.environ.pop("OFFICE_RUNTIME_ROOT", None)
+        for key in ("OFFICE_RUNTIME_ROOT", "OFFICE_CAPTURE_DIR", "OFFICE_CAPTURE_LOG"):
+            os.environ.pop(key, None)
         self.tmp.cleanup()
 
     # -- fixtures --------------------------------------------------------------
@@ -61,6 +74,37 @@ class MailBase(unittest.TestCase):
 
     def state(self, data: dict):
         (self.service / "state.json").write_text(json.dumps(data))
+
+    def capture(self, queued=0, ever=0, last="", processed=True):
+        """A drop folder in exactly the shape the test needs, plus an ingest log.
+
+        Rebuilt from nothing every time, so a test that wants an empty history
+        gets one even though setUp already laid down a healthy fixture.
+        """
+        shutil.rmtree(self.drop, ignore_errors=True)
+        self.log.unlink(missing_ok=True)
+        processed_dir = self.drop / ".processed"
+        (processed_dir if processed else self.drop).mkdir(parents=True, exist_ok=True)
+        # iCloud bookkeeping. It is a file in the folder and it is never a
+        # queued capture; counting it shows a permanent backlog of one.
+        (self.drop / ".gitkeep").write_text("")
+        for n in range(queued):
+            (self.drop / f"queued-{n}.txt").write_text("from the phone")
+        if processed:
+            for n in range(ever):
+                (processed_dir / f"done-{n}.txt").write_text("already moved")
+        if last:
+            self.log.write_text(
+                "2026-08-25T17:00:00Z starting\n"
+                f"{last} run complete: 1 file(s), errors=0\n")
+
+    def granola(self, **fields):
+        path = self.root / "_meta" / "granola"
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "state.json").write_text(json.dumps(fields))
+
+    def couriers(self):
+        return {c["key"]: c for c in self.mail.read()["couriers"]}
 
     def summary(self, **over):
         base = {
@@ -234,6 +278,110 @@ class MailTest(MailBase):
         self.assertEqual(self.mail.read()["excluded"], [])
 
 
+class CourierTest(MailBase):
+    """The two things that carry post into the room.
+
+    A pigeonhole counts what arrived. Neither of these tells you that, and the
+    failure they exist to catch is the one that reads as good news: a feed
+    nothing is arriving on holds at zero waiting, in green, forever. The capture
+    path did exactly that for 31 days.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.prints(self.summary())
+
+    # -- mobile capture --------------------------------------------------------
+
+    def test_the_queue_and_the_run_total_are_two_different_numbers(self):
+        self.capture(queued=3, ever=7, last="2026-08-25T18:00:00Z")
+        cap = self.couriers()["capture"]
+        self.assertEqual(cap["state"], "live")
+        self.assertEqual(cap["waiting"], 3)
+        self.assertEqual(cap["delivered"], 7)
+        self.assertEqual(cap["last_run"], "2026-08-25T18:00:00Z")
+
+    def test_the_icloud_marker_file_is_never_a_queued_capture(self):
+        # .gitkeep forces iCloud to publish the folder to the phone. Counting it
+        # shows a backlog of one that no amount of processing ever clears.
+        self.capture(queued=0, ever=1, last="2026-08-25T18:00:00Z")
+        self.assertEqual(self.couriers()["capture"]["waiting"], 0)
+
+    def test_nothing_ever_processed_is_never_fired_and_not_idle(self):
+        # The 31-day silence. An empty queue and an empty history look the same
+        # from the pigeonhole and have completely different fixes.
+        self.capture(queued=0, ever=0)
+        cap = self.couriers()["capture"]
+        self.assertEqual(cap["state"], "never-fired")
+        self.assertEqual(cap["delivered"], 0)
+        self.assertIn("Shortcut", cap["why"])
+
+    def test_a_missing_drop_folder_says_where_it_looked(self):
+        os.environ["OFFICE_CAPTURE_DIR"] = str(self.root / "not-there")
+        cap = self.couriers()["capture"]
+        self.assertEqual(cap["state"], "missing")
+        self.assertIn("not-there", cap["why"])
+
+    def test_the_stamp_is_the_last_completed_run_not_the_last_line(self):
+        self.capture(queued=0, ever=1)
+        self.log.write_text(
+            "2026-08-25T10:00:00Z run complete: 1 file(s), errors=0\n"
+            "2026-08-25T11:00:00Z run complete: 2 file(s), errors=0\n"
+            "2026-08-25T12:00:00Z scanning\n")
+        self.assertEqual(self.couriers()["capture"]["last_run"], "2026-08-25T11:00:00Z")
+
+    def test_a_missing_ingest_log_costs_the_stamp_and_not_the_courier(self):
+        self.capture(queued=1, ever=2)
+        cap = self.couriers()["capture"]
+        self.assertEqual(cap["state"], "live")
+        self.assertEqual(cap["last_run"], "")
+
+    # -- granola sync ----------------------------------------------------------
+
+    def test_the_sync_reports_what_it_holds_and_when_it_last_ran(self):
+        self.granola(synced=51, last_run="2026-08-27T05:55:35+00:00", last_error=None)
+        gran = self.couriers()["granola"]
+        self.assertEqual(gran["state"], "live")
+        self.assertEqual(gran["delivered"], 51)
+        self.assertEqual(gran["last_run"], "2026-08-27T05:55:35+00:00")
+
+    def test_synced_as_a_map_is_counted_rather_than_carried(self):
+        # Some versions write a map of meeting id -> metadata here. Shipping it
+        # raw would put 49 records where a number belongs.
+        self.granola(synced={"a": {}, "b": {}, "c": {}},
+                     last_run="2026-08-27T05:55:35+00:00")
+        self.assertEqual(self.couriers()["granola"]["delivered"], 3)
+
+    def test_a_failing_sync_is_failing_even_with_a_healthy_note_count(self):
+        # The dangerous shape: 51 notes on disk and nothing new since Tuesday.
+        self.granola(synced=51, last_run="2026-08-27T05:55:35+00:00",
+                     last_error="granola: 429 rate limited")
+        gran = self.couriers()["granola"]
+        self.assertEqual(gran["state"], "failing")
+        self.assertEqual(gran["delivered"], 51)
+        self.assertIn("429", gran["error"])
+
+    def test_a_sync_that_never_ran_is_not_a_sync_with_nothing_to_do(self):
+        self.granola(synced=0)
+        self.assertEqual(self.couriers()["granola"]["state"], "never-fired")
+
+    def test_a_missing_sync_state_says_nothing_is_fetching_meetings(self):
+        (self.root / "_meta" / "granola" / "state.json").unlink()
+        gran = self.couriers()["granola"]
+        self.assertEqual(gran["state"], "missing")
+        self.assertIn("nothing is fetching", gran["why"])
+
+    def test_a_torn_sync_state_is_unreadable_rather_than_empty(self):
+        (self.root / "_meta" / "granola" / "state.json").write_text('{"synced": 5')
+        self.assertEqual(self.couriers()["granola"]["state"], "unreadable")
+
+    def test_the_live_mailbox_behind_the_sync_is_unknown_not_zero(self):
+        # What granola is still holding cannot be counted from disk, and zero
+        # would draw as an empty shelf that is nothing of the kind.
+        self.granola(synced=51, last_run="2026-08-27T05:55:35+00:00")
+        self.assertIsNone(self.couriers()["granola"]["waiting"])
+
+
 class SectionsTest(unittest.TestCase):
     def test_a_raising_source_is_an_error_section_not_a_missing_one(self):
         # sections.py owns this, but the mailroom is the first source that can
@@ -278,6 +426,52 @@ class CardTest(MailBase):
         assert_card(self, card)
         self.assertEqual(card["headline"], "nothing waiting to be filed")
         self.assertEqual(card["needs"], 0)
+
+    def test_a_stopped_courier_takes_the_headline_off_nothing_waiting(self):
+        # The false-green in one test: the mailroom is clear precisely BECAUSE
+        # nothing is arriving, and the card has to say the second thing.
+        self.prints(self.summary(sources=["granola", "capture"]))
+        self.snapshot(covered={"granola": 50, "capture": 2})
+        self.capture(queued=0, ever=0)
+        card = self.card()
+        assert_card(self, card)
+        self.assertIn("capture watcher stopped", card["headline"])
+        self.assertEqual(card["needs"], 1)
+
+    def test_a_stopped_courier_is_a_row_a_person_can_act_on(self):
+        self.prints(self.summary())
+        self.snapshot(covered={"granola": 50, "capture": 2})
+        self.granola(synced=51, last_run="2026-08-27T05:55:35+00:00",
+                     last_error="granola: 429 rate limited")
+        card = self.card()
+        facts = {f["label"]: f for f in card["facts"]}
+        self.assertIn("granola sync", facts)
+        self.assertEqual(facts["granola sync"]["tone"], "bad")
+
+    def test_staleness_still_outranks_a_stopped_courier(self):
+        # Two bad things at once. Staleness wins the headline because it means
+        # every number under it describes a moment that has passed.
+        self.prints(self.summary(stale=True, stale_reason="granola: 12 of 50 on disk"))
+        self.capture(queued=0, ever=0)
+        card = self.card()
+        self.assertTrue(card["headline"].startswith("behind:"), card["headline"])
+
+    def test_working_couriers_get_one_row_saying_the_post_is_still_coming(self):
+        self.prints(self.summary(sources=["granola", "capture"]))
+        self.snapshot(covered={"granola": 50, "capture": 2})
+        card = self.card()
+        assert_card(self, card)
+        facts = {f["label"]: f["value"] for f in card["facts"]}
+        self.assertIn("arriving", facts)
+        self.assertIn("capture", facts["arriving"])
+        self.assertIn("granola", facts["arriving"])
+
+    def test_two_stopped_couriers_both_want_a_person(self):
+        self.prints(self.summary(sources=["granola", "capture"]))
+        self.snapshot(covered={"granola": 50, "capture": 2})
+        self.capture(queued=0, ever=0)
+        (self.root / "_meta" / "granola" / "state.json").unlink()
+        self.assertEqual(self.card()["needs"], 2)
 
     def test_an_intake_that_would_not_run_says_that_and_wants_a_person(self):
         # Nothing installed: the mailroom cannot be counted, and an uncounted

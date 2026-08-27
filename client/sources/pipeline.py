@@ -16,6 +16,18 @@ Four facts, from four places on local disk, each of which can fail on its own:
   allowed       _meta/state/pipeline-off, the kill switch dispatch.sh checks
                 before it does anything at all.
 
+...  and two facts about the last sweep rather than the next one:
+
+  last full run <pipeline>/.runtime/last-success, written only when a whole
+                sweep finished. A run that started and died never moves it.
+  covered       how many repos the runner actually reached in the last 24
+                hours, from its own receipts. A pipeline that fires on time and
+                reaches nothing is green on every other field on this card.
+
+`covered` deliberately does NOT tally outcomes. office-sync already derives that
+from the same receipts file into `world.today`, and two tallies over one file
+are two numbers that disagree the first time one window changes.
+
 THE PID FILE ALONE IS NOT LIVENESS. A killed run leaves its pid behind, because
 the trap never runs. So the file existing is treated as a CLAIM, and the claim is
 checked twice: the process must still exist (`kill -0`), and it must still be a
@@ -61,6 +73,8 @@ JOB_ID = "com.nexus.issue-dispatch"
 PIPELINE = "_meta/services/issue-pipeline"
 RUNTIME = PIPELINE + "/.runtime"
 KILL_SWITCH = "_meta/state/pipeline-off"
+RECEIPTS = RUNTIME + "/receipts.jsonl"
+HEARTBEAT = RUNTIME + "/last-success"
 LOG = "_meta/logs/jobs/" + JOB_ID + ".log"
 REGISTRY = "_meta/services/jobs/registry.jsonl"
 JOBCTL = "_meta/services/jobs/jobctl"
@@ -76,6 +90,16 @@ PMSET_TIMEOUT_S = 3
 # Enough of the tail to find the last timestamped line even when the run is
 # printing untimestamped continuation rows under it.
 LOG_TAIL_BYTES = 16384
+
+# Receipts are one short line per repo per sweep and the file grows forever, so
+# only the tail is read. At today's rate this is weeks; the window below is one
+# day, so a tail that falls short would under-report rather than invent.
+RECEIPTS_TAIL_BYTES = 1_048_576
+
+# The same rolling 24 hours office-sync uses for `world.today`, on purpose: a
+# calendar day resets to zero in the middle of the afternoon here and makes the
+# runner look idle twice a day.
+COVER_WINDOW_S = 86400
 
 TS = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\]\s*(.*)$")
 
@@ -216,6 +240,55 @@ def read_log(path: pathlib.Path) -> dict:
     return {"state": "ok", "doing": doing[:400], "at": at}
 
 
+def read_receipts(path: pathlib.Path, now: float) -> dict:
+    """How much ground the runner covered in the last 24 hours, from receipts.
+
+    Only the count of repos and the count of decisions. The outcome breakdown
+    belongs to office-sync, which already derives it into `world.today` from
+    this same file; a second tally here would be a second number to keep in step
+    and the first one to go wrong.
+
+    A line that will not parse is counted, never skipped in silence: receipts
+    are the runner's own accounting and a hole in them is a finding.
+    """
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > RECEIPTS_TAIL_BYTES:
+                fh.seek(size - RECEIPTS_TAIL_BYTES)
+                fh.readline()  # the seek probably landed mid-line; drop the half
+            tail = fh.read().decode("utf-8", "replace")
+    except FileNotFoundError:
+        return {"state": "missing", "repos": None, "receipts": None,
+                "since": "", "unparsed": 0,
+                "detail": f"the runner has written no receipts at {path}"}
+    except OSError as exc:
+        return {"state": "unreadable", "repos": None, "receipts": None,
+                "since": "", "unparsed": 0,
+                "detail": f"{type(exc).__name__}: {exc}"[:200]}
+
+    since = _dt.datetime.fromtimestamp(
+        now - COVER_WINDOW_S, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    repos, seen, unparsed = set(), 0, 0
+    for line in tail.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            unparsed += 1
+            continue
+        if not isinstance(row, dict) or str(row.get("at") or "") < since:
+            continue
+        seen += 1
+        repo = str(row.get("repo") or "")
+        if "/" in repo:
+            repos.add(repo)
+    return {"state": "ok", "repos": len(repos), "receipts": seen,
+            "since": since, "unparsed": unparsed, "detail": ""}
+
+
 def read_registry(path: pathlib.Path) -> dict:
     """The pipeline job's own declaration: is it enabled, and how often.
 
@@ -313,7 +386,8 @@ def _cannot(state: str, detail: str) -> dict:
     has to guess whether an absent key means false or means nobody looked.
     """
     return {"state": state, "detail": detail, "running": False,
-            "running_for": None, "doing": "", "next_in": None}
+            "running_for": None, "doing": "", "next_in": None,
+            "heartbeat": None, "covered": None}
 
 
 def read() -> dict:
@@ -355,16 +429,23 @@ def read() -> dict:
     job = read_jobctl(root)
     interval = reg.get("interval_s")
     last_attempt = job.get("last_attempt")
+    # When a whole sweep last FINISHED. dispatch.sh writes this at the end, so a
+    # run that started and died never moves it, which is exactly what makes it
+    # worth reading beside `last_attempt`.
+    try:
+        heartbeat = (root / HEARTBEAT).read_text(encoding="utf-8").strip()[:40]
+    except OSError:
+        heartbeat = ""
+
     next_source = "jobctl"
     base = _epoch(last_attempt)
     if base is None:
-        try:
-            base = _epoch((runtime / "last-success").read_text(encoding="utf-8").strip())
-            next_source = "heartbeat"
-        except OSError:
-            base = None
+        base = _epoch(heartbeat)
+        next_source = "heartbeat" if base is not None else "jobctl"
     if base is None:
         next_source = "unknown"
+
+    cover = read_receipts(root / RECEIPTS, now)
 
     next_at, next_in, overdue, late_by = None, None, False, None
     if base is not None and interval:
@@ -436,6 +517,13 @@ def read() -> dict:
         "enabled": reg.get("enabled"),
         "kill_switch": switched_off,
 
+        # The last sweep that actually finished, and what it reached. A pipeline
+        # that fires on time and covers nothing is green on every field above.
+        "heartbeat": heartbeat or None,
+        "heartbeat_age_s": (round(now - (_epoch(heartbeat) or now))
+                            if _epoch(heartbeat) is not None else None),
+        "covered": cover,
+
         "job_state": job.get("job_state"),
         "last_attempt": last_attempt,
         "last_success": job.get("last_success"),
@@ -468,6 +556,10 @@ def card(data: dict) -> dict:
     does not write a second one. What it adds is `needs`: a pid file that is
     lying, or a log nobody can read, is a thing a person has to go and look at,
     and neither of those is visible in `running`.
+
+    It also adds the last finished sweep and how many repos it reached. A runner
+    that fires on schedule and covers nothing reads as perfectly healthy on
+    `running`, `next look` and `last said` all at once.
     """
     state = data.get("state")
     detail = str(data.get("detail") or "")
@@ -499,6 +591,21 @@ def card(data: dict) -> dict:
     else:
         facts.append(_card.fact("next look", "could not be worked out", "warn"))
 
+    # One row for the last sweep that finished and what it reached, because on
+    # their own each is easy to explain away: a fresh heartbeat over zero repos
+    # is a runner that woke up and did nothing, and neither number says that.
+    cover = data.get("covered") or {}
+    hb_age = data.get("heartbeat_age_s")
+    reached = cover.get("repos")
+    when = f"{_human(hb_age)} ago" if hb_age is not None else "never"
+    if cover.get("state") != "ok":
+        facts.append(_card.fact("last full run",
+                                f"{when}, receipts {cover.get('state') or 'unknown'}", "bad"))
+    else:
+        facts.append(_card.fact(
+            "last full run", f"{when}, {reached} {_card.plural(reached, 'repo')} in 24h",
+            "warn" if (hb_age is None or not reached) else "dim"))
+
     age = data.get("last_said_age_s")
     if log_state == "ok":
         facts.append(_card.fact("last said",
@@ -522,6 +629,10 @@ def card(data: dict) -> dict:
 
     # A missing log is a break only when the pipeline is supposed to be running:
     # one switched off on purpose has no log to speak of, and no alarm to raise.
-    broken = bool(stale) or (data.get("state") == "ok" and log_state != "ok")
+    broken = (bool(stale)
+              or (data.get("state") == "ok" and log_state != "ok")
+              # Receipts nobody can read is a hole in the runner's own
+              # accounting, and it is invisible in every field above.
+              or (data.get("covered") or {}).get("state") == "unreadable")
     return _card.build(TITLE, detail, 1 if broken else 0,
                        _card.zulu(data.get("last_said_at")), facts)
