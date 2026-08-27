@@ -115,8 +115,16 @@ rather than accepting anything unsigned. A comment, an issue or a merged PR
 debounces for twenty seconds and then runs `dispatch.sh --repo` for that one
 checkout, serially, because the pipeline takes one global lock. The pipeline's
 own comments never trigger it. `GET /api/webhook` says whether anything is
-arriving. Registering the hooks (one per repo, no user-level webhook exists) is
-a script still to come; today `gh api -X POST repos/OWNER/NAME/hooks` does it.
+arriving. `scripts/register-webhooks.sh <hook-url>` registers one hook per repo
+(there is no user-level webhook), reading the repo list off the door rather than
+off a list anybody maintains.
+
+Both halves have to be on, and the office now says which one is not: when nothing
+has ever arrived it asks Tailscale whether there is a public mount at all, and a
+door with no Funnel in front of it reads `unreachable` with the reason on the
+card, never as a quiet Sunday. `docs/webhooks.md` has the two steps, one of which
+is a click in the Tailscale admin console that nothing on this machine can do for
+you.
 
 The same door serves the phone at `/`: three files out of `client/phone/`, no
 build step and no request to anywhere but itself, showing the raised hand first,
@@ -127,21 +135,54 @@ tailnet with `tailscale serve --bg 8790`, then name the tailnet host in
 must carry the `Tailscale-User-Login` that matches, or it is 403 before it reads
 a thing. That check is why the page has nothing to log in to.
 
+## The automation, and the agents already running
+
+Two questions the office used to answer only in a terminal.
+
+**What is the automation doing?** The `automation` row at the top of the wall
+opens a page that says it in one screen: when the runner next looks and when it
+last finished a whole sweep, whether it is running right now, whether anything on
+the internet can reach the webhook door, and then the list that matters, which is
+every issue it touched with a link to the comment it left. That link is the exact
+comment while the runner still has the last word; once a human replies it becomes
+a link to the thread instead, because a deep link to somebody else's words wearing
+the pipeline's label is worse than no deep link. The whole page is assembled
+server side in `client/automation.py` out of numbers the snapshot already
+carried, so the Mac app and the phone say one sentence about one machine.
+
+**What is running in this folder?** Every desk now shows the Claude Code and
+Codex sessions sitting in its checkout, what each one is doing, and a box to
+answer the one that is waiting on you. `start claude` and `start codex` open a new
+terminal in that folder. It reads `hcom`, which is the only thing on this machine
+that knows both which sessions are alive and how to reach one, so a session that
+never ran `hcom start` is invisible here and the office says so rather than
+drawing an empty list, which would be a claim that nothing is running.
+
+A reply is a message, never a keystroke: it lands in the agent's queue and it
+reads it at its next hook. Nothing in this project injects into a live terminal,
+because a message arriving mid-prompt is submitted into whatever was half typed
+there. A message addressed to a session `hcom` calls inactive is refused rather
+than sent, since a "sent" over a message nothing will ever read is exactly the
+false green this project exists to kill.
+
 ## Verify gates
 
 ```sh
 npm test        # the python door + the Swift state rules, headless
-npm run shot    # builds the app, photographs eight framings, then LOOK
+npm run shot    # builds the app, photographs ten framings, then LOOK
 ```
 
-`scripts/shoot.sh` writes eight PNGs into `shots/`: `app-roster.png` (bots above
+`scripts/shoot.sh` writes ten PNGs into `shots/`: `app-roster.png` (bots above
 desks), `app-desk.png` (a desk thread), `app-gate.png` (the sheet over the room),
 `app-needs.png` (the "needs me" filter), `app-wall.png` (the local sources, and
 the one that says something needs a person), `app-putaway.png` (the desks a
 person put away, and a desk saying out loud that what you are reading is the last
 thing it managed to pull) and `app-attach.png` (a picture picked and not yet
 sent: the chip, its size after the downscale, and the mark on the turn above it
-that already carried one). The eighth, `app-light.png`, is the roster with the
+that already carried one), `app-automation.png` (the automation page: the
+schedule, the door, and what the runner touched with a link to what it said) and
+`app-sessions.png` (a desk with a live agent on it, its conversation open and a
+reply half typed). The tenth, `app-light.png`, is the roster with the
 lights on: the office follows the system appearance, and it comes from a second
 run because there is no way to be in two appearances at once. They are not committed, because a screenshot in a repo is
 stale the day after it lands. Run it and open them: every defect this project has

@@ -657,3 +657,37 @@ details.away > summary .wants { color: var(--amber); }
 @media (min-width: 700px) {
   main, .composer, .turns { max-width: 680px; margin-inline: auto; }
 }
+
+/* ── the automation band, and the sessions band ──────────────────────────── */
+
+/* One thing the runner did. A row inside a card rather than a card of its own:
+ * six of these are a list to scan, and six cards are six things to look at. */
+.run {
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+}
+.run:first-of-type { border-top: 0; }
+.run .head { margin-bottom: 2px; }
+.run .detail { margin: 2px 0 0; }
+.run .asof { margin: 2px 0 0; }
+
+/* A card nested in a card: the webhook block under the automation headline, and
+ * a session's conversation under its own row. Inset rather than outlined, so
+ * the page never grows a second kind of border. */
+.card .sub {
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 0;
+}
+
+/* The way out to the comment the runner left. Big enough to hit with a thumb,
+ * which is the whole reason this page exists. */
+.link {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--blue);
+  text-decoration: none;
+}

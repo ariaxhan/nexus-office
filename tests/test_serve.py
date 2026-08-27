@@ -289,6 +289,107 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class SessionRoutesTest(ServeTest):
+    """The door's half of #38: sessions read and answered without a terminal.
+
+    The module itself is tested in test_sessions.py against a fake hcom. What is
+    checked here is the wiring: that the routes exist, that the query string
+    reaches the module, and that a refusal from the module reaches the caller
+    with its own status code rather than flattened to a 200 with an error in it.
+    """
+
+    def stub(self, **answers):
+        """Swap the sessions module's functions for recorded fakes."""
+        mod = self.serve.sessions
+        seen = {}
+        for name, value in answers.items():
+            was = getattr(mod, name)
+            self.addCleanup(lambda n=name, w=was: setattr(mod, n, w))
+
+            def fake(*args, _v=value, _n=name, **kw):
+                seen[_n] = (args, kw)
+                return _v() if callable(_v) else _v
+
+            setattr(mod, name, fake)
+        return seen
+
+    def test_the_roster_of_sessions_comes_through_the_door(self):
+        self.stub(read={"state": "ok", "sessions": [{"name": "veru"}],
+                        "live": 1, "blocked": 0})
+        code, body = self.get("/api/sessions")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["sessions"][0]["name"], "veru")
+
+    def test_a_desk_filter_reaches_the_module(self):
+        seen = self.stub(read={"state": "empty", "sessions": []})
+        self.get("/api/sessions?repo=acme/thing")
+        self.assertEqual(seen["read"][0], ("acme/thing",))
+
+    def test_a_transcript_carries_its_own_status_code(self):
+        self.stub(transcript=(404, {"error": "no such session"}))
+        code, body = self.get("/api/session?name=ghost")
+        self.assertEqual(code, 404)
+        self.assertEqual(body["error"], "no such session")
+
+    def test_the_screen_is_readable_and_there_is_no_route_that_types(self):
+        self.stub(screen=(200, {"name": "veru", "lines": ["hello"]}))
+        code, body = self.get("/api/session/screen?name=veru")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["lines"], ["hello"])
+        for path in ("/api/session/inject", "/api/session/keys"):
+            self.assertEqual(self.post(path, {"name": "veru", "text": "y"})[0], 404)
+
+    def test_answering_a_session_posts_the_body_straight_through(self):
+        seen = self.stub(say=(200, {"ok": True, "name": "veru"}))
+        code, body = self.post("/api/session/say", {"name": "veru", "text": "carry on"})
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(seen["say"][0][0], {"name": "veru", "text": "carry on"})
+
+    def test_a_message_the_module_refuses_is_refused_at_the_door_too(self):
+        self.stub(say=(409, {"error": "veru is inactive"}))
+        self.assertEqual(self.post("/api/session/say", {"name": "veru", "text": "x"})[0], 409)
+
+    def test_starting_a_session_is_a_post_and_never_a_get(self):
+        """It runs a program. A GET that runs a program is a link somebody can
+        put in a page and a prefetch away from being run by accident."""
+        self.stub(start=(200, {"ok": True, "tool": "claude"}))
+        self.assertEqual(self.post("/api/session/start", {"tool": "claude"})[0], 200)
+        self.assertEqual(self.get("/api/session/start")[0], 404)
+
+
+    # ── #42: the automation page, off the snapshot ──────────────────────────
+    # In this class rather than its own, on purpose: a TestCase that subclasses
+    # ServeTest to reuse its server reruns every one of ServeTest's own tests,
+    # so a second class here would be a second full copy of them.
+
+    def snapshot_key(self, key, value):
+        """Set a key on the SHARED snapshot and put it back afterwards. The
+        server is built once for the class, so a test that mutates it and walks
+        away breaks whichever test happens to run next."""
+        was = self.world.snapshot.get(key, KeyError)
+        self.addCleanup(lambda: self.world.snapshot.pop(key, None)
+                        if was is KeyError else self.world.snapshot.__setitem__(key, was))
+        if value is KeyError:
+            self.world.snapshot.pop(key, None)
+        else:
+            self.world.snapshot[key] = value
+
+    def test_the_automation_page_is_served_from_the_snapshot_already_built(self):
+        self.snapshot_key("automation", {"state": "ok", "headline": "idle",
+                                         "activity": [{"repo": "a/b", "issue": "1"}]})
+        code, body = self.get("/api/automation")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["automation"]["headline"], "idle")
+        self.assertEqual(body["at"], self.world.at,
+                         "the page is stamped with the snapshot it came from")
+
+    def test_a_snapshot_with_no_automation_block_is_an_empty_page_not_a_500(self):
+        self.snapshot_key("automation", KeyError)
+        code, body = self.get("/api/automation")
+        self.assertEqual((code, body["automation"]), (200, {}))
+
+
 class DoorTest(ServeTest):
     """The bind address keeps the network out; these keep the browser out."""
 

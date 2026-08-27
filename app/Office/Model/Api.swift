@@ -109,6 +109,28 @@ public final class Api {
         return try await get("/api/chat?bot=\(escaped)", as: ChatResponse.self).turns
     }
 
+    /// The automation, as one page. Off the snapshot the server already built,
+    /// never a fresh measurement: a page that re-measures on open disagrees with
+    /// the card that sent you to it.
+    public func automation() async throws -> Automation {
+        if let demo { return try demo.automation() }
+        return try await get("/api/automation", as: AutomationResponse.self).automation
+    }
+
+    /// Every agent running on this machine, or the ones at one desk.
+    public func sessions(repo: String = "") async throws -> SessionRoster {
+        if let demo { return try demo.sessions(repo: repo) }
+        guard !repo.isEmpty else { return try await get("/api/sessions", as: SessionRoster.self) }
+        let escaped = repo.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? repo
+        return try await get("/api/sessions?repo=\(escaped)", as: SessionRoster.self)
+    }
+
+    public func sessionTranscript(name: String, last: Int = 10) async throws -> SessionTranscript {
+        if let demo { return try demo.sessionTranscript(name: name) }
+        let escaped = name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? name
+        return try await get("/api/session?name=\(escaped)&last=\(last)", as: SessionTranscript.self)
+    }
+
     /// Which desks a person has put away. The whole list every time, never a
     /// delta: a list can be reconciled against the world, a delta can only be
     /// believed.
@@ -162,6 +184,29 @@ public final class Api {
     public func setPins(_ pins: [String]) async throws -> [String] {
         if let demo { return try demo.setPins(pins) }
         return try await post("/api/pins", ["pins": pins], as: PinsResponse.self).pins
+    }
+
+    /// Answer a running session without opening its terminal.
+    ///
+    /// A message, never a keystroke: it lands in the agent's queue and it reads
+    /// it at its next hook. The server refuses one addressed to an agent that
+    /// would never read it, and that refusal arrives here as a 409 with the
+    /// server's own words, which is the only honest thing to put on screen.
+    public func saySession(name: String, text: String) async throws -> Ack {
+        if let demo { return try demo.saySession(name: name, text: text) }
+        return try await post("/api/session/say", ["name": name, "text": text])
+    }
+
+    /// Open a new Claude Code or Codex session at a desk.
+    ///
+    /// This runs a real program with real credentials, so the engine and the
+    /// place are both named rather than typed: `tool` is one of two values the
+    /// server matches exactly, and `repo` is a desk the office already knows.
+    public func startSession(tool: String, repo: String, prompt: String = "") async throws -> Ack {
+        var payload: [String: Any] = ["tool": tool, "repo": repo]
+        if !prompt.isEmpty { payload["prompt"] = prompt }
+        if let demo { return try demo.startSession(payload) }
+        return try await post("/api/session/start", payload)
     }
 
     public func decide(kind: String, repo: String, issue: String,
@@ -278,10 +323,17 @@ private final class DemoFloor {
         /// office where nobody is waiting.
         var gates: [Gate]
         var chats: [String: [ChatTurn]]
+        /// The agents running on the demo machine. Its own key rather than a
+        /// corner of `world`, because on the real door it is its own route: it
+        /// is measured by asking hcom, not by building a snapshot.
+        var sessions: SessionRoster
+        var transcripts: [String: SessionTranscript]
 
         var gate: Gate { gates.first ?? .clear }
 
-        enum CodingKeys: String, CodingKey { case bots, world, gate, gates, chats }
+        enum CodingKeys: String, CodingKey {
+            case bots, world, gate, gates, chats, sessions, transcripts
+        }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -291,6 +343,13 @@ private final class DemoFloor {
             let single = ((try? c.decodeIfPresent(Gate.self, forKey: .gate)) ?? nil) ?? .clear
             gates = listed.isEmpty ? (single.isPending ? [single] : []) : listed
             chats = ((try? c.decodeIfPresent([String: [ChatTurn]].self, forKey: .chats)) ?? nil) ?? [:]
+            // A fixture written before sessions existed photographs a machine
+            // with no hcom on it, which is a real state and draws as one.
+            sessions = ((try? c.decodeIfPresent(SessionRoster.self, forKey: .sessions)) ?? nil)
+                ?? SessionRoster(state: "unavailable",
+                                 detail: "this fixture has no sessions in it")
+            transcripts = ((try? c.decodeIfPresent([String: SessionTranscript].self,
+                                                   forKey: .transcripts)) ?? nil) ?? [:]
         }
 
         /// An empty floor, for a fixture that would not load.
@@ -299,6 +358,8 @@ private final class DemoFloor {
             world = World()
             gates = []
             chats = [:]
+            sessions = SessionRoster(state: "unavailable", detail: "no fixture loaded")
+            transcripts = [:]
         }
     }
 
@@ -362,6 +423,49 @@ private final class DemoFloor {
 
     func chat(bot: String) throws -> [ChatTurn] {
         lock.withLock { fixture.chats[bot] ?? [] }
+    }
+
+    func automation() throws -> Automation { lock.withLock { fixture.world.automation } }
+
+    /// The same filtering the real door does, so the demo floor cannot show a
+    /// desk a session that is not sitting at it.
+    func sessions(repo: String) throws -> SessionRoster {
+        lock.withLock {
+            guard !repo.isEmpty else { return fixture.sessions }
+            var out = fixture.sessions
+            out.sessions = out.sessions.filter { $0.repo == repo }
+            out.live = out.sessions.filter(\.isAlive).count
+            out.blocked = out.sessions.filter(\.isBlocked).count
+            if out.state == "ok" && out.sessions.isEmpty { out.state = "empty" }
+            return out
+        }
+    }
+
+    func sessionTranscript(name: String) throws -> SessionTranscript {
+        lock.withLock { fixture.transcripts[name] ?? SessionTranscript() }
+    }
+
+    /// Answering on the demo floor lands in the transcript, so the fixture
+    /// behaves like the door: a reply that vanished on the next poll would make
+    /// the demo lie about the one control this view has.
+    func saySession(name: String, text: String) throws -> Ack {
+        lock.withLock {
+            var script = fixture.transcripts[name] ?? SessionTranscript()
+            script.exchanges.append(SessionTranscript.Exchange(
+                position: script.exchanges.count + 1, you: text,
+                them: "(the demo floor takes the message and runs nothing)",
+                at: Self.now()))
+            fixture.transcripts[name] = script
+            return Ack(ok: true, result: "queued on the demo floor")
+        }
+    }
+
+    /// The demo floor starts nothing. It says so, rather than answering `ok` to
+    /// a launch that never happened: a fake green on the one control that runs a
+    /// program is the worst place in this app to have one.
+    func startSession(_ payload: [String: Any]) throws -> Ack {
+        throw ApiError(status: 501,
+                       message: "the demo floor cannot start a session; this is a fixture")
     }
 
     func hiddenDesks() throws -> [String] {

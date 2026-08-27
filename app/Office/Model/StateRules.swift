@@ -486,6 +486,29 @@ public enum StateRules {
         SectionTone.read(fact.tone)
     }
 
+    /// The same closed vocabulary, read off a bare word.
+    ///
+    /// The automation page's rows carry a tone the same way a card's facts do,
+    /// and they must land in the same colours: a `warn` that is amber on the
+    /// wall and something else on the automation page is two vocabularies
+    /// wearing one word.
+    public static func tone(_ raw: String) -> SectionTone { SectionTone.read(raw) }
+
+    /// A duration in seconds, as a person says it. Never a bare number.
+    ///
+    /// The server already writes ages in words wherever it is the one measuring.
+    /// This exists for the handful of places it hands over raw seconds, and it
+    /// rounds the same way `_card.human` does so the two never disagree by a
+    /// unit in the middle of one screen.
+    public static func gap(_ seconds: Int) -> String {
+        let s = abs(seconds)
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60) \(s / 60 == 1 ? "minute" : "minutes")" }
+        if s < 86400 { return "\(s / 3600) \(s / 3600 == 1 ? "hour" : "hours")" }
+        let days = s / 86400
+        return "\(days) \(days == 1 ? "day" : "days")"
+    }
+
     /// The wall's order: what wants a person, then what is not ok, then the
     /// quiet ones. Ties by title, so the list never shuffles under a person.
     ///

@@ -28,6 +28,8 @@ from __future__ import annotations
 import datetime
 import json
 import pathlib
+import shutil
+import subprocess
 import sys
 import time
 
@@ -43,6 +45,16 @@ TITLE = "Webhooks"
 # knocking. One is noise; three in a row with nothing valid between them is a
 # thing to go and look at.
 BAD_SIG_RUN = 3
+
+# Where Tailscale actually lives on this machine. The CLI is inside the app
+# bundle and is NOT on a launchd PATH, or on a login shell's, so looking it up
+# by name alone is how this check quietly answers "unknown" forever.
+TAILSCALE = ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+             "/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale")
+# A local socket call to a running daemon. Capped anyway: this runs inside a
+# snapshot push that must not hang, and a Tailscale that is wedged is a fact to
+# report rather than a reason to stop building the room.
+REACH_TIMEOUT_S = 5
 
 
 def _state_dir() -> pathlib.Path:
@@ -80,6 +92,74 @@ def _epoch(stamp) -> float | None:
     return dt.replace(tzinfo=datetime.timezone.utc).timestamp()
 
 
+def _tailscale() -> str | None:
+    """The Tailscale CLI, or None if this machine has none."""
+    for candidate in TAILSCALE:
+        found = shutil.which(candidate) if "/" not in candidate else (
+            candidate if pathlib.Path(candidate).exists() else None)
+        if found:
+            return found
+    return None
+
+
+def reach() -> dict:
+    """Is there a public path to this door AT ALL.
+
+    THE FIELD THIS FIXTURE WAS MISSING. Everything else here measures what
+    arrived, and "nothing arrived" has two causes that read identically from
+    inside a quiet room: nobody sent anything, or nothing CAN arrive because the
+    door is not on the internet. The second one is the one that lasts for weeks.
+
+    It is measured, not assumed: a `funnel status` with no mount for this port is
+    a proven-absent public path, which is a far stronger statement than "we have
+    not seen a delivery lately".
+
+    Never a network call. `funnel status` asks the local daemon over a unix
+    socket and answers immediately; it says nothing about whether the wider
+    internet can resolve the name, which is why `state: "on"` here is reported as
+    "a mount exists" and never as "it works".
+
+      unknown   no Tailscale on this machine, or it would not answer. NOT off:
+                the check did not complete, and saying "off" would be inventing
+                the answer that happens to be alarming.
+      off       Tailscale answered and there is no funnel at all.
+      on        there is a funnel mount.
+    """
+    binary = _tailscale()
+    if not binary:
+        return {"state": "unknown", "detail": "no tailscale on this machine, so the "
+                                              "public path could not be checked"}
+    try:
+        proc = subprocess.run([binary, "funnel", "status", "--json"],
+                              capture_output=True, text=True, timeout=REACH_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return {"state": "unknown",
+                "detail": f"tailscale did not answer in {REACH_TIMEOUT_S}s"}
+    except OSError as exc:
+        return {"state": "unknown", "detail": f"{type(exc).__name__}: {exc}"[:200]}
+
+    out = (proc.stdout or "").strip()
+    try:
+        conf = json.loads(out or "{}")
+    except json.JSONDecodeError:
+        # `funnel status` prints prose when Funnel is not enabled on the tailnet,
+        # including the admin-console URL that turns it on. That prose IS the
+        # answer, so it is carried through rather than flattened to "unknown".
+        text = (out or proc.stderr or "").strip().replace("\n", " ")[:200]
+        return {"state": "off" if text else "unknown",
+                "detail": text or "tailscale printed nothing that parsed"}
+    if not isinstance(conf, dict):
+        conf = {}
+
+    allow = conf.get("AllowFunnel") or {}
+    if not allow:
+        return {"state": "off",
+                "detail": "no Tailscale Funnel mount, so nothing on the internet can "
+                          "reach /webhook (docs/webhooks.md has the two steps)"}
+    ports = ", ".join(sorted(str(k) for k in allow))
+    return {"state": "on", "detail": f"funnel on {ports}"}
+
+
 def read(now: float | None = None) -> dict:
     now = time.time() if now is None else now
     # Asked of the module that does the verifying, never of the environment:
@@ -106,10 +186,22 @@ def read(now: float | None = None) -> dict:
     # Not "configured" as a synonym for "working": a secret set and nothing ever
     # delivered is its own state, and it is the one a person has to act on
     # (register the hook), so it must not read the same as a quiet morning.
+    # Asked only when nothing has ever arrived. A door with deliveries on it is a
+    # door with a public path, proven by the deliveries themselves, and asking
+    # again would be a subprocess on every snapshot push to re-learn a fact the
+    # data already carries.
+    path = {"state": "not-asked", "detail": "deliveries have arrived, so there is a path"}
+    if configured and not events:
+        path = reach()
+
     if not configured:
         state = "unconfigured"
     elif not events:
-        state = "silent"
+        # "Silent" and "unreachable" are two different rooms and they must never
+        # draw the same. Silent is a quiet Sunday. Unreachable is weeks of
+        # nothing that nobody was ever going to notice, because a hook with no
+        # public path to post to fails on GitHub's side where nothing here looks.
+        state = "unreachable" if path["state"] == "off" else "silent"
     else:
         state = "ok"
 
@@ -121,9 +213,20 @@ def read(now: float | None = None) -> dict:
 
     bad_run = _bad_signature_run(state_dir)
 
+    if not configured:
+        detail = "no OFFICE_WEBHOOK_SECRET, so /webhook answers 503"
+    elif state == "unreachable":
+        detail = path["detail"]
+    else:
+        detail = ""
+
     return {
         "state": state,
-        "detail": "" if configured else "no OFFICE_WEBHOOK_SECRET, so /webhook answers 503",
+        "detail": detail,
+        # The one line that turns "nothing arrived" into something a person can
+        # act on. Empty when nothing is blocking, never absent.
+        "blocked_by": path["detail"] if state == "unreachable" else "",
+        "public_path": path["state"],
         "configured": configured,
         "events_today": events_today,
         "events_total": len(events),
@@ -181,6 +284,11 @@ def card(data: dict, now: float | None = None) -> dict:
     if state == "silent":
         needs = max(needs, 1)
         headline = "configured, but nothing has ever arrived"
+    elif state == "unreachable":
+        # The one state here where the headline is not a measurement of traffic
+        # but the reason there can be none.
+        needs = max(needs, 1)
+        headline = "no public path: nothing on the internet can reach the door"
 
     rc = data.get("last_run_rc")
     run_age = data.get("last_run_age_s")
@@ -206,4 +314,6 @@ def card(data: dict, now: float | None = None) -> dict:
     if bad:
         facts.append(_card.fact("refused signatures", f"{bad} in a row",
                                 "bad" if bad > BAD_SIG_RUN else "warn"))
+    if data.get("blocked_by"):
+        facts.append(_card.fact("blocked by", str(data["blocked_by"]), "bad"))
     return _card.build(TITLE, headline, needs, _card.zulu(data.get("last_at")), facts)

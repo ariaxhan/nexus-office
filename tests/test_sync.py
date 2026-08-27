@@ -669,12 +669,31 @@ class BatchPartsTest(SyncCase):
         self.assertFalse(self.mod._is_rate_limited("not found", {"type": "NOT_FOUND"}))
 
     def test_the_bot_last_word_travels_only_when_the_bot_spoke_last(self):
-        self.assertEqual(self.mod._bot_last_word(issue_node(1, comment=None)), "")
-        self.assertEqual(self.mod._bot_last_word(issue_node(1, comment="a human")), "")
+        self.assertEqual(self.mod._bot_last_word(issue_node(1, comment=None)), {})
+        self.assertEqual(self.mod._bot_last_word(issue_node(1, comment="a human")), {})
         word = self.mod._bot_last_word(issue_node(1))
-        self.assertIn(self.mod.BOT_MARKER, word)
+        self.assertIn(self.mod.BOT_MARKER, word["body"])
         row = self.mod._issue_row(issue_node(1))
-        self.assertEqual((row["bot_last"], row["last_word"]), (True, word))
+        self.assertEqual((row["bot_last"], row["last_word"]), (True, word["body"]))
+
+    def test_the_link_to_what_the_bot_said_rides_on_the_issue_row(self):
+        """The whole point of the automation page: a row that says the runner
+        commented has to be able to take you to the comment.
+
+        A human replying moves the last comment, and then there is no URL for
+        what the bot said. That reads as absent here rather than as the human's
+        comment wearing the bot's label.
+        """
+        node = issue_node(1)
+        node["comments"]["nodes"][-1]["url"] = "https://github.com/a/b/issues/1#issuecomment-9"
+        node["comments"]["nodes"][-1]["createdAt"] = "2026-08-27T21:11:43Z"
+        row = self.mod._issue_row(node)
+        self.assertEqual(row["last_word_url"],
+                         "https://github.com/a/b/issues/1#issuecomment-9")
+        self.assertEqual(row["last_word_at"], "2026-08-27T21:11:43Z")
+
+        human = self.mod._issue_row(issue_node(1, comment="a human"))
+        self.assertEqual((human["bot_last"], human["last_word_url"]), (False, ""))
 
 
 if __name__ == "__main__":

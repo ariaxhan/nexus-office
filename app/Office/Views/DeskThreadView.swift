@@ -43,6 +43,13 @@ struct DeskThreadView: View {
                     if let notice {
                         StaleNotice(text: notice)
                     }
+                    // Above the issues on purpose. What is running in this
+                    // folder right now is more urgent than what GitHub thought
+                    // about it when the snapshot was built, and an agent that is
+                    // blocked on a question is the most urgent thing on the desk
+                    // after a gate.
+                    SessionsView(store: store, repo: station.repo)
+                        .padding(.bottom, 4)
                     ForEach(station.issues) { issue in
                         IssueCard(store: store, repo: station.repo, issue: issue)
                             .id(Self.cardID(issue: issue.number))

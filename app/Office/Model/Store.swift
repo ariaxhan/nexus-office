@@ -69,6 +69,22 @@ public final class Store {
     /// harness is not there to ask. Only ever read when `gates` is empty.
     private var quiet: Gate = .clear
     public private(set) var chats: [String: [ChatTurn]] = [:]
+    /// The automation, as one page. Off the world poll, so it is exactly as old
+    /// as the room around it and never disagrees with the Pipeline card.
+    public private(set) var automation: Automation = Automation()
+    /// Every agent running on this machine, keyed by desk. Its own poll, because
+    /// it is measured by asking hcom rather than by building a snapshot, and it
+    /// changes on the scale of a tool call rather than of a GitHub budget.
+    public private(set) var sessionsAtDesk: [String: SessionRoster] = [:]
+    /// The whole machine, for the office-wide view.
+    public private(set) var allSessions: SessionRoster = SessionRoster()
+    /// One agent's conversation, loaded when a person opens it.
+    public private(set) var sessionTranscripts: [String: SessionTranscript] = [:]
+    /// Which agent's thread is open, if any.
+    public var openSession: String?
+    /// Whether the automation page is on screen. On the store rather than the
+    /// view so the shot harness can open it, exactly like `putAwayOpen`.
+    public var automationOpen = false
 
     // what the person did
     public var selection: Selection?
@@ -103,6 +119,10 @@ public final class Store {
 
     /// A message being written to a bot.
     public static func draftKey(bot id: String) -> String { "bot:\(id)" }
+
+    /// A reply being written to a running agent, keyed by its name so two
+    /// half-written answers to two agents do not overwrite each other.
+    public static func draftKey(session name: String) -> String { "session:\(name)" }
 
     /// A comment being written on one issue at one desk. Keyed per issue, so
     /// two half-written comments at the same desk do not overwrite each other.
@@ -254,6 +274,7 @@ public final class Store {
         guard loops.isEmpty else { return }
         loops.append(Task { await self.pollFast() })
         loops.append(Task { await self.pollWorld() })
+        loops.append(Task { await self.pollSessions() })
         askToNotify()
     }
 
@@ -275,6 +296,18 @@ public final class Store {
         while !Task.isCancelled {
             await refreshWorld()
             try? await Task.sleep(nanoseconds: 10_000_000_000)
+        }
+    }
+
+    /// Its own loop, on its own clock. Five seconds, because an agent's status
+    /// changes on the scale of a tool call: slower than the gate poll, which is
+    /// a question waiting on a person, and faster than the world poll, which is
+    /// a GitHub budget. It costs one local subprocess and no network at all.
+    private func pollSessions() async {
+        while !Task.isCancelled {
+            await refreshSessions()
+            if let open = openSession { await loadSessionTranscript(open) }
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
         }
     }
 
@@ -371,11 +404,114 @@ public final class Store {
             for station in stations where pendingHidden[station.repo] == station.hidden {
                 pendingHidden.removeValue(forKey: station.repo)
             }
+            automation = world.automation
             worldNotice = world.killed ? "the kill switch is on: nothing will run" : nil
         } catch let error as ApiError {
             worldNotice = error.message
         } catch {
             worldNotice = error.localizedDescription
+        }
+    }
+
+    /// Ask hcom what is running, and file each row under its desk.
+    ///
+    /// One call for the whole machine, never one per desk: a roster of 72 desks
+    /// would otherwise be 72 subprocesses every few seconds to answer a question
+    /// one subprocess already answers.
+    public func refreshSessions() async {
+        do {
+            let roster = try await api.sessions()
+            allSessions = roster
+            var byDesk: [String: SessionRoster] = [:]
+            for session in roster.sessions where !session.repo.isEmpty {
+                var desk = byDesk[session.repo] ?? SessionRoster(state: "ok", at: roster.at)
+                desk.sessions.append(session)
+                byDesk[session.repo] = desk
+            }
+            for repo in byDesk.keys {
+                guard var desk = byDesk[repo] else { continue }
+                desk.live = desk.sessions.filter(\.isAlive).count
+                desk.blocked = desk.sessions.filter(\.isBlocked).count
+                byDesk[repo] = desk
+            }
+            sessionsAtDesk = byDesk
+        } catch let error as ApiError {
+            // The office could not ask. That is not "nothing is running", and
+            // it must not empty a list a person is reading: the last roster
+            // stays, and the state says the asking failed.
+            allSessions = SessionRoster(state: "unreadable", detail: error.message,
+                                        sessions: allSessions.sessions,
+                                        live: allSessions.live, blocked: allSessions.blocked,
+                                        at: allSessions.at)
+        } catch {
+            allSessions = SessionRoster(state: "unreadable", detail: error.localizedDescription,
+                                        sessions: allSessions.sessions, at: allSessions.at)
+        }
+    }
+
+    /// What one desk can see. Never invents an empty roster for a desk the
+    /// office could not ask about: `canSee` is false and the view says so.
+    public func sessions(at repo: String) -> SessionRoster {
+        if let desk = sessionsAtDesk[repo] { return desk }
+        guard allSessions.canSee else { return allSessions }
+        return SessionRoster(state: "empty", at: allSessions.at)
+    }
+
+    public func openSessionThread(_ name: String) {
+        openSession = name
+        Task { await loadSessionTranscript(name) }
+    }
+
+    public func loadSessionTranscript(_ name: String) async {
+        do {
+            sessionTranscripts[name] = try await api.sessionTranscript(name: name)
+        } catch let error as ApiError {
+            // Same rule as a chat thread: whatever was last read stays on
+            // screen. A conversation that empties itself because hcom blinked is
+            // a lie about what was said.
+            if sessionTranscripts[name] == nil { toast = error.message }
+        } catch {
+            if sessionTranscripts[name] == nil { toast = error.localizedDescription }
+        }
+    }
+
+    /// Answer a running agent. The server refuses a message to one that would
+    /// never read it, and that refusal is shown in the server's own words: a
+    /// "sent" over a message nothing will read is the false green this office
+    /// exists to kill.
+    public func replyToSession(_ name: String, text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        drafts[Self.draftKey(session: name)] = ""
+        do {
+            _ = try await api.saySession(name: name, text: trimmed)
+            toast = "sent to \(name)"
+            await loadSessionTranscript(name)
+            await refreshSessions()
+        } catch let error as ApiError {
+            // Put the words back in the box. A refused message that also
+            // vanished is a message a person has to retype from memory.
+            drafts[Self.draftKey(session: name)] = trimmed
+            toast = error.message
+        } catch {
+            drafts[Self.draftKey(session: name)] = trimmed
+            toast = error.localizedDescription
+        }
+    }
+
+    /// Open a new engine at a desk. This runs a program, so the toast carries
+    /// the server's own words about what happened rather than a cheerful
+    /// sentence written here.
+    public func startSession(tool: String, at repo: String, prompt: String = "") async {
+        do {
+            let ack = try await api.startSession(tool: tool, repo: repo, prompt: prompt)
+            toast = ack.result?.isEmpty == false ? "\(tool) at \(repo): \(ack.result!)"
+                                                 : "\(tool) starting at \(repo)"
+            await refreshSessions()
+        } catch let error as ApiError {
+            toast = error.message
+        } catch {
+            toast = error.localizedDescription
         }
     }
 

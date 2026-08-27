@@ -163,6 +163,10 @@ struct RosterView: View {
         if !store.sections.isEmpty {
             header("wall", trailing: wallCount)
                 .padding(.top, 14)
+            // The automation, as one page, above the cards it is assembled from.
+            // It is not a section: a section is one source's card, and this is
+            // the join across three of them plus every desk's receipts.
+            automationRow
             ForEach(store.visibleSections) { section in
                 SectionRow(section: section,
                            selected: store.selection == .section(section.id))
@@ -174,6 +178,46 @@ struct RosterView: View {
                 notary(store.needsOnly ? "nothing on the wall needs you" : "nothing matches")
             }
         }
+    }
+
+    /// The way in to the automation page.
+    ///
+    /// Its own row rather than a button in a header, because it is the answer to
+    /// a question a person asks out loud ("what is the cron doing"), and a
+    /// question with no visible place to click is a question that gets asked in
+    /// a terminal instead.
+    private var automationRow: some View {
+        let page = store.automation
+        return Button {
+            store.automationOpen.toggle()
+        } label: {
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(page.needsSomebody ? Theme.amber
+                          : (page.now.running ? Theme.green : Theme.faint))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("automation")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                    Text(page.headline.isEmpty ? "not read yet" : page.headline)
+                        .font(.system(size: 11))
+                        .foregroundStyle(page.needsSomebody ? Theme.amber.opacity(0.85) : Theme.dim)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 6)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(store.automationOpen ? Theme.selected : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var wallCount: AnyView? {

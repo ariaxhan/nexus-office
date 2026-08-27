@@ -327,6 +327,109 @@ class PhotoTest(unittest.TestCase):
         self.assertIn('"with a photo"', js)
 
 
+class AutomationAndSessionsTest(unittest.TestCase):
+    """The two bands #42 and #38 added, and the rules they must not break.
+
+    Both are checked in the source rather than in a browser for the same reason
+    the rest of this file is: the page has no build step, so its failures are
+    not compile errors. They are a band that quietly derives its own version of
+    a state the server already measured, a link that points at the wrong
+    comment, and a send button over a session nothing will ever read.
+    """
+
+    def js(self):
+        return JS.read_text(encoding="utf-8")
+
+    def test_the_bands_exist_in_the_markup_and_are_filled_by_the_script(self):
+        html = HTML.read_text(encoding="utf-8")
+        for band in ('id="automation"', 'id="sessions"'):
+            self.assertIn(band, html)
+        js = self.js()
+        self.assertIn('getElementById("automation")', js)
+        self.assertIn('getElementById("sessions")', js)
+
+    def test_the_automation_band_derives_no_state_of_its_own(self):
+        """Every word on it was measured by the server, so that the phone and
+        the Mac app say one sentence about one machine. The headline in
+        particular is never composed here."""
+        js = self.js()
+        self.assertIn("page.headline", js)
+        self.assertNotIn("state.world.automation.headline =", js)
+        # The mechanism explanation comes from the server too, so there is one
+        # copy of it rather than one here and one in Swift.
+        self.assertNotIn("A launchd job wakes the runner", js)
+
+    def test_a_deep_link_is_only_offered_when_the_office_knows_the_comment(self):
+        """A human replying moves the last comment. Linking to it as the
+        runner's words would be wrong in the one place a person goes to check
+        what the runner said."""
+        js = self.js()
+        at = js.index("row.comment_url || row.issue_url")
+        window = js[at:at + 400]
+        self.assertIn('row.comment_url ? "read the comment" : "open the issue"', window)
+
+    def test_the_activity_list_never_hides_what_it_dropped(self):
+        js = self.js()
+        self.assertIn("page.activity_dropped", js)
+        self.assertIn("newest ", js)
+
+    def test_the_reason_nothing_arrives_is_shown_and_not_only_the_silence(self):
+        """"Quiet" and "nothing can reach us" read identically from inside a
+        quiet room, and the second one lasts for weeks."""
+        js = self.js()
+        self.assertIn("trig.blocked_by", js)
+
+    def test_a_reply_is_a_message_and_this_page_never_types_at_a_terminal(self):
+        js = self.js()
+        self.assertIn('write("/api/session/say"', js)
+        for typing in ("inject", "term inject", "/api/session/screen"):
+            self.assertNotIn(typing, js, "this page reads, it does not type")
+
+    def test_there_is_no_send_button_over_a_session_that_would_not_read_it(self):
+        js = self.js()
+        at = js.index("function sessionComposer(session)")
+        window = js[at:at + 700]
+        self.assertIn("if (!session.reachable)", window)
+        self.assertLess(window.index("if (!session.reachable)"), window.index('button("send"'),
+                        "the guard has to come before the button, not after it")
+
+    def test_a_refused_reply_puts_the_words_back_in_the_box(self):
+        """A message that was refused AND vanished is a message a person has to
+        retype from memory."""
+        js = self.js()
+        at = js.index("async function replyToSession")
+        window = js[at:at + 900]
+        self.assertIn("state.drafts[key] = words;", window)
+
+    def test_not_being_able_to_see_never_draws_as_nothing_running(self):
+        """An empty list is a claim that nothing is running. When hcom cannot be
+        asked, the office does not get to make that claim."""
+        js = self.js()
+        at = js.index("function drawSessions()")
+        window = js[at:at + 1400]
+        self.assertIn('roster.state === "ok" || roster.state === "empty"', window)
+        self.assertIn("roster.detail", window)
+
+    def test_the_session_poll_is_on_its_own_clock_and_spends_no_github_budget(self):
+        js = self.js()
+        self.assertIn("SESSION_EVERY_MS", js)
+        # It reads the local door only. `?fresh=1` is the one path that costs
+        # GitHub points and nothing here may be near it.
+        at = js.index("async function pollSessions()")
+        window = js[at:at + 500]
+        self.assertNotIn("fresh", window)
+
+    def test_the_moods_stay_inside_the_page_s_own_three_words(self):
+        """A fourth mood word is a dot with no colour behind it, and it draws as
+        nothing at all rather than as an error."""
+        js = self.js()
+        at = js.index("function sessionMood(session)")
+        window = js[at:at + 400]
+        css = CSS.read_text(encoding="utf-8")
+        for word in re.findall(r'return "([a-z]+)"', window):
+            self.assertIn(".m-" + word, css, word)
+
+
 class DriftAndNoiseTest(unittest.TestCase):
     def test_a_swapped_question_disarms_the_buttons_for_a_beat(self):
         js = (PHONE / "phone.js").read_text()
