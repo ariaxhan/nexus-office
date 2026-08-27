@@ -58,8 +58,8 @@ always, or deny. Three properties this has to hold, and does:
 ## The security model, in three sentences
 
 The door binds loopback only, never `0.0.0.0`, so the machine *is* the perimeter:
-nobody else can reach the port at all, and a phone reaching it (milestone 2) goes
-through Tailscale Serve in front rather than a wider bind. Every write must name
+nobody else can reach the port at all, and a phone reaching it goes through
+Tailscale Serve in front rather than a wider bind, carrying Aria's login. Every write must name
 that door as its `Host`, arrive as `application/json`, and carry either this
 origin or no origin at all, because a page you have open elsewhere can post to
 `127.0.0.1` without a preflight. Everything that touches GitHub happens in
@@ -96,6 +96,15 @@ Then open the app. `--root` is where the agent runtime keeps its gates, runs and
 cost, and where `_meta/bots.json` names your bots. The snapshot rebuilds in the
 background at most once a minute, so nothing waits on GitHub. Leave the door
 running (a launchd job works) and the roster stays live.
+
+The same door serves the phone at `/`: three files out of `client/phone/`, no
+build step and no request to anywhere but itself, showing the raised hand first,
+then what needs you, the bots, the desks and the wall. It is the same office and
+the same writes, so answering a gate from a pocket is answering it. Put it on the
+tailnet with `tailscale serve --bg 8790`, then name the tailnet host in
+`OFFICE_TRUSTED_HOSTS` and yourself in `OFFICE_LOGIN`: off loopback the request
+must carry the `Tailscale-User-Login` that matches, or it is 403 before it reads
+a thing. That check is why the page has nothing to log in to.
 
 ## Verify gates
 
