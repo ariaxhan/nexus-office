@@ -102,6 +102,7 @@ class SyncCase(unittest.TestCase):
         state = pathlib.Path(self.tmp.name)
         self.mod.STATE = state
         self.mod.HIDDEN_FILE = state / "hidden.json"
+        self.mod.PINS_FILE = state / "pins.json"
         self.mod.DESKS_CACHE = state / "desks.json"
         # Neither of these is what is under test, and both would reach outside
         # the process if left alone.
@@ -374,6 +375,46 @@ class HiddenTest(SyncCase):
     def test_hidden_survives_the_file_being_nonsense(self):
         self.mod.HIDDEN_FILE.write_text("{not json")
         self.assertEqual(self.mod.read_hidden(), [])
+
+    # ── pins ────────────────────────────────────────────────────────────────
+    def test_pins_keep_their_order_across_a_restart(self):
+        self.assertEqual(self.mod.write_pins(["acme/two", "acme/one"]), ["acme/two", "acme/one"])
+        import office_sync_shim
+        again = importlib.reload(office_sync_shim).mod
+        again.PINS_FILE = self.mod.PINS_FILE
+        self.assertEqual(again.read_pins(), ["acme/two", "acme/one"], "order, not a sort")
+        self.assertFalse(self.mod.PINS_FILE.with_name(self.mod.PINS_FILE.name + ".tmp").exists())
+
+    def test_a_pin_on_a_repo_with_no_desk_is_kept_and_harms_nothing(self):
+        self.mod.write_pins(["future/thing", "acme/one"])
+        snap = self.build()
+        self.assertEqual(snap["pins"], ["future/thing", "acme/one"])
+        self.assertEqual(self.desk(snap, "acme/one")["pinned"], 1)
+        self.assertIsNone(self.desk(snap, "acme/two")["pinned"])
+        self.assertNotIn("future/thing", [s["repo"] for s in snap["stations"]])
+
+    def test_pins_drop_junk_and_duplicates_but_never_the_rest(self):
+        kept = self.mod.write_pins(["acme/one", "", "nope", 7, "acme/one", "a/b\n", "acme/two"])
+        self.assertEqual(kept, ["acme/one", "acme/two"])
+        self.assertEqual(self.mod.read_pins(), ["acme/one", "acme/two"])
+
+    def test_pins_survive_the_file_being_nonsense(self):
+        self.mod.PINS_FILE.write_text("[1, 2")
+        self.assertEqual(self.mod.read_pins(), [])
+        self.mod.PINS_FILE.write_text('{"repos": ["acme/one", 3, "bad name"]}')
+        self.assertEqual(self.mod.read_pins(), ["acme/one"])
+
+    def test_the_snapshot_says_whose_office_it_is(self):
+        was = self.mod.OWNERS
+        try:
+            self.mod.OWNERS = ["ariaxhan", "acme"]
+            self.assertEqual(self.build()["owners"], ["ariaxhan", "acme"])
+            self.mod.OWNERS = []
+            access = FakeAccess()
+            access.mine = ["someone"]
+            self.assertEqual(self.build(access)["owners"], ["someone"], "falls back to the gh logins")
+        finally:
+            self.mod.OWNERS = was
 
 
 class BudgetTest(SyncCase):

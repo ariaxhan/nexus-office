@@ -138,6 +138,13 @@
     "generated": "2026-08-26T18:40:00Z",
     "heartbeat": "2026-08-26T18:39:00Z",
     "killed": false,
+    "pins": [
+      "northwind/api",
+      "acme/billing"
+    ],
+    "owners": [
+      "acme"
+    ],
     "github": {
       "limit": 5000,
       "remaining": 0,
@@ -397,7 +404,8 @@
         ],
         "issues_error": null,
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       },
       {
         "repo": "acme/storefront",
@@ -481,7 +489,8 @@
             "body": "One retry, one second apart, then the same give-up it always had. Closes #209.\n\nRebase needed: main moved under this."
           }
         ],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       },
       {
         "repo": "acme/billing",
@@ -516,7 +525,8 @@
         ],
         "issues_error": null,
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": 1
       },
       {
         "repo": "acme/website",
@@ -561,7 +571,8 @@
         ],
         "issues_error": "GitHub answered 403: the hourly budget for this token is spent",
         "prs": [],
-        "prs_error": "GitHub answered 403: the hourly budget for this token is spent"
+        "prs_error": "GitHub answered 403: the hourly budget for this token is spent",
+        "pinned": null
       },
       {
         "repo": "acme/docs",
@@ -583,7 +594,8 @@
         "issues": [],
         "issues_error": null,
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       },
       {
         "repo": "acme/legacy-import",
@@ -605,7 +617,8 @@
         "issues": [],
         "issues_error": null,
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       },
       {
         "repo": "acme/mobile",
@@ -671,7 +684,8 @@
             "body": "Draft while the cold-start numbers come back. Closes #30."
           }
         ],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       },
       {
         "repo": "northwind/api",
@@ -719,7 +733,8 @@
         ],
         "issues_error": null,
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": 0
       },
       {
         "repo": "northwind/warehouse",
@@ -752,7 +767,8 @@
         ],
         "issues_error": null,
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       },
       {
         "repo": "northwind/internal-tools",
@@ -767,7 +783,8 @@
         "issues": [],
         "issues_error": "no account holds push here",
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       },
       {
         "repo": "northwind/analytics",
@@ -789,7 +806,8 @@
         "issues": [],
         "issues_error": null,
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       },
       {
         "repo": "tiny/scratch",
@@ -824,7 +842,8 @@
         ],
         "issues_error": null,
         "prs": [],
-        "prs_error": null
+        "prs_error": null,
+        "pinned": null
       }
     ]
   }

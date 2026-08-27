@@ -167,6 +167,27 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(store.putAwayDesks.contains { $0.repo == "acme/website" })
     }
 
+    func testPinningMovesTheRowOnTheClickAndSurvivesThePoll() async throws {
+        let store = try floor()
+        await store.refreshWorld()
+        XCTAssertEqual(store.pins, ["acme/website"], "the fixture arrives with one pin")
+        XCTAssertEqual(store.roster.first?.header, StateRules.pinnedHeader)
+
+        await store.setPin(repo: "acme/storefront", pinned: true)
+        XCTAssertEqual(store.pinOrder, ["acme/website", "acme/storefront"])
+        XCTAssertEqual(store.roster.first?.desks.map(\.repo), ["acme/website", "acme/storefront"])
+
+        await store.movePin(repo: "acme/storefront", before: "acme/website")
+        XCTAssertEqual(store.roster.first?.desks.map(\.repo), ["acme/storefront", "acme/website"])
+        await store.refreshWorld()
+        XCTAssertEqual(store.pins, ["acme/storefront", "acme/website"], "the floor kept the order")
+
+        await store.setPin(repo: "acme/website", pinned: false)
+        await store.setPin(repo: "acme/storefront", pinned: false)
+        XCTAssertNotEqual(store.roster.first?.header, StateRules.pinnedHeader)
+        XCTAssertEqual(store.roster.map(\.header), ["acme"])
+    }
+
     func testTheFixtureArrivesWithDesksAlreadyPutAway() async throws {
         let store = try floor()
         await store.refreshWorld()
@@ -409,6 +430,8 @@ final class StoreTests: XCTestCase {
       "world": {
         "generated": "2026-08-26T18:40:00Z",
         "killed": false,
+        "pins": ["acme/website"],
+        "owners": ["acme"],
         "github": {"limit": 5000, "remaining": 0, "reset_at": "2026-08-26T18:48:00Z",
                    "cost": 4983, "paused_until": "2026-08-26T18:48:00Z", "error": "spent"},
         "sections": {

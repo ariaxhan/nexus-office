@@ -57,6 +57,10 @@ public final class Store {
     /// to say out loud rather than a thing a person has to work out.
     public private(set) var worldGenerated: String = ""
     public private(set) var github: GitHubBudget?
+    /// The pin order as the door last reported it.
+    public private(set) var pins: [String] = []
+    /// Whose office this is, first name first.
+    public private(set) var owners: [String] = []
     /// Every hand in the air, oldest first, exactly as the door listed them.
     /// The room can hold more than one, and the second one is not allowed to
     /// wait invisibly behind the first.
@@ -109,6 +113,10 @@ public final class Store {
     /// as a click that did not land.
     private var pendingHidden: [String: Bool] = [:]
 
+    /// A pin order believed on the drop, and checked against the next world
+    /// poll, for the same reason as `pendingHidden`.
+    private var pendingPins: [String]?
+
     /// Shot mode only. The gate sheet is the loudest thing this app does, and it
     /// would sit on top of every other framing, so the harness parks it for the
     /// three pictures that are not about it. Nothing else may ever set this.
@@ -156,6 +164,16 @@ public final class Store {
 
     public var visibleDesks: [Station] {
         StateRules.visibleDesks(stations, query: query, needsOnly: needsOnly, isHidden: isHidden)
+    }
+
+    /// The pin order, as this person last left it.
+    public var pinOrder: [String] { pendingPins ?? pins }
+
+    public func isPinned(_ station: Station) -> Bool { pinOrder.contains(station.repo) }
+
+    /// The desks list, grouped: pinned first, then by owner.
+    public var roster: [StateRules.RosterSection] {
+        StateRules.roster(visibleDesks, pins: pinOrder, owners: owners)
     }
 
     /// Put away by a person: out of the desks list, still in the building.
@@ -334,6 +352,9 @@ public final class Store {
             runtime = world.runtime
             worldGenerated = world.generated
             github = world.github
+            pins = world.pins
+            owners = world.owners
+            if pendingPins == world.pins { pendingPins = nil }
             // Already ordered by the decode, where the keys were still in hand.
             sections = world.sections
             // The gate comes from the gate poll. `world.runtime.gate` is a
@@ -502,6 +523,37 @@ public final class Store {
             toast = error.message
         } catch {
             pendingHidden.removeValue(forKey: repo)
+            toast = error.localizedDescription
+        }
+    }
+
+    /// Pin a desk to the top, or take the pin out.
+    public func setPin(repo: String, pinned: Bool) async {
+        let order = pinned ? StateRules.moved(pins: pinOrder, repo: repo, before: nil)
+                           : pinOrder.filter { $0 != repo }
+        await savePins(order, toast: pinned ? "\(repo) is pinned" : "\(repo) is unpinned")
+    }
+
+    /// One pinned desk dropped onto another, or past the last one.
+    public func movePin(repo: String, before target: String?) async {
+        let order = StateRules.moved(pins: pinOrder, repo: repo, before: target)
+        guard order != pinOrder else { return }
+        await savePins(order, toast: nil)
+    }
+
+    /// The row moves on the drop and the server is told afterwards, exactly as
+    /// putting a desk away does. A refusal puts the order back and says why.
+    private func savePins(_ order: [String], toast note: String?) async {
+        pendingPins = order
+        do {
+            pendingPins = try await api.setPins(order)
+            if let note { toast = note }
+            await refreshWorld()
+        } catch let error as ApiError {
+            pendingPins = nil
+            toast = error.message
+        } catch {
+            pendingPins = nil
             toast = error.localizedDescription
         }
     }
