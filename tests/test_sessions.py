@@ -33,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
@@ -440,9 +441,20 @@ class ReadmeTest(FakeHcom):
         self.assertTrue(body["detail"])
 
     def test_a_desk_this_machine_does_not_have_is_its_own_answer(self):
-        code, body = sessions.readme("acme/docs", {})
+        with unittest.mock.patch.dict(os.environ,
+                                      {"OFFICE_RUNTIME_ROOT": str(self.dir)}):
+            code, body = sessions.readme("acme/docs", {})
         self.assertEqual((code, body["state"]), (200, "elsewhere"))
         self.assertIn("acme/docs", body["detail"])
+
+    def test_a_door_with_no_vault_says_that_rather_than_blaming_the_desk(self):
+        """Without a root, every desk comes back empty at once. Calling that
+        "not checked out" points a person at the repo when the thing to fix is
+        the door, which was started without `--root`."""
+        with unittest.mock.patch.dict(os.environ, {"OFFICE_RUNTIME_ROOT": ""}):
+            code, body = sessions.readme("acme/docs", {})
+        self.assertEqual((code, body["state"]), (200, "elsewhere"))
+        self.assertEqual(body["detail"], sessions.NO_VAULT)
 
     def test_an_enormous_readme_is_clipped_and_says_it_was(self):
         (self.checkout / "README.md").write_text("x" * (sessions.MAX_README + 500))
