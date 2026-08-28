@@ -24,6 +24,11 @@
 	<false/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- The asset catalog's icon set. Without this key the catalog compiles and
+	     the Dock still draws the blank generic app, which is the failure this
+	     project keeps having: a build that passes and a screen that is wrong. -->
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<!-- Loopback only. The office server is on this machine or it is nowhere. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
