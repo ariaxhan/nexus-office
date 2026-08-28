@@ -29,6 +29,7 @@ struct SectionView: View {
                     headline
                     facts
                     detail
+                    rows
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 16)
@@ -129,6 +130,129 @@ struct SectionView: View {
                 .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 720, alignment: .leading)
+        }
+    }
+
+    // MARK: - the list
+
+    /// The table under the numbers, for the sources whose whole point is the
+    /// list: 630 learnings, 45 scheduled jobs.
+    ///
+    /// There is no branch here for either of them, and there must never be one.
+    /// The source decided the order, the headings, the badge and the tone; this
+    /// draws whatever arrived. Lazy because a shelf is hundreds of rows long and
+    /// a `VStack` would build every one of them before the first is on screen.
+    @ViewBuilder private var rows: some View {
+        let groups = SectionRows.grouped(section.card.rows)
+        if !groups.isEmpty {
+            LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+                ForEach(groups) { group in
+                    SwiftUI.Section {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(group.rows.enumerated()), id: \.offset) { index, row in
+                                SectionRowView(row: row)
+                                if index < group.rows.count - 1 {
+                                    Rectangle().fill(Theme.hairline).frame(height: 0.5)
+                                }
+                            }
+                        }
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(Theme.raised)
+                        )
+                    } header: {
+                        if !group.name.isEmpty {
+                            HStack(spacing: 7) {
+                                Text(group.name)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Theme.faint)
+                                Text("\(group.rows.count)")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.faint.opacity(0.7))
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 5)
+                            .background(Theme.ink)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: 720, alignment: .leading)
+        }
+    }
+}
+
+/// Rows, under the headings the source asked for.
+///
+/// First-appearance order, never sorted here: the source already put the
+/// failing jobs above the paused ones, and a second opinion in this file would
+/// silently disagree with the count on the card above it.
+enum SectionRows {
+    struct Group: Identifiable {
+        let name: String
+        let rows: [SectionRowItem]
+        var id: String { name }
+    }
+
+    static func grouped(_ rows: [SectionRowItem]) -> [Group] {
+        var order: [String] = []
+        var byName: [String: [SectionRowItem]] = [:]
+        for row in rows {
+            if byName[row.group] == nil { order.append(row.group) }
+            byName[row.group, default: []].append(row)
+        }
+        return order.map { Group(name: $0, rows: byName[$0] ?? []) }
+    }
+}
+
+/// One line of whatever this is.
+///
+/// The link is the only decision made here, and it is made by asking the model
+/// rather than by reading the string: `https` and `file` are places to go, and
+/// everything else stays text. A row that draws a button which does nothing is
+/// worse than a row that draws no button.
+struct SectionRowView: View {
+    let row: SectionRowItem
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                title
+                if !row.subtitle.isEmpty {
+                    Text(row.subtitle)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !row.detail.isEmpty {
+                    Text(row.detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 10)
+            if !row.badge.isEmpty {
+                Pill(text: row.badge, color: Theme.tone(StateRules.tone(row.tone)))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder private var title: some View {
+        if let destination = row.destination {
+            Link(row.title, destination: destination)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Theme.blue)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text(row.title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

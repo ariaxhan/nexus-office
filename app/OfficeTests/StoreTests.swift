@@ -391,6 +391,126 @@ final class StoreTests: XCTestCase {
                        "the one still waiting was already announced when it went up")
     }
 
+    // MARK: - the table under the numbers
+
+    /// A source that has no table must decode as having no table, not as a
+    /// section that failed. Six of the eight sources send no `rows` key at all,
+    /// so this is the ordinary case and not the edge one.
+    func testASectionWithNoRowsDecodesAsEmptyRatherThanFailing() async throws {
+        let store = try floor()
+        await store.refreshWorld()
+
+        let cost = try XCTUnwrap(store.section("cost"))
+        XCTAssertTrue(cost.card.rows.isEmpty)
+        XCTAssertEqual(cost.card.facts.count, 2, "the card itself is untouched")
+        XCTAssertEqual(cost.state, "ok")
+    }
+
+    func testRowsArriveWholeAndInTheOrderTheSourceSentThem() async throws {
+        let store = try wallFloor()
+        await store.refreshWorld()
+
+        let clock = try XCTUnwrap(store.section("clock"))
+        XCTAssertEqual(clock.card.rows.map(\.id),
+                       ["com.x.broken", "com.x.paused", "com.x.healthy"])
+        let first = clock.card.rows[0]
+        XCTAssertEqual(first.title, "com.x.broken")
+        XCTAssertEqual(first.group, "needs a look")
+        XCTAssertEqual(first.badge, "failing")
+        XCTAssertEqual(first.tone, "bad")
+        XCTAssertEqual(first.url, "file:///w/jobs/broken.sh")
+    }
+
+    /// Eight python files write these and each decides on its own whether a
+    /// count is `12` or `"12"`. A badge that vanishes because somebody left the
+    /// quotes off is a number missing from the wall for no reason a person can
+    /// see.
+    func testABadgeWrittenAsANumberIsStillABadge() async throws {
+        let store = try wallFloor()
+        await store.refreshWorld()
+
+        let library = try XCTUnwrap(store.section("library"))
+        let byID = Dictionary(uniqueKeysWithValues: library.card.rows.map { ($0.id, $0) })
+        XCTAssertEqual(byID["LRN-0001"]?.badge, "46")
+        XCTAssertEqual(byID["LRN-0002"]?.badge, "3.5")
+        XCTAssertEqual(byID["LRN-0003"]?.badge, "yes")
+    }
+
+    /// One row nobody can read must cost that row and nothing else. `[Row]`
+    /// would throw on the first bad element and take the whole table with it,
+    /// which turns one malformed record into a section that looks empty.
+    func testAMalformedRowIsKeptAndNeverBlanksTheSectionAroundIt() async throws {
+        let store = try wallFloor()
+        await store.refreshWorld()
+
+        let library = try XCTUnwrap(store.section("library"))
+        XCTAssertEqual(library.card.rows.count, 4, "the bad one is still a row")
+        XCTAssertEqual(library.card.rows[3].title, "a row that is just a sentence")
+        XCTAssertEqual(library.card.headline, "630 learnings, 4,201 recalls")
+    }
+
+    func testARowLinkIsOnlyFollowedWhenItIsSomewhereYouCanGo() async throws {
+        let store = try wallFloor()
+        await store.refreshWorld()
+
+        let clock = try XCTUnwrap(store.section("clock"))
+        let byID = Dictionary(uniqueKeysWithValues: clock.card.rows.map { ($0.id, $0) })
+        XCTAssertNotNil(byID["com.x.broken"]?.destination, "a file url is a place")
+        XCTAssertNil(byID["com.x.paused"]?.destination, "no url is not a place")
+        XCTAssertNil(byID["com.x.healthy"]?.destination,
+                     "javascript: is not a place, it is a thing to run")
+    }
+
+    // MARK: - what a desk says about itself
+
+    func testOpeningContextLoadsTheIndexAndPicksTheReadmeFirst() async throws {
+        let store = try wallFloor()
+        await store.refreshWorld()
+
+        XCTAssertEqual(store.tab(at: "acme/storefront"), .work, "work is the default")
+        store.showContext(at: "acme/storefront")
+        XCTAssertEqual(store.tab(at: "acme/storefront"), .context)
+
+        await store.loadContext(repo: "acme/storefront")
+        let context = try XCTUnwrap(store.context(at: "acme/storefront"))
+        XCTAssertEqual(context.files.map(\.path),
+                       ["README.md", "_meta/chronicles/2026-08.md", "_meta/commissions/one.md"])
+        XCTAssertEqual(context.path, "README.md", "the readme is what opens")
+        XCTAssertTrue(context.text.contains("# storefront"))
+        XCTAssertNil(store.contextError(at: "acme/storefront"))
+    }
+
+    func testAnIndexWithNoReadmeOpensAtTheFirstThingItHas() async throws {
+        let store = try wallFloor()
+        await store.loadContext(repo: "acme/website")
+        let context = try XCTUnwrap(store.context(at: "acme/website"))
+        XCTAssertEqual(context.path, "_meta/plans/only.md")
+    }
+
+    func testTwoDesksKeepTheirOwnContextAndTheirOwnPlaceInIt() async throws {
+        let store = try wallFloor()
+        await store.loadContext(repo: "acme/storefront")
+        await store.loadContext(repo: "acme/storefront", path: "_meta/commissions/one.md")
+        await store.loadContext(repo: "acme/website")
+
+        XCTAssertEqual(store.context(at: "acme/storefront")?.path, "_meta/commissions/one.md")
+        XCTAssertEqual(store.context(at: "acme/website")?.path, "_meta/plans/only.md")
+        XCTAssertNil(store.context(at: "acme/legacy-import"),
+                     "a desk nobody opened has nothing cached")
+    }
+
+    /// A desk the office cannot place is a real answer, and it must not draw as
+    /// a desk with an empty README: the reason has to be on screen.
+    func testADeskWithNoCheckoutSaysWhyRatherThanShowingNothing() async throws {
+        let store = try wallFloor()
+        await store.loadContext(repo: "acme/legacy-import")
+
+        XCTAssertNil(store.context(at: "acme/legacy-import"))
+        let said = try XCTUnwrap(store.contextError(at: "acme/legacy-import"))
+        XCTAssertTrue(said.contains("checked out"), said)
+        XCTAssertFalse(store.isLoadingContext(at: "acme/legacy-import"))
+    }
+
     // MARK: - the floor
 
     /// A three desk office on disk, small enough to assert against exactly.
@@ -414,6 +534,96 @@ final class StoreTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return Store(api: Api(source: .demo(url)))
     }
+
+    /// A floor whose sections carry tables, and whose desks carry the Markdown
+    /// they keep about themselves. Every awkward shape is in it once on purpose:
+    /// a badge written as a number, a badge written as a boolean, a row that is
+    /// not an object at all, a link that is not a place, a desk with no README,
+    /// and a desk the office cannot place.
+    private func wallFloor() throws -> Store {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("office-store-tests-\(UUID().uuidString).json")
+        try Data(Self.wall.utf8).write(to: url)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return Store(api: Api(source: .demo(url)))
+    }
+
+    private static let wall = #"""
+    {
+      "bots": {"runtime": "up", "bots": [{"id": "chief", "name": "Chief", "purpose": "What is running."}]},
+      "chats": {},
+      "gates": [],
+      "context": {
+        "acme/storefront": {
+          "root": "/w/storefront",
+          "files": [
+            {"path": "README.md", "name": "README.md", "group": "root", "bytes": 41},
+            {"path": "_meta/chronicles/2026-08.md", "name": "2026-08.md",
+             "group": "_meta/chronicles", "bytes": 22},
+            {"path": "_meta/commissions/one.md", "name": "one.md",
+             "group": "_meta/commissions", "bytes": 19}
+          ],
+          "texts": {
+            "README.md": "# storefront\n\nThe shop, and the checkout it calls.\n",
+            "_meta/chronicles/2026-08.md": "# August\n\nWhat happened.\n",
+            "_meta/commissions/one.md": "# One\n\nThe goal.\n"
+          }
+        },
+        "acme/website": {
+          "root": "/w/website",
+          "files": [{"path": "_meta/plans/only.md", "name": "only.md",
+                     "group": "_meta/plans", "bytes": 12}],
+          "texts": {"_meta/plans/only.md": "# Only\n"}
+        }
+      },
+      "world": {
+        "generated": "2026-08-26T18:40:00Z",
+        "killed": false,
+        "sections": {
+          "clock": {"state": "ok",
+            "card": {"title": "Clock", "headline": "1 of 3 jobs needs a look",
+                     "needs": 1, "as_of": "2026-08-26T18:39:00Z",
+                     "facts": [{"label": "ok", "value": "1", "tone": "ok"}],
+                     "rows": [
+                       {"id": "com.x.broken", "title": "com.x.broken",
+                        "subtitle": "every 1h · owner aria", "detail": "/w/jobs/broken.sh · exit 2",
+                        "badge": "failing", "tone": "bad", "group": "needs a look",
+                        "url": "file:///w/jobs/broken.sh"},
+                       {"id": "com.x.paused", "title": "com.x.paused",
+                        "subtitle": "every 6h", "detail": "", "badge": "off",
+                        "tone": "dim", "group": "off", "url": ""},
+                       {"id": "com.x.healthy", "title": "com.x.healthy",
+                        "subtitle": "at 07:30", "detail": "", "badge": "ok",
+                        "tone": "ok", "group": "healthy", "url": "javascript:alert(1)"}
+                     ]}},
+          "library": {"state": "ok",
+            "card": {"title": "Library", "headline": "630 learnings, 4,201 recalls",
+                     "needs": 0, "as_of": "2026-08-26T18:38:00Z",
+                     "facts": [{"label": "live", "value": "630", "tone": "ok"}],
+                     "rows": [
+                       {"id": "LRN-0001", "title": "a lesson", "subtitle": "a commit",
+                        "detail": "Vaults", "badge": 46, "tone": "", "group": "failure",
+                        "url": ""},
+                       {"id": "LRN-0002", "title": "another", "subtitle": "",
+                        "detail": "", "badge": 3.5, "tone": "dim", "group": "gotcha",
+                        "url": ""},
+                       {"id": "LRN-0003", "title": "a third", "subtitle": "",
+                        "detail": "", "badge": true, "tone": "nonsense",
+                        "group": "gotcha", "url": ""},
+                       "a row that is just a sentence"
+                     ]}}
+        },
+        "stations": [
+          {"repo": "acme/storefront", "access": true, "at": "2026-08-26T18:18:00Z",
+           "fetched_at": "2026-08-26T18:18:00Z", "hidden": false, "issues": [], "prs": []},
+          {"repo": "acme/website", "access": true, "at": "2026-08-26T18:18:00Z",
+           "fetched_at": "2026-08-26T18:18:00Z", "hidden": false, "issues": [], "prs": []},
+          {"repo": "acme/legacy-import", "access": true, "at": "2026-08-26T18:18:00Z",
+           "fetched_at": "2026-08-26T18:18:00Z", "hidden": false, "issues": [], "prs": []}
+        ]
+      }
+    }
+    """#
 
     private static let crowded = #"""
     {

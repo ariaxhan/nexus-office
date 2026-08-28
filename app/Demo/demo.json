@@ -207,6 +207,98 @@
               "value": "45",
               "tone": ""
             }
+          ],
+          "rows": [
+            {
+              "id": "com.acme.nightly-index",
+              "title": "com.acme.nightly-index",
+              "subtitle": "every 24h · owner aria",
+              "detail": "/bin/bash /w/acme/_meta/services/jobs/nightly-index.sh · no successful run in 31h",
+              "badge": "stale",
+              "tone": "bad",
+              "group": "needs a look",
+              "url": "file:///w/acme/_meta/services/jobs/nightly-index.sh"
+            },
+            {
+              "id": "com.acme.snapshot-push",
+              "title": "com.acme.snapshot-push",
+              "subtitle": "every 10m · owner aria",
+              "detail": "/usr/bin/python3 /w/acme/_meta/services/jobs/snapshot.py · exit 2: no route to host",
+              "badge": "failing",
+              "tone": "bad",
+              "group": "needs a look",
+              "url": ""
+            },
+            {
+              "id": "com.acme.ledger-roll",
+              "title": "com.acme.ledger-roll",
+              "subtitle": "at Mon 07:30 · owner aria",
+              "detail": "/bin/bash /w/acme/_meta/services/jobs/ledger-roll.sh · exit 1: the ledger is locked",
+              "badge": "failing",
+              "tone": "bad",
+              "group": "needs a look",
+              "url": ""
+            },
+            {
+              "id": "com.acme.mail-sweep",
+              "title": "com.acme.mail-sweep",
+              "subtitle": "every 1h · owner aria",
+              "detail": "/bin/bash /w/acme/_meta/services/jobs/mail-sweep.sh · exit 127: command not found",
+              "badge": "failing",
+              "tone": "bad",
+              "group": "needs a look",
+              "url": ""
+            },
+            {
+              "id": "com.acme.warehouse-sync",
+              "title": "com.acme.warehouse-sync",
+              "subtitle": "every 6h · owner aria",
+              "detail": "/bin/bash /w/acme/_meta/services/jobs/warehouse-sync.sh · no receipt at all · nothing is watching this",
+              "badge": "never",
+              "tone": "warn",
+              "group": "needs a look",
+              "url": ""
+            },
+            {
+              "id": "com.acme.legacy-import",
+              "title": "com.acme.legacy-import",
+              "subtitle": "every 24h · owner aria",
+              "detail": "/bin/bash /w/acme/_meta/services/jobs/legacy-import.sh · paused on 2026-07-02",
+              "badge": "off",
+              "tone": "dim",
+              "group": "off",
+              "url": ""
+            },
+            {
+              "id": "com.acme.backup-vault",
+              "title": "com.acme.backup-vault",
+              "subtitle": "at 02:00 · owner aria",
+              "detail": "/bin/bash /w/acme/_meta/services/jobs/backup-vault.sh",
+              "badge": "ok",
+              "tone": "ok",
+              "group": "healthy",
+              "url": ""
+            },
+            {
+              "id": "com.acme.desk-poll",
+              "title": "com.acme.desk-poll",
+              "subtitle": "always running · owner aria",
+              "detail": "/usr/bin/python3 /w/acme/client/office-sync.py --watch",
+              "badge": "ok",
+              "tone": "ok",
+              "group": "healthy",
+              "url": ""
+            },
+            {
+              "id": "com.acme.chronicle-triage",
+              "title": "com.acme.chronicle-triage",
+              "subtitle": "every 12h · owner aria",
+              "detail": "/bin/sh /w/acme/_meta/services/chronicle-triage.sh",
+              "badge": "ok",
+              "tone": "ok",
+              "group": "healthy",
+              "url": ""
+            }
           ]
         }
       },
@@ -248,33 +340,134 @@
         }
       },
       "library": {
-        "state": "stale",
-        "detail": "the shelf index was last rebuilt 9 days ago; searches answer from it anyway",
+        "state": "ok",
         "card": {
           "title": "Library",
-          "headline": "The index is 9 days behind the shelves",
+          "headline": "630 learnings, 4,201 recalls",
           "needs": 0,
-          "as_of": "2026-08-17T09:14:00Z",
+          "as_of": "2026-08-26T18:38:00Z",
           "facts": [
             {
-              "label": "shelves",
-              "value": "12",
-              "tone": ""
+              "label": "live",
+              "value": "630",
+              "tone": "ok"
             },
             {
-              "label": "documents",
-              "value": "3,418",
-              "tone": ""
-            },
-            {
-              "label": "indexed",
-              "value": "3,102",
-              "tone": "warn"
-            },
-            {
-              "label": "waiting for review",
-              "value": "7",
+              "label": "archived",
+              "value": "48",
               "tone": "dim"
+            },
+            {
+              "label": "domains",
+              "value": "14",
+              "tone": "dim"
+            },
+            {
+              "label": "by type",
+              "value": "gotcha 272, pattern 251, failure 95",
+              "tone": "dim"
+            },
+            {
+              "label": "review queue",
+              "value": "unknown, the runtime is closed",
+              "tone": "dim"
+            },
+            {
+              "label": "semantic memory",
+              "value": "the runtime is closed",
+              "tone": "dim"
+            }
+          ],
+          "rows": [
+            {
+              "id": "LRN-failure-0311",
+              "title": "Committing one file by name carried another lane's uncommitted hunks, so main could not import the door until their commit landed.",
+              "subtitle": "b4a9ef5, and the twenty minutes of a red main that followed it",
+              "detail": "Vaults · 2026-08-26T04:11:09Z",
+              "badge": "31×",
+              "tone": "",
+              "group": "failure",
+              "url": ""
+            },
+            {
+              "id": "LRN-failure-0288",
+              "title": "Built a whole leads pipeline without grepping for the one already in the workspace, which had been named out loud in the first message.",
+              "subtitle": "no evidence recorded",
+              "detail": "Vaults · 2026-08-24T22:40:02Z",
+              "badge": "24×",
+              "tone": "dim",
+              "group": "failure",
+              "url": ""
+            },
+            {
+              "id": "LRN-failure-0240",
+              "title": "Reported a stale deployment to a client as a production outage while the real site, served from a different repo, was healthy the whole time.",
+              "subtitle": "the chronicle for 2026-08-24, and the client thread it cost",
+              "detail": "Vaults · 2026-08-24T09:02:55Z",
+              "badge": "19×",
+              "tone": "",
+              "group": "failure",
+              "url": ""
+            },
+            {
+              "id": "LRN-gotcha-0502",
+              "title": "A permission gate must render and answer from ONE poll: drawing from a ten second snapshot and answering from a two second one can approve a command nobody saw.",
+              "subtitle": "a blind verifier drove the real store against a local server, 2026-08-26",
+              "detail": "Vaults · 2026-08-26T02:15:41Z",
+              "badge": "46×",
+              "tone": "",
+              "group": "gotcha",
+              "url": ""
+            },
+            {
+              "id": "LRN-gotcha-0498",
+              "title": "Listing issues with their comments costs dozens of GraphQL points per repo; a sixty second loop over seventy repos spent the hourly cap in minutes and blanked every desk.",
+              "subtitle": "the first night the app was open, every desk read 'API rate limit exceeded'",
+              "detail": "Vaults · 2026-08-26T01:44:18Z",
+              "badge": "38×",
+              "tone": "",
+              "group": "gotcha",
+              "url": ""
+            },
+            {
+              "id": "LRN-gotcha-0471",
+              "title": "A new TestCase that subclasses an existing one to reuse its setUp reruns every one of the parent's tests: the suite went from 201 to 306 for no new coverage.",
+              "subtitle": "the card lane, 2026-08-27; 79 duplicate tests before the split",
+              "detail": "Vaults · 2026-08-27T05:20:11Z",
+              "badge": "22×",
+              "tone": "",
+              "group": "gotcha",
+              "url": ""
+            },
+            {
+              "id": "LRN-pattern-0388",
+              "title": "The office already serves its phone page as an authenticated site over the tailnet, so a phone needs Tailscale and Safari and not a native build.",
+              "subtitle": "the milestone 2 commission, and the live pass on 2026-08-27",
+              "detail": "Vaults · 2026-08-27T01:06:33Z",
+              "badge": "17×",
+              "tone": "",
+              "group": "pattern",
+              "url": ""
+            },
+            {
+              "id": "LRN-pattern-0355",
+              "title": "A source that returns its own state rather than a bare number is what keeps 'not configured', 'broken' and 'genuinely zero' from rendering the same.",
+              "subtitle": "every source under client/sources, and the false green that started it",
+              "detail": "Vaults · 2026-08-25T18:30:00Z",
+              "badge": "14×",
+              "tone": "",
+              "group": "pattern",
+              "url": ""
+            },
+            {
+              "id": "LRN-preference-0092",
+              "title": "Estimates never render as measurements: the band travels in the label so a person reads 'estimated (not measured)' and never one folded total.",
+              "subtitle": "the cost ledger, and the card contract that came out of it",
+              "detail": "Vaults · 2026-08-25T11:12:47Z",
+              "badge": "9×",
+              "tone": "",
+              "group": "preference",
+              "url": ""
             }
           ]
         }
@@ -1067,6 +1260,64 @@
         "started_at": "2026-08-26T12:40:00Z"
       }
     ]
+  },
+  "context": {
+    "acme/checkout-api": {
+      "root": "/Users/aria/code/checkout-api",
+      "files": [
+        {
+          "path": "README.md",
+          "name": "README.md",
+          "group": "root",
+          "bytes": 1487
+        },
+        {
+          "path": "_meta/chronicles/2026/2026-08-ledger.md",
+          "name": "2026-08-ledger.md",
+          "group": "_meta/chronicles/2026",
+          "bytes": 902
+        },
+        {
+          "path": "_meta/commissions/2026-08-24-idempotent-capture.md",
+          "name": "2026-08-24-idempotent-capture.md",
+          "group": "_meta/commissions",
+          "bytes": 1104
+        },
+        {
+          "path": "_meta/plans/retry-budget.md",
+          "name": "retry-budget.md",
+          "group": "_meta/plans",
+          "bytes": 764
+        }
+      ],
+      "texts": {
+        "README.md": "# checkout-api\n\nThe door money goes through. Everything else in this\naccount can be down for an hour and cost nothing; this cannot be down\nfor a minute.\n\n## The one rule\n\n**A capture is idempotent or it is a bug.** The card network retries,\nthe client retries, and the queue retries. Three retries of one\npayment is three charges unless every path through `capture()` is keyed\non the intent id.\n\n## Running it\n\n```sh\nmake dev      # the api on :8080, against the sandbox gateway\nmake test     # unit, plus the replay suite against recorded webhooks\n```\n\n## Things that are load bearing and look like they are not\n\n- **The `Idempotency-Key` header is required, not optional.** A request\n  without one is refused at the edge rather than given a generated key:\n  a key the client did not choose is a key the client cannot retry with.\n- **Webhook order is not guaranteed.** `payment_intent.succeeded` can\n  arrive before the capture call it describes has returned. The ledger\n  is written from whichever arrives first and reconciled from the other.\n- **Refunds are their own state machine.** Folding them into the\n  payment one made a partially refunded payment read as failed.\n",
+        "_meta/chronicles/2026/2026-08-ledger.md": "# August 2026\n\n## 2026-08-24 · the double charge that was not\n\nA support ticket said one customer had been charged twice. They had\nnot: two intents were created because the client retried the CREATE and\nnot the CAPTURE, and only one of them ever captured. The dashboard drew\nboth intents with the same amount and no state, which is what made it\nlook like two charges.\n\n**Fixed:** the intent list shows state, and an uncaptured intent is\ndrawn grey with the word `never captured` on it.\n\n**Not fixed:** the client still retries CREATE without a key. Filed as\n#214.\n\n## 2026-08-19 · sandbox webhooks stopped\n\nThe gateway rotated its signing secret and our verifier kept the old\none, so every delivery failed the signature check and was dropped\nsilently. Two days of sandbox receipts are gone. The verifier now\naccepts both the current and the previous secret during a rotation, and\na dropped delivery is logged as an error rather than as a 200.\n",
+        "_meta/commissions/2026-08-24-idempotent-capture.md": "---\ntype: commission\nstatus: active\n---\n\n# Every path through capture is keyed on the intent\n\n**Goal:** a capture called twice with the same intent id charges once,\nwhatever order the calls arrive in and whichever of them wins the race.\n\n**Why now:** #214 is a real double charge waiting to happen. The retry\nis in the client, the client is shipped, and we cannot change it.\n\n**Done means:**\n\n- `capture()` takes the intent id as its key and writes the ledger row\n  in the same transaction as the charge.\n- A second call with the same key returns the FIRST result, not a\n  conflict: the caller retried because it did not hear us, and an error\n  is what makes it retry again.\n- The replay suite includes two captures interleaved at every step.\n\n**Explicitly not in scope:** refunds, and the client's CREATE retry.\n",
+        "_meta/plans/retry-budget.md": "# A retry budget, not a retry loop\n\n🔧 **Ready to build**\n\n**In one line:** the gateway client retries forever on a 500, which\nturns one bad minute at the gateway into an hour of our own traffic.\n\n| what | now | after |\n| --- | --- | --- |\n| retries | unbounded | 3, then the ledger says `gateway unreachable` |\n| backoff | 200ms flat | full jitter, 200ms base, 8s cap |\n| budget | none | 10% of requests may be retries, measured per minute |\n\n## Decisions\n\n- A retry budget is per process and not per request. A per-request cap\n  still lets every request retry at once, which is the stampede.\n- `gateway unreachable` is its own ledger state. Never `failed`: a\n  payment we could not ask about is not a payment that did not happen.\n"
+      }
+    },
+    "acme/storefront": {
+      "root": "/Users/aria/code/storefront",
+      "files": [
+        {
+          "path": "README.md",
+          "name": "README.md",
+          "group": "root",
+          "bytes": 612
+        },
+        {
+          "path": "_meta/plans/checkout-rewrite.md",
+          "name": "checkout-rewrite.md",
+          "group": "_meta/plans",
+          "bytes": 488
+        }
+      ],
+      "texts": {
+        "README.md": "# storefront\n\nThe shop. It renders the catalogue, holds the basket, and hands off to\n`checkout-api` for anything involving money.\n\n## Running it\n\n```sh\nnpm run dev     # :3000, against the checkout sandbox\nnpm test\n```\n\n## Where the money boundary is\n\nThis repo never talks to the card network and never stores a card\nnumber. If a change here makes you want to, the change belongs in\n`checkout-api` instead.\n",
+        "_meta/plans/checkout-rewrite.md": "# The basket survives a reload\n\n👀 **In review**\n\n**In one line:** the basket lives in memory, so a refresh empties it,\nand the refresh is what a person does when the page looks stuck.\n\n- The basket is written to the session on every change.\n- A basket older than seven days is dropped on read, not on a timer.\n- Prices are re-read at checkout: a basket is a list of intentions, not\n  a quote.\n"
+      }
+    }
   },
   "transcripts": {
     "veru": {

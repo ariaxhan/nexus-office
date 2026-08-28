@@ -21,6 +21,19 @@ public enum Selection: Hashable {
     case section(String)
 }
 
+/// The two halves of a desk: what is open on GitHub, and what the checkout on
+/// this machine says about itself.
+public enum DeskTab: String, Hashable, CaseIterable {
+    case work, context
+
+    public var label: String {
+        switch self {
+        case .work: return "Work"
+        case .context: return "Context"
+        }
+    }
+}
+
 public enum DotState {
     case idle, working, needsYou
 
@@ -82,6 +95,22 @@ public final class Store {
     public private(set) var sessionTranscripts: [String: SessionTranscript] = [:]
     /// Which agent's thread is open, if any.
     public var openSession: String?
+
+    // MARK: - what a desk says about itself
+    //
+    // Per desk, all three of them, because they are three different answers and
+    // a person looking at one desk must never see another desk's. Loading is
+    // not "no files yet" and an error is not "no files at all": a desk the
+    // office cannot place has to say so, and an empty pane says nothing.
+
+    /// The last context read for a desk: its index, and whichever file is open.
+    public private(set) var contexts: [String: DeskContext] = [:]
+    public private(set) var contextLoading: Set<String> = []
+    public private(set) var contextErrors: [String: String] = [:]
+    /// Which half of a desk is on screen. Kept here rather than in the view for
+    /// the same reason drafts are: switching desks and coming back should not
+    /// undo a person's choice, and the shot harness has to be able to open it.
+    public private(set) var deskTabs: [String: DeskTab] = [:]
     /// Whether the automation page is on screen. On the store rather than the
     /// view so the shot harness can open it, exactly like `putAwayOpen`.
     public var automationOpen = false
@@ -455,6 +484,57 @@ public final class Store {
         if let desk = sessionsAtDesk[repo] { return desk }
         guard allSessions.canSee else { return allSessions }
         return SessionRoster(state: "empty", at: allSessions.at)
+    }
+
+    // MARK: - a desk's own Markdown
+
+    public func tab(at repo: String) -> DeskTab { deskTabs[repo] ?? .work }
+
+    public func context(at repo: String) -> DeskContext? { contexts[repo] }
+
+    public func contextError(at repo: String) -> String? { contextErrors[repo] }
+
+    public func isLoadingContext(at repo: String) -> Bool { contextLoading.contains(repo) }
+
+    /// Show the Context half of a desk, and read it if it has not been read.
+    ///
+    /// Cached per desk on purpose: the index is a walk of a checkout, and
+    /// re-walking it every time somebody clicks back and forth is work nobody
+    /// asked for. `reload` is the way to ask again.
+    public func showContext(at repo: String) {
+        deskTabs[repo] = .context
+        guard contexts[repo] == nil, !contextLoading.contains(repo) else { return }
+        Task { await loadContext(repo: repo) }
+    }
+
+    public func showWork(at repo: String) {
+        deskTabs[repo] = .work
+    }
+
+    /// Read one desk's context. `path` empty asks for the index, and then opens
+    /// the README, or the first entry when there is no README: a list of files
+    /// with an empty pane beside it is a screen that reads as broken.
+    ///
+    /// A failure leaves whatever was last read on screen and puts the reason
+    /// beside it. A desk the office cannot place is the ordinary case here, and
+    /// it must say so rather than draw as a desk with nothing written in it.
+    public func loadContext(repo: String, path: String = "") async {
+        contextLoading.insert(repo)
+        defer { contextLoading.remove(repo) }
+        do {
+            var got = try await api.context(repo: repo, path: path)
+            if path.isEmpty, let opening = DeskContext.opening(got.files) {
+                // The index already arrived, so a failure to read the first
+                // file costs the document and not the list.
+                got = (try? await api.context(repo: repo, path: opening.path)) ?? got
+            }
+            contexts[repo] = got
+            contextErrors[repo] = nil
+        } catch let error as ApiError {
+            contextErrors[repo] = error.message
+        } catch {
+            contextErrors[repo] = error.localizedDescription
+        }
     }
 
     public func openSessionThread(_ name: String) {

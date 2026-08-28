@@ -642,6 +642,92 @@ public struct SectionFact: Decodable, Hashable, Identifiable {
     }
 }
 
+/// One line of the table under the numbers.
+///
+/// The generic half of the card, and deliberately anonymous: this is a learning,
+/// a scheduled job, and whatever the ninth source sends next month, all drawn by
+/// the same view. Nothing here knows what it is looking at, which is the only
+/// reason a new source can be a new python file and no Swift at all.
+///
+/// Its decoder cannot throw. A row that arrived as a bare string, or as an
+/// object full of numbers, still becomes a row: `[SectionRowItem]` would
+/// otherwise throw on the first odd element and take the whole table with it,
+/// which turns one malformed record into a section that looks empty.
+public struct SectionRowItem: Decodable, Hashable, Identifiable {
+    /// The source's own id for the thing. Not required to be unique on screen,
+    /// so nothing draws by it; it is what a person quotes back.
+    public var id: String
+    /// The thing itself. The one line that must not be empty.
+    public var title: String
+    /// Where it came from, or when it runs. Under the title, quieter.
+    public var subtitle: String
+    /// The small print. Under everything, quietest.
+    public var detail: String
+    /// The one number or word worth a pill.
+    public var badge: String
+    /// The source saying whether this row is good news. A word nobody here
+    /// knows reads as no tone rather than as a crash or as a wrong colour.
+    public var tone: String
+    /// The heading this row sits under. Empty means no heading at all.
+    public var group: String
+    /// Somewhere to go, or "". Never somewhere to run: see `destination`.
+    public var url: String
+
+    public init(id: String = "", title: String = "", subtitle: String = "",
+                detail: String = "", badge: String = "", tone: String = "",
+                group: String = "", url: String = "") {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.detail = detail
+        self.badge = badge
+        self.tone = tone
+        self.group = group
+        self.url = url
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, subtitle, detail, badge, tone, group, url
+    }
+
+    public init(from decoder: Decoder) throws {
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self) else {
+            // Not an object at all. Keep whatever text it was rather than
+            // dropping it: a row nobody can read is still evidence that
+            // something is wrong, and a silently shorter list is not.
+            let text = (try? decoder.singleValueContainer().decode(String.self)) ?? ""
+            self.init(title: text)
+            return
+        }
+        // `loose` on purpose: eight python files write these and each one
+        // decides on its own whether a count is `46` or `"46"`. A badge that
+        // vanishes over a missing pair of quotes is a number missing from the
+        // wall for no reason a person can see.
+        self.init(id: c.loose(.id) ?? "",
+                  title: c.loose(.title) ?? "",
+                  subtitle: c.loose(.subtitle) ?? "",
+                  detail: c.loose(.detail) ?? "",
+                  badge: c.loose(.badge) ?? "",
+                  tone: c.str(.tone) ?? "",
+                  group: c.loose(.group) ?? "",
+                  url: c.str(.url) ?? "")
+    }
+
+    /// Where a click goes, when there is anywhere it may go.
+    ///
+    /// Two schemes and no others. `https` is the internet and `file` is
+    /// something on this machine the source already proved is there; everything
+    /// else, `javascript:` first among them, is a way to make a click run
+    /// something, and no row in this app runs anything. A refused url leaves
+    /// the row drawn as text, which is honest: the row is still true, it is the
+    /// destination that could not be stood behind.
+    public var destination: URL? {
+        guard let url = URL(string: url), let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "file" else { return nil }
+        return url
+    }
+}
+
 /// What a source wants said about itself, in the one shape every source shares.
 ///
 /// This is the whole interface between the six python files that fill
@@ -657,18 +743,23 @@ public struct SectionCard: Decodable, Hashable {
     /// When the source last looked, ISO Z, or empty when it declined to say.
     public var asOf: String
     public var facts: [SectionFact]
+    /// The list, when the source has one. Six of the eight send no `rows` key
+    /// at all, so empty is the ordinary answer and not a failure to decode.
+    public var rows: [SectionRowItem]
 
     public init(title: String = "", headline: String = "", needs: Int = 0,
-                asOf: String = "", facts: [SectionFact] = []) {
+                asOf: String = "", facts: [SectionFact] = [],
+                rows: [SectionRowItem] = []) {
         self.title = title
         self.headline = headline
         self.needs = needs
         self.asOf = asOf
         self.facts = facts
+        self.rows = rows
     }
 
     enum CodingKeys: String, CodingKey {
-        case title, headline, needs, facts
+        case title, headline, needs, facts, rows
         case asOf = "as_of"
     }
 
@@ -681,6 +772,7 @@ public struct SectionCard: Decodable, Hashable {
         needs = max(0, c.int(.needs) ?? 0)
         asOf = c.str(.asOf) ?? ""
         facts = c.list(.facts, SectionFact.self)
+        rows = c.list(.rows, SectionRowItem.self)
     }
 }
 
@@ -739,6 +831,96 @@ public struct Section: Decodable, Hashable, Identifiable {
         let words = key.split(whereSeparator: { $0 == "-" || $0 == "_" || $0 == "." })
         guard let first = words.first else { return key }
         return ([first.capitalized] + words.dropFirst().map(String.init)).joined(separator: " ")
+    }
+}
+
+// MARK: - what a desk says about itself
+
+/// One document a desk offers to show.
+public struct ContextFile: Decodable, Hashable, Identifiable {
+    /// Relative to the checkout, and the only thing that may be asked for back.
+    public var path: String
+    public var name: String
+    /// The folder it sits in, or `root`. The index is drawn under these.
+    public var group: String
+    public var bytes: Int
+
+    public var id: String { path }
+
+    public init(path: String = "", name: String = "", group: String = "",
+                bytes: Int = 0) {
+        self.path = path
+        self.name = name
+        self.group = group
+        self.bytes = bytes
+    }
+
+    enum CodingKeys: String, CodingKey { case path, name, group, bytes }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = c.str(.path) ?? ""
+        name = c.str(.name) ?? ""
+        group = c.str(.group) ?? ""
+        bytes = max(0, c.int(.bytes) ?? 0)
+    }
+}
+
+/// A desk's own Markdown: the index, and whichever one of them is open.
+///
+/// Both in one value because they arrive in one answer. A list and a document
+/// fetched separately can disagree about which desk they belong to, and the
+/// disagreement is invisible: the index says one repo and the text says
+/// another, and both draw perfectly well.
+public struct DeskContext: Decodable, Hashable {
+    public var repo: String
+    /// Where the office found this checkout. Shown, because a person reading a
+    /// file has a right to know which copy of the repo it came out of.
+    public var root: String
+    public var files: [ContextFile]
+    /// Whether the index was cut. Drawn, always: a truncated list presented as
+    /// a whole one is the defect this project exists to prevent.
+    public var capped: Bool
+    /// The document that is open, relative. Empty when only the index arrived.
+    public var path: String
+    public var title: String
+    public var text: String
+    public var bytes: Int
+
+    public init(repo: String = "", root: String = "", files: [ContextFile] = [],
+                capped: Bool = false, path: String = "", title: String = "",
+                text: String = "", bytes: Int = 0) {
+        self.repo = repo
+        self.root = root
+        self.files = files
+        self.capped = capped
+        self.path = path
+        self.title = title
+        self.text = text
+        self.bytes = bytes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case repo, root, files, capped, path, title, text, bytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        repo = c.str(.repo) ?? ""
+        root = c.str(.root) ?? ""
+        files = c.list(.files, ContextFile.self)
+        capped = c.bool(.capped) ?? false
+        path = c.str(.path) ?? ""
+        title = c.str(.title) ?? ""
+        text = c.str(.text) ?? ""
+        bytes = max(0, c.int(.bytes) ?? 0)
+    }
+
+    /// What opens first: the README if there is one, else the first thing in
+    /// the index. A person opening this wants the front page of the repo, and
+    /// an empty pane over a list of files is a screen that looks broken.
+    public static func opening(_ files: [ContextFile]) -> ContextFile? {
+        files.first { $0.name.lowercased().hasPrefix("readme") } ?? files.first
     }
 }
 

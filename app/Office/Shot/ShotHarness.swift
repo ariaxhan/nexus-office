@@ -113,6 +113,30 @@ enum ShotHarness {
         store.select(.section(sectionNeedingAPerson(store)))
         await frame(store, window, directory, "wall", settling: 1.4)
 
+        // The two sources whose whole point is the LIST rather than the count.
+        // The `wall` framing above photographs a card with facts on it and
+        // would look identical whether the rows arrived or not, which is the
+        // exact defect this harness exists to catch: a table that decoded to
+        // nothing is invisible in source and obvious here.
+        for source in ["library", "clock"] where store.section(source) != nil {
+            store.select(.section(source))
+            await frame(store, window, directory, source, settling: 1.4)
+        }
+
+        // A desk's own Markdown, open. It is a whole second half of the desk
+        // behind a switch, so no framing that photographs the Work side can
+        // ever reveal it: an index that came back empty and a document that
+        // never loaded both draw as a desk with nothing on it.
+        if let desk = await deskWithContext(store) {
+            store.select(.desk(desk))
+            store.showContext(at: desk)
+            // Long enough for the index AND the file it opens: the read is two
+            // calls, and photographing between them is a picture of a list
+            // beside an empty pane, which is the one state this is not about.
+            await frame(store, window, directory, "context", settling: 2.2)
+            store.showWork(at: desk)
+        }
+
         // The two things the other framings cannot show at once: the
         // desks a person put away, which live in a section that is shut by
         // default, and a desk saying out loud that what you are reading is the
@@ -313,10 +337,36 @@ enum ShotHarness {
         return best?.repo ?? store.stations.first?.repo ?? ""
     }
 
+    /// A desk the fixture has Markdown for, preferring one with the most of it:
+    /// a context framing of a desk with a lone README photographs the pane and
+    /// not the index, and the index is half of what this screen is.
+    ///
+    /// Asked by loading rather than by reading the fixture, because the demo
+    /// floor and the live door answer this the same way and the harness must
+    /// not learn a shape only one of them has.
+    private static func deskWithContext(_ store: Store) async -> String? {
+        var best: (repo: String, files: Int)?
+        for station in store.stations.prefix(12) {
+            await store.loadContext(repo: station.repo)
+            guard let found = store.context(at: station.repo), !found.files.isEmpty
+            else { continue }
+            if best == nil || found.files.count > best!.files {
+                best = (station.repo, found.files.count)
+            }
+        }
+        return best?.repo
+    }
+
     /// A source with a count on it. A framing of a wall row whose badge is
     /// absent photographs the one case the badge was built for not happening.
+    ///
+    /// One with no TABLE, where there is one. `library` and `clock` have their
+    /// own framings now, and three pictures of the same card is two framings
+    /// that rot: this one exists to prove the badge and the facts, so it is
+    /// pointed at a source whose card is only that.
     private static func sectionNeedingAPerson(_ store: Store) -> String {
-        let wanted = store.sections.first { $0.needs > 0 }
+        let wanted = store.sections.first { $0.needs > 0 && $0.card.rows.isEmpty }
+            ?? store.sections.first { $0.needs > 0 }
             ?? store.sections.first { !$0.isOK }
         return wanted?.id ?? store.sections.first?.id ?? ""
     }

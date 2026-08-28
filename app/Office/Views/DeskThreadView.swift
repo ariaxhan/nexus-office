@@ -30,10 +30,26 @@ struct DeskThreadView: View {
         StateRules.asOf(station: station, generated: store.worldGenerated)
     }
 
+    /// Which half of the desk is on screen. On the store, so it survives going
+    /// to look at something else and coming back.
+    private var tab: DeskTab { store.tab(at: station.repo) }
+
     var body: some View {
         VStack(spacing: 0) {
             head
             Divider().overlay(Theme.hairline)
+            if tab == .context {
+                DeskContextView(store: store, repo: station.repo)
+            } else {
+                work
+            }
+        }
+        .background(Theme.ink)
+    }
+
+    /// What is open on GitHub: the gate, the agents, the issues, the PRs.
+    private var work: some View {
+        VStack(spacing: 0) {
             ScrollViewReader { scroll in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -95,7 +111,6 @@ struct DeskThreadView: View {
                 ToastBar(text: toast) { store.toast = nil }
             }
         }
-        .background(Theme.ink)
     }
 
     /// Where an issue card sits, so a PR that closes it can point at it.
@@ -118,6 +133,26 @@ struct DeskThreadView: View {
                 .lineLimit(1)
             }
             Spacer()
+            // Two halves of one desk: what GitHub has open, and what the
+            // checkout on this machine says about itself. A switch rather than
+            // a second row in the roster, because it is the same desk.
+            Picker("", selection: Binding(
+                get: { tab },
+                set: { $0 == .context ? store.showContext(at: station.repo)
+                                      : store.showWork(at: station.repo) })) {
+                ForEach(DeskTab.allCases, id: \.self) { choice in
+                    Text(choice.label).tag(choice)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 156)
+            .controlSize(.small)
+            // The room's own blue rather than the system accent. Red and amber
+            // mean "this needs you" everywhere else in here, and a navigation
+            // control in the loudest colour on screen is a false alarm that
+            // never goes away.
+            .tint(Theme.blue)
             // The most recent thing we were able to pull, said where the clock
             // already is. Without it the desk shows an hours-old GitHub with
             // the confidence of a live one.
@@ -200,6 +235,161 @@ struct ReadmeBlock: View {
         if let failure { return "could not read this repo's README: \(failure)" }
         guard let readme else { return nil }
         return readme.detail.isEmpty ? nil : readme.detail
+    }
+}
+
+// MARK: - what the desk says about itself
+
+/// The Markdown a checkout keeps: its README, and everything under `_meta`.
+///
+/// An index down the left and the document beside it. Nothing on this screen
+/// writes anything or runs anything: a click chooses which of the files the
+/// server already listed to ask for, and the server decides whether that is a
+/// file it will read. There is no path built here, no folder to walk into, and
+/// no way to name a file that was not offered.
+struct DeskContextView: View {
+    @Bindable var store: Store
+    let repo: String
+
+    private var context: DeskContext? { store.context(at: repo) }
+
+    var body: some View {
+        HSplitView {
+            index
+                .frame(minWidth: 200, idealWidth: 260, maxWidth: 340)
+            document
+                .frame(minWidth: 320, maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - the list
+
+    @ViewBuilder private var index: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                if let context {
+                    ForEach(SortedGroups.of(context.files)) { group in
+                        Text(group.name)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(Theme.faint)
+                            .padding(.top, 10)
+                            .padding(.horizontal, 8)
+                        ForEach(group.files) { file in
+                            entry(file, open: context.path == file.path)
+                        }
+                    }
+                    if context.capped {
+                        // A truncated list presented as a whole one is the
+                        // defect this project exists to prevent.
+                        Text("this list was cut; the checkout has more")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.amber)
+                            .padding(8)
+                    }
+                    if context.files.isEmpty {
+                        Text("no README and nothing under _meta")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.faint)
+                            .padding(10)
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.well)
+    }
+
+    private func entry(_ file: ContextFile, open: Bool) -> some View {
+        Button {
+            Task { await store.loadContext(repo: repo, path: file.path) }
+        } label: {
+            HStack(spacing: 6) {
+                Text(file.name)
+                    .font(.system(size: 12))
+                    .foregroundStyle(open ? Theme.text : Theme.dim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(open ? Theme.raised : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - the document
+
+    @ViewBuilder private var document: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if let said = store.contextError(at: repo) {
+                    // The reason, in the server's own words. A desk the office
+                    // cannot place must never draw as a desk with nothing in it.
+                    Text(said)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Theme.amber)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let context, !context.path.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(context.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Theme.text)
+                        Text(context.path)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(Theme.faint)
+                            .textSelection(.enabled)
+                    }
+                    MarkdownText(raw: context.text, size: 12.5, color: Theme.dim)
+                        .lineSpacing(2)
+                } else if store.isLoadingContext(at: repo) {
+                    Text("reading the checkout")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                } else if store.contextError(at: repo) == nil {
+                    Text("nothing to read here.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Theme.faint)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
+            .frame(maxWidth: 760, alignment: .leading)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.ink)
+        .onAppear {
+            // Reached by clicking the switch OR by landing on a desk that was
+            // already on Context, so the load lives here rather than only in
+            // the button that flipped it.
+            if store.context(at: repo) == nil && store.contextError(at: repo) == nil {
+                store.showContext(at: repo)
+            }
+        }
+    }
+
+    /// The index under its folder headings, in the order the server sent them.
+    struct SortedGroups: Identifiable {
+        let name: String
+        let files: [ContextFile]
+        var id: String { name }
+
+        static func of(_ files: [ContextFile]) -> [SortedGroups] {
+            var order: [String] = []
+            var byName: [String: [ContextFile]] = [:]
+            for file in files {
+                if byName[file.group] == nil { order.append(file.group) }
+                byName[file.group, default: []].append(file)
+            }
+            return order.map { SortedGroups(name: $0, files: byName[$0] ?? []) }
+        }
     }
 }
 
