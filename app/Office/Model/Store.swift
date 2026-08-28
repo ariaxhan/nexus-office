@@ -130,6 +130,13 @@ public final class Store {
     /// to open it to photograph it.
     public var putAwayOpen = false
 
+    /// Which desk's face picker is open, by repo, or `nil`.
+    ///
+    /// On the store rather than in the row for the same reason `putAwayOpen` is:
+    /// a `LazyVStack` throws a row's `@State` away the moment it scrolls off,
+    /// and the shot harness has to be able to open the picker to photograph it.
+    public var facePicker: String?
+
     /// Half-typed text, by where it was typed.
     ///
     /// These used to be `@State` inside the composer and the comment box, which

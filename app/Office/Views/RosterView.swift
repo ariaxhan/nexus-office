@@ -101,7 +101,8 @@ struct RosterView: View {
         DeskRow(station: station,
                 gate: store.gateShown(at: station),
                 selected: store.selection == .desk(station.repo),
-                away: store.isHidden(station))
+                away: store.isHidden(station),
+                face: FaceBook.shared.hex(repo: station.repo))
             .contentShape(Rectangle())
             .ifPickedUp(pickUp, repo: station.repo)
             .onTapGesture { store.select(.desk(station.repo)) }
@@ -124,9 +125,19 @@ struct RosterView: View {
                         Task { await store.setPin(repo: station.repo, pinned: true) }
                     }
                 }
+                Button("Face colour\u{2026}") { store.facePicker = station.repo }
                 if let url = URL(string: "https://github.com/\(station.repo)") {
                     Link("Open on GitHub", destination: url)
                 }
+            }
+            // Anchored on the row so the well opens next to the face it is
+            // changing, and driven off the store so a row scrolling out from
+            // under a `LazyVStack` cannot take the open picker with it.
+            .popover(isPresented: Binding(
+                get: { store.facePicker == station.repo },
+                set: { open in if !open, store.facePicker == station.repo { store.facePicker = nil } }
+            ), arrowEdge: .trailing) {
+                FacePicker(repo: station.repo, store: store)
             }
     }
 
@@ -448,12 +459,16 @@ struct DeskRow: View {
     let selected: Bool
     /// Put away. Drawn dimmer, drawn the same shape, never drawn as broken.
     var away = false
+    /// The colour this desk keeps, handed in from the face book. Status is the
+    /// badge on the corner of it and never the disc itself, so a desk is
+    /// recognisable whatever it happens to be doing.
+    var face: String
 
     private var state: DeskState { StateRules.deskState(station: station, gate: gate) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            StateDot(state: state)
+            DeskFace(repo: station.repo, state: state, hex: face)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(station.repo)

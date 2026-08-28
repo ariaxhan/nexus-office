@@ -177,6 +177,41 @@ struct StateDot: View {
     var body: some View { Dot(color: Theme.color(state), size: size) }
 }
 
+/// A desk's face: the colour it keeps, with what it is doing badged on top.
+///
+/// Two questions, two glyphs. The disc is a pure function of the repo path (or
+/// the colour a person picked for it) and never moves, so a desk is recognisable
+/// across a floor of seventy; the badge in the top-right corner carries the
+/// state, which is the half that changes. Drawing both into one dot is how every
+/// working desk came to look like every other working desk.
+///
+/// Same footprint as `Dot` and `BotAvatar`, so the roster still lines up down
+/// one edge.
+struct DeskFace: View {
+    let repo: String
+    let state: DeskState
+    var size: CGFloat = 34
+    /// The colour a person chose, if they chose one. Handed in rather than read
+    /// here, so this view stays a drawing and the store stays the store.
+    var hex: String?
+
+    private var coat: Color { Color(hex: hex ?? Faces.coat(repo: repo)) }
+
+    var body: some View {
+        BotAvatar(color: coat, size: size)
+            .overlay(alignment: .topTrailing) {
+                Circle()
+                    .fill(Theme.color(state))
+                    .frame(width: size * 0.32, height: size * 0.32)
+                    // Rung against the roster it sits on, not against the face:
+                    // a badge the same colour as the coat under it is a badge
+                    // that disappears on exactly one desk.
+                    .overlay(Circle().strokeBorder(Theme.roster, lineWidth: 2))
+                    .offset(x: 2, y: -2)
+            }
+    }
+}
+
 /// The wall's one glyph. Three states rather than eight: something wants you,
 /// something is not answering, or it is quiet.
 struct MoodDot: View {
