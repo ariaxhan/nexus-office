@@ -576,13 +576,34 @@ def desk_dir(repo: str, desks: dict | None = None) -> str:
     base = pathlib.Path(root).expanduser()
     for vault in ("CodingVault", "CollabVault", ""):
         candidate = (base / vault / name) if vault else (base / name)
+        if _is_checkout_of(candidate, repo):
+            return str(candidate.resolve())
+
+    # The folder is not always named after the repo: `ariacam` is `aria-cam`,
+    # and `site-spec` is somebody else's `site-spec-private` while the real one
+    # sits in `site-spec-public`. So the same one level is walked and asked,
+    # rather than the name being trusted. The origin is still what decides, so
+    # this reaches no folder the name guess was allowed to reach.
+    for vault in ("CodingVault", "CollabVault", ""):
+        folder = (base / vault) if vault else base
         try:
-            if candidate.is_dir() and (candidate / ".git").exists():
-                if origin_nwo(str(candidate)) == repo:
-                    return str(candidate.resolve())
+            children = sorted(folder.iterdir())
         except OSError:
             continue
+        for candidate in children:
+            if candidate.name != name and _is_checkout_of(candidate, repo):
+                return str(candidate.resolve())
     return ""
+
+
+def _is_checkout_of(candidate: pathlib.Path, repo: str) -> bool:
+    """Whether this directory is a checkout of `repo`, by its origin remote."""
+    try:
+        if not (candidate.is_dir() and (candidate / ".git").exists()):
+            return False
+    except OSError:
+        return False
+    return origin_nwo(str(candidate)) == repo
 
 
 # ── the front page of a desk ─────────────────────────────────────────────────
