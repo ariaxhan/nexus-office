@@ -222,6 +222,58 @@ final class StateRulesTests: XCTestCase {
         XCTAssertEqual(StateRules.putAwayDesks(floor).map(\.repo), ["acme/docs"])
     }
 
+    // MARK: - the roster can be ordered
+
+    private func floorToSort() -> [Station] {
+        [Station(repo: "acme/docs", at: "2026-01-03T00:00:00Z",
+                 issues: [quietIssue()], prs: []),
+         Station(repo: "zeta/tools", at: "2026-01-05T00:00:00Z",
+                 issues: [], prs: [openPR(1), openPR(2)]),
+         Station(repo: "Beta/site", at: "",
+                 issues: [quietIssue(), quietIssue(2)], prs: [openPR(3)])]
+    }
+
+    func testEachOrderPutsTheRightDeskFirst() {
+        let floor = floorToSort()
+        XCTAssertEqual(StateRules.roster(floor, pins: [], sort: .recent).flatMap(\.desks).map(\.repo),
+                       ["zeta/tools", "acme/docs", "Beta/site"],
+                       "no readable timestamp sorts last: unknown is not new")
+        XCTAssertEqual(StateRules.roster(floor, pins: [], sort: .name).flatMap(\.desks).map(\.repo),
+                       ["acme/docs", "Beta/site", "zeta/tools"])
+        XCTAssertEqual(StateRules.roster(floor, pins: [], sort: .issues).flatMap(\.desks).map(\.repo),
+                       ["Beta/site", "acme/docs", "zeta/tools"])
+        XCTAssertEqual(StateRules.roster(floor, pins: [], sort: .prs).flatMap(\.desks).map(\.repo),
+                       ["zeta/tools", "Beta/site", "acme/docs"])
+    }
+
+    func testAnOrderOtherThanOwnerIsOneGroupUnderItsOwnName() {
+        let groups = StateRules.roster(floorToSort(), pins: [], owners: ["acme"], sort: .name)
+        XCTAssertEqual(groups.map(\.header), [StateRules.DeskSort.name.label])
+        let byOwner = StateRules.roster(floorToSort(), pins: [], owners: ["acme"])
+        XCTAssertEqual(byOwner.map(\.header), ["acme", "Beta", "zeta"], "the default is unchanged")
+    }
+
+    func testSortingKeepsThePinsOnTopAndDropsNothing() {
+        let floor = floorToSort()
+        for order in StateRules.DeskSort.allCases {
+            let groups = StateRules.roster(floor, pins: ["Beta/site"], sort: order)
+            XCTAssertEqual(groups.first?.header, StateRules.pinnedHeader, "\(order)")
+            XCTAssertEqual(groups.first?.desks.map(\.repo), ["Beta/site"], "\(order)")
+            XCTAssertEqual(groups.flatMap(\.desks).count, floor.count, "\(order)")
+        }
+    }
+
+    func testNoOrderCanHideARaisedHand() {
+        let gated = Station(repo: "acme/checkout-api", at: "", gate: pendingGate())
+        let floor = [gated, Station(repo: "acme/docs", at: "2026-01-09T00:00:00Z",
+                                    hidden: true, issues: [quietIssue()], prs: [openPR(1)])]
+        for order in StateRules.DeskSort.allCases {
+            let groups = StateRules.roster(StateRules.visibleDesks(floor, query: "zzzz", needsOnly: true),
+                                           pins: [], sort: order)
+            XCTAssertEqual(groups.flatMap(\.desks).map(\.repo), [gated.repo], "\(order)")
+        }
+    }
+
     func testDroppingOnARowLandsJustAboveItAndOnNothingLandsLast() {
         let pins = ["a/one", "a/two", "a/three"]
         XCTAssertEqual(StateRules.moved(pins: pins, repo: "a/three", before: "a/one"),
@@ -1038,6 +1090,10 @@ final class StateRulesTests: XCTestCase {
 
     private func quietIssue(_ number: Int = 2) -> Issue {
         Issue(number: number, title: "in flight", botLast: false)
+    }
+
+    private func openPR(_ number: Int) -> PullRequest {
+        PullRequest(number: number, title: "open", mergeable: "MERGEABLE")
     }
 
     private func pendingGate() -> Gate {

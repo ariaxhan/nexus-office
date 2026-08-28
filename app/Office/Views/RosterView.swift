@@ -26,7 +26,7 @@ struct RosterView: View {
                             .onTapGesture { store.select(.bot(bot.id)) }
                     }
 
-                    header("desks", trailing: needsToggle)
+                    header("desks", trailing: deskControls)
                         .padding(.top, 14)
                     if !store.stations.isEmpty {
                         // Put away means not polled, so this is the honest
@@ -309,18 +309,59 @@ struct RosterView: View {
         .padding(.bottom, 4)
     }
 
-    private var needsToggle: AnyView? {
+    /// The two things a person can do to the desks list: narrow it, and order
+    /// it. Both live in the header because both are answers to "show me a
+    /// different view of the same floor".
+    private var deskControls: AnyView? {
         AnyView(
-            Button {
+            HStack(spacing: 10) {
+                sortMenu
+                needsToggle
+            }
+        )
+    }
+
+    /// How the desks are ordered. Reordering hides nothing, so there is no
+    /// escape hatch to write here: a raised hand is somewhere in every one of
+    /// these orders.
+    private var sortMenu: some View {
+        Menu {
+            ForEach(StateRules.DeskSort.allCases) { order in
+                Button {
+                    store.deskSort = order
+                } label: {
+                    if store.deskSort == order {
+                        Label(order.label, systemImage: "checkmark")
+                    } else {
+                        Text(order.label)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(store.deskSort.label)
+                    .font(.system(size: 11, weight: store.deskSort == .owner ? .regular : .semibold))
+            }
+            .foregroundStyle(store.deskSort == .owner ? Theme.faint : Theme.text)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Order the desks. No order hides a desk.")
+    }
+
+    private var needsToggle: some View {
+        Button {
                 store.needsOnly.toggle()
             } label: {
                 Text("needs me")
                     .font(.system(size: 11, weight: store.needsOnly ? .semibold : .regular))
                     .foregroundStyle(store.needsOnly ? Theme.amber : Theme.faint)
-            }
-            .buttonStyle(.plain)
-            .help("Show only the desks a person has to touch. A raised hand is never hidden by it.")
-        )
+        }
+        .buttonStyle(.plain)
+        .help("Show only the desks a person has to touch. A raised hand is never hidden by it.")
     }
 
     private func notary(_ text: String) -> some View {
