@@ -119,6 +119,9 @@ public final class Store {
     public var selection: Selection?
     public var query: String = ""
     public var needsOnly = false
+    /// How the desks are ordered. A view, never a fetch: nothing here changes
+    /// what is polled or what a desk says.
+    public var deskSort: StateRules.DeskSort = .owner
     public var toast: String?
     public var gateNotice: String?
     /// Whether the put-away section is open. On the store rather than the view
@@ -222,7 +225,7 @@ public final class Store {
 
     /// The desks list, grouped: pinned first, then by owner.
     public var roster: [StateRules.RosterSection] {
-        StateRules.roster(visibleDesks, pins: pinOrder, owners: owners)
+        StateRules.roster(visibleDesks, pins: pinOrder, owners: owners, sort: deskSort)
     }
 
     /// Put away by a person: out of the desks list, still in the building.

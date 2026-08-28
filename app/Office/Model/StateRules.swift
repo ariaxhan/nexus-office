@@ -341,6 +341,37 @@ public enum StateRules {
 
     public static let pinnedHeader = "pinned"
 
+    /// How the desks list is ordered.
+    ///
+    /// Ordering is a VIEW, like the filters above it: every sort arranges the
+    /// desks it was handed and drops none of them, so a raised hand that
+    /// survived the filters survives this too.
+    public enum DeskSort: String, CaseIterable, Identifiable, Sendable {
+        /// The arrangement the roster has always had: grouped by owner.
+        case owner
+        /// Freshest data first.
+        case recent
+        /// Repo name, A to Z.
+        case name
+        /// Most open issues first.
+        case issues
+        /// Most open pull requests first.
+        case prs
+
+        public var id: String { rawValue }
+
+        /// What the menu says, and the header the group gets.
+        public var label: String {
+            switch self {
+            case .owner: return "by owner"
+            case .recent: return "most recent"
+            case .name: return "a to z"
+            case .issues: return "open issues"
+            case .prs: return "open prs"
+            }
+        }
+    }
+
     /// How the desks list is arranged, given the desks that are on it.
     ///
     /// Pinned desks come first, in the order a person dragged them. The rest
@@ -353,7 +384,8 @@ public enum StateRules {
     /// more recent and more deliberate of the two.
     public static func roster(_ visible: [Station],
                               pins: [String],
-                              owners: [String] = []) -> [RosterSection] {
+                              owners: [String] = [],
+                              sort: DeskSort = .owner) -> [RosterSection] {
         var sections: [RosterSection] = []
         var pinned: [Station] = []
         var seen = Set<String>()
@@ -365,6 +397,14 @@ public enum StateRules {
         if !pinned.isEmpty { sections.append(RosterSection(header: pinnedHeader, desks: pinned)) }
 
         let rest = visible.filter { !seen.contains($0.repo) }
+        // Any order but the owner one is one list: grouping by owner and then
+        // sorting inside each group would answer "which desk has the most open
+        // PRs" with as many answers as there are owners.
+        if sort != .owner {
+            if rest.isEmpty { return sections }
+            sections.append(RosterSection(header: sort.label, desks: sorted(rest, by: sort)))
+            return sections
+        }
         let mine = owners.map { $0.lowercased() }
         let groups = Dictionary(grouping: rest, by: { $0.owner.lowercased() })
         let ordered = groups.keys.sorted { a, b in
@@ -377,6 +417,40 @@ public enum StateRules {
             sections.append(RosterSection(header: desks[0].owner, desks: desks))
         }
         return sections
+    }
+
+    /// One flat list of desks in the order a sort asks for.
+    ///
+    /// Every sort falls back to the repo name, case blind, so two desks with
+    /// the same count or no timestamp at all keep a stable place rather than
+    /// swapping about between polls. A desk whose `at` we cannot read sorts
+    /// last under "most recent": unknown is not new.
+    private static func sorted(_ desks: [Station], by sort: DeskSort) -> [Station] {
+        func byName(_ a: Station, _ b: Station) -> Bool {
+            a.repo.lowercased() < b.repo.lowercased()
+        }
+        switch sort {
+        case .owner, .name:
+            return desks.sorted(by: byName)
+        case .recent:
+            return desks.sorted { a, b in
+                let da = date(a.at), db = date(b.at)
+                switch (da, db) {
+                case let (x?, y?): return x != y ? x > y : byName(a, b)
+                case (nil, _?): return false
+                case (_?, nil): return true
+                case (nil, nil): return byName(a, b)
+                }
+            }
+        case .issues:
+            return desks.sorted { a, b in
+                a.issues.count != b.issues.count ? a.issues.count > b.issues.count : byName(a, b)
+            }
+        case .prs:
+            return desks.sorted { a, b in
+                a.prs.count != b.prs.count ? a.prs.count > b.prs.count : byName(a, b)
+            }
+        }
     }
 
     /// The order after one pinned desk is dragged onto another: `repo` lands
