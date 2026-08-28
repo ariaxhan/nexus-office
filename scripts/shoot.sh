@@ -25,6 +25,12 @@
 
 set -eu
 
+if [ ! -t 0 ] || [ "${NEXUS_OFFICE_ALLOW_VISIBLE_SHOTS:-}" != "1" ]; then
+  echo "shoot: refused: this command opens and drives visible Office windows" >&2
+  echo "shoot: while at the Mac, run NEXUS_OFFICE_ALLOW_VISIBLE_SHOTS=1 npm run shot" >&2
+  exit 2
+fi
+
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
