@@ -11,7 +11,7 @@ struct RosterView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            search
+            top
             ScrollViewReader { scroll in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
@@ -283,6 +283,42 @@ struct RosterView: View {
         }
     }
 
+    /// The search field and the gear, on one line.
+    ///
+    /// The gear is here rather than behind a keystroke because every preference
+    /// this app had was a shortcut nobody could find. The header controls stay
+    /// where they are: they are the fast way to the same two settings, and this
+    /// is the way you can see.
+    private var top: some View {
+        HStack(spacing: 8) {
+            search
+            gear
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 38)
+        .padding(.bottom, 10)
+    }
+
+    /// Settings, in a popover. Its own window, so the shot harness photographs
+    /// it the same way it photographs the gate sheet.
+    private var gear: some View {
+        Button {
+            store.settingsOpen.toggle()
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(store.settingsOpen ? Theme.text : Theme.faint)
+                .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Theme.raised))
+        }
+        .buttonStyle(.plain)
+        .help("Settings. Everything here is a view of the same floor and persists.")
+        .popover(isPresented: $store.settingsOpen, arrowEdge: .bottom) {
+            SettingsPopover(store: store)
+        }
+    }
+
     private var search: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
@@ -306,9 +342,6 @@ struct RosterView: View {
         .padding(.horizontal, 8)
         .frame(height: 26)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.raised))
-        .padding(.horizontal, 12)
-        .padding(.top, 38)
-        .padding(.bottom, 10)
     }
 
     private func header(_ title: String, trailing: AnyView?) -> some View {

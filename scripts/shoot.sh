@@ -4,9 +4,9 @@
 #
 # A build passing proves nothing about a room. Every defect this project has had
 # was invisible in source and obvious on screen, so this builds the app, runs it
-# against the demo fixture, and photographs sixteen framings into shots/.
+# against the demo fixture, and photographs seventeen framings into shots/.
 #
-# Fifteen come out of one run. The sixteenth is a second run with --light,
+# Sixteen come out of one run. The seventeenth is a second run with --light,
 # because the office follows the system appearance now and there is no way to be
 # in two appearances at once: a Mac set to Dark would otherwise photograph the
 # light room never, which is the same as not having built it.
@@ -99,7 +99,7 @@ shoot_run() {
   { kill "$WATCHDOG" 2>/dev/null; wait "$WATCHDOG" 2>/dev/null; } || true
 }
 
-echo "shoot: running the fifteen dark framings"
+echo "shoot: running the sixteen dark framings"
 shoot_run $QUIET
 
 # The same room with the lights on. A separate process because an appearance is
@@ -109,7 +109,7 @@ echo "shoot: running the light framing"
 shoot_run --light $QUIET
 
 MISSING=0
-for framing in roster desk gate needs wall library clock pipeline context putaway automation sessions reactions readme attach light; do
+for framing in roster desk gate needs wall library clock pipeline context putaway automation sessions reactions readme attach settings light; do
   if [ -f "$ROOT/shots/app-$framing.png" ]; then
     echo "shoot: shots/app-$framing.png"
   else

@@ -52,9 +52,14 @@ public final class Store {
     /// One store for the whole process. The menu bar dot and the window are two
     /// views of the same office, and the dot has to keep working when the window
     /// is closed, so neither of them can own it.
-    public static let shared = Store(api: Api.resolve())
+    public static let shared = Store(api: Api.resolve(), prefs: .shared)
 
     public let api: Api
+
+    /// The choices that outlive the launch. In memory unless somebody hands
+    /// this store the persisting one, so a test and a shoot cannot write to
+    /// the machine they run on.
+    public let prefs: Preferences
 
     // what the server said
     public private(set) var bots: [Bot] = []
@@ -118,10 +123,14 @@ public final class Store {
     // what the person did
     public var selection: Selection?
     public var query: String = ""
-    public var needsOnly = false
+    public var needsOnly = false {
+        didSet { prefs.set(needsOnly: needsOnly) }
+    }
     /// How the desks are ordered. A view, never a fetch: nothing here changes
     /// what is polled or what a desk says.
-    public var deskSort: StateRules.DeskSort = .owner
+    public var deskSort: StateRules.DeskSort = .owner {
+        didSet { prefs.set(deskSort: deskSort) }
+    }
     public var toast: String?
     public var gateNotice: String?
     /// Whether the put-away section is open. On the store rather than the view
@@ -184,8 +193,23 @@ public final class Store {
     private var runtime: RuntimeInfo?
     private var loops: [Task<Void, Never>] = []
 
-    public init(api: Api) {
+    /// Whether the settings popover is open. On the store rather than the view
+    /// for the same reason `putAwayOpen` is: the shot harness has to be able to
+    /// open it to photograph it.
+    public var settingsOpen = false
+
+    /// `nil` preferences means an in-memory set, built here rather than as a
+    /// default argument: a default is evaluated outside the actor, and a
+    /// `@MainActor` type cannot be constructed there.
+    public init(api: Api, prefs: Preferences? = nil) {
         self.api = api
+        let prefs = prefs ?? Preferences()
+        self.prefs = prefs
+        // Swift does not run a property observer for a write inside the
+        // initialiser, so this is a load and never a save back over the value
+        // it just read.
+        deskSort = prefs.deskSort
+        needsOnly = prefs.needsOnly
     }
 
     // MARK: - derived
