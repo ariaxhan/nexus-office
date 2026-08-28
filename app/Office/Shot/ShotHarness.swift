@@ -90,7 +90,9 @@ enum ShotHarness {
             return
         }
         place(window)
-        NSApp.activate(ignoringOtherApps: true)
+        // `place` has already ordered an unattended window to the back on
+        // purpose; activating here would undo it and take the desktop.
+        if !isUnattended { NSApp.activate(ignoringOtherApps: true) }
         await settle(1.2)
 
         if let bot = preferredBot(store) {
