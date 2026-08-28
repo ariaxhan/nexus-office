@@ -505,8 +505,8 @@
         "lanes": [
           {
             "pid": 4101,
-            "repo": "nexus-office",
-            "path": "/repos/ariaxhan/nexus-office",
+            "repo": "checkout-api",
+            "path": "/repos/acme/checkout-api",
             "issue": "44",
             "started": "2026-08-28T07:42:26Z",
             "started_age_s": 1500,
@@ -524,7 +524,7 @@
           {
             "pid": 4103,
             "repo": "storefront",
-            "path": "/repos/ariaxhan/storefront",
+            "path": "/repos/acme/storefront",
             "issue": "88",
             "started": "2026-08-28T06:37:26Z",
             "started_age_s": 5400,
@@ -537,7 +537,7 @@
             "issues": 4
           },
           {
-            "repo": "ariaxhan/kernel-claude",
+            "repo": "acme/toolkit",
             "issues": 1
           }
         ],
@@ -577,8 +577,8 @@
           ],
           "rows": [
             {
-              "id": "lane-nexus-office-44",
-              "title": "nexus-office#44",
+              "id": "lane-checkout-api-44",
+              "title": "checkout-api#44",
               "subtitle": "started 25m ago",
               "detail": "working",
               "badge": "working",
@@ -617,8 +617,8 @@
               "url": ""
             },
             {
-              "id": "queued-ariaxhan/kernel-claude",
-              "title": "ariaxhan/kernel-claude",
+              "id": "queued-acme/toolkit",
+              "title": "acme/toolkit",
               "subtitle": "1 issue waiting for a free lane",
               "detail": "",
               "badge": "queued",
