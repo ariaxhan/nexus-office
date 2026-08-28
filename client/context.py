@@ -206,7 +206,8 @@ def read(repo: str, path: str = "", desks: dict | None = None) -> tuple[int, dic
 
     found = sessions.desk_dir(repo, desks)
     if not found:
-        return 404, {"error": f"the office does not know where {repo} is checked out"}
+        return 404, {"error": sessions.NO_VAULT if sessions.no_vault()
+                     else f"the office does not know where {repo} is checked out"}
     try:
         root = str(pathlib.Path(found).resolve(strict=True))
     except (OSError, RuntimeError):

@@ -550,6 +550,22 @@ def _allowed_dir(resolved: str) -> bool:
     return False
 
 
+NO_VAULT = ("the office has no vault to look in: OFFICE_RUNTIME_ROOT is not set "
+            "on the process serving this door")
+
+
+def no_vault() -> bool:
+    """Whether this process was given a vault to walk at all.
+
+    A desk that is not checked out and a door that was never told where any
+    checkout lives both come out of `desk_dir` as "". They are not the same
+    fact: the first is about one repo, the second is about every desk at once
+    and is fixed by restarting the door with `--root`. Saying the first when the
+    second is true sends a person looking at the wrong machine.
+    """
+    return not os.environ.get("OFFICE_RUNTIME_ROOT", "").strip()
+
+
 def desk_dir(repo: str, desks: dict | None = None) -> str:
     """Where a desk is checked out on this machine, or "".
 
@@ -640,7 +656,8 @@ def readme(repo: str, desks: dict | None = None) -> tuple[int, dict]:
     directory = desk_dir(repo, desks)
     if not directory:
         return 200, {"repo": repo, "state": "elsewhere", "text": "",
-                     "detail": f"{repo} is not checked out on this machine"}
+                     "detail": NO_VAULT if no_vault()
+                     else f"{repo} is not checked out on this machine"}
 
     base = pathlib.Path(directory)
     try:

@@ -23,11 +23,13 @@ on the answer.
 from __future__ import annotations
 
 import importlib
+import os
 import pathlib
 import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
@@ -240,9 +242,19 @@ class RefusalTest(ContextBase):
         self.assertNotIn("text", body)
 
     def test_a_repo_the_office_cannot_place_is_a_miss_not_a_guess(self):
-        code, body = self.context.read("acme/not-checked-out")
+        with unittest.mock.patch.dict(os.environ,
+                                      {"OFFICE_RUNTIME_ROOT": str(self.root)}):
+            code, body = self.context.read("acme/not-checked-out")
         self.assertEqual(code, 404)
         self.assertIn("acme/not-checked-out", body["error"])
+
+    def test_a_door_with_no_vault_says_that_rather_than_blaming_the_desk(self):
+        """Every desk failing at once is a door started without `--root`, not
+        seventy repos that vanished."""
+        with unittest.mock.patch.dict(os.environ, {"OFFICE_RUNTIME_ROOT": ""}):
+            code, body = self.context.read("acme/not-checked-out")
+        self.assertEqual(code, 404)
+        self.assertEqual(body["error"], self.context.sessions.NO_VAULT)
 
     def test_a_repo_that_is_not_a_name_with_a_slash_in_it_is_refused(self):
         for bad in ("", "acme", "../../etc", "acme/thing/extra", "acme thing"):
