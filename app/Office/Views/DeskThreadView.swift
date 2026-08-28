@@ -79,6 +79,10 @@ struct DeskThreadView: View {
                             .font(.system(size: 12.5))
                             .foregroundStyle(Theme.faint)
                             .padding(.top, 20)
+                        // A desk with nothing open used to be that one line and
+                        // nothing else. The repo's own front page is what a
+                        // person opens a quiet desk to read.
+                        ReadmeBlock(store: store, repo: station.repo)
                     }
                 }
                 .padding(.horizontal, 18)
@@ -130,6 +134,72 @@ struct DeskThreadView: View {
         .padding(.horizontal, 18)
         .frame(height: 44)
         .padding(.top, 8)
+    }
+}
+
+/// The repo's README, when the desk has nothing else to say.
+///
+/// Read off this machine by the door rather than off GitHub, and asked for only
+/// on a desk with nothing open on it: the office's GraphQL budget is spent on
+/// what changed, and a front page is not that.
+///
+/// Held here rather than in `Store`, because it is wanted by exactly one view
+/// in exactly one state and nothing else in the office reasons about it. The
+/// `task(id:)` reloads when the selection moves to another desk.
+struct ReadmeBlock: View {
+    // Not `@Bindable`: this reads `store.api` and writes nothing back, and a
+    // property wrapper that promises a write nobody makes is a lie about the
+    // seam.
+    let store: Store
+    let repo: String
+
+    @State private var readme: DeskReadme?
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let readme, readme.isOK {
+                HStack(spacing: 8) {
+                    Text(readme.name.isEmpty ? "readme" : readme.name.lowercased())
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.faint)
+                    if readme.clipped {
+                        Text("first 64 KB")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.faint)
+                    }
+                }
+                MarkdownText(raw: readme.text)
+                    .frame(maxWidth: 720, alignment: .leading)
+            } else if let sentence {
+                // Why there is no front page, in the door's own words. Not red:
+                // a repo that is not checked out here is not a broken repo.
+                Text(sentence)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 620, alignment: .leading)
+            }
+        }
+        .padding(.top, 14)
+        .task(id: repo) {
+            readme = nil
+            failure = nil
+            do {
+                readme = try await store.api.readme(repo: repo)
+            } catch {
+                failure = error.localizedDescription
+            }
+        }
+    }
+
+    /// The one sentence to print when there is no text. Nil while the read is
+    /// still out, so a quiet desk does not flash a sentence it is about to
+    /// replace.
+    private var sentence: String? {
+        if let failure { return "could not read this repo's README: \(failure)" }
+        guard let readme else { return nil }
+        return readme.detail.isEmpty ? nil : readme.detail
     }
 }
 

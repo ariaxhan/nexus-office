@@ -889,3 +889,47 @@ public struct Ack: Decodable {
         return ok ? "Done." : "That did not apply."
     }
 }
+
+/// A desk's README, read off this machine.
+///
+/// `state` is `ok`, `none` (this checkout has no README), `elsewhere` (the
+/// office does not know where this repo is checked out) or `unreadable`. Only
+/// `ok` carries text, and the other three each carry their own sentence,
+/// because a desk that says nothing at all is the thing this was added to end.
+public struct DeskReadme: Decodable, Hashable {
+    public var repo: String
+    public var state: String
+    public var name: String
+    public var text: String
+    public var detail: String
+    /// The file's own mtime, not the snapshot's clock.
+    public var at: String
+    public var clipped: Bool
+
+    public var isOK: Bool { state == "ok" && !text.isEmpty }
+
+    public init(repo: String = "", state: String = "none", name: String = "",
+                text: String = "", detail: String = "", at: String = "",
+                clipped: Bool = false) {
+        self.repo = repo
+        self.state = state
+        self.name = name
+        self.text = text
+        self.detail = detail
+        self.at = at
+        self.clipped = clipped
+    }
+
+    enum CodingKeys: String, CodingKey { case repo, state, name, text, detail, at, clipped }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        repo = c.str(.repo) ?? ""
+        state = c.str(.state) ?? "none"
+        name = c.str(.name) ?? ""
+        text = c.str(.text) ?? ""
+        detail = c.str(.detail) ?? ""
+        at = c.str(.at) ?? ""
+        clipped = c.bool(.clipped) ?? false
+    }
+}

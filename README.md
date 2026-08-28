@@ -169,10 +169,10 @@ false green this project exists to kill.
 
 ```sh
 npm test        # the python door + the Swift state rules, headless
-npm run shot    # builds the app, photographs eleven framings, then LOOK
+npm run shot    # builds the app, photographs twelve framings, then LOOK
 ```
 
-`scripts/shoot.sh` writes eleven PNGs into `shots/`: `app-roster.png` (bots above
+`scripts/shoot.sh` writes twelve PNGs into `shots/`: `app-roster.png` (bots above
 desks), `app-desk.png` (a desk thread), `app-gate.png` (the sheet over the room),
 `app-needs.png` (the "needs me" filter), `app-wall.png` (the local sources, and
 the one that says something needs a person), `app-putaway.png` (the desks a
@@ -183,8 +183,9 @@ that already carried one), `app-automation.png` (the automation page: the
 schedule, the door, and what the runner touched with a link to what it said) and
 `app-sessions.png` (a desk with a live agent on it, its conversation open and a
 reply half typed) and `app-reactions.png` (a conversation with marks on two of
-its turns: the one surface drawn from a store no other framing reads). The
-eleventh, `app-light.png`, is the roster with the
+its turns: the one surface drawn from a store no other framing reads) and
+`app-readme.png` (a desk with nothing open on it, drawing the repo's own front
+page instead of one grey line). The twelfth, `app-light.png`, is the roster with the
 lights on: the office follows the system appearance, and it comes from a second
 run because there is no way to be in two appearances at once. They are not committed, because a screenshot in a repo is
 stale the day after it lands. Run it and open them: every defect this project has
