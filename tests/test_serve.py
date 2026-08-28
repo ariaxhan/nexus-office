@@ -325,6 +325,22 @@ class SessionRoutesTest(ServeTest):
         self.get("/api/sessions?repo=acme/thing")
         self.assertEqual(seen["read"][0], ("acme/thing",))
 
+    def test_a_desks_readme_comes_through_the_door_by_repo(self):
+        seen = self.stub(readme=(200, {"repo": "acme/docs", "state": "ok",
+                                       "name": "README.md", "text": "# acme docs"}))
+        code, body = self.get("/api/readme?repo=acme/docs")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["text"], "# acme docs")
+        self.assertEqual(seen["readme"][0], ("acme/docs",))
+
+    def test_a_refused_readme_keeps_the_modules_status_code(self):
+        self.stub(readme=(400, {"error": "bad repo"}))
+        self.assertEqual(self.get("/api/readme?repo=../..")[0], 400)
+
+    def test_the_readme_route_is_a_read_and_there_is_no_write_at_it(self):
+        self.stub(readme=(200, {"repo": "acme/docs", "state": "none", "text": ""}))
+        self.assertEqual(self.post("/api/readme", {"repo": "acme/docs"})[0], 404)
+
     def test_a_transcript_carries_its_own_status_code(self):
         self.stub(transcript=(404, {"error": "no such session"}))
         code, body = self.get("/api/session?name=ghost")

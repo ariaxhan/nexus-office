@@ -1114,5 +1114,9 @@
     "release": {
       "2": "unclear"
     }
+  },
+    "readmes": {
+    "acme/docs": "# acme docs\n\nEverything a person needs to run the acme stack, and nothing about how it\nis built.\n\n## Where things are\n\n- `guides/` the pages a customer reads\n- `runbooks/` what to do at 3am, one page per alarm\n- `adr/` the decisions, dated, never edited after the fact\n\n## Publishing\n\n    make preview     # localhost:4000, live reload\n    make check       # link check and spelling, the same one CI runs\n\nA page ships when `make check` is clean. There is no review queue: the runbooks\nare owned by the team that gets paged for them, and a wrong runbook is worse\nthan a missing one.\n\n## Conventions\n\nEvery runbook opens with the alarm text it answers, verbatim, so searching the\npage title for the thing PagerDuty just said finds it.\n",
+    "northwind/internal-tools": "# internal-tools\n\nThe small programs the warehouse team runs by hand. Each one is a single file\nand does one thing.\n\n    ./bin/relabel   reprint a pallet label from its manifest id\n    ./bin/reconcile diff last night's counts against the ledger\n\nNothing here is a service. If a tool here needs to run on a schedule it belongs\nin `northwind/api` instead, where it can be watched.\n"
   }
 }

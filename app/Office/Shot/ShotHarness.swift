@@ -159,6 +159,15 @@ enum ShotHarness {
             await frame(store, window, directory, "reactions", settling: 1.4)
         }
 
+        // A desk with nothing open on it. Every other framing photographs a
+        // desk that has work on it, so none of them would ever show what a
+        // quiet desk draws, which is the one place this app used to print a
+        // single grey line and stop.
+        if let quiet = quietDesk(store) {
+            store.select(.desk(quiet.repo))
+            await frame(store, window, directory, "readme", settling: 1.4)
+        }
+
         // A picture picked and not yet sent. The composer is the one part of
         // this app whose state nothing else photographs: the chip, the size
         // after the downscale and the way out of it all live for the seconds
@@ -176,6 +185,14 @@ enum ShotHarness {
         }
 
         NSApp.terminate(nil)
+    }
+
+    /// A desk with no issues, no PRs and no raised hand: the state whose whole
+    /// content is the repo's front page.
+    private static func quietDesk(_ store: Store) -> Station? {
+        store.stations.first {
+            $0.issues.isEmpty && $0.prs.isEmpty && !$0.hidden && $0.gate == nil
+        }
     }
 
     /// A desk the demo floor has an agent sitting at, preferring one that is
