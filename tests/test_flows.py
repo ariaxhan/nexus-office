@@ -230,6 +230,13 @@ class States(Base):
         assert_card(self, c, "unregistered")
         self.assertEqual(c["facts"][0]["value"], "not in the registry")
         self.assertEqual(c["facts"][0]["tone"], "warn")
+        # And it counts. A row nobody is asked to look at is the false-green
+        # this card exists to refuse.
+        self.assertEqual(d["alarm"], 1)
+        self.assertEqual(c["needs"], 1)
+        self.assertEqual(
+            c["headline"],
+            "1 of 8 flows needs a look: Mobile capture not in the registry")
 
     def test_precedence_broken_beats_stale(self):
         """A flow whose last success is past budget AND whose last run failed
