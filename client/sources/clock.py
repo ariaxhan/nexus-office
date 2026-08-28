@@ -248,6 +248,90 @@ TROUBLE = {
 }
 
 
+# Which heading a job sits under. Three, not six: a person reading the wall is
+# deciding what to look at, and the difference between stale and failing belongs
+# in the badge on the row rather than in a fourth heading to scan past.
+GROUPS = {
+    "stale": "needs a look", "failing": "needs a look",
+    "never": "needs a look", "unknown": "needs a look",
+    "off": "off",
+    "ok": "healthy",
+}
+ROW_TONES = {"stale": "bad", "failing": "bad", "never": "warn",
+             "unknown": "warn", "off": "dim", "ok": "ok"}
+
+
+def _script(command: str, root: pathlib.Path | None) -> str:
+    """The absolute file this command runs, when there really is one under the
+    root, else "".
+
+    Three conditions, all of them required, and none of them about the string
+    looking plausible: the token is absolute, it resolves to a REGULAR FILE that
+    exists right now, and the resolved path is inside the configured root. The
+    resolve is what makes a symlink out of the vault fail this rather than pass
+    it, and the containment is why `/bin/sh` is not a link even though it is
+    unquestionably there.
+
+    A link is somewhere to OPEN. Nothing in this app runs a row, and a path that
+    cannot be stood behind draws as text rather than as a button that lies.
+    """
+    if root is None:
+        return ""
+    try:
+        base = str(root.resolve(strict=True))
+    except (OSError, RuntimeError):
+        return ""
+    for token in str(command or "").split():
+        if not token.startswith("/"):
+            continue
+        candidate = pathlib.Path(token)
+        try:
+            real = candidate.resolve(strict=True)
+            if not real.is_file():
+                continue
+        except (OSError, RuntimeError):
+            continue
+        text = str(real)
+        if text == base or text.startswith(base + os.sep):
+            return "file://" + text
+    return ""
+
+
+def rows(data: dict) -> list:
+    """Every job, in the order the source already sorted them.
+
+    Source order, not a second sort here: `read()` put the faults on top and the
+    deliberately-off tail underneath, and a card that re-decided that would put
+    a paused job above one that stopped firing on somebody's wall.
+    """
+    root = _root()
+    out = []
+    for job in data.get("jobs") or []:
+        state = str(job.get("state") or "unknown")
+        command = str(job.get("command") or "")
+        # The small print, in the order it is useful: what it runs, what the
+        # health check said about the last run, why nothing is watching it.
+        detail = " · ".join(p for p in (
+            command,
+            str(job.get("detail") or ""),
+            str(job.get("note") or ""),
+            "nothing is watching this" if job.get("unwatched") else "",
+        ) if p)
+        owner = str(job.get("owner") or "")
+        out.append(_card.row(
+            str(job.get("id") or ""),
+            str(job.get("id") or ""),
+            subtitle=" · ".join(p for p in (str(job.get("schedule") or ""),
+                                            owner and f"owner {owner}") if p),
+            detail=detail,
+            badge=state,
+            tone=ROW_TONES.get(state, "warn"),
+            group=GROUPS.get(state, "needs a look"),
+            url=_script(command, root),
+        ))
+    return out
+
+
 def card(data: dict) -> dict:
     """The wall clock in one line: how many jobs want a person, and why.
 
@@ -294,4 +378,4 @@ def card(data: dict) -> dict:
     # a stamp in another shape sorts last instead of winning the comparison.
     as_of = max((_card.zulu(j.get("last_attempt"))
                  for j in (data.get("jobs") or [])), default="")
-    return _card.build(TITLE, headline, alarm, as_of, facts)
+    return _card.build(TITLE, headline, alarm, as_of, facts, rows(data))

@@ -477,6 +477,58 @@ class SessionRoutesTest(ServeTest):
         code, body = self.get("/api/automation")
         self.assertEqual((code, body["automation"]), (200, {}))
 
+    # ── #36: a desk's own Markdown, through the door ────────────────────────
+    # Same class for the same reason as the automation block above. The reader
+    # itself is tested in test_context.py against a real checkout; what is
+    # checked here is the wiring, and that the door added no reach of its own.
+
+    def context_stub(self, answer):
+        """Swap the context module's `read` for a recorder."""
+        mod = self.serve.context
+        was = mod.read
+        self.addCleanup(setattr, mod, "read", was)
+        seen = []
+
+        def fake(*args, **kw):
+            seen.append((args, kw))
+            return answer
+
+        mod.read = fake
+        return seen
+
+    def test_a_desks_context_comes_through_the_door(self):
+        seen = self.context_stub((200, {"repo": "acme/thing", "root": "/w/thing",
+                                        "files": [{"path": "README.md", "name": "README.md",
+                                                   "group": "root", "bytes": 12}],
+                                        "capped": False, "path": "", "title": "",
+                                        "text": "", "bytes": 0}))
+        code, body = self.get("/api/context?repo=acme/thing")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["files"][0]["path"], "README.md")
+        self.assertEqual(seen[0][0], ("acme/thing", ""))
+
+    def test_the_requested_path_reaches_the_reader_verbatim(self):
+        seen = self.context_stub((200, {"path": "_meta/plans/one.md"}))
+        self.get("/api/context?repo=acme/thing&path=_meta%2Fplans%2Fone.md")
+        self.assertEqual(seen[0][0], ("acme/thing", "_meta/plans/one.md"))
+
+    def test_a_refusal_keeps_its_own_status_code_at_the_door(self):
+        """400 and 404 mean different things to the app, and flattening either
+        into a 200 with an error in it is how a refusal draws as a document."""
+        for status in (400, 403, 404):
+            self.context_stub((status, {"error": "no"}))
+            self.assertEqual(self.get("/api/context?repo=acme/thing&path=x")[0], status)
+
+    def test_the_door_asks_the_reader_even_when_nothing_was_named(self):
+        """No repo is the reader's refusal to make, not the door's. One place
+        decides what a valid request is, or the two drift."""
+        seen = self.context_stub((400, {"error": "bad repo"}))
+        self.assertEqual(self.get("/api/context")[0], 400)
+        self.assertEqual(seen[0][0], ("", ""))
+
+    def test_context_is_read_only_and_has_no_write_route(self):
+        self.assertEqual(self.post("/api/context", {"repo": "acme/thing"})[0], 404)
+
 
 class DoorTest(ServeTest):
     """The bind address keeps the network out; these keep the browser out."""

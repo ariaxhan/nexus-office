@@ -42,6 +42,31 @@ HEADLINE_CHARS = 79
 FACT_CHARS = 120
 MAX_FACTS = 8
 
+# ── the table under the numbers ───────────────────────────────────────────────
+#
+# `facts` is the count. `rows` is the list, for a source whose whole point is the
+# list: 632 learnings, 45 jobs. Eight keys, drawn by a renderer that knows
+# nothing about what it is looking at, which is the only reason a ninth source
+# can arrive next month with no Swift at all.
+#
+# `rows` is OPTIONAL and absent when empty rather than present and empty. Six of
+# the eight sources have no table, and an always-present key is bytes on every
+# card in every push for a list nobody has.
+ROW_KEYS = ("id", "title", "subtitle", "detail", "badge", "tone", "group", "url")
+ROW_TITLE_CHARS = 480
+ROW_SUBTITLE_CHARS = 320
+ROW_BADGE_CHARS = 24
+ROW_GROUP_CHARS = 40
+ROW_ID_CHARS = 200
+# The clock has 45 jobs and the library has hundreds of learnings. This is the
+# ceiling that keeps one source from owning a snapshot the whole room shares.
+MAX_ROWS = 2000
+
+# A link in a row is a place to GO. `https` is the internet; `file` is something
+# on this machine the source already proved is there. Everything else is a way
+# to make a click run a program, and no click in this app runs anything.
+ROW_SCHEMES = ("https://", "file://")
+
 
 def clip(text, n: int) -> str:
     s = str(text if text is not None else "").strip()
@@ -130,8 +155,40 @@ def fact(label: str, value, tone: str = "") -> dict:
     }
 
 
+def link(url) -> str:
+    """A url a click may follow, or "".
+
+    An allow-list of two schemes, checked here so no renderer in either language
+    has to decide whether `javascript:` counts. A row whose link is refused
+    still draws; it just draws as text, which is the honest thing: the row is
+    still true, it is only the destination that could not be stood behind.
+    """
+    s = str(url if url is not None else "").strip()
+    return s if s.startswith(ROW_SCHEMES) and len(s) > max(len(p) for p in ROW_SCHEMES) else ""
+
+
+def row(id: str, title, subtitle="", detail="", badge="", tone: str = "",
+        group: str = "", url: str = "") -> dict:
+    """One line of the table. Eight keys, always, all of them already strings.
+
+    `title` is the thing itself, `subtitle` is where it came from, `detail` is
+    the small print, `badge` is the one number worth a pill, `group` is the
+    heading it sits under, and `url` is somewhere to go or nothing at all.
+    """
+    return {
+        "id": clip(id, ROW_ID_CHARS),
+        "title": clip(title, ROW_TITLE_CHARS),
+        "subtitle": clip(subtitle, ROW_SUBTITLE_CHARS),
+        "detail": clip(detail, FACT_CHARS),
+        "badge": clip(badge, ROW_BADGE_CHARS),
+        "tone": tone if tone in TONES else "",
+        "group": clip(group, ROW_GROUP_CHARS),
+        "url": link(url),
+    }
+
+
 def build(title: str, headline: str, needs: int = 0, as_of: str = "",
-          facts=()) -> dict:
+          facts=(), rows=()) -> dict:
     """The card, clamped to the contract so a renderer never has to check.
 
     Clamped rather than asserted: a card is a summary, and a summary that raises
@@ -142,16 +199,22 @@ def build(title: str, headline: str, needs: int = 0, as_of: str = "",
         n = int(needs)
     except (TypeError, ValueError):
         n = 0
-    rows = []
-    for row in list(facts)[:MAX_FACTS]:
-        rows.append(fact(row.get("label", ""), row.get("value", ""), row.get("tone", "")))
-    return {
+    lines = []
+    for entry in list(facts)[:MAX_FACTS]:
+        lines.append(fact(entry.get("label", ""), entry.get("value", ""), entry.get("tone", "")))
+    card = {
         "title": str(title),
         "headline": clip(headline, HEADLINE_CHARS),
         "needs": max(0, n),
         "as_of": str(as_of or ""),
-        "facts": rows,
+        "facts": lines,
     }
+    # Order is the source's: it already decided what leads, and a second opinion
+    # here would put a failing job under a healthy one on somebody's wall.
+    table = [r for r in list(rows)[:MAX_ROWS] if isinstance(r, dict)]
+    if table:
+        card["rows"] = table
+    return card
 
 
 def trouble(title: str, state, detail, phrases: dict) -> dict:

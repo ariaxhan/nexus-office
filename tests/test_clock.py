@@ -343,5 +343,141 @@ class CardTest(ClockBase):
         self.assertEqual(card["needs"], 1)
 
 
+class CardRowTest(ClockBase):
+    """The wall clock as a list you can actually read.
+
+    A count of five is not a thing anybody can act on. The rows are what turns
+    "5 jobs need a look" into five job ids with their schedule, their owner and
+    the command underneath, and the grouping is the same problem-first ordering
+    the source already sorted by: a deliberately paused job must never sit above
+    one that stopped firing on its own.
+    """
+
+    def card(self):
+        return self.clock.card(self.clock.read())
+
+    def three(self):
+        """One fault, one deliberately off, one healthy."""
+        self.status([
+            self.row("com.x.healthy", "OK", attempt="2026-08-26T05:00:00Z",
+                     success="2026-08-26T05:00:00Z", rc=0),
+            self.row("com.x.paused", "OFF"),
+            self.row("com.x.broken", "FAILING", attempt="2026-08-26T06:00:00Z",
+                     success="2026-08-26T04:00:00Z", rc=2, detail="exit 2"),
+        ], unhealthy=1, off=1)
+        self.registry(self.reg("com.x.healthy"), self.reg("com.x.paused"),
+                      self.reg("com.x.broken"))
+
+    def test_every_job_becomes_a_row_in_the_order_the_source_sorted_them(self):
+        self.three()
+        section = self.clock.read()
+        card = self.clock.card(section)
+        assert_card(self, card)
+        self.assertEqual([r["id"] for r in card["rows"]],
+                         [j["id"] for j in section["jobs"]])
+        self.assertEqual(len(card["rows"]), 3)
+
+    def test_the_rows_are_grouped_problem_first_then_off_then_healthy(self):
+        self.three()
+        rows = self.card()["rows"]
+        self.assertEqual([r["group"] for r in rows],
+                         ["needs a look", "off", "healthy"])
+        self.assertEqual(rows[0]["id"], "com.x.broken",
+                         "a fault leads; a paused job never does")
+
+    def test_a_row_carries_the_state_the_schedule_the_owner_and_the_command(self):
+        self.status([self.row("com.x.broken", "FAILING",
+                              attempt="2026-08-26T06:00:00Z", rc=2,
+                              detail="exit 2 from the wrapper")], unhealthy=1)
+        self.registry(self.reg("com.x.broken", command=["/bin/bash", "/srv/run.sh"]))
+        r = self.card()["rows"][0]
+        self.assertEqual(r["id"], "com.x.broken")
+        self.assertEqual(r["title"], "com.x.broken")
+        self.assertEqual(r["badge"], "failing")
+        self.assertEqual(r["tone"], "bad")
+        self.assertIn("every 1h", r["subtitle"])
+        self.assertIn("aria", r["subtitle"])
+        self.assertIn("/srv/run.sh", r["detail"])
+        self.assertIn("exit 2", r["detail"])
+
+    def test_a_paused_job_is_dim_and_a_healthy_one_is_not_an_alarm(self):
+        self.three()
+        rows = {r["id"]: r for r in self.card()["rows"]}
+        self.assertEqual(rows["com.x.paused"]["tone"], "dim")
+        self.assertEqual(rows["com.x.paused"]["badge"], "off")
+        self.assertEqual(rows["com.x.healthy"]["tone"], "ok")
+
+    def test_a_job_nothing_watches_says_so_in_its_own_row(self):
+        self.status([self.row("com.x.unwatched", "OK",
+                              attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0)])
+        self.registry(self.reg("com.x.unwatched", budget=None))
+        self.assertIn("nothing is watching", self.card()["rows"][0]["detail"])
+
+    # -- the one link, and everything it refuses ------------------------------
+
+    def test_a_command_file_that_exists_under_the_root_becomes_a_link(self):
+        """The only clickable thing this source produces, and it is a place to
+        open, never a thing to run: the office does not execute a row."""
+        script = self.root / "_meta" / "services" / "jobs" / "nightly.sh"
+        script.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+        self.status([self.row("com.x.nightly", "OK",
+                              attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0)])
+        self.registry(self.reg("com.x.nightly",
+                               command=["/bin/sh", str(script), "--quiet"]))
+        # Resolved, not as written: the containment check is done against where
+        # the filesystem says this lands, and the link is that same answer, so
+        # what a click opens is what was proven to be inside the root.
+        self.assertEqual(self.card()["rows"][0]["url"],
+                         "file://" + str(script.resolve()))
+
+    def test_a_command_path_that_is_not_there_is_never_linked(self):
+        missing = self.root / "_meta" / "services" / "jobs" / "gone.sh"
+        self.status([self.row("com.x.gone", "OK", attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0)])
+        self.registry(self.reg("com.x.gone", command=["/bin/sh", str(missing)]))
+        row = self.card()["rows"][0]
+        self.assertEqual(row["url"], "")
+        self.assertIn("gone.sh", row["detail"], "still readable, just not a link")
+
+    def test_a_command_path_outside_the_root_is_never_linked(self):
+        """`/bin/sh` exists, and it is not this vault's business to open it.
+        Containment is what makes the link safe, not existence."""
+        self.status([self.row("com.x.outside", "OK",
+                              attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0)])
+        self.registry(self.reg("com.x.outside", command=["/bin/sh", "/etc/hosts"]))
+        self.assertEqual(self.card()["rows"][0]["url"], "")
+
+    def test_a_directory_or_a_relative_path_is_not_a_file_to_open(self):
+        inside = self.root / "_meta" / "services"
+        self.status([self.row("a", "OK", attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0),
+                     self.row("b", "OK", attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0)])
+        self.registry(self.reg("a", command=["/bin/sh", str(inside)]),
+                      self.reg("b", command=["make", "_meta/services/jobs/jobctl"]))
+        self.assertEqual([r["url"] for r in self.card()["rows"]], ["", ""])
+
+    def test_a_symlink_out_of_the_root_is_not_inside_the_root(self):
+        import os
+        target = pathlib.Path(self.tmp.name).parent / "office-clock-outside.sh"
+        target.write_text("#!/bin/sh\n", encoding="utf-8")
+        self.addCleanup(target.unlink, True)
+        link = self.root / "_meta" / "services" / "jobs" / "escape.sh"
+        os.symlink(target, link)
+        self.status([self.row("com.x.escape", "OK",
+                              attempt="2026-08-26T05:00:00Z",
+                              success="2026-08-26T05:00:00Z", rc=0)])
+        self.registry(self.reg("com.x.escape", command=["/bin/sh", str(link)]))
+        self.assertEqual(self.card()["rows"][0]["url"], "")
+
+    def test_a_source_that_could_not_read_the_clock_has_no_rows(self):
+        card = self.card()
+        assert_card(self, card)
+        self.assertNotIn("rows", card)
+
+
 if __name__ == "__main__":
     unittest.main()
