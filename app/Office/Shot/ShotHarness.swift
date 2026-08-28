@@ -7,7 +7,7 @@ import SwiftUI
 /// A build passing proves nothing about a room. Every defect this project has
 /// had was invisible in source and obvious on screen, so the app can photograph
 /// itself: `--demo <fixture> --shot-mode` opens the window at a fixed size,
-/// walks seven framings, and writes each one to `shots/app-<framing>.png`.
+/// walks its framings, and writes each one to `shots/app-<framing>.png`.
 ///
 /// `--light` is the eighth. The office follows the system appearance, and a
 /// machine set to Dark would photograph the light room never, so that run
@@ -240,6 +240,16 @@ enum ShotHarness {
             store.select(.desk(quiet.repo))
             await frame(store, window, directory, "readme", settling: 1.4)
         }
+
+        // The gear, open. Every preference this app has is behind this one
+        // button now, and no other framing can reach it: the popover is its own
+        // window, so a run that never opens it photographs a room where the
+        // settings surface and a settings surface that draws nothing look
+        // exactly the same.
+        store.settingsOpen = true
+        await frame(store, window, directory, "settings", settling: 1.4)
+        store.settingsOpen = false
+        await settle(0.6)
 
         // A picture picked and not yet sent. The composer is the one part of
         // this app whose state nothing else photographs: the chip, the size
