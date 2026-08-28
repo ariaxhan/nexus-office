@@ -75,6 +75,13 @@ targets:
       # relaunch. Neither failure is visible in a screenshot, so neither can be
       # left to one.
       - path: Office/Model/Reactions.swift
+      # A desk's face. The colour is a pure function of the repo path, ported
+      # from the villagers' own `src/names.js`, and the whole claim is that the
+      # same desk gets the same coat on every machine and after every relaunch.
+      # That is arithmetic on a string and invisible in a screenshot: a picture
+      # shows a floor of colours whether or not they are the same colours as
+      # yesterday.
+      - path: Office/Model/Faces.swift
     settings:
       base:
         PRODUCT_NAME: OfficeTests

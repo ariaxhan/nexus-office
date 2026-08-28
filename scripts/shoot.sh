@@ -109,7 +109,7 @@ echo "shoot: running the light framing"
 shoot_run --light $QUIET
 
 MISSING=0
-for framing in roster desk gate needs wall library clock pipeline context putaway automation sessions reactions readme attach light; do
+for framing in roster faces desk gate needs wall library clock pipeline context putaway automation sessions reactions readme attach light; do
   if [ -f "$ROOT/shots/app-$framing.png" ]; then
     echo "shoot: shots/app-$framing.png"
   else

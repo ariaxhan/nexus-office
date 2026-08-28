@@ -114,6 +114,25 @@ enum ShotHarness {
 
         await frame(store, window, directory, "roster")
 
+        // The faces, and the way to change one. Every other framing photographs
+        // the roster as it is derived, so none of them would ever show that the
+        // picker opens or that a hand-picked colour actually lands: the coats
+        // are a pure function of the repo path and a floor of them looks the
+        // same whether the override path works or has been deleted.
+        //
+        // The chosen colour is written into the shared book, which on a demo run
+        // holds its faces in memory and never writes them down, so photographing
+        // this cannot recolour a real desk.
+        if let dressed = store.stations.first(where: { !$0.hidden })?.repo {
+            FaceBook.shared.choose(repo: dressed, hex: "#c9a2e0")
+            store.select(.desk(dressed))
+            store.facePicker = dressed
+            await frame(store, window, directory, "faces", settling: 1.6)
+            store.facePicker = nil
+            FaceBook.shared.reset(repo: dressed)
+            await settle(0.6)
+        }
+
         store.select(.desk(deskWithWork(store)))
         await frame(store, window, directory, "desk")
 
