@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 import SwiftUI
 
 /// The eyes.
@@ -25,6 +26,27 @@ enum ShotHarness {
 
     /// Photograph the light room instead of the dark one.
     static var isLight: Bool { CommandLine.arguments.contains("--light") }
+
+    /// Photograph without taking the desktop.
+    ///
+    /// A lane that cannot see ships what it never looked at, which is the one
+    /// rule this repo opens with. The visible path is correctly refused to an
+    /// unattended run, because it activates a window and warps the cursor on a
+    /// desk somebody is working at. This path does neither: the window is
+    /// ordered to the BACK, never made key, never activated, and the cursor is
+    /// left exactly where the person left it.
+    ///
+    /// The picture cannot come from `screencapture` then, because a region of
+    /// the screen would photograph whatever is in front of the office rather
+    /// than the office. It comes from ScreenCaptureKit, which composites a
+    /// named set of windows and nothing else, so what is in front does not
+    /// appear and does not have to be moved.
+    ///
+    /// The set is every window this app has, not just the big one, which keeps
+    /// the property the visible path buys with a region: a sheet is its own
+    /// window, and a capture that photographed only the main window would show
+    /// the gate framing with no gate in it.
+    static var isUnattended: Bool { CommandLine.arguments.contains("--offscreen") }
 
     /// Pin the room a shoot is photographed in, before the window exists.
     ///
@@ -238,7 +260,7 @@ enum ShotHarness {
                               settling seconds: Double = 1.0) async {
         store.query = ""
         await settle(seconds)
-        shoot(window, into: directory, named: name)
+        await shoot(window, into: directory, named: name)
     }
 
     // MARK: - the window
@@ -265,6 +287,13 @@ enum ShotHarness {
         let origin = NSPoint(x: (usable.midX - size.width / 2).rounded(),
                              y: (usable.maxY - clearance - size.height).rounded())
         window.setFrame(NSRect(origin: origin, size: size), display: true)
+        if isUnattended {
+            // Ordered in so it draws, ordered BACK so it never covers what the
+            // person is reading, and never made key: a key window steals the
+            // keystrokes of whoever is typing.
+            window.orderBack(nil)
+            return
+        }
         window.makeKeyAndOrderFront(nil)
         parkTheCursor(over: window)
     }
@@ -284,7 +313,79 @@ enum ShotHarness {
         CGAssociateMouseAndMouseCursorPosition(1)
     }
 
-    private static func shoot(_ window: NSWindow, into directory: String, named name: String) {
+    /// One picture, composited from this app's own windows.
+    ///
+    /// The window set rather than the screen region is the whole point: the
+    /// office is at the BACK of somebody's desktop while this runs, so a region
+    /// of the screen would photograph their browser. ScreenCaptureKit draws the
+    /// listed windows and nothing else, occluded or not.
+    ///
+    /// Every visible window this app owns is listed, and the picture is cropped
+    /// to the union of the ones touching the office window. That is how a sheet
+    /// stays in the frame: it is its own window, it hangs over the office, and
+    /// a capture of the main window alone would show the gate framing with no
+    /// gate in it, which is the exact lie this harness exists to catch.
+    private static func captureQuietly(_ window: NSWindow,
+                                       into directory: String,
+                                       named name: String) async {
+        let path = "\(directory)/app-\(name).png"
+        // A window number is a signed `Int` and AppKit hands out values a
+        // `CGWindowID` cannot hold for windows the window server does not own.
+        // Converting one of those traps the whole app, so every conversion here
+        // is the failable one: a window nothing can photograph is a window to
+        // leave out, not a crash.
+        let ours = Set(NSApp.windows.filter(\.isVisible)
+            .compactMap { CGWindowID(exactly: $0.windowNumber) })
+        guard let target = CGWindowID(exactly: window.windowNumber) else {
+            say("the office window has no window server id, so \(name) was not photographed")
+            return
+        }
+        do {
+            // `onScreenWindowsOnly: false`, because a window that is behind
+            // everything else is still a window this app must be able to
+            // photograph, and the on-screen list is not a promise about that.
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                true, onScreenWindowsOnly: false)
+            let mine = content.windows.filter { ours.contains($0.windowID) }
+            guard let office = mine.first(where: { $0.windowID == target }) else {
+                say("the office window is not in the window list, so \(name) was not photographed")
+                return
+            }
+            guard let display = content.displays.first(where: { $0.frame.intersects(office.frame) })
+                ?? content.displays.first else {
+                say("no display to photograph \(name) against")
+                return
+            }
+            // The filter's content is the windows themselves, not the screen
+            // they happen to sit on, so the picture is asked for at the office
+            // window's own size and never cropped afterwards. Sizing it to the
+            // display instead stretches that content across the whole frame,
+            // which photographs a room sliding off its own edges.
+            let filter = SCContentFilter(display: display, including: mine)
+            let scale = CGFloat(filter.pointPixelScale)
+            let config = SCStreamConfiguration()
+            config.width = Int(office.frame.width * scale)
+            config.height = Int(office.frame.height * scale)
+            config.showsCursor = false
+            let cut = try await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                 configuration: config)
+            let rep = NSBitmapImageRep(cgImage: cut)
+            guard let png = rep.representation(using: .png, properties: [:]) else {
+                say("could not encode \(name)")
+                return
+            }
+            try png.write(to: URL(fileURLWithPath: path))
+            say("wrote \(path)")
+        } catch {
+            say("could not photograph \(name) quietly: \(error.localizedDescription)")
+        }
+    }
+
+    private static func shoot(_ window: NSWindow, into directory: String, named name: String) async {
+        if isUnattended {
+            await captureQuietly(window, into: directory, named: name)
+            return
+        }
         // `screencapture -R` measures from the top left of the PRIMARY display,
         // which on a multi display Mac is the one at the origin and not
         // necessarily the first one AppKit lists.
