@@ -144,6 +144,18 @@ public final class Api {
         return try await get("/api/sessions?repo=\(escaped)", as: SessionRoster.self)
     }
 
+    /// A desk's README, read off this machine by the door.
+    ///
+    /// Its own route rather than a field on the station: it is read from disk
+    /// and not from GitHub, it is only wanted when a desk has nothing open on
+    /// it, and putting every repo's front page in every snapshot would grow the
+    /// poll by the size of the office's documentation.
+    public func readme(repo: String) async throws -> DeskReadme {
+        if let demo { return try demo.readme(repo: repo) }
+        let escaped = repo.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? repo
+        return try await get("/api/readme?repo=\(escaped)", as: DeskReadme.self)
+    }
+
     public func sessionTranscript(name: String, last: Int = 10) async throws -> SessionTranscript {
         if let demo { return try demo.sessionTranscript(name: name) }
         let escaped = name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? name
@@ -352,11 +364,14 @@ private final class DemoFloor {
         /// decoding it as `[Int: String]` makes `JSONDecoder` expect an array of
         /// alternating keys and values, not the object a person would write.
         var reactions: [String: [String: String]]
+        /// A desk's front page, by repo. Absent for a desk the fixture does
+        /// not have one for, which is the real "not checked out here" state.
+        var readmes: [String: String]
 
         var gate: Gate { gates.first ?? .clear }
 
         enum CodingKeys: String, CodingKey {
-            case bots, world, gate, gates, chats, sessions, transcripts, reactions
+            case bots, world, gate, gates, chats, sessions, transcripts, reactions, readmes
         }
 
         init(from decoder: Decoder) throws {
@@ -376,6 +391,7 @@ private final class DemoFloor {
                                                    forKey: .transcripts)) ?? nil) ?? [:]
             reactions = ((try? c.decodeIfPresent([String: [String: String]].self,
                                                  forKey: .reactions)) ?? nil) ?? [:]
+            readmes = ((try? c.decodeIfPresent([String: String].self, forKey: .readmes)) ?? nil) ?? [:]
         }
 
         /// An empty floor, for a fixture that would not load.
@@ -387,6 +403,7 @@ private final class DemoFloor {
             reactions = [:]
             sessions = SessionRoster(state: "unavailable", detail: "no fixture loaded")
             transcripts = [:]
+            readmes = [:]
         }
     }
 
@@ -481,6 +498,23 @@ private final class DemoFloor {
             out.blocked = out.sessions.filter(\.isBlocked).count
             if out.state == "ok" && out.sessions.isEmpty { out.state = "empty" }
             return out
+        }
+    }
+
+    /// Two of the four answers the real door gives, so the demo floor cannot
+    /// photograph a desk saying nothing.
+    ///
+    /// `none` and `unreadable` are not reachable from a fixture, which is a gap
+    /// stated rather than hidden: a JSON floor has no folder to be missing a
+    /// README from. They are pinned in `tests/test_sessions.py` instead, which
+    /// is the weaker proof of the two and the only one available here.
+    func readme(repo: String) throws -> DeskReadme {
+        lock.withLock {
+            guard let text = fixture.readmes[repo], !text.isEmpty else {
+                return DeskReadme(repo: repo, state: "elsewhere",
+                                  detail: "\(repo) is not checked out on this machine")
+            }
+            return DeskReadme(repo: repo, state: "ok", name: "README.md", text: text)
         }
     }
 

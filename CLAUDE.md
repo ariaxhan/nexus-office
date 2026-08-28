@@ -19,7 +19,7 @@ So: **after any change that could alter what the app looks like, take pictures
 and look at them.**
 
 ```sh
-npm run shot        # builds the app, runs it on the fixture, eleven framings into shots/
+npm run shot        # builds the app, runs it on the fixture, twelve framings into shots/
 ```
 
 `shots/app-*.png` are real images. Open them. If you are an agent, **read the PNG
@@ -30,7 +30,7 @@ or network: a check that needs credentials is a check that stops running. It doe
 need a screen that is awake, which is why it caffeinates. `screencapture` returns
 a black frame from a sleeping display and no error.
 
-Add a framing to `scripts/shoot.sh` when you add something the existing eleven
+Add a framing to `scripts/shoot.sh` when you add something the existing twelve
 would not reveal. A framing nobody looks at is a framing that rots.
 
 ## Verify gates
@@ -73,7 +73,7 @@ One thing, one file, so several can be built at once without collisions.
 
 ```
 client/sources/<id>.py       the local data, plus card(data)  (listed in client/sections.py)
-scripts/shoot.sh             a framing, if the eleven would not reveal it
+scripts/shoot.sh             a framing, if the twelve would not reveal it
 tests/test_<id>.py           the data and the card
 app/Office/Views/<Id>.swift  only if the generic card is not enough
 ```

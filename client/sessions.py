@@ -583,3 +583,70 @@ def desk_dir(repo: str, desks: dict | None = None) -> str:
         except OSError:
             continue
     return ""
+
+
+# ── the front page of a desk ─────────────────────────────────────────────────
+# Read off this machine, never off GitHub. The office's GraphQL budget is 5000
+# points an hour shared with the pipeline and with Aria's own `gh`, and a repo's
+# README does not change often enough to be worth one of them.
+
+README_NAMES = ("README.md", "readme.md", "README.markdown", "README.txt", "README")
+# A README is a page a person reads, not an archive. Anything past this is a
+# repo shipping its documentation as one file, and the rest is a scroll nobody
+# finishes.
+MAX_README = 64_000
+
+
+def readme(repo: str, desks: dict | None = None) -> tuple[int, dict]:
+    """One desk's README. (http status, body).
+
+    Nothing a caller sends becomes part of a path: the repo is matched against
+    `NWO_RE`, the folder is one `desk_dir` already vouched for, and the filename
+    is one of a fixed few.
+
+    The three ways there is no text are three different sentences, because a
+    desk that is not checked out on this machine, a repo that has no README, and
+    a file that would not open are three different facts, and drawing any of
+    them as an empty pane is the blank screen this route exists to end.
+    """
+    repo = str(repo or "").strip()
+    # `NWO_RE` allows dots, so `../..` is a name it accepts. Nothing downstream
+    # would build a path out of it (a desk is looked up, never derived), but a
+    # route that reads files refuses a dot segment where it can see one rather
+    # than relying on the next function along to keep being careful.
+    if not NWO_RE.match(repo) or any(part in (".", "..") for part in repo.split("/")):
+        return 400, {"error": "bad repo"}
+    directory = desk_dir(repo, desks)
+    if not directory:
+        return 200, {"repo": repo, "state": "elsewhere", "text": "",
+                     "detail": f"{repo} is not checked out on this machine"}
+
+    base = pathlib.Path(directory)
+    try:
+        root = base.resolve()
+    except OSError:
+        root = base
+    for name in README_NAMES:
+        candidate = base / name
+        try:
+            if not candidate.is_file():
+                continue
+            # `is_file()` follows a symlink, so a checkout carrying
+            # `README.md -> /etc/passwd` would be served over the door. The name
+            # check above is about what a caller can send; this is about what a
+            # folder on this machine can point at, which is a different vector
+            # and needs its own answer.
+            if not candidate.resolve().is_relative_to(root):
+                return 200, {"repo": repo, "state": "unreadable", "text": "", "name": name,
+                             "detail": f"{name} is a link out of this checkout"}
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+            at = datetime.fromtimestamp(candidate.stat().st_mtime, timezone.utc)
+        except OSError as exc:  # noqa: BLE001 - a README that will not open is not a dead door
+            return 200, {"repo": repo, "state": "unreadable", "text": "", "name": name,
+                         "detail": f"could not read {name}: {exc}"[:200]}
+        return 200, {"repo": repo, "state": "ok", "name": name,
+                     "text": text[:MAX_README], "clipped": len(text) > MAX_README,
+                     "at": at.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    return 200, {"repo": repo, "state": "none", "text": "",
+                 "detail": "there is no README in this checkout"}

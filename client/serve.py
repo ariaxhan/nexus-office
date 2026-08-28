@@ -492,6 +492,13 @@ class Handler(BaseHTTPRequestHandler):
                                                  (q.get("last") or [""])[0]
                                                  or sessions.DEFAULT_EXCHANGES)
                 return self._json(body, code)
+            if path == "/api/readme":
+                # The desk's front page, read off this machine. A read, so the
+                # only thing it can be pointed at is a checkout the office
+                # already knows about, by a name that has to look like a repo.
+                repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
+                code, body = sessions.readme(repo)
+                return self._json(body, code)
             if path == "/api/session/screen":
                 name = (urllib.parse.parse_qs(query).get("name") or [""])[0]
                 code, body = sessions.screen(name)

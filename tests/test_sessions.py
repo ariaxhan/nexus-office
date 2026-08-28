@@ -387,5 +387,62 @@ class StartTest(FakeHcom):
             self.assertEqual(sessions.say(bad)[0], 400)
 
 
+class ReadmeTest(FakeHcom):
+    """A desk's front page, read off this machine.
+
+    The three ways there is no text are three different sentences, and the test
+    that matters most is the one that proves none of them is an empty pane: a
+    desk drawing nothing at all is what this route was added to end.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.checkout = self.dir / "docs"
+        self.checkout.mkdir()
+        self.desks = {"acme/docs": str(self.checkout)}
+
+    def test_the_readme_comes_back_with_the_name_it_has_on_disk(self):
+        (self.checkout / "README.md").write_text("# acme docs\n\nthe front page\n")
+        code, body = sessions.readme("acme/docs", self.desks)
+        self.assertEqual((code, body["state"], body["name"]), (200, "ok", "README.md"))
+        self.assertIn("the front page", body["text"])
+        self.assertFalse(body["clipped"])
+        self.assertTrue(body["at"])
+
+    def test_a_checkout_with_no_readme_says_so_rather_than_answering_blank(self):
+        code, body = sessions.readme("acme/docs", self.desks)
+        self.assertEqual((code, body["state"], body["text"]), (200, "none", ""))
+        self.assertTrue(body["detail"])
+
+    def test_a_desk_this_machine_does_not_have_is_its_own_answer(self):
+        code, body = sessions.readme("acme/docs", {})
+        self.assertEqual((code, body["state"]), (200, "elsewhere"))
+        self.assertIn("acme/docs", body["detail"])
+
+    def test_an_enormous_readme_is_clipped_and_says_it_was(self):
+        (self.checkout / "README.md").write_text("x" * (sessions.MAX_README + 500))
+        _, body = sessions.readme("acme/docs", self.desks)
+        self.assertEqual(len(body["text"]), sessions.MAX_README)
+        self.assertTrue(body["clipped"])
+
+    def test_a_readme_that_links_out_of_the_checkout_is_not_served(self):
+        # `is_file()` follows the link, so without its own check this answers
+        # with the contents of whatever the link points at.
+        outside = self.dir / "secret.md"
+        outside.write_text("not this checkout's front page")
+        (self.checkout / "README.md").symlink_to(outside)
+        code, body = sessions.readme("acme/docs", self.desks)
+        self.assertEqual((code, body["state"], body["text"]), (200, "unreadable", ""))
+        self.assertNotIn("not this checkout", str(body))
+
+    def test_nothing_a_caller_sends_can_become_part_of_a_path(self):
+        secret = self.dir / "README.md"
+        secret.write_text("not a desk")
+        for bad in ("../..", "acme/../../etc/passwd", "/etc/passwd", "", "acme"):
+            code, body = sessions.readme(bad, self.desks)
+            self.assertEqual(code, 400, bad)
+            self.assertEqual(body["error"], "bad repo")
+
+
 if __name__ == "__main__":
     unittest.main()
