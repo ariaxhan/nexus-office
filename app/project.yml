@@ -20,6 +20,10 @@ settings:
     DEVELOPMENT_TEAM: ""
     ENABLE_HARDENED_RUNTIME: NO
     ENABLE_APP_SANDBOX: NO
+    # The icon, from Office/Resources/Assets.xcassets. Every pixel of it is
+    # drawn by `scripts/icon.swift` and none of it is a file somebody exported,
+    # so the mark is a diff like everything else here.
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 targets:
   Office:
     type: application
