@@ -93,12 +93,18 @@ struct RosterView: View {
 
     // MARK: - parts
 
-    private func deskRow(_ station: Station) -> some View {
+    /// One desk. `pickUp` puts `.draggable` INSIDE the tap gesture rather than
+    /// outside it, which is the whole difference between a row that can be
+    /// dragged and one that cannot: a tap gesture attached closer to the
+    /// content claims the mouse down and the drag never begins, so a `.draggable`
+    /// wrapped around the outside of it is dead code that reads as a feature.
+    private func deskRow(_ station: Station, pickUp: Bool = false) -> some View {
         DeskRow(station: station,
                 gate: store.gateShown(at: station),
                 selected: store.selection == .desk(station.repo),
                 away: store.isHidden(station))
             .contentShape(Rectangle())
+            .ifPickedUp(pickUp, repo: station.repo)
             .onTapGesture { store.select(.desk(station.repo)) }
             .contextMenu {
                 if store.isHidden(station) {
@@ -129,8 +135,7 @@ struct RosterView: View {
     /// lands just above the row it was dropped on. Order is the whole point of
     /// the group, so it is the one place on the roster a drag means anything.
     private func pinnedRow(_ station: Station) -> some View {
-        deskRow(station)
-            .draggable(station.repo)
+        deskRow(station, pickUp: true)
             .dropDestination(for: String.self) { repos, _ in
                 guard let repo = repos.first else { return false }
                 Task { await store.movePin(repo: repo, before: station.repo) }
@@ -502,5 +507,17 @@ struct SectionRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(selected ? Theme.selected : Color.clear)
         )
+    }
+}
+
+extension View {
+    /// `.draggable`, applied only where a drag means something.
+    ///
+    /// A modifier rather than an `if` in the body, because the two branches of an
+    /// `if` are different view types and SwiftUI would rebuild the row from
+    /// scratch when a desk is pinned, losing its selection highlight mid-drag.
+    @ViewBuilder
+    func ifPickedUp(_ pickUp: Bool, repo: String) -> some View {
+        if pickUp { self.draggable(repo) } else { self }
     }
 }
