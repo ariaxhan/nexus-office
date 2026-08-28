@@ -235,7 +235,8 @@ def read(now: float | None = None) -> dict:
         "state": "ok",
         "receipts": str(receipts_path),
         "counts": counts,
-        "alarm": counts["broken"] + counts["stale"] + counts["never"],
+        "alarm": (counts["broken"] + counts["stale"] + counts["never"]
+                  + counts["unregistered"]),
         "flows": flows,
     }
 
