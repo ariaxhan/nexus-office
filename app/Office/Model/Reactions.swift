@@ -156,16 +156,22 @@ public final class Reactions {
     /// How many marks exist. Only the tests and the demo floor ask.
     public var count: Int { marks.count }
 
-    /// Fill an empty store from a fixture, for `--demo`.
+    /// Fill a store from a fixture, for `--demo`.
     ///
     /// Without this a reaction could not be photographed: marks live in
     /// `UserDefaults` and `shoot.sh` runs a fresh app against a JSON floor, so
     /// every framing would show a thread with nothing on it and the harness
-    /// could never tell a working feature from a deleted one. Refuses to
-    /// overwrite anything already there, so it can never eat a real mark.
+    /// could never tell a working feature from a deleted one.
+    ///
+    /// Refuses per key rather than per store. A `marks.isEmpty` guard reads as
+    /// the same promise and is not: a fixture seeds more than one thread, and
+    /// the first one to load would make the store non-empty and silently swallow
+    /// every thread after it. Skipping only the keys already spoken for keeps
+    /// the actual promise, which is that a seed never eats a real mark.
     public func seed(_ seeds: [String: Reaction]) {
-        guard marks.isEmpty else { return }
-        marks = seeds
+        for (key, mark) in seeds where marks[key] == nil {
+            marks[key] = mark
+        }
     }
 
     /// Resolve a fixture's `index → name` against the turns actually loaded,

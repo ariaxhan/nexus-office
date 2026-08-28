@@ -114,6 +114,22 @@ final class ReactionsTests: XCTestCase {
         XCTAssertEqual(marks.reaction(thread: "chief", turn: said), .loved)
     }
 
+    /// The fixture seeds more than one thread, and the second one to load is
+    /// the one a `marks.isEmpty` guard would swallow: by then the store is not
+    /// empty, and the marks on `release` would never be drawn. That failure is
+    /// invisible to every framing, because a framing photographs one thread.
+    func test_a_second_thread_is_seeded_after_the_first_one_already_was() {
+        let marks = store()
+        let first = turn("assistant", "merged")
+        let second = turn("assistant", "landed")
+        marks.seed([Reactions.key(thread: "chief", turn: first): .loved])
+        marks.seed([Reactions.key(thread: "release", turn: second): .unclear])
+
+        XCTAssertEqual(marks.reaction(thread: "chief", turn: first), .loved)
+        XCTAssertEqual(marks.reaction(thread: "release", turn: second), .unclear,
+                       "a fixture seeds every thread it names, not the first one only")
+    }
+
     func test_a_seed_never_eats_a_real_mark() {
         let marks = store()
         let said = turn("assistant", "merged")
