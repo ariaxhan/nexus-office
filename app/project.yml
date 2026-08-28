@@ -64,6 +64,13 @@ targets:
       # each other. Foundation only, so they prove out with no app host.
       - path: Office/Model/Automation.swift
       - path: Office/Model/Sessions.swift
+      # A mark on a turn. In here because the only interesting thing about a
+      # reaction is which turn it lands on, and that is arithmetic on a string:
+      # keyed by position it slides onto somebody else's sentence when the
+      # transcript grows, and keyed by a process-seeded hash it disappears every
+      # relaunch. Neither failure is visible in a screenshot, so neither can be
+      # left to one.
+      - path: Office/Model/Reactions.swift
     settings:
       base:
         PRODUCT_NAME: OfficeTests

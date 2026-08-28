@@ -1105,5 +1105,14 @@
         }
       ]
     }
+  },
+  "reactions": {
+    "chief": {
+      "2": "loved",
+      "5": "flagged"
+    },
+    "release": {
+      "2": "unclear"
+    }
   }
 }

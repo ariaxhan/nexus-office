@@ -109,6 +109,25 @@ public final class Api {
         return try await get("/api/chat?bot=\(escaped)", as: ChatResponse.self).turns
     }
 
+    /// Marks the fixture wants drawn, as thread → turn index → reaction name.
+    ///
+    /// **Always empty on the real door, and that is the whole design.** A
+    /// reaction is local to this Mac: it never travels to the door, the harness
+    /// or GitHub, so there is no endpoint here to call and there is not going to
+    /// be one. This exists only so `--demo` can put a mark on a bubble, because
+    /// marks live in `UserDefaults` and `shoot.sh` runs a fresh app against a
+    /// JSON floor — without it every framing would photograph a thread with
+    /// nothing on it and the harness could never tell this feature working from
+    /// this feature deleted.
+    ///
+    /// Indexed by position rather than by turn key, because a fixture is a
+    /// static file a person edits and the keys are hashes nobody can type. The
+    /// position is resolved against the loaded turns before anything is stored,
+    /// so nothing keyed by position ever reaches disk.
+    public func reactionSeeds() -> [String: [Int: String]] {
+        demo?.reactionSeeds() ?? [:]
+    }
+
     /// The automation, as one page. Off the snapshot the server already built,
     /// never a fresh measurement: a page that re-measures on open disagrees with
     /// the card that sent you to it.
@@ -328,11 +347,16 @@ private final class DemoFloor {
         /// is measured by asking hcom, not by building a snapshot.
         var sessions: SessionRoster
         var transcripts: [String: SessionTranscript]
+        /// thread → turn index → reaction name, for `--demo` only. The index
+        /// stays a `String` here because that is what a JSON object key is:
+        /// decoding it as `[Int: String]` makes `JSONDecoder` expect an array of
+        /// alternating keys and values, not the object a person would write.
+        var reactions: [String: [String: String]]
 
         var gate: Gate { gates.first ?? .clear }
 
         enum CodingKeys: String, CodingKey {
-            case bots, world, gate, gates, chats, sessions, transcripts
+            case bots, world, gate, gates, chats, sessions, transcripts, reactions
         }
 
         init(from decoder: Decoder) throws {
@@ -350,6 +374,8 @@ private final class DemoFloor {
                                  detail: "this fixture has no sessions in it")
             transcripts = ((try? c.decodeIfPresent([String: SessionTranscript].self,
                                                    forKey: .transcripts)) ?? nil) ?? [:]
+            reactions = ((try? c.decodeIfPresent([String: [String: String]].self,
+                                                 forKey: .reactions)) ?? nil) ?? [:]
         }
 
         /// An empty floor, for a fixture that would not load.
@@ -358,6 +384,7 @@ private final class DemoFloor {
             world = World()
             gates = []
             chats = [:]
+            reactions = [:]
             sessions = SessionRoster(state: "unavailable", detail: "no fixture loaded")
             transcripts = [:]
         }
@@ -423,6 +450,22 @@ private final class DemoFloor {
 
     func chat(bot: String) throws -> [ChatTurn] {
         lock.withLock { fixture.chats[bot] ?? [] }
+    }
+
+    /// An index the fixture wrote as text becomes the number it meant. A key
+    /// that is not a number is dropped rather than defaulted to zero, which
+    /// would silently mark the first turn of the thread.
+    func reactionSeeds() -> [String: [Int: String]] {
+        lock.withLock {
+            fixture.reactions.mapValues { rows in
+                // `uniquingKeysWith` rather than `uniqueKeysWithValues`, which
+                // traps on a collision: "2" and "02" are two JSON keys and one
+                // integer, and a fixture typo must cost a mark, never the room
+                // this fixture exists to photograph.
+                Dictionary(rows.compactMap { key, value in Int(key).map { ($0, value) } },
+                           uniquingKeysWith: { first, _ in first })
+            }
+        }
     }
 
     func automation() throws -> Automation { lock.withLock { fixture.world.automation } }
