@@ -52,7 +52,7 @@ struct RosterView: View {
                             // list is a target that is nobody.
                             Color.clear.frame(height: 6)
                                 .contentShape(Rectangle())
-                                .pinDrop { repo in
+                                .pinDrop(over: nil) { repo, _ in
                                     Task { await store.movePin(repo: repo, before: nil) }
                                 }
                         }
@@ -135,8 +135,8 @@ struct RosterView: View {
     /// the group, so it is the one place on the roster a drag means anything.
     private func pinnedRow(_ station: Station) -> some View {
         deskRow(station, pickUp: true)
-            .pinDrop { repo in
-                Task { await store.movePin(repo: repo, before: station.repo) }
+            .pinDrop(over: station.repo) { repo, before in
+                Task { await store.movePin(repo: repo, before: before) }
             }
     }
 
@@ -548,42 +548,85 @@ struct SectionRow: View {
     }
 }
 
+/// Why the drag is written this way, after two attempts that did nothing.
+///
+/// The roster is a `LazyVStack` inside a `ScrollView`, and each row carries an
+/// `.onTapGesture` for selection. That combination is the documented way to
+/// stop a drag from ever starting: a tap gesture attached to a row claims the
+/// mouse down, and the scroll view claims what is left, so `.draggable` never
+/// reaches its threshold. Moving `.draggable` inside the tap did not fix it.
+///
+/// So this uses the pair that predates `Transferable` and is a thin face over
+/// the AppKit dragging session: `.onDrag` to begin one, and `.onDrop` with a
+/// `DropDelegate` rather than the closure form. The delegate matters: the
+/// closure form of `.onDrop` only hears the drop itself, while `dropEntered`
+/// fires while the pointer is still moving, which is what makes a row reorder
+/// under the cursor instead of jumping once at the end.
+///
+/// `ROSTER_DRAG_LOG=1` prints each stage to stderr, because a drag that does
+/// nothing is indistinguishable from a drag that never started, and the two
+/// have different fixes.
+enum DragLog {
+    static let on = ProcessInfo.processInfo.environment["ROSTER_DRAG_LOG"] == "1"
+    static func say(_ what: String) {
+        guard on else { return }
+        FileHandle.standardError.write(Data("roster-drag: \(what)\n".utf8))
+    }
+}
+
+/// Reorders while the pointer is still moving, and lands the change on drop.
+struct PinDropDelegate: DropDelegate {
+    /// The row this delegate belongs to, or nil for the strip past the last pin.
+    let over: String?
+    let move: (String, String?) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.utf8PlainText])
+    }
+
+    func dropEntered(info: DropInfo) {
+        DragLog.say("entered \(over ?? "the end")")
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let item = info.itemProviders(for: [.utf8PlainText]).first else {
+            DragLog.say("dropped on \(over ?? "the end") with nothing in it")
+            return false
+        }
+        _ = item.loadObject(ofClass: NSString.self) { value, error in
+            guard let repo = value as? String else {
+                DragLog.say("could not read the dragged desk: \(error?.localizedDescription ?? "no value")")
+                return
+            }
+            DragLog.say("dropped \(repo) before \(self.over ?? "the end")")
+            Task { @MainActor in self.move(repo, self.over) }
+        }
+        return true
+    }
+}
+
 extension View {
-    /// The drag half of reordering a pin, applied only where a drag means
-    /// something.
-    ///
-    /// `.onDrag`/`.onDrop` rather than `.draggable`/`.dropDestination`: the
-    /// newer pair never started a drag from these rows, in any build, on any
-    /// copy of the app. The older pair is the AppKit dragging session with a
-    /// SwiftUI face on it, and it begins on a drag threshold rather than on a
-    /// gesture that a tap can win.
-    ///
-    /// A modifier rather than an `if` in the body, because the two branches of
-    /// an `if` are different view types and SwiftUI would rebuild the row when
-    /// a desk is pinned, dropping its selection mid drag.
+    /// The drag half, applied only where a drag means something.
     @ViewBuilder
     func ifPickedUp(_ pickUp: Bool, repo: String) -> some View {
         if pickUp {
             self.onDrag {
-                // The repo, as plain text. `NSItemProvider(object:)` is what a
-                // drop written against `.utf8PlainText` actually receives.
-                NSItemProvider(object: repo as NSString)
+                DragLog.say("picked up \(repo)")
+                return NSItemProvider(object: repo as NSString)
             }
         } else {
             self
         }
     }
 
-    /// The drop half. `before` is the repo the dragged desk lands above, or nil
-    /// for the end of the list.
-    func pinDrop(_ accept: @escaping (String) -> Void) -> some View {
-        onDrop(of: [.utf8PlainText], isTargeted: nil) { providers in
-            guard let provider = providers.first else { return false }
-            _ = provider.loadObject(ofClass: NSString.self) { value, _ in
-                guard let repo = value as? String else { return }
-                Task { @MainActor in accept(repo) }
-            }
-            return true
-        }
+    /// The drop half. `over` is the pinned desk the dragged one lands above,
+    /// or nil for the strip past the last pin.
+    func pinDrop(over: String?, _ move: @escaping (String, String?) -> Void) -> some View {
+        onDrop(of: [.utf8PlainText],
+               delegate: PinDropDelegate(over: over, move: move))
     }
 }

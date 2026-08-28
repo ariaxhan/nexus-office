@@ -52,7 +52,21 @@ LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchService
 "$LSREG" -kill -r -domain local -domain system -domain user >/dev/null 2>&1 || true
 "$LSREG" -f "$DEST" >/dev/null 2>&1 || true
 
+# A build product is not an installed app. `app/build` holds a Debug copy for
+# the shot harness and the Release copy this script just installed from, and
+# registering either is what makes the Dock, Spotlight and the icon pick the
+# wrong one. They are unregistered rather than deleted, because deleting them
+# means the next shoot rebuilds the whole app for nothing.
+"$LSREG" -dump 2>/dev/null | grep -o '/[^ ]*Office\.app' | sort -u | while read -r found; do
+  [ "$found" = "$DEST" ] && continue
+  "$LSREG" -u "$found" >/dev/null 2>&1 || true
+done
+
 echo "install: $DEST"
-"$LSREG" -dump 2>/dev/null | grep -o '/[^ ]*Office\.app' | sort -u | grep -v "^$DEST$" \
-  && echo "install: the copies above are still registered; they are stale builds, not installs" \
-  || echo "install: it is the only Office registered"
+LEFT="$("$LSREG" -dump 2>/dev/null | grep -o '/[^ ]*Office\.app' | sort -u | grep -v "^$DEST\$" || true)"
+if [ -n "$LEFT" ]; then
+  echo "install: still registered, and should not be:"
+  echo "$LEFT"
+else
+  echo "install: it is the only Office registered"
+fi
