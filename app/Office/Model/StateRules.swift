@@ -459,12 +459,26 @@ public enum StateRules {
     /// onto itself changes nothing.
     public static func moved(pins: [String], repo: String, before target: String?) -> [String] {
         guard repo != target else { return pins }
+        // DIRECTION DECIDES WHICH SIDE, which is the difference between a drag
+        // that works and one that reads as broken.
+        //
+        // This used to insert before the target always. Dragging the FIRST pin
+        // down onto the second therefore put it before the second, which is
+        // where it already was: the most natural gesture anybody tries is the
+        // one guaranteed to do nothing, and a reorder that never visibly
+        // reorders is indistinguishable from a drag that never started.
+        //
+        // Dragging down lands AFTER the row you dropped on, dragging up lands
+        // before it, which is what every list on this machine does.
+        let from = pins.firstIndex(of: repo)
         var out = pins.filter { $0 != repo }
-        if let target, let at = out.firstIndex(of: target) {
-            out.insert(repo, at: at)
-        } else {
+        guard let target, let at = out.firstIndex(of: target) else {
             out.append(repo)
+            return out
         }
+        let to = pins.firstIndex(of: target)
+        let movingDown = (from.map { f in to.map { f < $0 } ?? false }) ?? false
+        out.insert(repo, at: movingDown ? at + 1 : at)
         return out
     }
 

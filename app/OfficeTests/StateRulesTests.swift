@@ -1107,4 +1107,34 @@ final class StateRulesTests: XCTestCase {
         Gate(state: "pending", id: "f7e6d5c4b3a29180", permission: "run_bash",
              target: "rm -rf ~/code/acme/storefront/node_modules", waitingS: 12, bot: "chief")
     }
+    // MARK: - a drag that visibly reorders
+
+    /// The gesture everybody tries first: take the top pin and drop it on the
+    /// one below. Inserting before the target made that a no-op, so the drag
+    /// looked broken while working perfectly.
+    func testDraggingDownLandsAfterTheRowItWasDroppedOn() {
+        let pins = ["a", "b", "c"]
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "a", before: "b"), ["b", "a", "c"])
+    }
+
+    func testDraggingUpStillLandsBeforeTheRowItWasDroppedOn() {
+        let pins = ["a", "b", "c"]
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "c", before: "b"), ["a", "c", "b"])
+    }
+
+    func testDraggingPastTheLastPinGoesToTheEnd() {
+        let pins = ["a", "b", "c"]
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "a", before: nil), ["b", "c", "a"])
+    }
+
+    func testADeskThatWasNotPinnedBecomesPinnedWhereItLands() {
+        let pins = ["a", "b"]
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "z", before: "b"), ["a", "z", "b"])
+    }
+
+    func testDroppingOnItselfChangesNothing() {
+        let pins = ["a", "b", "c"]
+        XCTAssertEqual(StateRules.moved(pins: pins, repo: "b", before: "b"), pins)
+    }
+
 }
