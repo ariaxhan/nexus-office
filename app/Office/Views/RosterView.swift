@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The left column: who you can talk to, then what is on the floor.
 ///
@@ -51,10 +52,8 @@ struct RosterView: View {
                             // list is a target that is nobody.
                             Color.clear.frame(height: 6)
                                 .contentShape(Rectangle())
-                                .dropDestination(for: String.self) { repos, _ in
-                                    guard let repo = repos.first else { return false }
+                                .pinDrop { repo in
                                     Task { await store.movePin(repo: repo, before: nil) }
-                                    return true
                                 }
                         }
                     }
@@ -136,10 +135,8 @@ struct RosterView: View {
     /// the group, so it is the one place on the roster a drag means anything.
     private func pinnedRow(_ station: Station) -> some View {
         deskRow(station, pickUp: true)
-            .dropDestination(for: String.self) { repos, _ in
-                guard let repo = repos.first else { return false }
+            .pinDrop { repo in
                 Task { await store.movePin(repo: repo, before: station.repo) }
-                return true
             }
     }
 
@@ -552,13 +549,41 @@ struct SectionRow: View {
 }
 
 extension View {
-    /// `.draggable`, applied only where a drag means something.
+    /// The drag half of reordering a pin, applied only where a drag means
+    /// something.
     ///
-    /// A modifier rather than an `if` in the body, because the two branches of an
-    /// `if` are different view types and SwiftUI would rebuild the row from
-    /// scratch when a desk is pinned, losing its selection highlight mid-drag.
+    /// `.onDrag`/`.onDrop` rather than `.draggable`/`.dropDestination`: the
+    /// newer pair never started a drag from these rows, in any build, on any
+    /// copy of the app. The older pair is the AppKit dragging session with a
+    /// SwiftUI face on it, and it begins on a drag threshold rather than on a
+    /// gesture that a tap can win.
+    ///
+    /// A modifier rather than an `if` in the body, because the two branches of
+    /// an `if` are different view types and SwiftUI would rebuild the row when
+    /// a desk is pinned, dropping its selection mid drag.
     @ViewBuilder
     func ifPickedUp(_ pickUp: Bool, repo: String) -> some View {
-        if pickUp { self.draggable(repo) } else { self }
+        if pickUp {
+            self.onDrag {
+                // The repo, as plain text. `NSItemProvider(object:)` is what a
+                // drop written against `.utf8PlainText` actually receives.
+                NSItemProvider(object: repo as NSString)
+            }
+        } else {
+            self
+        }
+    }
+
+    /// The drop half. `before` is the repo the dragged desk lands above, or nil
+    /// for the end of the list.
+    func pinDrop(_ accept: @escaping (String) -> Void) -> some View {
+        onDrop(of: [.utf8PlainText], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+                guard let repo = value as? String else { return }
+                Task { @MainActor in accept(repo) }
+            }
+            return true
+        }
     }
 }
