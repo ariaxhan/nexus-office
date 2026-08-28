@@ -25,10 +25,29 @@
 
 set -eu
 
-if [ ! -t 0 ] || [ "${NEXUS_OFFICE_ALLOW_VISIBLE_SHOTS:-}" != "1" ]; then
-  echo "shoot: refused: this command opens and drives visible Office windows" >&2
-  echo "shoot: while at the Mac, run NEXUS_OFFICE_ALLOW_VISIBLE_SHOTS=1 npm run shot" >&2
-  exit 2
+# Two ways to take the pictures, and only one of them touches the desk.
+#
+# `--offscreen` never activates a window, never makes one key, and never moves
+# the cursor: the office is ordered to the back and photographed out of the
+# window server by name. That is safe while somebody is working, so it is the
+# path an unattended lane is allowed to take, and it needs no consent because
+# it asks for nothing.
+#
+# The visible path drives real windows on the logged in desktop and warps the
+# pointer, so it still needs a person at the Mac who said yes: a terminal AND
+# the variable. An unattended lane that wants eyes uses --offscreen.
+QUIET=""
+for arg in "$@"; do
+  [ "$arg" = "--offscreen" ] && QUIET="--offscreen"
+done
+
+if [ -z "$QUIET" ]; then
+  if [ ! -t 0 ] || [ "${NEXUS_OFFICE_ALLOW_VISIBLE_SHOTS:-}" != "1" ]; then
+    echo "shoot: refused: this command opens and drives visible Office windows" >&2
+    echo "shoot: while at the Mac, run NEXUS_OFFICE_ALLOW_VISIBLE_SHOTS=1 npm run shot" >&2
+    echo "shoot: unattended, run ./scripts/shoot.sh --offscreen instead" >&2
+    exit 2
+  fi
 fi
 
 cd "$(dirname "$0")/.."
@@ -73,13 +92,13 @@ shoot_run() {
 }
 
 echo "shoot: running the fourteen dark framings"
-shoot_run
+shoot_run $QUIET
 
 # The same room with the lights on. A separate process because an appearance is
 # forced on the whole app before its window exists, and a window that has
 # already drawn itself once is a race between the redraw and the shutter.
 echo "shoot: running the light framing"
-shoot_run --light
+shoot_run --light $QUIET
 
 MISSING=0
 for framing in roster desk gate needs wall library clock context putaway automation sessions reactions readme attach light; do
