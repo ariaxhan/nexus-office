@@ -162,6 +162,23 @@ public final class Api {
         return try await get("/api/session?name=\(escaped)&last=\(last)", as: SessionTranscript.self)
     }
 
+    /// What one desk says about itself: its index of Markdown, and one file.
+    ///
+    /// `path` empty asks for the index alone. Both come back in one answer, so
+    /// the list and the document on screen can never be about different desks.
+    /// The server decides what is listable and what is readable; nothing here
+    /// builds a path, and there is no write half of this route.
+    public func context(repo: String, path: String = "") async throws -> DeskContext {
+        if let demo { return try demo.context(repo: repo, path: path) }
+        let desk = repo.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? repo
+        var query = "/api/context?repo=\(desk)"
+        if !path.isEmpty {
+            let file = path.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? path
+            query += "&path=\(file)"
+        }
+        return try await get(query, as: DeskContext.self)
+    }
+
     /// Which desks a person has put away. The whole list every time, never a
     /// delta: a list can be reconciled against the world, a delta can only be
     /// believed.
@@ -345,6 +362,25 @@ public final class Api {
 /// so the demo floor answers a click the same way the real one does, which is
 /// what makes it worth photographing.
 private final class DemoFloor {
+    /// One desk's Markdown on the demo floor: the index, and the bodies keyed
+    /// by the same relative path the index lists. Bodies keyed by path rather
+    /// than carried on the entry, because that is what makes asking for a file
+    /// the fixture does not have behave like the real door: a miss, not a blank.
+    private struct DemoContext: Decodable {
+        var root: String
+        var files: [ContextFile]
+        var texts: [String: String]
+
+        enum CodingKeys: String, CodingKey { case root, files, texts }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            root = c.str(.root) ?? ""
+            files = c.list(.files, ContextFile.self)
+            texts = ((try? c.decodeIfPresent([String: String].self, forKey: .texts)) ?? nil) ?? [:]
+        }
+    }
+
     private struct Fixture: Decodable {
         var bots: BotsResponse
         var world: World
@@ -367,11 +403,15 @@ private final class DemoFloor {
         /// A desk's front page, by repo. Absent for a desk the fixture does
         /// not have one for, which is the real "not checked out here" state.
         var readmes: [String: String]
+        /// The Markdown each demo desk keeps, by repo. A desk that is not in
+        /// here is a desk the office cannot place, which is a real state on the
+        /// live door too and is the one this fixture is photographed showing.
+        var context: [String: DemoContext]
 
         var gate: Gate { gates.first ?? .clear }
 
         enum CodingKeys: String, CodingKey {
-            case bots, world, gate, gates, chats, sessions, transcripts, reactions, readmes
+            case bots, world, gate, gates, chats, sessions, transcripts, reactions, readmes, context
         }
 
         init(from decoder: Decoder) throws {
@@ -392,6 +432,8 @@ private final class DemoFloor {
             reactions = ((try? c.decodeIfPresent([String: [String: String]].self,
                                                  forKey: .reactions)) ?? nil) ?? [:]
             readmes = ((try? c.decodeIfPresent([String: String].self, forKey: .readmes)) ?? nil) ?? [:]
+            context = ((try? c.decodeIfPresent([String: DemoContext].self,
+                                               forKey: .context)) ?? nil) ?? [:]
         }
 
         /// An empty floor, for a fixture that would not load.
@@ -404,6 +446,7 @@ private final class DemoFloor {
             sessions = SessionRoster(state: "unavailable", detail: "no fixture loaded")
             transcripts = [:]
             readmes = [:]
+            context = [:]
         }
     }
 
@@ -520,6 +563,30 @@ private final class DemoFloor {
 
     func sessionTranscript(name: String) throws -> SessionTranscript {
         lock.withLock { fixture.transcripts[name] ?? SessionTranscript() }
+    }
+
+    /// The same two refusals the real reader makes, in the same status codes: a
+    /// desk the office cannot place is a 404, and so is a path that is not in
+    /// the index. A demo floor that answered an empty document to both would
+    /// photograph a pane that looks merely uninteresting rather than refused.
+    func context(repo: String, path: String) throws -> DeskContext {
+        try lock.withLock {
+            guard let desk = fixture.context[repo] else {
+                throw ApiError(status: 404,
+                               message: "the office does not know where \(repo) is checked out")
+            }
+            var out = DeskContext(repo: repo, root: desk.root, files: desk.files)
+            guard !path.isEmpty else { return out }
+            guard let entry = desk.files.first(where: { $0.path == path }),
+                  let text = desk.texts[path] else {
+                throw ApiError(status: 404, message: "that file is not in this desk's context")
+            }
+            out.path = entry.path
+            out.title = entry.name
+            out.text = text
+            out.bytes = entry.bytes
+            return out
+        }
     }
 
     /// Answering on the demo floor lands in the transcript, so the fixture
