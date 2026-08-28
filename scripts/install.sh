@@ -25,6 +25,14 @@ command -v xcodegen >/dev/null 2>&1 || {
 }
 ( cd app && xcodegen generate --quiet )
 
+# Spotlight indexes a build product the same as an installed app, and Launchpad
+# reads Spotlight, not LaunchServices. That is why three Offices kept appearing
+# after the duplicates were unregistered: unregistering hides a copy from the
+# Dock and the icon, and does nothing to the index. This marker file stops the
+# whole build directory from ever being indexed, so a build stays a build.
+mkdir -p "$ROOT/app/build"
+: > "$ROOT/app/build/.metadata_never_index"
+
 echo "install: building Release"
 xcodebuild -project app/Office.xcodeproj \
            -scheme Office \
@@ -61,6 +69,15 @@ LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchService
   [ "$found" = "$DEST" ] && continue
   "$LSREG" -u "$found" >/dev/null 2>&1 || true
 done
+
+# The Release product has been copied; leaving it on disk is what puts a second
+# and third "Office" in Launchpad. Launchpad reads Spotlight, and Spotlight
+# indexes a build product exactly like an installed app: unregistering it from
+# LaunchServices hides it from the Dock and the icon and does nothing to the
+# index. The `.metadata_never_index` marker above only helps a path Spotlight
+# has not already seen, so the copy is removed rather than trusted to be hidden.
+rm -rf "$ROOT/app/build/Build/Products/Release/Office.app"
+rm -rf "$ROOT/app/build/Build/Products/Debug/Office.app"
 
 echo "install: $DEST"
 LEFT="$("$LSREG" -dump 2>/dev/null | grep -o '/[^ ]*Office\.app' | sort -u | grep -v "^$DEST\$" || true)"
