@@ -55,8 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     func showOffice() -> NSWindow {
         if let window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            reveal(window)
             return window
         }
 
@@ -83,10 +82,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = NSHostingView(rootView: RootView(store: .shared))
         window.setFrameAutosaveName("office")
         if window.frame.origin == .zero { window.center() }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        reveal(window)
         self.window = window
         return window
+    }
+
+    /// Put the window on screen, taking the desktop only if somebody is there.
+    ///
+    /// An unattended shoot photographs the room from the back of a desk
+    /// somebody else is working at, so it must never make this window key and
+    /// never activate this app: a key window steals the next keystroke and an
+    /// activation pulls the front window out from under whoever is reading.
+    /// The window still has to be ordered in, because a window that has never
+    /// been ordered in has nothing to photograph.
+    private func reveal(_ window: NSWindow) {
+        if ShotHarness.isUnattended {
+            window.orderBack(nil)
+            return
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
