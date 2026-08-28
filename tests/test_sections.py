@@ -34,12 +34,22 @@ TONES = {"ok", "warn", "bad", "dim", ""}
 FACT_KEYS = {"label", "value", "tone"}
 MAX_FACTS = 8
 
+# The long half of a card: the table under the numbers, for a source whose
+# whole point is the list rather than the count. Optional on purpose, so a
+# source that has no table grows no key and costs the snapshot nothing.
+ROW_KEYS = {"id", "title", "subtitle", "detail", "badge", "tone", "group", "url"}
+# A link in a row is a place to go, never a thing to run. Two schemes, and a
+# `file` one only ever points at something the source already proved is there.
+ROW_SCHEMES = ("https://", "file://")
+
 
 def assert_card(case: unittest.TestCase, card, where: str = "") -> None:
     """The frozen contract, checked. Anything a renderer would have to guess
     about is an assertion here instead."""
     case.assertIsInstance(card, dict, where)
-    case.assertEqual(set(card), KEYS, where)
+    case.assertLessEqual(set(card), KEYS | {"rows"}, where)
+    case.assertGreaterEqual(set(card), KEYS, where)
+    assert_rows(case, card, where)
 
     case.assertIsInstance(card["title"], str, where)
     case.assertTrue(card["title"], f"a card with no title: {where}")
@@ -68,6 +78,31 @@ def assert_card(case: unittest.TestCase, card, where: str = "") -> None:
         case.assertIsInstance(fact["label"], str, where)
         case.assertIsInstance(fact["value"], str, where)
         case.assertIn(fact["tone"], TONES, where)
+
+
+def assert_rows(case: unittest.TestCase, card, where: str = "") -> None:
+    """The table half of the contract, when a card has one.
+
+    One generic shape for every source, because the alternative is a renderer
+    that knows what a learning is and what a job is, and then a third source
+    arrives and it has to learn a third noun in two languages.
+    """
+    if "rows" not in card:
+        return
+    rows = card["rows"]
+    case.assertIsInstance(rows, list, where)
+    case.assertTrue(rows, f"an empty rows key is a key that should not be there: {where}")
+    for row in rows:
+        case.assertIsInstance(row, dict, where)
+        case.assertEqual(set(row), ROW_KEYS, where)
+        for key in ROW_KEYS:
+            case.assertIsInstance(row[key], str, f"{where}.{key}")
+        case.assertTrue(row["id"], f"a row with no id: {where}")
+        case.assertTrue(row["title"].strip(), f"a row with nothing written on it: {where}")
+        case.assertIn(row["tone"], TONES, where)
+        if row["url"]:
+            case.assertTrue(row["url"].startswith(ROW_SCHEMES),
+                            f"a row link that is neither https nor file: {row['url']}")
 
 
 class Boom(RuntimeError):
@@ -183,6 +218,71 @@ class ClampTest(unittest.TestCase):
         card = importlib.import_module("sources._card")
         self.assertEqual(card.fact("x", "1", "PURPLE")["tone"], "")
         self.assertEqual(card.fact("x", "1", "bad")["tone"], "bad")
+
+
+class RowTest(unittest.TestCase):
+    """The row builder: the one place a source turns a thing into a table line.
+
+    A row is drawn by a renderer that knows nothing about what it is looking at,
+    so everything a renderer would otherwise have to decide is decided here.
+    """
+
+    def setUp(self):
+        self.card = importlib.import_module("sources._card")
+
+    def test_a_row_carries_the_eight_keys_and_nothing_else(self):
+        row = self.card.row("a-1", "the thing")
+        self.assertEqual(set(row), {"id", "title", "subtitle", "detail",
+                                    "badge", "tone", "group", "url"})
+        self.assertEqual(row["id"], "a-1")
+        self.assertEqual(row["title"], "the thing")
+        self.assertEqual([row["subtitle"], row["detail"], row["badge"],
+                          row["tone"], row["group"], row["url"]], [""] * 6)
+
+    def test_an_unknown_tone_on_a_row_becomes_plain(self):
+        self.assertEqual(self.card.row("i", "t", tone="MAUVE")["tone"], "")
+        self.assertEqual(self.card.row("i", "t", tone="warn")["tone"], "warn")
+
+    def test_a_row_never_shows_a_link_it_cannot_stand_behind(self):
+        """The whole list of schemes a click may follow. Everything else is a
+        way to make the app run something, and a row is a place to go."""
+        for bad in ("javascript:alert(1)", "http://example.com", "data:text/html,x",
+                    "ftp://host/f", "vscode://open", "/etc/passwd", "file:relative",
+                    "  ", "https:/nope"):
+            self.assertEqual(self.card.row("i", "t", url=bad)["url"], "", bad)
+        self.assertEqual(self.card.row("i", "t", url="https://example.com/x")["url"],
+                         "https://example.com/x")
+        self.assertEqual(self.card.row("i", "t", url="file:///tmp/a.sh")["url"],
+                         "file:///tmp/a.sh")
+
+    def test_a_row_is_clipped_so_one_long_field_cannot_bloat_a_snapshot(self):
+        row = self.card.row("i" * 900, "t" * 900, subtitle="s" * 900,
+                            detail="d" * 900, badge="b" * 900, group="g" * 900)
+        for key in ("id", "title", "subtitle", "detail", "badge", "group"):
+            self.assertLess(len(row[key]), 900, key)
+
+    def test_a_card_with_no_rows_does_not_grow_a_rows_key(self):
+        """Six of the eight sources have no table. An always-present empty list
+        would be eight bytes on every card in every push, forever."""
+        self.assertNotIn("rows", self.card.build("T", "headline"))
+        self.assertNotIn("rows", self.card.build("T", "headline", rows=[]))
+
+    def test_rows_survive_the_build_in_the_order_the_source_gave_them(self):
+        built = self.card.build("T", "headline", rows=[
+            self.card.row("b", "second", group="two"),
+            self.card.row("a", "first", group="one"),
+        ])
+        self.assertEqual([r["id"] for r in built["rows"]], ["b", "a"])
+
+    def test_a_row_that_is_not_a_row_is_dropped_rather_than_fatal(self):
+        built = self.card.build("T", "headline",
+                                rows=[self.card.row("a", "kept"), "nope", None, 7])
+        self.assertEqual([r["id"] for r in built["rows"]], ["a"])
+
+    def test_the_row_list_is_capped_so_one_source_cannot_own_the_snapshot(self):
+        rows = [self.card.row(f"r{i}", f"line {i}") for i in range(self.card.MAX_ROWS + 40)]
+        self.assertEqual(len(self.card.build("T", "h", rows=rows)["rows"]),
+                         self.card.MAX_ROWS)
 
 
 class BadSourceTest(unittest.TestCase):

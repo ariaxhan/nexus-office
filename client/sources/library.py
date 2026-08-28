@@ -53,13 +53,19 @@ DB_REL = "_meta/agentdb/agent.db"
 DB_TIMEOUT = 2.0
 HTTP_TIMEOUT = 2.0
 
-# The cap. 594 learnings averaging ~460 characters of insight plus evidence is
-# roughly 300KB per push, every ten minutes, for a shelf nobody scrolls to the
-# bottom of. So the top SHELF_CAP of each type by hit count get bodies, the rest
-# are counted but not carried, and `capped` says exactly what was left behind.
-# A truncated list presented as a complete one is the defect this repo exists to
-# prevent, so the number omitted travels with the data and the panel prints it.
-SHELF_CAP = 20
+# There is no shelf cap any more, and that is a decision with a cost.
+#
+# It used to carry the top twenty of each type by hit count and count the rest,
+# on the theory that nobody scrolls a shelf to the bottom. That theory was about
+# a shelf nobody could open: the room only ever drew the COUNT. Now the card
+# carries the whole shelf as rows a person can actually read, and a learning you
+# cannot reach from the room is a learning the room does not have. The 632 live
+# lessons in the vault this was measured against cost about 850 KB per push
+# every ten minutes, over a loopback socket, which is the price of the library
+# being real rather than a number.
+#
+# What still bounds it is the CLIP: no single lesson can be more than these two
+# numbers long, so the payload grows with the count and never with one essay.
 INSIGHT_CHARS = 420
 EVIDENCE_CHARS = 240
 
@@ -169,13 +175,15 @@ def read_agentdb() -> dict:
             live = by_type.get(t)
             if live is None:
                 continue
+            # No LIMIT. Most-recalled first is now only an ORDER, not a filter:
+            # what the hit count decides is where a lesson sits, never whether
+            # it is carried at all.
             items = [_item(r) for r in _rows(cur, """
                 SELECT id, ts, type, insight, evidence, domain, hit_count, last_hit, load_count
                   FROM learnings
                  WHERE type = ? AND archived_at IS NULL
               ORDER BY hit_count DESC, ts DESC
-                 LIMIT ?
-            """, (t, SHELF_CAP))]
+            """, (t,))]
             omitted += max(0, live - len(items))
             shelves.append({"type": t, "count": live, "shown": len(items), "items": items})
     except sqlite3.Error as exc:
@@ -198,14 +206,18 @@ def read_agentdb() -> dict:
             "newest": str(span["newest"] or ""),
         },
         "shelves": shelves,
+        # Kept, and now it says zero. The accounting for what was left behind is
+        # more useful than ever precisely because the answer is "nothing": a
+        # future cap that creeps back in has a place to be noticed rather than a
+        # deleted key nobody misses.
         "capped": {
-            "per_type": SHELF_CAP,
             "shown": sum(s["shown"] for s in shelves),
             "omitted": omitted,
             "insight_chars": INSIGHT_CHARS,
+            "evidence_chars": EVIDENCE_CHARS,
             "note": (
-                f"the {SHELF_CAP} most-recalled of each type are carried in full; "
-                f"{omitted} more are on the shelf and counted but not in this snapshot"
+                f"{omitted} live learnings were counted but not carried, which "
+                "should not be able to happen"
             ) if omitted else "",
         },
     }
@@ -314,6 +326,42 @@ def _semantic_row(semantic: dict) -> tuple:
     return _card.clip(semantic.get("detail") or state, _card.FACT_CHARS), "bad"
 
 
+def _row(item: dict, shelf_type: str) -> dict:
+    """One learning as a table line a renderer that knows nothing can draw.
+
+    The provenance travels IN the row rather than one level up, because the row
+    is the only thing a person reads: a lesson whose evidence stayed behind in a
+    field nobody drew is a rumour with a hit count on it. An unsourced memory
+    says so in the place the evidence would have been, and is dimmed, so it can
+    never be mistaken at a glance for one that can be checked.
+    """
+    prov = item.get("provenance") or {}
+    evidence = str(prov.get("evidence") or "")
+    where = " · ".join(p for p in (str(prov.get("domain") or ""),
+                                   _card.zulu(prov.get("learned_at")) or
+                                   str(prov.get("learned_at") or "")) if p)
+    return _card.row(
+        str(prov.get("record") or item.get("id") or ""),
+        item.get("insight"),
+        subtitle=evidence or "no evidence recorded",
+        detail=where,
+        badge=f"{_card.count(item.get('hits') or 0)}×",
+        tone="" if evidence else "dim",
+        group=str(item.get("type") or shelf_type),
+    )
+
+
+def rows(data: dict) -> list:
+    """Every live learning, in shelf order: eye-level types first, and inside
+    each of those the most-recalled first. The order is the shelf's, not a
+    second opinion formed here."""
+    out = []
+    for shelf in data.get("shelves") or []:
+        for item in shelf.get("items") or []:
+            out.append(_row(item, str(shelf.get("type") or "")))
+    return out
+
+
 def card(data: dict) -> dict:
     """What memory holds, in one line, plus whether anything is waiting on you.
 
@@ -353,4 +401,5 @@ def card(data: dict) -> dict:
         1 if review.get("state") == "error" else 0,
         _card.zulu(store.get("newest")),
         facts,
+        rows(data),
     )

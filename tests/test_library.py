@@ -88,7 +88,9 @@ class ShapeTest(LibraryBase):
         self.assertEqual(s["state"], "ok")
         shelf = next(x for x in s["shelves"] if x["type"] == "gotcha")
         self.assertEqual(shelf["count"], 60)
-        self.assertEqual(shelf["shown"], self.lib.SHELF_CAP)
+        # Shown and counted are the same number now, and that IS the claim: the
+        # shelf carries every live learning rather than the top of it.
+        self.assertEqual(shelf["shown"], 60)
         self.assertEqual(s["store"]["live"], 60)
 
     def test_archived_learnings_are_counted_but_not_shelved(self):
@@ -137,12 +139,16 @@ class ShelvingTest(LibraryBase):
         items = self.lib.read()["shelves"][0]["items"]
         self.assertEqual([i["provenance"]["sourced"] for i in items], [False, False])
 
-    def test_the_most_recalled_are_the_ones_kept(self):
+    def test_every_live_learning_is_carried_most_recalled_first(self):
+        """The old shelf kept the top twenty of each type and counted the rest.
+        A memory you cannot reach from the room is a memory the room does not
+        have, so the shelf now carries all of them and the order is the only
+        thing the hit count decides."""
         seed(self.db, [row(i, "gotcha", i) for i in range(40)])
         items = self.lib.read()["shelves"][0]["items"]
-        self.assertEqual(items[0]["hits"], 39)
-        self.assertEqual(len(items), self.lib.SHELF_CAP)
-        self.assertTrue(all(i["hits"] >= 20 for i in items))
+        self.assertEqual(len(items), 40)
+        self.assertEqual([i["hits"] for i in items], list(range(39, -1, -1)))
+        self.assertEqual(len({i["id"] for i in items}), 40, "no learning twice")
 
     def test_long_bodies_are_clipped_so_the_snapshot_stays_small(self):
         long = ("x" * 5000, "y" * 5000)
@@ -154,28 +160,56 @@ class ShelvingTest(LibraryBase):
 
 
 class TruncationTest(LibraryBase):
-    def test_the_truncation_notice_is_present_when_the_cap_bites(self):
-        # A truncated list presented as a complete one is the defect this repo
-        # exists to prevent, so the number left behind travels with the data.
-        seed(self.db, [row(i, "gotcha", i) for i in range(55)])
-        cap = self.lib.read()["capped"]
-        self.assertEqual(cap["shown"], self.lib.SHELF_CAP)
-        self.assertEqual(cap["omitted"], 55 - self.lib.SHELF_CAP)
-        self.assertIn(str(55 - self.lib.SHELF_CAP), cap["note"])
+    """What is left behind, now that the answer is "nothing".
 
-    def test_there_is_no_truncation_notice_when_nothing_was_truncated(self):
-        seed(self.db, [row(i, "failure", i) for i in range(3)])
-        cap = self.lib.read()["capped"]
+    These used to prove a per-type cap of twenty was admitted honestly. The cap
+    is gone, so what they prove now is that nothing quietly took its place: the
+    accounting still exists, and it still says zero, which is a claim that can
+    be checked rather than a key that was deleted.
+    """
+
+    def test_nothing_is_left_off_the_shelf_however_many_there_are(self):
+        seed(self.db, [row(i, "gotcha", i) for i in range(55)])
+        s = self.lib.read()
+        cap = s["capped"]
+        self.assertEqual(cap["shown"], 55)
         self.assertEqual(cap["omitted"], 0)
         self.assertEqual(cap["note"], "")
+        self.assertEqual(len(s["shelves"][0]["items"]), 55)
 
-    def test_a_snapshot_of_a_realistic_store_stays_small(self):
+    def test_a_body_is_still_clipped_even_though_the_list_is_not(self):
+        """Carrying every learning is not carrying every byte of every one. The
+        clip is what keeps 632 lessons a snapshot rather than a download."""
+        seed(self.db, [row(i, "failure", i) for i in range(3)])
+        cap = self.lib.read()["capped"]
+        self.assertEqual(cap["insight_chars"], self.lib.INSIGHT_CHARS)
+
+    def test_a_snapshot_costs_a_bounded_amount_per_learning(self):
+        """The size claim, stated as arithmetic rather than as a wish.
+
+        Every one of these 1000 lessons is longer than both clips, so this is
+        the worst case the store can produce: the shelf item and its card row
+        both carry the clipped body, and nothing else scales with the count.
+        A per-learning ceiling is the honest invariant, because the total is
+        now allowed to grow, and only the price of one lesson is fixed.
+
+        Measured against the live vault on 2026-08-27: 630 learnings, 840,619
+        bytes, 0.80 MiB. Under a megabyte, over a loopback socket, every ten
+        minutes, which is the price of the library being readable.
+        """
         import json
-        seed(self.db, [row(i, t, i)
+        seed(self.db, [(f"LRN-{t}-{i:04d}", "2026-06-12T07:36:44.398Z", t,
+                        "l" * (self.lib.INSIGHT_CHARS + 60),
+                        "e" * (self.lib.EVIDENCE_CHARS + 60), "Vaults", i,
+                        "2026-08-11T05:55:33.380Z", i, None)
                        for t in ("failure", "gotcha", "pattern", "preference")
                        for i in range(250)])
-        size = len(json.dumps(self.lib.read()))
-        self.assertLess(size, 200_000, f"snapshot grew to {size} bytes")
+        section = self.lib.read()
+        section["card"] = self.lib.card(section)
+        size = len(json.dumps(section).encode())
+        per = size / 1000
+        self.assertLess(per, 1900, f"{per:.0f} bytes per learning, worst case")
+        self.assertEqual(section["capped"]["shown"], 1000)
 
 
 class AbsenceTest(LibraryBase):
@@ -319,6 +353,81 @@ class CardTest(LibraryBase):
         assert_card(self, card)
         self.assertIn("no agentdb on disk", card["headline"])
         self.assertEqual(card["needs"], 0)
+
+
+class CardRowTest(LibraryBase):
+    """The shelf, as the generic table every renderer already knows how to draw.
+
+    The point of #40 is that a person can READ the library from the room. A count
+    on a card is not memory you can reach, so every live learning becomes a row,
+    and the row carries its provenance with it: a lesson without the evidence
+    beside it is a rumour with a badge on.
+    """
+
+    def card(self):
+        return self.lib.card(self.lib.read())
+
+    def test_every_live_learning_becomes_a_row_even_past_the_old_cap(self):
+        seed(self.db, [row(i, "gotcha", i) for i in range(45)]
+                      + [row(i, "failure", i) for i in range(3)])
+        card = self.card()
+        assert_card(self, card)
+        self.assertEqual(len(card["rows"]), 48)
+        self.assertEqual(len({r["id"] for r in card["rows"]}), 48)
+
+    def test_an_archived_learning_is_never_a_row(self):
+        seed(self.db, [row(0, "failure", 4),
+                       row(1, "failure", 9, archived="2026-01-01T00:00:00Z")])
+        card = self.card()
+        self.assertEqual([r["id"] for r in card["rows"]], ["LRN-failure-0000"])
+
+    def test_the_rows_are_grouped_by_type_at_eye_level_first(self):
+        seed(self.db, [row(0, "preference", 1), row(1, "pattern", 2),
+                       row(2, "gotcha", 3), row(3, "failure", 4)])
+        groups = [r["group"] for r in self.card()["rows"]]
+        self.assertEqual(groups, ["failure", "gotcha", "pattern", "preference"])
+
+    def test_a_row_carries_the_lesson_its_evidence_its_hits_and_its_record(self):
+        seed(self.db, [row(7, "failure", 46, evidence="chronicle 2026-08-24")])
+        r = self.card()["rows"][0]
+        self.assertEqual(r["title"], "lesson failure 7")
+        self.assertEqual(r["subtitle"], "chronicle 2026-08-24")
+        self.assertEqual(r["badge"], "46×")
+        self.assertEqual(r["id"], "LRN-failure-0007")
+        self.assertIn("Vaults", r["detail"])
+        self.assertIn("2026-06-12", r["detail"], "when it was learned")
+        self.assertEqual(r["url"], "", "a learning is not a place to go")
+
+    def test_an_unsourced_row_says_so_rather_than_borrowing_authority(self):
+        seed(self.db, [row(0, "gotcha", 3, evidence=""),
+                       row(1, "gotcha", 2, evidence="a real commit")])
+        rows = {r["id"]: r for r in self.card()["rows"]}
+        weak = rows["LRN-gotcha-0000"]
+        self.assertIn("no evidence", weak["subtitle"])
+        self.assertEqual(weak["tone"], "dim")
+        self.assertEqual(rows["LRN-gotcha-0001"]["tone"], "")
+
+    def test_the_row_bodies_are_clipped_the_same_way_the_shelf_items_are(self):
+        seed(self.db, [("LRN-long", "2026-06-12T00:00:00Z", "failure", "x" * 5000,
+                        "y" * 5000, "Vaults", 9, "", 0, None)])
+        r = self.card()["rows"][0]
+        self.assertLessEqual(len(r["title"]), self.lib.INSIGHT_CHARS)
+        self.assertLessEqual(len(r["subtitle"]), self.lib.EVIDENCE_CHARS)
+
+    def test_a_store_that_will_not_open_has_no_rows_to_show(self):
+        self.db.write_bytes(b"not a database")
+        card = self.card()
+        assert_card(self, card)
+        self.assertNotIn("rows", card)
+
+    def test_the_shelf_and_the_rows_never_disagree_about_what_is_there(self):
+        seed(self.db, [row(i, t, i) for t in ("failure", "pattern")
+                       for i in range(25)])
+        section = self.lib.read()
+        card = self.lib.card(section)
+        self.assertEqual(len(card["rows"]),
+                         sum(len(s["items"]) for s in section["shelves"]))
+        self.assertEqual(len(card["rows"]), section["store"]["live"])
 
 
 if __name__ == "__main__":

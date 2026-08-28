@@ -53,6 +53,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
+import context  # noqa: E402
 import runtime as rt  # noqa: E402
 import sessions  # noqa: E402
 import webhook  # noqa: E402
@@ -483,6 +484,16 @@ class Handler(BaseHTTPRequestHandler):
                 # sent you to it.
                 return self._json({"at": self.world.at,
                                    "automation": self.world.snapshot.get("automation") or {}})
+            if path == "/api/context":
+                # Two names off the query string and nothing else. Every rule
+                # about where this may look and what it may open lives in
+                # `context.read`, including the refusal of a repo nobody named:
+                # a door that pre-judged the request would be a second place
+                # deciding what is safe, and two of those drift.
+                q = urllib.parse.parse_qs(query)
+                code, body = context.read((q.get("repo") or [""])[0],
+                                          (q.get("path") or [""])[0])
+                return self._json(body, code)
             if path == "/api/sessions":
                 repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
                 return self._json(sessions.read(repo))
