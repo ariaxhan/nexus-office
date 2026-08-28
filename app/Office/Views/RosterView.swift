@@ -98,7 +98,7 @@ struct RosterView: View {
     /// dragged and one that cannot: a tap gesture attached closer to the
     /// content claims the mouse down and the drag never begins, so a `.draggable`
     /// wrapped around the outside of it is dead code that reads as a feature.
-    private func deskRow(_ station: Station, pickUp: Bool = false) -> some View {
+    private func deskRow(_ station: Station, pickUp: Bool = true) -> some View {
         DeskRow(station: station,
                 gate: store.gateShown(at: station),
                 selected: store.selection == .desk(station.repo),
@@ -144,6 +144,11 @@ struct RosterView: View {
     }
 
     /// The name over one group of desks: "pinned", or an owner.
+    ///
+    /// The pinned name is also a drop target, so a desk from an owner group can
+    /// be dragged into the pins and lands at the top of them. Dropping onto a
+    /// row lands above that row, which leaves the very top unreachable
+    /// otherwise, exactly as the spacer past the last pin covers the bottom.
     private func groupHeader(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 10.5, weight: .semibold))
@@ -151,6 +156,10 @@ struct RosterView: View {
             .padding(.horizontal, 10)
             .padding(.top, 8)
             .padding(.bottom, 2)
+            .contentShape(Rectangle())
+            .ifDropsIntoPins(title == StateRules.pinnedHeader) { repo in
+                Task { await store.movePin(repo: repo, before: store.pinOrder.first) }
+            }
     }
 
     private var putAwayAnchor: String { "put-away-drawer" }
@@ -264,7 +273,10 @@ struct RosterView: View {
 
             if store.putAwayOpen {
                 ForEach(away) { station in
-                    deskRow(station)
+                    // The drawer has no order to change and a desk dragged out
+                    // of it would be pinned and still in the drawer, since put
+                    // away outranks a pin. So a drawer row is not picked up.
+                    deskRow(station, pickUp: false)
                 }
             }
             // The anchor is the bottom of the drawer, not the top of it, so
@@ -519,5 +531,18 @@ extension View {
     @ViewBuilder
     func ifPickedUp(_ pickUp: Bool, repo: String) -> some View {
         if pickUp { self.draggable(repo) } else { self }
+    }
+
+    /// A drop destination, applied only where a drop means something. Same
+    /// shape and same reason as `ifPickedUp`.
+    @ViewBuilder
+    func ifDropsIntoPins(_ accepts: Bool, drop: @escaping (String) -> Void) -> some View {
+        if accepts {
+            self.dropDestination(for: String.self) { repos, _ in
+                guard let repo = repos.first else { return false }
+                drop(repo)
+                return true
+            }
+        } else { self }
     }
 }
