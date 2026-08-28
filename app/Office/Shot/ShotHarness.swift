@@ -142,7 +142,13 @@ enum ShotHarness {
         // would look identical whether the rows arrived or not, which is the
         // exact defect this harness exists to catch: a table that decoded to
         // nothing is invisible in source and obvious here.
-        for source in ["library", "clock"] where store.section(source) != nil {
+        // The pipeline's own list: which issues are being worked right now, and
+        // which are waiting for a lane. Its own framing rather than a corner of
+        // `wall`, because the card alone is a headline and a count, and the
+        // whole question a person has here is WHICH ones, by name. A lane that
+        // has gone quiet draws differently from one that is working, and no
+        // other framing would ever show that.
+        for source in ["library", "clock", "pipeline"] where store.section(source) != nil {
             store.select(.section(source))
             await frame(store, window, directory, source, settling: 1.4)
         }

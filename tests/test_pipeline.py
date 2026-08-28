@@ -463,3 +463,90 @@ class OffCardTest(PipelineBase):
         out = self.mod.read()
         self.assertEqual(out["state"], "off")
         self.assertEqual(self.mod.card(out)["needs"], 0)
+
+
+class LaneTest(PipelineBase):
+    """The lanes are the work; the sweep is the few seconds that starts them.
+
+    Since 2026-08-28 a lane is a detached process that outlives the dispatcher,
+    so reading `.runtime/pid` alone reports an idle pipeline while five lanes
+    are building code. Every assertion here is that specific false green, or its
+    mirror: a lane directory left behind by a process that is gone must never be
+    reported as work in progress.
+    """
+
+    def lane(self, repo: str, issue: str, pid: int, quiet_s: float = 0.0):
+        d = self.runtime / "lanes" / f"{repo.replace('/', '_')}__{issue}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "pid").write_text(str(pid), encoding="utf-8")
+        (d / "repo").write_text(f"/repos/{repo}", encoding="utf-8")
+        (d / "started").write_text(_iso(time.time() - 600), encoding="utf-8")
+        log = d / "log"
+        log.write_text("working\n", encoding="utf-8")
+        if quiet_s:
+            old = time.time() - quiet_s
+            os.utime(log, (old, old))
+        return d
+
+    def test_lanes_are_running_even_when_no_sweep_holds_the_pid(self):
+        # The exact regression: the dispatcher exits after starting lanes, so
+        # the pid file is absent for almost all of the time work is happening.
+        self.lane("acme/thing", "42", self.live_dispatch())
+        data = self.mod.read()
+        self.assertTrue(data["running"], "lanes are work, so the pipeline is running")
+        self.assertFalse(data["sweeping"], "no sweep holds the lock")
+        self.assertEqual(data["lane_count"], 1)
+
+    def test_a_lane_whose_process_is_gone_is_not_work_in_progress(self):
+        self.lane("acme/thing", "42", self.dead_pid())
+        data = self.mod.read()
+        self.assertEqual(data["lane_count"], 0)
+        self.assertFalse(data["running"])
+
+    def test_a_lane_that_is_merely_quiet_is_still_working(self):
+        # Quiet is not lateness. A lane thinking hard says nothing for minutes,
+        # and this card must not invent a fault out of that.
+        self.receipts([("acme/thing", 60)])
+        self.log([f"[{_iso(time.time() - 60)}] working acme/thing#42"])
+        self.lane("acme/thing", "42", self.live_dispatch(), quiet_s=1800)
+        card = self.mod.card(self.mod.read())
+        self.assertEqual(card["needs"], 0, "a working lane needs nobody")
+        row = [r for r in card["rows"] if r["group"] == "lanes"][0]
+        self.assertEqual(row["tone"], "ok")
+
+    def test_the_headline_says_what_is_being_worked_not_which_pid(self):
+        self.lane("acme/thing", "42", self.live_dispatch())
+        self.lane("acme/other", "7", self.live_dispatch())
+        card = self.mod.card(self.mod.read())
+        self.assertIn("2 issues being worked", card["headline"])
+
+    def test_the_queue_is_the_last_sweep_only(self):
+        now = time.time()
+        self.receipts([], extra=[
+            json.dumps({"at": _iso(now - 30), "repo": "acme/thing", "issue": "",
+                        "outcome": "waiting", "detail": "3 issue(s) waiting for a free lane"}),
+            # An hour old: that queue has already drained, and adding it would
+            # grow a backlog that does not exist.
+            json.dumps({"at": _iso(now - 3600), "repo": "old/repo", "issue": "",
+                        "outcome": "waiting", "detail": "9 issue(s) waiting for a free lane"}),
+        ])
+        data = self.mod.read()
+        self.assertEqual(data["queue_total"], 3)
+        self.assertEqual([q["repo"] for q in data["queue"]], ["acme/thing"])
+
+    def test_a_queue_with_no_lanes_still_says_so_on_the_card(self):
+        self.receipts([], extra=[
+            json.dumps({"at": _iso(time.time() - 30), "repo": "acme/thing", "issue": "",
+                        "outcome": "waiting", "detail": "2 issue(s) waiting for a free lane"}),
+        ])
+        card = self.mod.card(self.mod.read())
+        self.assertIn("2 waiting", card["facts"][0]["value"])
+        self.assertEqual([r["group"] for r in card["rows"]], ["queue"])
+
+    def test_no_lanes_directory_is_an_idle_pipeline_not_a_broken_one(self):
+        self.receipts([("acme/thing", 60)])
+        self.log([f"[{_iso(time.time() - 60)}] nothing to do"])
+        data = self.mod.read()
+        self.assertEqual(data["lanes_state"], "none")
+        self.assertEqual(data["lane_count"], 0)
+        self.assertEqual(self.mod.card(data)["needs"], 0)

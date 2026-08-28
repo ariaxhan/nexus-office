@@ -500,14 +500,133 @@
         }
       },
       "pipeline": {
-        "state": "unconfigured",
-        "detail": "no pipeline is installed on this machine",
+        "state": "ok",
+        "detail": "a sweep is in flight",
+        "lanes": [
+          {
+            "pid": 4101,
+            "repo": "nexus-office",
+            "path": "/repos/ariaxhan/nexus-office",
+            "issue": "44",
+            "started": "2026-08-28T07:42:26Z",
+            "started_age_s": 1500,
+            "quiet_s": 40
+          },
+          {
+            "pid": 4102,
+            "repo": "matra",
+            "path": "/repos/jessstrom/matra",
+            "issue": "313",
+            "started": "2026-08-28T07:55:26Z",
+            "started_age_s": 720,
+            "quiet_s": 95
+          },
+          {
+            "pid": 4103,
+            "repo": "our4cuts",
+            "path": "/repos/ariaxhan/our4cuts",
+            "issue": "88",
+            "started": "2026-08-28T06:37:26Z",
+            "started_age_s": 5400,
+            "quiet_s": 4300
+          }
+        ],
+        "queue": [
+          {
+            "repo": "jessstrom/matra",
+            "issues": 4
+          },
+          {
+            "repo": "ariaxhan/kernel-claude",
+            "issues": 1
+          }
+        ],
+        "lane_count": 3,
+        "queue_total": 5,
         "card": {
           "title": "Pipeline",
-          "headline": "Nothing is installed here, so there is nothing to run",
+          "headline": "3 issues being worked, 5 waiting for a lane",
           "needs": 0,
-          "as_of": "",
-          "facts": []
+          "as_of": "2026-08-28T08:06:26Z",
+          "facts": [
+            {
+              "label": "working on",
+              "value": "3 issues, 5 waiting",
+              "tone": "ok"
+            },
+            {
+              "label": "next look",
+              "value": "9m",
+              "tone": ""
+            },
+            {
+              "label": "last full run",
+              "value": "5m ago, 23 repos in 24h",
+              "tone": "dim"
+            },
+            {
+              "label": "last said",
+              "value": "1m ago",
+              "tone": "dim"
+            },
+            {
+              "label": "pid",
+              "value": "nobody claims a run",
+              "tone": "dim"
+            }
+          ],
+          "rows": [
+            {
+              "id": "lane-nexus-office-44",
+              "title": "nexus-office#44",
+              "subtitle": "started 25m ago",
+              "detail": "working",
+              "badge": "working",
+              "tone": "ok",
+              "group": "lanes",
+              "url": ""
+            },
+            {
+              "id": "lane-matra-313",
+              "title": "matra#313",
+              "subtitle": "started 12m ago",
+              "detail": "working",
+              "badge": "working",
+              "tone": "ok",
+              "group": "lanes",
+              "url": ""
+            },
+            {
+              "id": "lane-our4cuts-88",
+              "title": "our4cuts#88",
+              "subtitle": "started 1h30m ago",
+              "detail": "quiet 1h11m",
+              "badge": "working",
+              "tone": "warn",
+              "group": "lanes",
+              "url": ""
+            },
+            {
+              "id": "queued-jessstrom/matra",
+              "title": "jessstrom/matra",
+              "subtitle": "4 issues waiting for a free lane",
+              "detail": "",
+              "badge": "queued",
+              "tone": "dim",
+              "group": "queue",
+              "url": ""
+            },
+            {
+              "id": "queued-ariaxhan/kernel-claude",
+              "title": "ariaxhan/kernel-claude",
+              "subtitle": "1 issue waiting for a free lane",
+              "detail": "",
+              "badge": "queued",
+              "tone": "dim",
+              "group": "queue",
+              "url": ""
+            }
+          ]
         }
       },
       "flows": {
@@ -521,42 +640,42 @@
           "facts": [
             {
               "label": "Inbox",
-              "value": "did nothing (rc 0) \u00b7 18h39m ago",
+              "value": "did nothing (rc 0) · 18h39m ago",
               "tone": "bad"
             },
             {
               "label": "Distillations",
-              "value": "ok \u00b7 8h9m ago",
+              "value": "ok · 8h9m ago",
               "tone": "ok"
             },
             {
               "label": "Granola",
-              "value": "ok \u00b7 1h13m ago",
+              "value": "ok · 1h13m ago",
               "tone": "ok"
             },
             {
               "label": "Issue pipeline",
-              "value": "ok \u00b7 1h2m ago",
+              "value": "ok · 1h2m ago",
               "tone": "ok"
             },
             {
               "label": "Mobile capture",
-              "value": "ok \u00b7 3m ago",
+              "value": "ok · 3m ago",
               "tone": "ok"
             },
             {
               "label": "Money swarm",
-              "value": "ok \u00b7 2h2m ago",
+              "value": "ok · 2h2m ago",
               "tone": "ok"
             },
             {
               "label": "Morning briefing",
-              "value": "ok \u00b7 19h9m ago",
+              "value": "ok · 19h9m ago",
               "tone": "ok"
             },
             {
               "label": "Outbound",
-              "value": "ok \u00b7 16h46m ago",
+              "value": "ok · 16h46m ago",
               "tone": "ok"
             }
           ]
@@ -1366,7 +1485,7 @@
       "2": "unclear"
     }
   },
-    "readmes": {
+  "readmes": {
     "acme/docs": "# acme docs\n\nEverything a person needs to run the acme stack, and nothing about how it\nis built.\n\n## Where things are\n\n- `guides/` the pages a customer reads\n- `runbooks/` what to do at 3am, one page per alarm\n- `adr/` the decisions, dated, never edited after the fact\n\n## Publishing\n\n    make preview     # localhost:4000, live reload\n    make check       # link check and spelling, the same one CI runs\n\nA page ships when `make check` is clean. There is no review queue: the runbooks\nare owned by the team that gets paged for them, and a wrong runbook is worse\nthan a missing one.\n\n## Conventions\n\nEvery runbook opens with the alarm text it answers, verbatim, so searching the\npage title for the thing PagerDuty just said finds it.\n",
     "northwind/internal-tools": "# internal-tools\n\nThe small programs the warehouse team runs by hand. Each one is a single file\nand does one thing.\n\n    ./bin/relabel   reprint a pallet label from its manifest id\n    ./bin/reconcile diff last night's counts against the ledger\n\nNothing here is a service. If a tool here needs to run on a schedule it belongs\nin `northwind/api` instead, where it can be watched.\n"
   }

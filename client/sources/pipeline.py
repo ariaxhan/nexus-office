@@ -204,6 +204,129 @@ def read_pid(runtime: pathlib.Path) -> dict:
             "command": cmd[:300], "verified": True}
 
 
+def read_lanes(runtime: pathlib.Path, now: float) -> dict:
+    """The lanes running right now, from the directory each one keeps.
+
+    Since 2026-08-28 a lane is a detached process that outlives the dispatcher,
+    so `.runtime/pid` no longer answers "is anything happening": it is held for
+    the seconds a sweep spends reaping, surveying and starting, and is absent
+    while five lanes are working. THE LANES ARE THE WORK. Reading the pid file
+    alone would report an idle pipeline with a full machine, which is the exact
+    false green the pid checking above exists to prevent.
+
+    A lane directory holds `pid`, `repo`, `started` and `log`. Same rule as the
+    pid file: the directory is a CLAIM. A lane whose process is gone has not
+    been reaped yet, and reporting it as running would be a lie a person can see
+    through by looking at Activity Monitor.
+
+    `quiet_s` is how long the lane has said nothing, which is the only thing
+    that can stop one. It is not a deadline: a lane thinking hard is silent for
+    minutes at a time, and the threshold is hours.
+    """
+    lanes_dir = runtime / "lanes"
+    try:
+        entries = sorted(p for p in lanes_dir.iterdir() if p.is_dir())
+    except FileNotFoundError:
+        return {"state": "none", "lanes": []}
+    except OSError as exc:
+        return {"state": "unreadable", "lanes": [],
+                "detail": f"{type(exc).__name__}: {exc}"[:200]}
+
+    lanes = []
+    for d in entries:
+        try:
+            pid = int((d / "pid").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+        if not _alive(pid):
+            # Finished, or died. Either way it is not work in progress.
+            continue
+        try:
+            repo = (d / "repo").read_text(encoding="utf-8").strip()
+        except OSError:
+            repo = ""
+        try:
+            started = (d / "started").read_text(encoding="utf-8").strip()
+        except OSError:
+            started = ""
+        # The issue number is the tail of the directory name, which is how the
+        # runner names it: <slugged repo path>__<issue>.
+        issue = d.name.rsplit("__", 1)[-1]
+        try:
+            quiet = now - (d / "log").stat().st_mtime
+        except OSError:
+            quiet = None
+        lanes.append({
+            "pid": pid,
+            "repo": repo.rstrip("/").split("/")[-1] or repo,
+            "path": repo,
+            "issue": issue if issue.isdigit() else "",
+            "started": started,
+            "started_age_s": (round(now - (_epoch(started) or now)) if started else None),
+            "quiet_s": round(quiet) if quiet is not None else None,
+        })
+    return {"state": "ok", "lanes": lanes}
+
+
+def read_queue(path: pathlib.Path, now: float) -> dict:
+    """Issues that wanted a lane this sweep and did not get one.
+
+    From the runner's own receipts rather than a second file: the queue is by
+    definition what has not happened, so there is nothing on disk to read it out
+    of, and inventing a file two processes both write is how two numbers start
+    disagreeing.
+
+    Only the MOST RECENT sweep counts. A `waiting` receipt from an hour ago
+    describes a queue that has already drained, and adding it to this one would
+    grow a backlog that does not exist.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        return {"state": "none", "waiting": [], "total": 0}
+    except OSError as exc:
+        return {"state": "unreadable", "waiting": [], "total": 0,
+                "detail": f"{type(exc).__name__}: {exc}"[:200]}
+
+    # Collected first, filtered second. Reading the file backwards and
+    # stopping at the first old line assumes the receipts are in time order;
+    # they are appended by whichever process finishes first, so a line further
+    # down can be NEWER. A test seeded exactly that and the queue reported 12
+    # issues waiting when 3 were.
+    seen = []
+    for line in raw[-400:]:
+        try:
+            r = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if r.get("outcome") != "waiting":
+            continue
+        at = _epoch(str(r.get("at") or ""))
+        repo = str(r.get("repo") or "")
+        n = str(r.get("detail") or "").strip().split(" ", 1)[0]
+        if at and repo:
+            seen.append((at, repo, int(n) if n.isdigit() else 0))
+    if not seen:
+        return {"state": "ok", "waiting": [], "total": 0, "at": "", "age_s": None}
+
+    newest = max(at for at, _, _ in seen)
+    newest_at = _dt.datetime.fromtimestamp(newest, _dt.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    latest = {}
+    # One sweep, not the whole file. Anything more than a few minutes older than
+    # the newest line describes a queue that has already drained.
+    for at, repo, n in sorted(seen, reverse=True):
+        if (newest - at) > 180:
+            continue
+        latest.setdefault(repo, n)
+    waiting = [{"repo": k, "issues": v} for k, v in
+               sorted(latest.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return {"state": "ok", "waiting": waiting,
+            "total": sum(w["issues"] for w in waiting),
+            "at": newest_at,
+            "age_s": (round(now - (_epoch(newest_at) or now)) if newest_at else None)}
+
+
 def read_log(path: pathlib.Path) -> dict:
     """The last thing the pipeline said, and when it said it."""
     try:
@@ -415,7 +538,15 @@ def read() -> dict:
     kill = (root / KILL_SWITCH)
     switched_off = kill.exists()
 
-    running = pid["claim"] == "alive"
+    lanes_read = read_lanes(runtime, now)
+    lanes = lanes_read["lanes"]
+    queue = read_queue(runtime / "receipts.jsonl", now)
+
+    # A sweep holding the lock, OR any lane doing the actual work. Since lanes
+    # detach, the pid file is absent for almost all of the time the pipeline is
+    # busy, and reporting on it alone said "nothing running" with five lanes up.
+    sweeping = pid["claim"] == "alive"
+    running = sweeping or bool(lanes)
     started = pid.get("started")
     stale = pid if pid["claim"] == "stale" else None
 
@@ -488,6 +619,17 @@ def read() -> dict:
 
         # The panel reads these five.
         "running": running,
+        "sweeping": sweeping,
+
+        # The work itself. `lanes` is what is being worked right now, one entry
+        # per detached process; `queue` is what asked for a slot last sweep and
+        # did not get one. Neither is derived from the other.
+        "lanes": lanes,
+        "lane_count": len(lanes),
+        "lanes_state": lanes_read["state"],
+        "queue": queue.get("waiting", []),
+        "queue_total": queue.get("total", 0),
+        "queue_at": queue.get("at", ""),
         "running_for": _human(now - started) if (running and started) else None,
         "doing": log["doing"] if running else "",
         "next_in": next_in,
@@ -575,9 +717,23 @@ def card(data: dict) -> dict:
     running = bool(data.get("running"))
     running_for = data.get("running_for")
 
-    facts = [_card.fact("running",
-                        (f"yes, for {running_for}" if running_for else "yes") if running else "no",
-                        "ok" if running else "dim")]
+    # WHAT IS BEING WORKED, before anything about schedules. Lanes are the work;
+    # a sweep is the few seconds that starts them. Reporting only the sweep said
+    # "nothing running" while five lanes were building code, which is the same
+    # false green as a stale pid, arriving from the other direction.
+    lanes = data.get("lanes") or []
+    queued = int(data.get("queue_total") or 0)
+    if lanes:
+        facts = [_card.fact("working on",
+                            f"{len(lanes)} {_card.plural(len(lanes), 'issue')}"
+                            + (f", {queued} waiting" if queued else ""), "ok")]
+    else:
+        facts = [_card.fact("running",
+                            ("a sweep" if data.get("sweeping") else "no")
+                            + (f", {queued} waiting for a lane" if queued else ""),
+                            "ok" if running else "dim")]
+    if running_for and data.get("sweeping"):
+        facts.append(_card.fact("sweep started", running_for + " ago", "dim"))
     if data.get("doing"):
         facts.append(_card.fact("doing", data["doing"]))
 
@@ -605,6 +761,30 @@ def card(data: dict) -> dict:
         facts.append(_card.fact(
             "last full run", f"{when}, {reached} {_card.plural(reached, 'repo')} in 24h",
             "warn" if (hb_age is None or not reached) else "dim"))
+
+    rows = []
+    for lane in lanes:
+        quiet = lane.get("quiet_s")
+        # Quiet is not lateness. A lane thinking hard says nothing for minutes,
+        # and only hours of it means anything, so this is dim until it is not.
+        quiet_txt = f"quiet {_human(quiet)}" if quiet and quiet > 300 else "working"
+        rows.append(_card.row(
+            id=f"lane-{lane.get('repo')}-{lane.get('issue')}",
+            title=f"{lane.get('repo')}#{lane.get('issue')}" if lane.get("issue")
+                  else str(lane.get("repo") or "a lane"),
+            subtitle=(f"started {_human(lane['started_age_s'])} ago"
+                      if lane.get("started_age_s") is not None else ""),
+            detail=quiet_txt,
+            badge="working",
+            tone="ok" if not (quiet and quiet > 3600) else "warn",
+            group="lanes"))
+    for w in (data.get("queue") or []):
+        n = int(w.get("issues") or 0)
+        rows.append(_card.row(
+            id=f"queued-{w.get('repo')}",
+            title=str(w.get("repo") or ""),
+            subtitle=f"{n} {_card.plural(n, 'issue')} waiting for a free lane",
+            badge="queued", tone="dim", group="queue"))
 
     age = data.get("last_said_age_s")
     if log_state == "ok":
@@ -634,5 +814,14 @@ def card(data: dict) -> dict:
               # Receipts nobody can read is a hole in the runner's own
               # accounting, and it is invisible in every field above.
               or (data.get("covered") or {}).get("state") == "unreadable")
-    return _card.build(TITLE, detail, 1 if broken else 0,
-                       _card.zulu(data.get("last_said_at")), facts)
+    # The headline says what is being WORKED when anything is, because "a run is
+    # in flight (pid 39792)" answers a question about the runner and not the one
+    # a person is asking, which is whether their issue is moving.
+    if lanes:
+        head = f"{len(lanes)} {_card.plural(len(lanes), 'issue')} being worked"
+        if queued:
+            head += f", {queued} waiting for a lane"
+    else:
+        head = detail
+    return _card.build(TITLE, head, 1 if broken else 0,
+                       _card.zulu(data.get("last_said_at")), facts, rows)
