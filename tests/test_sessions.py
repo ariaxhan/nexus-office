@@ -348,6 +348,31 @@ class StartTest(FakeHcom):
         self.assertEqual(code, 200)
         self.assertEqual(body["directory"], str(outside))
 
+    def test_a_checkout_whose_folder_is_not_named_after_the_repo_is_still_found(self):
+        """`ariacam` is `ariaxhan/aria-cam`. A folder is found by its origin, so
+        a checkout does not vanish because somebody named the folder something
+        shorter."""
+        folder = self.root / "CodingVault" / "ariacam"
+        (folder / ".git").mkdir(parents=True)
+        sessions._origin_cache[str(folder)] = "acme/aria-cam"
+        self.assertEqual(sessions.desk_dir("acme/aria-cam"), str(folder.resolve()))
+
+    def test_a_folder_that_shares_a_name_but_not_an_origin_is_not_the_checkout(self):
+        """`CodingVault/site-spec` is somebody else's `site-spec-private`; the
+        real `site-spec` sits in `site-spec-public`. The origin decides."""
+        decoy = self.root / "CodingVault" / "site-spec"
+        real = self.root / "CodingVault" / "site-spec-public"
+        for d in (decoy, real):
+            (d / ".git").mkdir(parents=True)
+        sessions._origin_cache[str(decoy)] = "acme/site-spec-private"
+        sessions._origin_cache[str(real)] = "acme/site-spec"
+        self.assertEqual(sessions.desk_dir("acme/site-spec"), str(real.resolve()))
+
+    def test_the_walk_still_refuses_a_folder_no_origin_claims(self):
+        (self.root / "CodingVault" / "unrelated" / ".git").mkdir(parents=True)
+        sessions._origin_cache[str(self.root / "CodingVault" / "unrelated")] = "acme/other"
+        self.assertEqual(sessions.desk_dir("acme/nothing"), "")
+
     def test_a_desk_nobody_has_checked_out_says_so_rather_than_inventing_a_path(self):
         code, body = sessions.start({"tool": "claude", "repo": "acme/absent"})
         self.assertEqual(code, 400)
