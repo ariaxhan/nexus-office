@@ -5,10 +5,10 @@
   "identity": "ariaxhan",
   "engine": "claude",
   "capability": "commit_and_pr",
-  "enabled": false,
+  "enabled": true,
   "_cap_minutes": "25 rather than the vault's 12, because these issues are room-building rather than bug-fixing and a lane needs time to build, shoot, LOOK at the pictures, and fix what it sees. Not higher: run_budget_minutes is 45 across all 71 repos, and a lane that eats most of a run starves everyone else.",
   "cap_minutes": 25,
   "_max_issues_per_run": "One. Each remaining issue is a substantial piece of the room, and a lane that rushes three of them produces three PRs nobody wants to review.",
   "max_issues_per_run": 1,
-  "note": "PARKED 2026-08-27 after the unattended issue lane ran `npm run shot`, opened Office on Aria's desktop, and drove the UI. Do not unpark until visual checks are proven genuinely headless or explicitly gated on an attended session. Earlier: unparked 2026-08-27 on Aria's say-so for #43 and #44, but selection is only `did the bot have the last word`, so unrelated issues remained eligible."
+  "note": "UNPARKED 2026-08-28 once the cause was actually fixed rather than braked around. The park was for the lane running `npm run shot`, which opens and drives real Office windows on Aria's desktop every 15 minutes. `scripts/shoot.sh` now refuses unless it has a terminal AND NEXUS_OFFICE_ALLOW_VISIBLE_SHOTS=1, proven by running it both ways: a lane has no tty, so it cannot bypass the gate by setting the variable. tests/test_shoot_safety.py pins both halves. THE COST, STATED: a lane now gets exit 2 from the harness, so it ships visual changes it has never looked at, which is the one rule CLAUDE.md opens with. A genuinely offscreen capture path is the real fix and is not written yet. Until it is, prefer issues on this repo that are not about what a screen looks like. Selection is still only `did the bot have the last word`, so every open issue is eligible: the roadmap epic #16 and the milestone issues #20 (M0), #22 (M2), #24 (M4) and #25 (M5) are SHIPPED or not yours to build, and a lane picking one up rebuilds something that already exists. Close or answer them so the bot holds the last word."
 }
