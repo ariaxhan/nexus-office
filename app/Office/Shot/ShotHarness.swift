@@ -145,6 +145,20 @@ enum ShotHarness {
             store.openSession = nil
         }
 
+        // The marks a person left on a conversation. Its own framing rather than
+        // a corner of the composer shot: a reaction is drawn from a store none
+        // of the other ten read, and leaning on `attach` to prove it would mean
+        // the day it stops rendering, the only picture that could say so is one
+        // nobody is scanning for a mark.
+        //
+        // The marks come from the fixture's `reactions`, seeded when the thread
+        // loads. A screenshot run keeps them in memory and never writes them
+        // down, so photographing this cannot edit what Aria reacted to.
+        if let bot = preferredBot(store) {
+            store.select(.bot(bot))
+            await frame(store, window, directory, "reactions", settling: 1.4)
+        }
+
         // A picture picked and not yet sent. The composer is the one part of
         // this app whose state nothing else photographs: the chip, the size
         // after the downscale and the way out of it all live for the seconds

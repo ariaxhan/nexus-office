@@ -131,7 +131,12 @@ struct BotThreadView: View {
                         .padding(.top, 24)
                     }
                     ForEach(Array(turns.enumerated()), id: \.offset) { index, turn in
-                        Bubble(turn: turn, color: color).id(index)
+                        // The row is still drawn by position — that is only
+                        // where it sits. The mark on it is keyed by what the
+                        // turn says, so a turn arriving above this one moves the
+                        // bubble and never the mark. See `Reactions.key`.
+                        Bubble(turn: turn, color: color, thread: bot.id,
+                               reactions: Reactions.shared).id(index)
                     }
                     // The gate lands in the thread of the bot that asked, because
                     // that is where a person is already looking. The sheet is the
@@ -180,6 +185,14 @@ struct BotThreadView: View {
             )
             .onPreferenceChange(ThreadBottom.self) { contentBottom = $0 }
             .onPreferenceChange(ThreadViewport.self) { viewport = $0 }
+            // Only ever does anything under `--demo`: the real door returns no
+            // seeds, and a store with a mark already in it refuses them. This is
+            // what lets a framing photograph a reaction at all.
+            .onChange(of: turns.count, initial: true) {
+                let seeds = store.api.reactionSeeds()
+                guard let rows = seeds[bot.id] else { return }
+                Reactions.shared.seed(fixture: rows, thread: bot.id, turns: turns)
+            }
             // A reply is only allowed to move the screen when the screen is
             // already on the newest turn, or when the newest turn is hers. A
             // person four replies back reading why something was refused, and
@@ -484,19 +497,34 @@ struct NewRepliesPill: View {
 struct Bubble: View {
     let turn: ChatTurn
     let color: Color
+    /// Which conversation this turn is in, so a mark on it belongs to one
+    /// thread. Defaults to nothing, which is the same as unreactable: a bubble
+    /// drawn somewhere that has no thread to name cannot carry a mark, rather
+    /// than sharing one with every other nameless bubble.
+    var thread: String = ""
+    /// Passed in rather than reached for, so this view has no opinion about
+    /// where the marks live and the one that owns them is chosen at the call
+    /// site. Nothing to react to when it is absent.
+    var reactions: Reactions?
 
     var body: some View {
         HStack {
             if turn.isUser { Spacer(minLength: 60) }
             VStack(alignment: turn.isUser ? .trailing : .leading, spacing: 3) {
                 if !turn.content.isEmpty || !turn.hasPhoto {
-                    said
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 9)
-                        .background(
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .fill(turn.isUser ? color.opacity(0.28) : Theme.raised)
-                        )
+                    if let reactions, !thread.isEmpty {
+                        ReactionMenu(reactions: reactions, thread: thread, turn: turn) {
+                            bubble
+                        }
+                        // Under the bubble rather than overlapping its corner:
+                        // an overlay would sit on top of the last line of a one
+                        // line reply, and the mark is worth less than the words.
+                        ReactionBadge(reactions: reactions, thread: thread,
+                                      turn: turn, color: color)
+                            .padding(.horizontal, 4)
+                    } else {
+                        bubble
+                    }
                 }
                 // The picture itself is gone: the office carried the bytes and
                 // never wrote them down, so this says a photo went and stops
@@ -511,6 +539,18 @@ struct Bubble: View {
             .frame(maxWidth: 560, alignment: turn.isUser ? .trailing : .leading)
             if !turn.isUser { Spacer(minLength: 60) }
         }
+    }
+
+    /// What was said, in its rounded box. Named because it is drawn either bare
+    /// or inside the reaction menu, and writing it twice is how the two drift.
+    private var bubble: some View {
+        said
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(turn.isUser ? color.opacity(0.28) : Theme.raised)
+            )
     }
 
     /// A bot writes markdown; a person writes a sentence.
