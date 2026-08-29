@@ -31,6 +31,12 @@ final class StateRulesTests: XCTestCase {
         XCTAssertEqual(Set(DeskState.allCases.map(\.rawValue)).count, 8)
     }
 
+    func testARefusalReadsAsAQuestionPosted() {
+        XCTAssertEqual(DeskState.refused.label, "question posted")
+        XCTAssertEqual(StateRules.outcomeLabel("refused"), "question posted")
+        XCTAssertEqual(StateRules.outcomeLabel("landed"), "landed")
+    }
+
     func testTheOrderingIsStrict() {
         // Each state, given every field that a lower state would have claimed.
         let loaded = Station(repo: "a/all", access: false, outcome: "parked",

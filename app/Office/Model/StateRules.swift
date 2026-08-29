@@ -21,7 +21,7 @@ public enum DeskState: String, CaseIterable {
         case .waiting: return "waiting on you"
         case .locked: return "no push access"
         case .parked: return "parked"
-        case .refused: return "refused"
+        case .refused: return "question posted"
         case .landed: return "landed a PR"
         case .working: return "working"
         case .idle: return "quiet"
@@ -70,6 +70,11 @@ public enum DeskState: String, CaseIterable {
 }
 
 public enum StateRules {
+
+    /// Human copy for protocol outcomes that are otherwise shown verbatim.
+    public static func outcomeLabel(_ outcome: String) -> String {
+        outcome == DeskState.refused.rawValue ? DeskState.refused.label : outcome
+    }
 
     // MARK: - the one ordering
 
