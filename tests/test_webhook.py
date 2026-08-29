@@ -78,6 +78,24 @@ def ping(repo="acme/thing"):
             "repository": {"full_name": repo}, "sender": {"login": "ariaxhan"}}
 
 
+def patch_env(**values):
+    """Set env vars for one test; .stop() puts back exactly what was there."""
+    import os
+    saved = {k: os.environ.get(k) for k in values}
+    for k, v in values.items():
+        os.environ[k] = v
+
+    class _Stop:
+        @staticmethod
+        def stop():
+            for k, old in saved.items():
+                if old is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = old
+    return _Stop
+
+
 class VerifyTest(unittest.TestCase):
     """The whole security model of the public path is this function."""
 
@@ -553,6 +571,11 @@ class TriggerTest(unittest.TestCase):
         self.assertTrue(seen["receipt_first"])
 
     def test_no_receipts_file_configured_is_not_a_crash(self):
+        # `receipts=None` means "read OFFICE_RECEIPTS", and a shell that has it
+        # set would send this fixture's acme/thing merge into the real wall
+        # (it did, 2026-08-28: a fixture desk sat on the office for a day).
+        self.env = patch_env(OFFICE_RECEIPTS="")
+        self.addCleanup(self.env.stop)
         t = self.trigger(receipts=None)
         t.notice(wh.parse("pull_request", "d1", pull_request()))
         self.assertTrue(self.until(lambda: t.acts >= 1))
