@@ -66,6 +66,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// `nexus-office://open?repo=owner/name&path=docs/x.md`, from `nexus open`.
+    /// Anything else on this scheme is ignored: one verb, two names, and the
+    /// door still decides whether the file is readable.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let ask = OfficeURL.parse(url) else { continue }
+            showOffice()
+            Task { await Store.shared.open(repo: ask.repo, path: ask.path) }
+        }
+    }
+
     /// Closing the window is not quitting. The dot outlives it.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

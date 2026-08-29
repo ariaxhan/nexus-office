@@ -579,6 +579,23 @@ public final class Store {
         deskTabs[repo] = .work
     }
 
+    /// Open one Markdown file of one desk, the way `nexus open <file>` asks
+    /// to: select the desk, flip it to Context, read that file. The path is
+    /// still only a request; the door decides whether it is in the index.
+    ///
+    /// A repo with no desk on the floor is said out loud rather than drawn as
+    /// an empty pane: the selection lands on it, so the moment a snapshot
+    /// carries the desk it draws, and the toast says why it has not yet.
+    public func open(repo: String, path: String) async {
+        select(.desk(repo))
+        deskTabs[repo] = .context
+        if station(repo) == nil {
+            toast = "\(repo) is not a desk in the office yet; the next snapshot may bring it"
+        }
+        await loadContext(repo: repo, path: path)
+        if let said = contextErrors[repo] { toast = said }
+    }
+
     /// Read one desk's context. `path` empty asks for the index, and then opens
     /// the README, or the first entry when there is no README: a list of files
     /// with an empty pane beside it is a screen that reads as broken.

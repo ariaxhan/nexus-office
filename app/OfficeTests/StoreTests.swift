@@ -14,6 +14,31 @@ import XCTest
 @MainActor
 final class StoreTests: XCTestCase {
 
+    // MARK: - nexus open lands on the file
+
+    func testOpeningAFileSelectsTheDeskFlipsItToContextAndReadsThatFile() async throws {
+        // The shipped demo floor, because the inline fixture carries no
+        // checkout and this is about the read landing.
+        let demo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Demo/demo.json")
+        let store = Store(api: Api(source: .demo(demo)))
+        await store.refreshWorld()
+        await store.open(repo: "acme/storefront", path: "_meta/plans/checkout-rewrite.md")
+        XCTAssertEqual(store.selection, .desk("acme/storefront"))
+        XCTAssertEqual(store.tab(at: "acme/storefront"), .context)
+        XCTAssertEqual(store.context(at: "acme/storefront")?.path, "_meta/plans/checkout-rewrite.md")
+        XCTAssertNil(store.toast)
+    }
+
+    func testOpeningAFileTheDoorWillNotOfferSaysSoInsteadOfDrawingNothing() async throws {
+        let store = try floor()
+        await store.refreshWorld()
+        await store.open(repo: "acme/storefront", path: "src/secret.md")
+        XCTAssertEqual(store.selection, .desk("acme/storefront"))
+        XCTAssertNotNil(store.toast)
+    }
+
     // MARK: - a draft belongs to the office, not to the view
 
     func testAMessageHalfWrittenSurvivesGoingToLookAtSomethingElse() async throws {

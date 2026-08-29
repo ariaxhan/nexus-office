@@ -29,6 +29,21 @@
 	     project keeps having: a build that passes and a screen that is wrong. -->
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
+	<!-- nexus-office://open?repo=owner/name&path=docs/x.md opens that file in
+	     the desk's Context pane. This is how `nexus open <file>` reaches the
+	     window; the CLI works the repo out from the checkout's origin so the app
+	     never has to map a path to a desk. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.nexusoffice.open</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nexus-office</string>
+			</array>
+		</dict>
+	</array>
 	<!-- Loopback only. The office server is on this machine or it is nowhere. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

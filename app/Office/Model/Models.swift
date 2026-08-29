@@ -1004,6 +1004,33 @@ public enum FileTree {
     }
 }
 
+/// What `nexus-office://open?repo=owner/name&path=docs/x.md` asks for.
+///
+/// The repo must look like a repo and the path must be relative, or the URL
+/// is not a request: the door refuses the same shapes again, but a URL is
+/// typed by anything that can call `open`, so it is checked before it moves
+/// a selection.
+public struct OfficeURL: Equatable {
+    public let repo: String
+    public let path: String
+
+    public static func parse(_ url: URL) -> OfficeURL? {
+        guard url.scheme?.lowercased() == "nexus-office",
+              url.host?.lowercased() == "open",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+        else { return nil }
+        let repo = items.first { $0.name == "repo" }?.value ?? ""
+        let path = items.first { $0.name == "path" }?.value ?? ""
+        let parts = repo.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty }),
+              repo.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) || "._-/".unicodeScalars.contains($0) }),
+              !path.isEmpty, !path.hasPrefix("/"), !path.hasPrefix("~"),
+              !path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+        else { return nil }
+        return OfficeURL(repo: repo, path: path)
+    }
+}
+
 /// A section slot that swallows its own decode failure, so `[String: MaybeSection]`
 /// survives one bad value where `[String: Section]` would throw the lot away.
 struct MaybeSection: Decodable {
