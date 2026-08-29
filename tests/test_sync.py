@@ -766,3 +766,26 @@ class BatchPartsTest(SyncCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReceiptsKeepTheWorkTest(SyncCase):
+    """A survey every fifteen minutes must never push a desk's real work out of
+    its 24 rows, which is what emptied the automation page on 2026-08-29."""
+
+    def test_issue_rows_survive_a_day_of_surveys(self):
+        path = pathlib.Path(self.tmp.name) / "receipts.jsonl"
+        rows = [{"at": "2026-08-28T09:00:00Z", "repo": "acme/thing", "issue": "7",
+                 "outcome": "landed", "detail": "opened a PR"}]
+        rows += [{"at": f"2026-08-29T{h:02d}:{m:02d}:00Z", "repo": "acme/thing", "issue": "",
+                  "outcome": "survey", "detail": ""} for h in range(24) for m in (0, 15, 30, 45)]
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        import office_sync_shim
+        mod = importlib.reload(office_sync_shim).mod  # setUp replaced receipts() with a fake
+        mod.log = lambda m: None
+        mod.RECEIPTS = path
+        mod.NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)
+        by_repo, _ = mod.receipts()
+        kept = by_repo["acme/thing"]
+        self.assertEqual([r["issue"] for r in kept if r["issue"]], ["7"])
+        self.assertLessEqual(sum(1 for r in kept if not r["issue"]), 2)
+        self.assertEqual(kept[0]["outcome"], "survey")  # newest first still

@@ -228,9 +228,14 @@ def receipts():
             counts[r.get("outcome", "?")] = counts.get(r.get("outcome", "?"), 0) + 1
         by_repo.setdefault(repo, []).append(r)
 
+    # Newest first, and the issue rows survive the surveys: a runner that
+    # surveys every fifteen minutes fills 24 rows with "survey" in six hours,
+    # and a desk whose work is all older than that would show none of it.
     for repo, rs in by_repo.items():
         rs.sort(key=lambda x: x.get("at", ""), reverse=True)
-        del rs[24:]
+        work = [r for r in rs if str(r.get("issue") or "").strip()]
+        surveys = [r for r in rs if not str(r.get("issue") or "").strip()]
+        rs[:] = sorted(work[:24] + surveys[:2], key=lambda x: x.get("at", ""), reverse=True)
     return by_repo, counts
 
 
