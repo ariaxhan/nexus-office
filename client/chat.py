@@ -56,10 +56,14 @@ IMAGE_TYPES = ("image/png", "image/jpeg")
 # for the whole thing, so this is a "the harness died" timeout, not a latency
 # budget.
 TURN_TIMEOUT_S = 300
+# The harness folds this block into one prompt, so it is a token budget, not a
+# list. Counts are exact whatever gets cut; the rows are what fits, with the
+# ones that need a person first, because "what needs me" is the question asked.
 MAX_EVIDENCE_ISSUES = 180
 MAX_EVIDENCE_PRS = 120
-EVIDENCE_BODY_CHARS = 600
-EVIDENCE_LAST_CHARS = 400
+EVIDENCE_BODY_CHARS = 240
+EVIDENCE_LAST_CHARS = 200
+EVIDENCE_MAX_CHARS = 48_000
 
 DOWN = "the harness is not running"
 BAD_BOT = "bad bot id"
@@ -163,8 +167,6 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
     for row in selected:
         repo = str(row.get("repo") or "")
         for issue in row.get("issues") or []:
-            if len(issue_rows) >= MAX_EVIDENCE_ISSUES:
-                break
             issue_rows.append({
                 "repo": repo,
                 "number": issue.get("number"),
@@ -176,8 +178,6 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
                 "last_word_excerpt": str(issue.get("last_word") or "")[:EVIDENCE_LAST_CHARS],
             })
         for pr in row.get("prs") or []:
-            if len(pr_rows) >= MAX_EVIDENCE_PRS:
-                break
             pr_rows.append({
                 "repo": repo,
                 "number": pr.get("number"),
@@ -188,6 +188,10 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
                 "state": pr.get("state"),
                 "closes": list(pr.get("closes") or [])[:40],
             })
+
+    issue_rows.sort(key=lambda r: "waiting on human" not in r["labels"])
+    issue_rows = issue_rows[:MAX_EVIDENCE_ISSUES]
+    pr_rows = pr_rows[:MAX_EVIDENCE_PRS]
 
     sections = {}
     for name, value in (snap.get("sections") or {}).items():
@@ -201,12 +205,14 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
             "needs": card.get("needs"),
             "as_of": card.get("as_of"),
         }
-    return {
+    evidence = {
         "source": "nexus-office:/api/world",
         "captured_at": snap.get("generated"),
         "bot": bot,
         "owner_filter": selected_owner or None,
         "owners": owners,
+        "counts_scope": f"every repo owned by {selected_owner}" if selected_owner
+                        else "every desk on the wall",
         "counts": {
             "issues": issue_count,
             "waiting_on_human": waiting_count,
@@ -214,11 +220,23 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
             "clean_mergeable_prs": clean_prs,
             "conflicting_prs": dirty_prs,
         },
+        "rows_note": "counts are exact; rows are the ones that fit, waiting on human first",
         "issues": issue_rows,
         "pull_requests": pr_rows,
         "sections": sections,
-        "truncated": len(issue_rows) >= MAX_EVIDENCE_ISSUES or len(pr_rows) >= MAX_EVIDENCE_PRS,
+        "truncated": False,
     }
+    # Drop rows from the end until the block fits: PRs first, then issues, so the
+    # raised hands at the front of the list are the last thing to go.
+    while len(json.dumps(evidence, ensure_ascii=False)) > EVIDENCE_MAX_CHARS:
+        evidence["truncated"] = True
+        if evidence["pull_requests"]:
+            evidence["pull_requests"].pop()
+        elif evidence["issues"]:
+            evidence["issues"].pop()
+        else:
+            break
+    return evidence
 
 
 def _harness_get(path: str):

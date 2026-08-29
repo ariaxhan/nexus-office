@@ -1700,3 +1700,38 @@ class WebhookTest(unittest.TestCase):
     def test_a_malformed_repo_never_reaches_github(self):
         for repo in ("", "nope", "a/b/c", "../../etc/passwd"):
             self.assertFalse(self.world.refresh_desk(repo), repr(repo))
+
+
+class OfficeEvidenceTest(unittest.TestCase):
+    """The evidence block is a token budget: counts stay exact, raised hands go first."""
+
+    @classmethod
+    def setUpClass(cls):
+        import chat
+
+        cls.chat = chat
+
+    def world(self, n):
+        return {"generated": "2026-08-29T08:00:00Z", "owners": ["ariaxhan"], "sections": {},
+                "stations": [{"repo": "ariaxhan/big", "hidden": False, "prs": [], "issues": [
+                    {"number": i, "title": f"issue {i}", "body": "b" * 240, "last_word": "w" * 200,
+                     "labels": ["waiting on human"] if i % 3 == 0 else []}
+                    for i in range(n)]}]}
+
+    def test_waiting_on_human_rows_come_first_and_counts_are_exact(self):
+        evidence = self.chat.office_evidence(self.world(30), "sphinx", "ariaxhan")
+        labels = [r["labels"] for r in evidence["issues"]]
+        first_plain = next(i for i, l in enumerate(labels) if "waiting on human" not in l)
+        self.assertTrue(all("waiting on human" in l for l in labels[:first_plain]))
+        self.assertEqual(evidence["counts"], {"issues": 30, "waiting_on_human": 10, "in_pr": 0,
+                                              "clean_mergeable_prs": 0, "conflicting_prs": 0})
+        self.assertFalse(evidence["truncated"])
+
+    def test_a_big_world_is_cut_to_budget_from_the_back(self):
+        evidence = self.chat.office_evidence(self.world(400), "sphinx", "ariaxhan")
+        self.assertTrue(evidence["truncated"])
+        self.assertLessEqual(len(json.dumps(evidence, ensure_ascii=False)), self.chat.EVIDENCE_MAX_CHARS)
+        self.assertEqual(evidence["counts"]["issues"], 400)
+        # the cut ate from the back, so what survived is raised hands only
+        self.assertTrue(evidence["issues"])
+        self.assertTrue(all("waiting on human" in r["labels"] for r in evidence["issues"]))
