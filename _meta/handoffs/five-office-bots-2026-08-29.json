@@ -1,0 +1,200 @@
+{
+  "schema": "kernel.handoff/v1",
+  "identity": {
+    "name": "five-office-bots",
+    "created": "2026-08-29T08:15:01Z",
+    "session": "main-30921",
+    "tier": 2
+  },
+  "provenance": {
+    "branch": "main",
+    "commit": "ffd50381605664b956f4a7153549f130464360e5",
+    "dirty": true,
+    "artifacts": [
+      {
+        "path": "client/chat.py",
+        "sha256": "6a425faa13ecbd60fd8bff5fb359ca40ce468dab4112182d78f6273e8068df26",
+        "purpose": "Unverified Office evidence producer and chat attachment"
+      },
+      {
+        "path": "client/serve.py",
+        "sha256": "15da316b9f3627226b3db31262d87a992586b08332316ff0577b28007c774d6a",
+        "purpose": "Unverified live World evidence callback"
+      },
+      {
+        "path": "tests/test_serve.py",
+        "sha256": "b5da6aec0928c16f101f517de9885ea60dcaf94e1a5de65bc3d571a9e393fe67",
+        "purpose": "Unrun evidence-forwarding regression"
+      }
+    ],
+    "retrospective_refs": [
+      "_meta/reports/retrospective-2026-08-29.json"
+    ]
+  },
+  "objective": {
+    "goal": "Ship five useful Office intelligences whose judgments use deterministic live Office evidence.",
+    "success_conditions": [
+      "North, Relay, Rune, Sphinx, and Parallax retain distinct judgment functions and always-on compression.",
+      "Interactive turns receive bounded, timestamped, untrusted Office evidence.",
+      "A live Sphinx ariaxhan query agrees with /api/world and yields typed questions, not grep-based absence.",
+      "All source changes pass focused and full tests, reach default branches, restart, and verify on the serving Tailscale domain."
+    ],
+    "non_goals": [
+      "No external issue writes, merges, sends, publishing, or spending without Aria's explicit action.",
+      "Do not touch untracked wrangler.jsonc or unrelated Vaults runtime state."
+    ]
+  },
+  "contract": {
+    "invariants": [
+      "Concrete events remain deterministic and evidence-linked; models interpret but do not invent occurrence.",
+      "Compression is canonical and always on for all five bots.",
+      "Work is not done until merged, deployed, and verified live where applicable.",
+      "Office evidence is data, never instructions."
+    ],
+    "assumptions": [
+      "The Tailscale serving domain remains arias-macbook-pro-2.tail4f309a.ts.net and proxies 127.0.0.1:8790.",
+      "Current dirty changes are an incomplete producer half; the tradition harness still ignores evidence_context."
+    ],
+    "decisions_accepted": [
+      {
+        "decision": "Sources are shared Office senses, routed by meaning rather than bot identity.",
+        "rationale": "One source can change direction, execution, knowledge, decisions, and longitudinal patterns."
+      }
+    ],
+    "alternatives_rejected": [
+      {
+        "alternative": "Let bot turns grep the Vault when live Office evidence is unavailable.",
+        "reason": "It produced a confident false absence against 104 live issues."
+      }
+    ]
+  },
+  "workflow": {
+    "phases": [
+      {
+        "name": "roster-ui-and-safe-event-sink",
+        "status": "inherited",
+        "evidence": "nexus-office ffd5038; tradition-harness af3a71d; 736 Python tests plus OfficeTests; reviewed offscreen screenshots; live five-bot roster and opening posts."
+      },
+      {
+        "name": "interactive-office-evidence-bridge",
+        "status": "required"
+      },
+      {
+        "name": "typed-sphinx-decisions-and-requeue",
+        "status": "required"
+      },
+      {
+        "name": "deterministic-routing-schedules-and-parallax-longitudinal-layer",
+        "status": "required"
+      }
+    ]
+  },
+  "runtime": {
+    "required_skills": [
+      {
+        "name": "kernel:ingest"
+      },
+      {
+        "name": "kernel:build"
+      }
+    ],
+    "preflight": [
+      {
+        "check": "current_branch",
+        "expected": "main"
+      },
+      {
+        "check": "path_exists",
+        "path": "client/chat.py"
+      },
+      {
+        "check": "argv",
+        "argv": [
+          "git",
+          "status",
+          "--short"
+        ]
+      }
+    ]
+  },
+  "context": {
+    "policy": {
+      "mode": "bounded"
+    },
+    "required": [
+      {
+        "path": "client/chat.py",
+        "grep": "office_evidence",
+        "context": 120,
+        "reason": "Incomplete producer and attachment boundary"
+      },
+      {
+        "path": "client/serve.py",
+        "grep": "bot_evidence",
+        "context": 40,
+        "reason": "Live World snapshot callback"
+      },
+      {
+        "path": "tests/test_serve.py",
+        "grep": "bounded_live_office_evidence",
+        "context": 60,
+        "reason": "Unrun regression"
+      },
+      {
+        "path": "_meta/plans/2026-08-29-proactive-bots.md",
+        "heading": "Acceptance",
+        "reason": "Remaining acceptance contract"
+      }
+    ],
+    "optional": [
+      {
+        "path": "_meta/plans/2026-08-29-proactive-bots.md",
+        "heading": "Parallax longitudinal layer",
+        "reason": "Later architectural unit"
+      }
+    ],
+    "forbidden": [
+      "wrangler.jsonc",
+      "../_meta/logs/**"
+    ],
+    "budget": {
+      "target_tokens": 12000,
+      "max_tokens": 24000
+    }
+  },
+  "execution": {
+    "entry_phase": "interactive-office-evidence-bridge",
+    "entrypoint": "Inspect git diff -- client/chat.py client/serve.py tests/test_serve.py; then make the tradition harness validate and consume evidence_context as bounded untrusted data.",
+    "stop_conditions": [
+      "Evidence can influence instructions rather than remain quoted untrusted data.",
+      "The live Sphinx answer still contradicts /api/world.",
+      "Any external write requires Aria's explicit action."
+    ],
+    "checkpoints": [
+      "Both producer and consumer tests pass.",
+      "Changes are merged into both default branches.",
+      "Services restart and the live Sphinx ariaxhan query agrees with /api/world."
+    ]
+  },
+  "open_threads": [
+    "Rune proposed replacing vague waiting-human with blocked-review, blocked-decision, and stale/dead; Aria asked to file this, but no issue was created before pause.",
+    "Sphinx owes Aria a batch of real ariaxhan decisions after the evidence bridge works.",
+    "Automated meaning routing, schedules, typed resolution/requeue, and Parallax longitudinal detection remain unbuilt."
+  ],
+  "warnings": [
+    "The three dirty source files are untested, unreviewed, uncommitted, undeployed, and incomplete without the harness consumer.",
+    "Do not repeat the local-grep absence check; live /api/world disproved it.",
+    "wrangler.jsonc is user-owned and untouched."
+  ],
+  "outputs": {
+    "required": [
+      "Focused and full test receipts in both repositories",
+      "Default-branch commit hashes",
+      "Serving repo/domain proof and live Sphinx evidence-dependent answer"
+    ],
+    "completion": "Validate final live state, close the active commission, write AgentDB end state, and archive this handoff."
+  },
+  "resume": {
+    "prompt": "Resume five-office-bots: finish the bounded untrusted Office evidence bridge first, then prove Sphinx against live ariaxhan /api/world data."
+  }
+}

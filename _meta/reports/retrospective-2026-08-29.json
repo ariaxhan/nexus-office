@@ -1,0 +1,32 @@
+{
+  "schema": "kernel.retrospective-result/v1",
+  "identity": {
+    "created": "2026-08-29T08:15:01Z",
+    "session": "main-30921",
+    "scope": "nexus-office"
+  },
+  "analyzed": {
+    "learnings": 37,
+    "clusters": 1,
+    "merged": 0,
+    "archived": 0,
+    "contradictions_resolved": 1
+  },
+  "mutations": [
+    {
+      "op": "create",
+      "artifact_type": "learning",
+      "path": "agentdb:failure/office-bot-live-world-context",
+      "reason": "Preserve the failed source boundary and its acceptance test.",
+      "evidence": "Sphinx denied ariaxhan issues while /api/world held 104 open issues across 12 ariaxhan repositories.",
+      "reinforced": 1,
+      "status": "applied"
+    }
+  ],
+  "project_fit": {
+    "missing": [
+      "A tested contract carrying bounded, timestamped, untrusted Office evidence into every interactive bot turn"
+    ],
+    "dormant": []
+  }
+}
