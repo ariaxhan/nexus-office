@@ -344,13 +344,13 @@ class AutomationAndSessionsTest(unittest.TestCase):
     def js(self):
         return JS.read_text(encoding="utf-8")
 
-    def test_the_bands_exist_in_the_markup_and_are_filled_by_the_script(self):
+    def test_the_automation_band_exists_and_sessions_live_inside_their_desk(self):
         html = HTML.read_text(encoding="utf-8")
-        for band in ('id="automation"', 'id="sessions"'):
-            self.assertIn(band, html)
+        self.assertIn('id="automation"', html)
+        self.assertNotIn('id="sessions"', html)
         js = self.js()
         self.assertIn('getElementById("automation")', js)
-        self.assertIn('getElementById("sessions")', js)
+        self.assertIn("sessionsForDesk", js)
 
     def test_the_automation_band_derives_no_state_of_its_own(self):
         """Every word on it was measured by the server, so that the phone and
@@ -406,21 +406,24 @@ class AutomationAndSessionsTest(unittest.TestCase):
         self.assertIn("state.drafts[key] = words;", window)
 
     def test_a_desk_can_start_either_agent_through_the_office(self):
-        """A pocket can start work, not only answer work already running."""
+        """A pocket starts work from inside a desk, never from its roster row."""
         js = self.js()
         at = js.index("async function startDeskSession")
         window = js[at:at + 800]
         self.assertIn('write("/api/session/start", { tool: tool, repo: repo })', window)
         self.assertIn('["claude", "codex"]', js)
         self.assertIn("got.body.error", window)
+        desks = js[js.index("function drawDesks()"):js.index("async function startDeskSession")]
+        self.assertNotIn("deskLaunchers", desks)
+        self.assertNotIn('button(open ? "hide" : "start"', desks)
 
     def test_not_being_able_to_see_never_draws_as_nothing_running(self):
         """An empty list is a claim that nothing is running. When hcom cannot be
         asked, the office does not get to make that claim."""
         js = self.js()
-        at = js.index("function drawSessions()")
+        at = js.index("function drawDeskSessions(")
         window = js[at:at + 1400]
-        self.assertIn('roster.state === "ok" || roster.state === "empty"', window)
+        self.assertIn('roster.state !== "ok" && roster.state !== "empty"', window)
         self.assertIn("roster.detail", window)
 
     def test_the_session_poll_is_on_its_own_clock_and_spends_no_github_budget(self):
@@ -455,3 +458,33 @@ class DriftAndNoiseTest(unittest.TestCase):
     def test_a_door_that_answers_500_is_said_out_loud(self):
         js = (PHONE / "phone.js").read_text()
         self.assertIn("the door is not answering", js)
+
+
+class MobileDeskTest(unittest.TestCase):
+    def js(self):
+        return JS.read_text(encoding="utf-8")
+
+    def test_a_desk_row_opens_a_real_desk_panel(self):
+        html = HTML.read_text(encoding="utf-8")
+        js = self.js()
+        self.assertIn('id="desk"', html)
+        at = js.index("function deskRow(")
+        row = js[at:at + 900]
+        self.assertIn('el("button", "row")', row)
+        self.assertIn("openDesk(desk.repo)", row)
+        self.assertIn("function drawDesk()", js)
+
+    def test_work_contains_the_desk_s_issues_prs_sessions_and_launchers(self):
+        js = self.js()
+        at = js.index("function drawDeskWork(")
+        work = js[at:js.index("function drawDeskContext(", at)]
+        for fact in ("desk.issues", "desk.prs", "drawDeskSessions", "deskLaunchers"):
+            self.assertIn(fact, work)
+
+    def test_context_lists_and_opens_markdown_through_the_existing_door(self):
+        js = self.js()
+        self.assertIn('"/api/context?repo=" + encodeURIComponent(repo)', js)
+        self.assertIn("read(target)", js)
+        self.assertIn("encodeURIComponent(path)", js)
+        self.assertIn("context.files", js)
+        self.assertIn("markdownView(context.text)", js)

@@ -47,6 +47,7 @@ html, body {
   font-size: 15px;
   line-height: 1.4;
   -webkit-text-size-adjust: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -473,6 +474,14 @@ details.away > summary {
 details.away > summary::-webkit-details-marker { display: none; }
 details.away > summary .wants { color: var(--amber); }
 
+.awaydesk { position: relative; }
+.awaydesk .row { padding-right: 100px; }
+.awaydesk .bringback {
+  position: absolute;
+  right: 8px;
+  top: 11px;
+}
+
 /* ── the wall ───────────────────────────────────────────────────────────── */
 
 .wallcard .head {
@@ -549,9 +558,106 @@ details.away > summary .wants { color: var(--amber); }
   display: flex;
   flex-direction: column;
   background: var(--ink);
+  overflow: hidden;
 }
 
-.thread .top { background: var(--roster); }
+.thread > .top { position: static; flex: none; background: var(--roster); }
+.thread > .top .mark {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread > .top .stamp { flex: none; max-width: 96px; }
+
+.deskpanel { z-index: 21; }
+
+.desktabs {
+  flex: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 0.5px solid var(--hairline);
+  background: var(--roster);
+}
+
+.desktabs button { background: transparent; }
+.desktabs button.selected { color: var(--text); background: var(--selected); }
+
+.deskbody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 16px calc(32px + env(safe-area-inset-bottom, 0px));
+}
+
+.deskstatus { margin-top: 12px; }
+.deskstatus .head,
+.desksection .card > .head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.deskstatus .deskstart {
+  margin: 12px 0 0;
+  padding: 10px 0 0;
+  border-top: 0.5px solid var(--hairline);
+}
+
+.reader { margin-top: 9px; }
+.reader > summary,
+.contextgroup > summary {
+  color: var(--blue);
+  font-size: 12.5px;
+  padding: 7px 0;
+  cursor: pointer;
+}
+
+.markdown {
+  color: var(--dim);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.markdown p { margin: 8px 0; white-space: pre-wrap; }
+.markdown .mditem { padding-left: 12px; }
+.markdown strong { color: var(--text); }
+.markdown code {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+.markdown a { color: var(--blue); text-decoration: none; }
+.markdown h2, .markdown h3, .markdown h4,
+.markdown h5, .markdown h6 {
+  color: var(--text);
+  font-size: 14px;
+  margin: 16px 0 7px;
+}
+.markdown pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.contextgroup { border-top: 0.5px solid var(--hairline); }
+.contextfile {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 3px 0;
+  text-align: left;
+  background: transparent;
+  color: var(--dim);
+}
+.contextfile.selected { color: var(--text); background: var(--selected); }
+.contextfile .asof { margin-left: auto; color: var(--faint); }
 
 .turns {
   flex: 1;

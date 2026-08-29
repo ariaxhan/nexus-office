@@ -120,9 +120,13 @@ const state = {
   sessions: null,
   openSession: "",
   scripts: Object.create(null),
-  /* One desk's launch controls, and launches still waiting for hcom. A second
-   * tap must not start a second paid agent while the first request is open. */
-  launchDesk: "",
+  /* A desk is a place, not a launch menu. Work owns GitHub and hcom; Context
+   * owns the checkout's Markdown. */
+  openDesk: "",
+  deskTab: "work",
+  contexts: Object.create(null),
+  contextLoading: "",
+  contextErrors: Object.create(null),
   launching: Object.create(null),
 };
 
@@ -652,9 +656,10 @@ function drawBots() {
 
 /* ── desks ───────────────────────────────────────────────────────────────── */
 
-function deskRow(desk, canStart) {
+function deskRow(desk) {
   const kind = deskState(desk, state.gate);
-  const row = el("div", "row");
+  const row = el("button", "row");
+  row.type = "button";
   row.appendChild(el("span", "dot s-" + kind));
   const body = el("div", "body");
   body.appendChild(el("p", "name", desk.repo));
@@ -666,15 +671,7 @@ function deskRow(desk, canStart) {
   const old = asOf(desk, state.generated);
   if (old) row.appendChild(el("span", "asof", old));
   else row.appendChild(el("span", "under", stamp(desk.at)));
-  if (canStart) {
-    const open = state.launchDesk === desk.repo;
-    const starter = button(open ? "hide" : "start", "chipout", function () {
-      state.launchDesk = open ? "" : desk.repo;
-      drawDesks();
-    });
-    starter.setAttribute("aria-expanded", open ? "true" : "false");
-    row.appendChild(starter);
-  }
+  row.addEventListener("click", function () { openDesk(desk.repo); });
   return row;
 }
 
@@ -707,8 +704,7 @@ function drawDesks() {
   }
 
   shown.forEach(function (desk) {
-    band.appendChild(deskRow(desk, true));
-    if (state.launchDesk === desk.repo) band.appendChild(deskLaunchers(desk));
+    band.appendChild(deskRow(desk));
     const notice = staleNotice(desk, state.github, state.generated);
     if (notice) band.appendChild(el("p", "notice", notice));
   });
@@ -728,9 +724,10 @@ function drawDesks() {
   if (wants) summary.appendChild(el("span", "wants", " · " + wants + " needs you"));
   box.appendChild(summary);
   away.forEach(function (desk) {
-    const row = deskRow(desk, false);
-    row.appendChild(button("bring back", null, function () { bringBack(desk.repo); }));
-    box.appendChild(row);
+    const wrap = el("div", "awaydesk");
+    wrap.appendChild(deskRow(desk));
+    wrap.appendChild(button("bring back", "bringback", function () { bringBack(desk.repo); }));
+    box.appendChild(wrap);
   });
   band.appendChild(box);
 }
@@ -738,25 +735,338 @@ function drawDesks() {
 async function startDeskSession(repo, tool) {
   if (state.launching[repo]) return;
   state.launching[repo] = tool;
-  drawDesks();
+  drawDesk();
   let got = null;
   try {
     got = await write("/api/session/start", { tool: tool, repo: repo });
   } catch (err) {
     delete state.launching[repo];
     say("the office could not start " + tool);
-    drawDesks();
+    drawDesk();
     return;
   }
   delete state.launching[repo];
   if (got.code === 200) {
-    state.launchDesk = "";
     say(tool + " started at " + repo);
     await pollSessions();
   } else {
     say(got.body.error || ("the door said " + got.code));
   }
-  drawDesks();
+  drawDesk();
+}
+
+function deskByRepo(repo) {
+  return ((state.world && state.world.stations) || []).filter(function (desk) {
+    return desk.repo === repo;
+  })[0] || null;
+}
+
+function openDesk(repo) {
+  state.openDesk = repo;
+  state.deskTab = "work";
+  state.openSession = "";
+  drawDesk();
+}
+
+function closeDesk() {
+  state.openDesk = "";
+  state.openSession = "";
+  drawDesk();
+}
+
+function chooseDeskTab(tab) {
+  state.deskTab = tab;
+  drawDesk();
+  if (tab === "context" && !state.contexts[state.openDesk]
+      && state.contextLoading !== state.openDesk) {
+    loadDeskContext(state.openDesk, "");
+  }
+}
+
+function drawDesk() {
+  const panel = document.getElementById("desk");
+  if (!state.openDesk) {
+    panel.hidden = true;
+    clear(panel);
+    return;
+  }
+  const desk = deskByRepo(state.openDesk);
+  panel.hidden = false;
+  clear(panel);
+
+  const bar = el("header", "top");
+  bar.appendChild(button("back", null, closeDesk));
+  bar.appendChild(el("p", "mark", state.openDesk));
+  if (desk) {
+    const kind = deskState(desk, state.gate);
+    bar.appendChild(el("p", "stamp state c-" + kind, DESK_LABEL[kind]));
+  }
+  panel.appendChild(bar);
+
+  const tabs = el("nav", "desktabs");
+  [["work", "Work"], ["context", "Context"]].forEach(function (pair) {
+    const tab = button(pair[1], state.deskTab === pair[0] ? "selected" : "", function () {
+      chooseDeskTab(pair[0]);
+    });
+    tab.setAttribute("aria-pressed", state.deskTab === pair[0] ? "true" : "false");
+    tabs.appendChild(tab);
+  });
+  panel.appendChild(tabs);
+
+  const body = el("div", "deskbody");
+  if (!desk) {
+    body.appendChild(el("p", "empty", "this desk is not in the current Office snapshot"));
+  } else if (state.deskTab === "context") {
+    drawDeskContext(desk, body);
+  } else {
+    drawDeskWork(desk, body);
+  }
+  panel.appendChild(body);
+}
+
+function deskSection(title, count) {
+  const section = el("section", "desksection");
+  section.appendChild(head(title, count ? String(count) : ""));
+  return section;
+}
+
+function drawDeskWork(desk, body) {
+  const summary = el("div", "card deskstatus");
+  const kind = deskState(desk, state.gate);
+  const top = el("div", "head");
+  top.appendChild(el("span", "dot s-" + kind));
+  top.appendChild(el("span", "title", DESK_LABEL[kind]));
+  summary.appendChild(top);
+  if (desk.detail) summary.appendChild(el("p", "detail", desk.detail));
+  const notice = staleNotice(desk, state.github, state.generated);
+  if (notice) summary.appendChild(el("p", "notice", notice));
+  summary.appendChild(deskLaunchers(desk));
+  body.appendChild(summary);
+
+  drawDeskSessions(desk, body);
+
+  const issues = desk.issues || [];
+  const issueSection = deskSection("issues", issues.length);
+  if (!issues.length) issueSection.appendChild(el("p", "empty", "no open issues"));
+  issues.forEach(function (issue) { issueSection.appendChild(deskIssueCard(issue)); });
+  body.appendChild(issueSection);
+
+  const prs = desk.prs || [];
+  const prSection = deskSection("pull requests", prs.length);
+  if (!prs.length) prSection.appendChild(el("p", "empty", "no open pull requests"));
+  prs.forEach(function (pr) { prSection.appendChild(deskPrCard(pr)); });
+  body.appendChild(prSection);
+}
+
+function deskIssueCard(issue) {
+  const card = el("article", "card issue");
+  const top = el("div", "head");
+  top.appendChild(el("span", "num", "#" + issue.number));
+  top.appendChild(el("span", "title", issue.title || ""));
+  if (needsHuman(issue)) top.appendChild(el("span", "pill wants", "waiting on you"));
+  card.appendChild(top);
+  const labels = issue.labels || [];
+  if (labels.length) card.appendChild(el("p", "asof", labels.join(" · ")));
+  card.appendChild(detailReader("read issue", issue.body || ""));
+  if (issue.url) card.appendChild(outLink(issue.url, "open on GitHub"));
+  return card;
+}
+
+function deskPrCard(pr) {
+  const card = el("article", "card issue");
+  const top = el("div", "head");
+  top.appendChild(el("span", "num", "#" + pr.number));
+  top.appendChild(el("span", "title", pr.title || ""));
+  if (pr.draft) top.appendChild(el("span", "pill", "draft"));
+  if (pr.state) top.appendChild(el("span", "pill", String(pr.state).toLowerCase()));
+  card.appendChild(top);
+  const branch = [pr.head, pr.base].filter(Boolean).join(" → ");
+  if (branch) card.appendChild(el("p", "asof", branch));
+  card.appendChild(detailReader("read pull request", pr.body || ""));
+  if (pr.url) card.appendChild(outLink(pr.url, "open on GitHub"));
+  return card;
+}
+
+function detailReader(label, markdown) {
+  const details = el("details", "reader");
+  details.appendChild(el("summary", null, label));
+  details.appendChild(markdownView(markdown));
+  return details;
+}
+
+function outLink(href, label) {
+  const link = el("a", "link", label);
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  return link;
+}
+
+function markdownView(raw) {
+  const view = el("div", "markdown");
+  const lines = String(raw || "").replace(/\r\n/g, "\n").split("\n");
+  let code = null;
+  let paragraph = [];
+
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    const node = el("p");
+    inlineMarkdown(node, paragraph.join(" "));
+    view.appendChild(node);
+    paragraph = [];
+  }
+
+  for (let at = 0; at < lines.length; at++) {
+    const lineText = lines[at];
+    if (/^```/.test(lineText)) {
+      flushParagraph();
+      if (code) {
+        view.appendChild(code);
+        code = null;
+      } else {
+        code = el("pre");
+      }
+      continue;
+    }
+    if (code) {
+      code.textContent += (code.textContent ? "\n" : "") + lineText;
+      continue;
+    }
+    if (!lineText.trim()) {
+      flushParagraph();
+      continue;
+    }
+    const heading = lineText.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      flushParagraph();
+      const title = el("h" + Math.min(heading[1].length + 1, 6));
+      inlineMarkdown(title, heading[2]);
+      view.appendChild(title);
+      continue;
+    }
+    const item = lineText.match(/^\s*(?:[-*+]|\d+\.)\s+(.*)$/);
+    if (item) {
+      flushParagraph();
+      const bullet = el("p", "mditem");
+      bullet.appendChild(document.createTextNode("• "));
+      inlineMarkdown(bullet, item[1]);
+      view.appendChild(bullet);
+      continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(lineText)) {
+      flushParagraph();
+      const table = el("pre", "mdtable");
+      const rows = [];
+      while (at < lines.length && /^\s*\|.*\|\s*$/.test(lines[at])) {
+        rows.push(lines[at].trim());
+        at++;
+      }
+      at--;
+      table.textContent = rows.join("\n");
+      view.appendChild(table);
+      continue;
+    }
+    paragraph.push(lineText.trim());
+  }
+  flushParagraph();
+  if (code) view.appendChild(code);
+  return view;
+}
+
+function inlineMarkdown(node, raw) {
+  const text = String(raw || "");
+  const token = /(\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*)/g;
+  let from = 0;
+  let match = null;
+  while ((match = token.exec(text)) !== null) {
+    if (match.index > from) node.appendChild(document.createTextNode(text.slice(from, match.index)));
+    if (match[2]) {
+      const href = String(match[3] || "");
+      const link = el("a", null, match[2]);
+      if (/^(?:https?:\/\/|#)/i.test(href)) {
+        link.href = href;
+        if (href.charAt(0) !== "#") {
+          link.target = "_blank";
+          link.rel = "noreferrer";
+        }
+      }
+      node.appendChild(link);
+    } else if (match[4]) {
+      node.appendChild(el("strong", null, match[4]));
+    } else if (match[5]) {
+      node.appendChild(el("code", null, match[5]));
+    } else {
+      node.appendChild(el("em", null, match[6]));
+    }
+    from = token.lastIndex;
+  }
+  if (from < text.length) node.appendChild(document.createTextNode(text.slice(from)));
+}
+
+function drawDeskContext(desk, body) {
+  const context = state.contexts[desk.repo] || null;
+  const error = state.contextErrors[desk.repo] || "";
+  if (error) body.appendChild(el("p", "notice", error));
+  if (!context) {
+    body.appendChild(el("p", "empty", state.contextLoading === desk.repo
+      ? "opening this checkout" : "no context loaded"));
+    return;
+  }
+
+  if (context.path) {
+    const documentSection = deskSection(context.title || context.path, "");
+    documentSection.appendChild(el("p", "asof", context.path));
+    documentSection.appendChild(markdownView(context.text));
+    body.appendChild(documentSection);
+  }
+
+  const files = context.files || [];
+  const index = deskSection("Markdown", files.length);
+  if (context.capped) index.appendChild(el("p", "notice", "this checkout has more Markdown than the Office index can show"));
+  if (!files.length) index.appendChild(el("p", "empty", "no Markdown in this checkout"));
+  const groups = Object.create(null);
+  files.forEach(function (file) {
+    const group = file.group || "root";
+    if (!groups[group]) groups[group] = [];
+    groups[group].push(file);
+  });
+  Object.keys(groups).forEach(function (group) {
+    const box = el("details", "contextgroup");
+    if (group === "root" || groups[group].some(function (file) { return file.path === context.path; })) {
+      box.open = true;
+    }
+    box.appendChild(el("summary", null, group));
+    groups[group].forEach(function (file) {
+      const row = button(file.name, file.path === context.path ? "contextfile selected" : "contextfile", function () {
+        loadDeskContext(desk.repo, file.path);
+      });
+      row.appendChild(el("span", "asof", readable(file.bytes || 0)));
+      box.appendChild(row);
+    });
+    index.appendChild(box);
+  });
+  body.appendChild(index);
+}
+
+async function loadDeskContext(repo, path) {
+  state.contextLoading = repo;
+  delete state.contextErrors[repo];
+  drawDesk();
+  let target = "/api/context?repo=" + encodeURIComponent(repo);
+  if (path) target += "&path=" + encodeURIComponent(path);
+  const got = await read(target);
+  state.contextLoading = "";
+  if (got.code !== 200) {
+    state.contextErrors[repo] = got.body.error || ("the door said " + got.code);
+    drawDesk();
+    return;
+  }
+  state.contexts[repo] = got.body;
+  if (!path && got.body.files && got.body.files.length) {
+    loadDeskContext(repo, got.body.files[0].path);
+    return;
+  }
+  drawDesk();
 }
 
 async function bringBack(repo) {
@@ -981,39 +1291,27 @@ function fact(label, value, tone) {
  * The office cannot see a session that never joined hcom, and says so. `canSee`
  * false means "we do not know", which draws as its own sentence rather than as
  * an empty list, because an empty list is a claim that nothing is running. */
-function drawSessions() {
-  const band = document.getElementById("sessions");
-  clear(band);
+function sessionsForDesk(repo) {
   const roster = state.sessions;
-  if (!roster) {
-    band.hidden = true;
-    return;
-  }
-  const seen = roster.state === "ok" || roster.state === "empty";
-  const rows = roster.sessions || [];
-  /* A machine with no hcom on it is not worth a band on a phone. A machine that
-   * HAS one and could not be asked is, because that is a thing that broke. */
-  if (roster.state === "unavailable" && !rows.length) {
-    band.hidden = true;
-    return;
-  }
-  band.hidden = false;
-  band.appendChild(head("sessions",
-                        roster.blocked ? roster.blocked + " waiting on you"
-                                       : (roster.live ? roster.live + " running" : ""),
-                        roster.blocked > 0));
+  if (!roster) return [];
+  return (roster.sessions || []).filter(function (session) {
+    return session.repo === repo;
+  });
+}
 
-  if (!seen) {
-    band.appendChild(el("p", "empty",
+function drawDeskSessions(desk, body) {
+  const roster = state.sessions;
+  const rows = sessionsForDesk(desk.repo);
+  const section = deskSection("sessions", rows.length);
+  if (roster && roster.state !== "ok" && roster.state !== "empty") {
+    section.appendChild(el("p", "empty",
       roster.detail || "the office cannot see the sessions on this machine right now"));
-    return;
+  } else if (!rows.length) {
+    section.appendChild(el("p", "empty", "nothing running at this desk"));
+  } else {
+    rows.forEach(function (session) { section.appendChild(sessionCard(session)); });
   }
-  if (!rows.length) {
-    band.appendChild(el("p", "empty",
-      "nothing running. Only sessions connected to hcom are visible here."));
-    return;
-  }
-  rows.forEach(function (session) { band.appendChild(sessionCard(session)); });
+  body.appendChild(section);
 }
 
 function sessionCard(session) {
@@ -1034,7 +1332,7 @@ function sessionCard(session) {
   card.appendChild(button(open ? "hide" : "open", "chipout", function () {
     if (open) {
       state.openSession = "";
-      drawSessions();
+      drawDesk();
     } else {
       openSessionThread(session.name);
     }
@@ -1091,7 +1389,7 @@ function sessionComposer(session) {
 
 function openSessionThread(name) {
   state.openSession = name;
-  drawSessions();
+  drawDesk();
   loadSessionScript(name);
 }
 
@@ -1099,7 +1397,7 @@ async function loadSessionScript(name) {
   const got = await read("/api/session?name=" + encodeURIComponent(name));
   if (got.code === 200) {
     state.scripts[name] = got.body;
-    drawSessions();
+    drawDesk();
   } else if (!state.scripts[name]) {
     /* Whatever was last read stays on screen. A conversation that empties
      * itself because hcom blinked is a lie about what was said. */
@@ -1112,7 +1410,7 @@ async function replyToSession(name, text) {
   if (!words) return;
   const key = "session:" + name;
   state.drafts[key] = "";
-  drawSessions();
+  drawDesk();
   const got = await write("/api/session/say", { name: name, text: words });
   if (got.code === 200) {
     say("sent to " + name);
@@ -1123,7 +1421,7 @@ async function replyToSession(name, text) {
      * message a person has to retype from memory. */
     state.drafts[key] = words;
     say(got.body.error || ("the door said " + got.code));
-    drawSessions();
+    drawDesk();
   }
 }
 
@@ -1132,7 +1430,7 @@ async function pollSessions() {
     const got = await read("/api/sessions");
     if (got.code === 200) {
       state.sessions = got.body;
-      drawSessions();
+      if (state.openDesk && state.deskTab === "work") drawDesk();
     }
   } catch (err) {
     /* The last roster stays. The office not being able to ask is not the same
@@ -1520,6 +1818,7 @@ async function pollWorld(nowPlease) {
       drawDesks();
       drawAutomation();
       drawWall();
+      if (state.openDesk && state.deskTab === "work") drawDesk();
     } else {
       // The door answered, but not with a world. The last picture stays up
       // and the stamp says why it is not moving.
@@ -1544,8 +1843,8 @@ function start() {
   pollSessions();
   setInterval(pollGate, GATE_EVERY_MS);
   setInterval(function () {
-    /* Only while a thread is open does the conversation reload; the roster
-     * always does. An agent's status is what the band is for. */
+    /* Only while a session is open does its conversation reload; the roster
+     * always does. Sessions draw inside the desk they belong to. */
     pollSessions();
     if (state.openSession) loadSessionScript(state.openSession);
   }, SESSION_EVERY_MS);
