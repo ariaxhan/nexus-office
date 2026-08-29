@@ -597,13 +597,11 @@ struct PullRequestCard: View {
                 Pill(text: "\(pr.head) into \(pr.base)")
                 if pr.draft { Pill(text: "draft", color: Theme.dim) }
                 Pill(text: pr.mergeable.lowercased(),
-                     color: pr.canMerge ? Theme.green : Theme.amber)
+                     color: pr.isMergeable ? Theme.green : Theme.amber)
             }
 
-            // What the PR says about itself. The office's own PRs are written
-            // by the runner, so this is the note from whoever did the work, and
-            // reading it is most of deciding whether to press the one button on
-            // this card that cannot be taken back.
+            // What the PR says about itself, whether written by the pipeline or
+            // a person. Visibility is independent from merge authority.
             if !pr.body.isEmpty {
                 MarkdownText(raw: pr.body, size: 12.5, color: Theme.dim,
                              limit: expanded ? nil : 1)
@@ -658,8 +656,9 @@ struct PullRequestCard: View {
                         }
                     }
                 } else {
-                    Text(pr.draft ? "a draft is a statement that it is not ready"
-                                  : "GitHub has not said this can merge")
+                    Text(!pr.pipeline ? "view only; the Office did not open this PR"
+                         : pr.draft ? "a draft is a statement that it is not ready"
+                         : "GitHub has not said this can merge")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.faint)
                 }

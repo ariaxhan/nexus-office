@@ -1643,7 +1643,7 @@ class WebhookTest(unittest.TestCase):
         code, body = self.get("/api/world")
         stations = {s["repo"]: s for s in body["world"]["stations"]}
         self.assertEqual([i["number"] for i in stations["acme/thing"]["issues"]], [9, 4])
-        self.assertEqual([p["number"] for p in stations["acme/thing"]["prs"]], [11])
+        self.assertEqual([p["number"] for p in stations["acme/thing"]["prs"]], [12, 11])
         self.assertTrue(stations["acme/thing"]["fetched_at"])
         self.assertIsNone(stations["acme/thing"]["issues_error"])
         self.assertEqual(stations["acme/other"]["issues"], [], "and only that desk moved")

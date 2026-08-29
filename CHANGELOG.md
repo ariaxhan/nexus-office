@@ -15,6 +15,12 @@ which never matches the version.
 | minor | new behaviour, nothing existing moved |
 | major | something you relied on is gone or works differently |
 
+## [Unreleased]
+
+### Fixed
+- Desks show every open pull request. Human and dependency-update branches stay
+  read-only; only pipeline branches offer the Office merge control.
+
 ## [1.0.0] - 2026-08-28
 
 The room can be trusted about itself.

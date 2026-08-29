@@ -26,6 +26,26 @@ final class PullRequestTests: XCTestCase {
         XCTAssertTrue(pr.canMerge)
     }
 
+    func testAHumanPullRequestIsVisibleButCannotMergeFromTheOffice() throws {
+        let pr = try decode("""
+        {"number": 216, "title": "human review",
+         "head": "aria/my-own-work", "base": "main",
+         "pipeline": false, "mergeable": "MERGEABLE"}
+        """)
+        XCTAssertFalse(pr.pipeline)
+        XCTAssertTrue(pr.isMergeable)
+        XCTAssertFalse(pr.canMerge)
+    }
+
+    func testAnOlderSnapshotStillTreatsItsPipelineOnlyRowsAsPipelineWork() throws {
+        let pr = try decode("""
+        {"number": 215, "title": "older snapshot",
+         "head": "pipeline/auto-issue-213", "mergeable": "MERGEABLE"}
+        """)
+        XCTAssertTrue(pr.pipeline)
+        XCTAssertTrue(pr.canMerge)
+    }
+
     /// A PR opened with no description is the ordinary case and is not an
     /// error. The card draws nothing rather than an empty panel.
     func testAMissingBodyIsAnEmptyStringAndNotAFailedDecode() throws {

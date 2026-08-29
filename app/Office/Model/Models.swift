@@ -229,6 +229,9 @@ public struct PullRequest: Decodable, Hashable, Identifiable {
     public var number: Int
     public var title: String
     public var head: String
+    /// Visibility is for every PR. This flag only grants the Office merge
+    /// control; the server independently re-checks the branch before acting.
+    public var pipeline: Bool
     public var base: String
     public var url: String
     public var draft: Bool
@@ -248,15 +251,18 @@ public struct PullRequest: Decodable, Hashable, Identifiable {
     public var body: String
 
     public var id: Int { number }
-    public var canMerge: Bool { mergeable == "MERGEABLE" && !draft }
+    public var isMergeable: Bool { mergeable == "MERGEABLE" && !draft }
+    public var canMerge: Bool { pipeline && isMergeable }
 
     public init(number: Int, title: String, head: String = "", base: String = "main",
-                url: String = "", draft: Bool = false, mergeable: String = "UNKNOWN",
+                pipeline: Bool = true, url: String = "", draft: Bool = false,
+                mergeable: String = "UNKNOWN",
                 state: String = "UNKNOWN", closes: [Int] = [], updatedAt: String = "",
                 body: String = "") {
         self.number = number
         self.title = title
         self.head = head
+        self.pipeline = pipeline
         self.base = base
         self.url = url
         self.draft = draft
@@ -268,7 +274,7 @@ public struct PullRequest: Decodable, Hashable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case number, title, head, base, url, draft, mergeable, state, closes, updatedAt, body
+        case number, title, head, pipeline, base, url, draft, mergeable, state, closes, updatedAt, body
     }
 
     public init(from decoder: Decoder) throws {
@@ -276,6 +282,9 @@ public struct PullRequest: Decodable, Hashable, Identifiable {
         number = c.int(.number) ?? 0
         title = c.str(.title) ?? ""
         head = c.str(.head) ?? ""
+        // Older snapshots contained pipeline PRs exclusively. Preserve their
+        // merge control during a rolling app/server restart.
+        pipeline = c.bool(.pipeline) ?? true
         base = c.str(.base) ?? ""
         url = c.str(.url) ?? ""
         draft = c.bool(.draft) ?? false

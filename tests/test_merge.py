@@ -80,6 +80,15 @@ class MergeTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(self.merged(), [])
 
+    def test_an_empty_configured_prefix_fails_closed(self):
+        self.mod.PR_PREFIX = ""
+        self.pr["headRefName"] = "aria/my-own-work"
+        ok, msg = self.merge()
+        self.assertFalse(ok)
+        self.assertIn("prefix", msg.lower())
+        self.assertFalse(self.mod._pr_rows([self.pr])[0]["pipeline"])
+        self.assertEqual(self.merged(), [])
+
     def test_a_draft_is_never_merged(self):
         self.pr["isDraft"] = True
         ok, msg = self.merge()

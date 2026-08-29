@@ -82,6 +82,15 @@ WAITING_LABEL = os.environ.get("OFFICE_WAITING", "waiting on human")
 # PR is never trusted: only this check counts.
 PR_PREFIX = os.environ.get("OFFICE_PR_PREFIX", "pipeline/")
 
+
+def _pipeline_branch(head: str) -> bool:
+    """Whether this branch is inside the configured merge boundary.
+
+    An explicitly empty or whitespace-only prefix fails closed. Python treats
+    every string as starting with ``""``, which must never become permission.
+    """
+    return bool(PR_PREFIX and PR_PREFIX.strip()) and head.startswith(PR_PREFIX)
+
 NOW = datetime.now(timezone.utc)
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -447,10 +456,27 @@ fragment Desk on Repository {
       comments(last: 1) { nodes { body url createdAt } }
     }
   }
-  pullRequests(first: 40, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+  pullRequests(first: 100, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
     nodes {
       number title headRefName baseRefName mergeable mergeStateStatus
       isDraft url body updatedAt
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+"""
+
+PR_PAGE_QUERY = """
+query($o: String!, $n: String!, $after: String!) {
+  rateLimit { limit cost remaining resetAt }
+  r0: repository(owner: $o, name: $n) {
+    pullRequests(first: 100, after: $after, states: OPEN,
+                 orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number title headRefName baseRefName mergeable mergeStateStatus
+        isDraft url body updatedAt
+      }
+      pageInfo { hasNextPage endCursor }
     }
   }
 }
@@ -515,17 +541,15 @@ def _issue_rows(nodes) -> list:
 
 
 def _pr_rows(nodes) -> list:
-    """The pipeline's own open PRs, and whether they can merge.
+    """Every open PR, with pipeline ownership kept separate from visibility.
 
-    Only pipeline PRs. A human's branch is none of the office's business, and
-    listing it here would invite a merge button over work nobody asked the
-    office to touch.
+    A desk is allowed to show all of its work. Only a pipeline branch may gain
+    the office's merge button; apply_merge re-reads and enforces the same
+    boundary at the moment of action.
     """
     prs = []
     for pr in nodes or []:
         head = pr.get("headRefName") or ""
-        if not head.startswith(PR_PREFIX):
-            continue
         body = pr.get("body") or ""
         prs.append({
             "number": pr.get("number"),
@@ -534,6 +558,7 @@ def _pr_rows(nodes) -> list:
             # closes list, and a reviewer should not need GitHub to read why.
             "body": body[:4000],
             "head": head,
+            "pipeline": _pipeline_branch(head),
             "base": pr.get("baseRefName") or "",
             "url": pr.get("url") or "",
             "draft": bool(pr.get("isDraft")),
@@ -556,6 +581,30 @@ def _batch_command(nwos) -> list:
         owner, name = nwo.split("/", 1)
         cmd += ["-f", f"o{i}={owner}", "-f", f"n{i}={name}"]
     return cmd
+
+
+def _pr_page_command(nwo: str, cursor: str) -> list:
+    owner, name = nwo.split("/", 1)
+    return ["gh", "api", "graphql", "-f", "query=" + PR_PAGE_QUERY,
+            "-f", f"o={owner}", "-f", f"n={name}", "-f", f"after={cursor}"]
+
+
+def _add_rate(total: dict, page: dict) -> dict:
+    """One rate block representing every query used for this batch."""
+    answer = dict(total or {})
+    answer["cost"] = int(answer.get("cost") or 0) + int(page.get("cost") or 0)
+    for key in ("limit", "remaining", "resetAt"):
+        if page.get(key) is not None:
+            answer[key] = page[key]
+    return answer
+
+
+def _pr_reserve_error(rate: dict) -> str:
+    remaining = rate.get("remaining")
+    if isinstance(remaining, int) and remaining < GH_RESERVE:
+        return (f"rate limit reserve reached: {remaining} points left, "
+                f"reserve is {GH_RESERVE}")
+    return ""
 
 
 def _json_body(out: str) -> dict:
@@ -609,6 +658,60 @@ def _desk_rows(data: dict, nwos, errors: dict, fatal: str) -> dict:
     return rows
 
 
+def _pr_page_cursors(data: dict, nwos) -> dict:
+    """Continuation cursor for each repo whose first hundred PRs were not all."""
+    cursors = {}
+    for i, nwo in enumerate(nwos):
+        node = data.get(f"r{i}") or {}
+        page = ((node.get("pullRequests") or {}).get("pageInfo")) or {}
+        if page.get("hasNextPage"):
+            cursors[nwo] = str(page.get("endCursor") or "")
+    return cursors
+
+
+def _fetch_pr_tail(nwo: str, token: str, cursor: str):
+    """All PR rows after one connection cursor, or one fail-closed error."""
+    prs, rate = [], {}
+    if not cursor:
+        return None, "GitHub omitted a pull-request cursor", rate, ""
+    seen = set()
+    while cursor:
+        if cursor in seen:
+            return None, "GitHub repeated a pull-request cursor", rate, ""
+        seen.add(cursor)
+
+        rc, out, err = sh(_pr_page_command(nwo, cursor), timeout=90,
+                          env={"GH_TOKEN": token})
+        body = _json_body(out)
+        if not body:
+            msg = (err.strip().splitlines() or [f"gh exit {rc}"])[0][:160]
+            return None, msg, rate, ""
+
+        data = body.get("data") or {}
+        rate = _add_rate(rate, data.get("rateLimit") or {})
+        errors, fatal = _sort_errors(body.get("errors") or [], [nwo])
+        if fatal:
+            return None, fatal, rate, fatal
+        if nwo in errors:
+            return None, errors[nwo], rate, ""
+
+        node = data.get("r0")
+        if not isinstance(node, dict):
+            return None, "GitHub returned nothing for this PR page", rate, ""
+        connection = node.get("pullRequests") or {}
+        prs.extend(_pr_rows(connection.get("nodes")))
+        page = connection.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        reserve_error = _pr_reserve_error(rate)
+        if reserve_error:
+            return None, reserve_error, rate, reserve_error
+        cursor = str(page.get("endCursor") or "")
+        if not cursor:
+            return None, "GitHub omitted a pull-request cursor", rate, ""
+    return prs, "", rate, ""
+
+
 def fetch_batch(nwos, token):
     """(rows, errors, rate, fatal) for up to BATCH_SIZE repos on one token.
 
@@ -633,6 +736,30 @@ def fetch_batch(nwos, token):
     rate = data.get("rateLimit") or {}
     errors, fatal = _sort_errors(body.get("errors") or [], nwos)
     rows = _desk_rows(data, nwos, errors, fatal)
+    cursors = list(_pr_page_cursors(data, nwos).items())
+    reserve_error = _pr_reserve_error(rate)
+    if cursors and reserve_error:
+        for nwo, _ in cursors:
+            rows.pop(nwo, None)
+            errors[nwo] = reserve_error
+        return rows, errors, rate, reserve_error
+    for index, (nwo, cursor) in enumerate(cursors):
+        tail, page_error, page_rate, page_fatal = _fetch_pr_tail(nwo, token, cursor)
+        rate = _add_rate(rate, page_rate)
+        if page_error:
+            rows.pop(nwo, None)
+            errors[nwo] = page_error
+        elif nwo in rows:
+            rows[nwo]["prs"].extend(tail or [])
+            rows[nwo]["prs"].sort(key=lambda x: -(x["number"] or 0))
+        if page_fatal:
+            fatal = page_fatal
+            # No partial list may masquerade as every open PR. Repos whose
+            # continuations were not attempted keep their last-good cache too.
+            for pending, _ in cursors[index + 1:]:
+                rows.pop(pending, None)
+                errors[pending] = page_fatal
+            break
     return rows, errors, rate, fatal
 
 
@@ -928,7 +1055,9 @@ def _read_pr(repo, num, env):
 
 def _merge_refusal(pr: dict, num: str, head: str) -> str:
     """Why this PR must not be merged, or "" when it may."""
-    if not head.startswith(PR_PREFIX):
+    if not PR_PREFIX or not PR_PREFIX.strip():
+        return "refusing: the pipeline branch prefix is empty"
+    if not _pipeline_branch(head):
         # The refusal names the branch on purpose. A silent no here would look
         # exactly like a failure to reach GitHub.
         return (f"refusing: PR #{num} is on {head!r}, which is not a pipeline "

@@ -152,11 +152,12 @@ scripts/shoot.sh      the eyes
   that is the whole point of putting it away, and it comes back with the last
   data it had. A gate is from the runtime, not from a desk, so it still shows.
 - **GitHub is a budget, not a faucet.** 5000 GraphQL points an hour, shared with
-  the pipeline and with Aria's own `gh`. One batched query per ten desks with
-  `comments(last: 1)`, every 300 s, and a pause until `reset_at` when the budget
-  runs low. A failed fetch never blanks a desk: it keeps the last-good data and
-  says "as of" when. Nothing in this repo may call `gh issue list` or `gh pr list`
-  in a loop.
+  the pipeline and with Aria's own `gh`. One initial batched query per ten desks
+  with `comments(last: 1)`, every 300 s; a repo with over 100 open PRs gets only
+  the continuation queries required to finish its list. Pause until `reset_at`
+  when the budget runs low. A failed fetch never blanks a desk: it keeps the
+  last-good data and says "as of" when. Nothing in this repo may call
+  `gh issue list` or `gh pr list` in a loop.
 - **No hand-maintained lists.** Desks are a pure function of the repo path;
   put-away is a set of exceptions to that list, not a list.
 - **Never present an estimate as a measurement.** The cost ledger has an

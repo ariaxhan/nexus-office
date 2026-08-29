@@ -176,11 +176,14 @@ class MappingTest(SyncCase):
         self.assertFalse(quiet["bot_last"])
         self.assertEqual(quiet["last_word"], "", "no bot, no question")
 
-        # Only the pipeline's own branches. A human's branch is not the office's
-        # business and a merge button over it would be a defect, not a feature.
-        self.assertEqual([p["number"] for p in st["prs"]], [11])
-        pr = st["prs"][0]
+        # Every open PR is visible. Pipeline ownership controls the merge button,
+        # not whether a person can read the work on their desk.
+        self.assertEqual([p["number"] for p in st["prs"]], [12, 11])
+        human, pr = st["prs"]
+        self.assertEqual(human["head"], "aria/my-own-work")
+        self.assertFalse(human["pipeline"])
         self.assertEqual(pr["head"], "pipeline/auto-issue-9")
+        self.assertTrue(pr["pipeline"])
         self.assertEqual(pr["base"], "main")
         self.assertEqual(pr["closes"], [9])
         # The body travels with the PR so the desk pane can show why.
@@ -233,6 +236,71 @@ class BatchingTest(SyncCase):
         self.assertEqual(sorted(self.asked()), sorted(repos))
         self.assertEqual(len(snap["stations"]), 23)
         self.assertEqual(snap["github"]["cost"], 3, "one rateLimit block per query")
+
+    def test_every_page_of_open_pull_requests_reaches_the_desk(self):
+        calls = []
+
+        def response(nodes, has_next, cursor, cost):
+            return 0, json.dumps({"data": {
+                "rateLimit": {"limit": 5000, "cost": cost, "remaining": 4000 - cost,
+                              "resetAt": RESET},
+                "r0": {"issues": {"nodes": []},
+                       "pullRequests": {"nodes": nodes, "pageInfo": {
+                           "hasNextPage": has_next, "endCursor": cursor}}},
+                "r1": {"issues": {"nodes": []},
+                       "pullRequests": {"nodes": [], "pageInfo": {
+                           "hasNextPage": False, "endCursor": None}}},
+            }}), ""
+
+        def paged_sh(cmd, timeout=45, env=None, check=False):
+            query = next(v.split("=", 1)[1] for v in cmd if v.startswith("query="))
+            calls.append(query)
+            if "$after" in query:
+                return response([pr_node(1, head="aria/my-old-work")], False, None, 2)
+            return response([pr_node(101)], True, "next-page", 1)
+
+        self.mod.sh = paged_sh
+        snap = self.build()
+        prs = self.desk(snap, "acme/one")["prs"]
+        self.assertEqual([p["number"] for p in prs], [101, 1])
+        self.assertEqual([p["pipeline"] for p in prs], [True, False])
+        self.assertEqual(len(calls), 2, "one batched page plus one continuation")
+        self.assertEqual(snap["github"]["cost"], 3)
+
+    def test_a_missing_continuation_cursor_never_presents_a_partial_list_as_all(self):
+        def missing_cursor(_batch):
+            data = {"rateLimit": {"limit": 5000, "cost": 1, "remaining": 4000,
+                                  "resetAt": RESET}}
+            for i in range(2):
+                data[f"r{i}"] = {"issues": {"nodes": []}, "pullRequests": {
+                    "nodes": [pr_node(101)], "pageInfo": {
+                        "hasNextPage": True, "endCursor": None}}}
+            return 0, json.dumps({"data": data}), ""
+
+        self.reply = missing_cursor
+        station = self.desk(self.build(), "acme/one")
+        self.assertEqual(station["prs"], [])
+        self.assertIn("cursor", station["prs_error"].lower())
+
+    def test_pr_continuations_stop_before_spending_the_github_reserve(self):
+        calls = []
+
+        def low_reserve(_batch):
+            calls.append("initial")
+            data = {"rateLimit": {"limit": 5000, "cost": 1,
+                                  "remaining": self.mod.GH_RESERVE - 1,
+                                  "resetAt": RESET}}
+            for i in range(2):
+                data[f"r{i}"] = {"issues": {"nodes": []}, "pullRequests": {
+                    "nodes": [pr_node(101)], "pageInfo": {
+                        "hasNextPage": True, "endCursor": "next-page"}}}
+            return 0, json.dumps({"data": data}), ""
+
+        self.reply = low_reserve
+        station = self.desk(self.build(), "acme/one")
+        self.assertEqual(calls, ["initial"])
+        self.assertEqual(station["prs"], [])
+        self.assertIn("paused", station["prs_error"].lower())
 
     def test_two_logins_never_share_a_query(self):
         """A batch is one token's worth of repos. Mixing them would send half of
@@ -292,7 +360,7 @@ class LastKnownGoodTest(SyncCase):
         stale = self.desk(second, "acme/one")
         self.assertEqual([i["number"] for i in stale["issues"]], [9, 4],
                          "the desk keeps what it last showed")
-        self.assertEqual(len(stale["prs"]), 1)
+        self.assertEqual(len(stale["prs"]), 2)
         self.assertEqual(stale["fetched_at"], stamp, "and says when that was")
         self.assertIn("502", stale["issues_error"])
         self.assertIn("502", stale["prs_error"])
