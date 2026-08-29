@@ -10,7 +10,7 @@ each reports its own reachability:
             This is the reliable half of the library.
 
   the runtime's semantic memory
-            HTTP on <url>/api/memory/summary and /api/memory/review. The runtime
+            HTTP on <url>/api/memory/summary (queue rides on it too). The runtime
             is a foreground dev server that is usually CLOSED, exactly like the
             board in runtime.py. Down is the normal case, and it is reported as
             "down" rather than swallowed into an empty library.
@@ -247,11 +247,14 @@ def _fetch(path: str) -> dict:
 def read_review() -> dict:
     """The pending-review cart. Runtime only: there is no on-disk copy of it, so
     when the runtime is down the honest answer is "unknown", not "nothing"."""
-    got = _fetch("/api/memory/review")
+    # The runtime's /api/memory/review is a per-proposal detail route (400
+    # "proposal_id_required" without ?id=). The queue itself rides on the
+    # summary as proposal_review_items / review_items.
+    got = _fetch("/api/memory/summary")
     if got["state"] != "up":
         return got
-    data = got["data"]
-    raw = data.get("pending") or data.get("items") or (data if isinstance(data, list) else [])
+    data = got["data"] if isinstance(got["data"], dict) else {}
+    raw = (data.get("proposal_review_items") or data.get("review_items") or [])
     items = []
     for r in (raw or [])[:12]:
         if not isinstance(r, dict):
@@ -270,7 +273,7 @@ def read_review() -> dict:
                 "record": str(r.get("id") or ""),
             },
         })
-    total = data.get("count")
+    total = data.get("human_pending_count", data.get("review_count"))
     count = int(total) if isinstance(total, int) else len(raw or [])
     return {"state": "up", "count": count, "shown": len(items), "items": items}
 
