@@ -137,6 +137,8 @@ client/automation.py  the hourly runner: schedule, sweep, what it touched
 client/webhook.py     one GitHub delivery, verified, into the drainer
 client/buzz.py        one notification out per event
 client/sections.py    the wall: every `sources/*.py` card, in order
+client/sources/care.py the care desk's pulse: is hello@ being read, what the
+                      last sweep filed. The queue itself is the tbs-care desk.
 client/phone/         the page served at `/`: three files, no build step
 app/Office/           the Mac app: roster, threads, gate sheet, menu bar dot
 scripts/shoot.sh      the eyes
