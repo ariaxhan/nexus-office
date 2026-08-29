@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// One repo, as the thing you actually do something about.
@@ -344,30 +345,66 @@ struct DeskContextView: View {
     }
 
     private func entry(_ file: ContextFile, depth: Int, open: Bool) -> some View {
-        Button {
-            Task { await store.loadContext(repo: repo, path: file.path) }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 9 * scale))
-                    .foregroundStyle(open ? Theme.blue : Theme.faint)
-                    .frame(width: 10)
-                Text(file.name)
-                    .font(.system(size: 12 * scale))
-                    .foregroundStyle(open ? Theme.text : Theme.dim)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 4)
+        HStack(spacing: 3) {
+            Button {
+                Task { await store.loadContext(repo: repo, path: file.path) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 9 * scale))
+                        .foregroundStyle(open ? Theme.blue : Theme.faint)
+                        .frame(width: 10)
+                    Text(file.name)
+                        .font(.system(size: 12 * scale))
+                        .foregroundStyle(open ? Theme.text : Theme.dim)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                }
+                .padding(.leading, 8 + CGFloat(depth) * 14)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.leading, 8 + CGFloat(depth) * 14)
-            .padding(.trailing, 8)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(open ? Theme.raised : Color.clear))
+            .buttonStyle(.plain)
+
+            Button {
+                Task { await copy(file) }
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 10 * scale))
+                    .foregroundStyle(Theme.faint)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Copy \(file.name)")
+            .accessibilityLabel("Copy \(file.name)")
+            .padding(.trailing, 4)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(open ? Theme.raised : Color.clear))
+    }
+
+    @MainActor private func copy(_ file: ContextFile) async {
+        do {
+            let text: String
+            if let context, context.path == file.path {
+                text = context.text
+            } else {
+                text = try await store.api.context(repo: repo, path: file.path).text
+            }
+            let board = NSPasteboard.general
+            board.clearContents()
+            guard board.setString(text, forType: .string) else {
+                store.toast = "could not copy \(file.name)"
+                return
+            }
+            store.toast = "copied \(file.name)"
+        } catch {
+            store.toast = "could not copy \(file.name): \(error.localizedDescription)"
+        }
     }
 
     // MARK: - the document
