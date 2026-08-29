@@ -1759,7 +1759,11 @@ class DecisionBlockTest(unittest.TestCase):
     def test_a_well_formed_block_is_read_and_junk_is_not(self):
         rows = self.chat.decision_blocks(BLOCK % ("ariaxhan/nexus-office", 20))
         self.assertEqual(rows, [{"repo": "ariaxhan/nexus-office", "issue": 20, "answer": "B",
-                                 "comment": "leave the Worker dark"}])
+                                 "action": "unblock", "comment": "leave the Worker dark"}])
+        closing = json.dumps([{"repo": "a/b", "issue": 1, "answer": "A", "action": "close"}])
+        self.assertEqual(self.chat.decision_blocks(f"```office-decisions\n{closing}\n```")[0]["action"], "close")
+        bogus = json.dumps([{"repo": "a/b", "issue": 1, "answer": "A", "action": "delete"}])
+        self.assertEqual(self.chat.decision_blocks(f"```office-decisions\n{bogus}\n```"), [])
         self.assertEqual(self.chat.decision_blocks("no block here"), [])
         self.assertEqual(self.chat.decision_blocks(BLOCK % ("evil repo", 20)), [])
         self.assertEqual(self.chat.decision_blocks(BLOCK % ("a/b", '"x"')), [])

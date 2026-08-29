@@ -347,14 +347,15 @@ class World:
         and only about an issue the wall shows; anything else is refused and said."""
         out = []
         for d in chat.decision_blocks(reply):
-            row = {"bot": bot, "repo": d["repo"], "issue": d["issue"], "answer": d["answer"]}
+            row = {"bot": bot, "repo": d["repo"], "issue": d["issue"], "answer": d["answer"],
+                   "action": d["action"]}
             if bot != chat.DECIDER:
                 ok, result = False, f"{bot} does not decide"
             elif not self.knows_issue(d["repo"], d["issue"]):
                 ok, result = False, "not an issue on the wall"
             else:
                 body = f"{d['answer']}: {d['comment']}" if d["comment"] else d["answer"]
-                ok, result = self.apply_now({"kind": "unblock", "repo": d["repo"],
+                ok, result = self.apply_now({"kind": d["action"], "repo": d["repo"],
                                              "issue": str(d["issue"]), "body": body})
             row.update(ok=bool(ok), result=str(result)[:300])
             out.append(row)

@@ -267,7 +267,11 @@ def decision_blocks(reply) -> list:
             answer = str(row.get("answer") or "").strip()
             if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo, re.ASCII) or not issue.isdigit() or not answer:
                 continue
+            action = str(row.get("action") or "unblock")
+            if action not in ("unblock", "close"):
+                continue
             out.append({"repo": repo, "issue": int(issue), "answer": answer[:200],
+                        "action": action,
                         "comment": str(row.get("comment") or "").strip()[:2000]})
             if len(out) >= MAX_DECISIONS_PER_TURN:
                 return out
