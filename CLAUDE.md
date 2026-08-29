@@ -59,6 +59,11 @@ a black frame from a sleeping display and no error.
 Add a framing to `scripts/shoot.sh` when you add something the existing twelve
 would not reveal. A framing nobody looks at is a framing that rots.
 
+`npm run shot` is the demo floor. For the real one, the installed app on the
+real door, `./scripts/peek.sh` takes one picture of the live window (it wakes
+the display first; a sleeping one returns "could not create image" and nothing
+else). Use it after `nexus open`, after a hook, before believing a report.
+
 ## Verify gates
 
 ```sh
