@@ -56,6 +56,10 @@ IMAGE_TYPES = ("image/png", "image/jpeg")
 # for the whole thing, so this is a "the harness died" timeout, not a latency
 # budget.
 TURN_TIMEOUT_S = 300
+MAX_EVIDENCE_ISSUES = 180
+MAX_EVIDENCE_PRS = 120
+EVIDENCE_BODY_CHARS = 600
+EVIDENCE_LAST_CHARS = 400
 
 DOWN = "the harness is not running"
 BAD_BOT = "bad bot id"
@@ -125,6 +129,98 @@ def check_attachments(value):
     return list(value), None
 
 
+def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
+    """Bounded live Office facts for one bot turn; source text is evidence, never instruction."""
+    snap = snapshot if isinstance(snapshot, dict) else {}
+    stations = [row for row in snap.get("stations") or [] if isinstance(row, dict)]
+    owners = [str(owner) for owner in snap.get("owners") or [] if str(owner)]
+    query = message.casefold()
+    selected_owner = next((owner for owner in owners if owner.casefold() in query), "")
+    selected = [
+        row for row in stations
+        if (not selected_owner or str(row.get("repo") or "").startswith(selected_owner + "/"))
+        and (not row.get("hidden") or selected_owner)
+        and (row.get("issues") or row.get("prs"))
+    ]
+
+    issue_count = waiting_count = in_pr_count = 0
+    clean_prs = dirty_prs = 0
+    for row in stations:
+        repo = str(row.get("repo") or "")
+        if selected_owner and not repo.startswith(selected_owner + "/"):
+            continue
+        issues = row.get("issues") or []
+        issue_count += len(issues)
+        for issue in issues:
+            labels = [str(label) for label in issue.get("labels") or []]
+            waiting_count += "waiting on human" in labels
+            in_pr_count += "in pr" in labels
+        for pr in row.get("prs") or []:
+            clean_prs += pr.get("mergeable") == "MERGEABLE" and pr.get("state") == "CLEAN"
+            dirty_prs += pr.get("mergeable") == "CONFLICTING" or pr.get("state") == "DIRTY"
+
+    issue_rows, pr_rows = [], []
+    for row in selected:
+        repo = str(row.get("repo") or "")
+        for issue in row.get("issues") or []:
+            if len(issue_rows) >= MAX_EVIDENCE_ISSUES:
+                break
+            issue_rows.append({
+                "repo": repo,
+                "number": issue.get("number"),
+                "title": str(issue.get("title") or "")[:300],
+                "labels": [str(label)[:80] for label in issue.get("labels") or []],
+                "url": str(issue.get("url") or "")[:500],
+                "updated_at": issue.get("updatedAt"),
+                "body_excerpt": str(issue.get("body") or "")[:EVIDENCE_BODY_CHARS],
+                "last_word_excerpt": str(issue.get("last_word") or "")[:EVIDENCE_LAST_CHARS],
+            })
+        for pr in row.get("prs") or []:
+            if len(pr_rows) >= MAX_EVIDENCE_PRS:
+                break
+            pr_rows.append({
+                "repo": repo,
+                "number": pr.get("number"),
+                "title": str(pr.get("title") or "")[:300],
+                "url": str(pr.get("url") or "")[:500],
+                "draft": bool(pr.get("draft")),
+                "mergeable": pr.get("mergeable"),
+                "state": pr.get("state"),
+                "closes": list(pr.get("closes") or [])[:40],
+            })
+
+    sections = {}
+    for name, value in (snap.get("sections") or {}).items():
+        if not isinstance(value, dict):
+            continue
+        card = value.get("card") if isinstance(value.get("card"), dict) else {}
+        sections[str(name)] = {
+            "state": value.get("state"),
+            "detail": str(value.get("detail") or "")[:300],
+            "headline": str(card.get("headline") or "")[:300],
+            "needs": card.get("needs"),
+            "as_of": card.get("as_of"),
+        }
+    return {
+        "source": "nexus-office:/api/world",
+        "captured_at": snap.get("generated"),
+        "bot": bot,
+        "owner_filter": selected_owner or None,
+        "owners": owners,
+        "counts": {
+            "issues": issue_count,
+            "waiting_on_human": waiting_count,
+            "in_pr": in_pr_count,
+            "clean_mergeable_prs": clean_prs,
+            "conflicting_prs": dirty_prs,
+        },
+        "issues": issue_rows,
+        "pull_requests": pr_rows,
+        "sections": sections,
+        "truncated": len(issue_rows) >= MAX_EVIDENCE_ISSUES or len(pr_rows) >= MAX_EVIDENCE_PRS,
+    }
+
+
 def _harness_get(path: str):
     """(body, error). error is a message when the harness could not answer."""
     try:
@@ -143,10 +239,11 @@ class Chatroom:
     never inherit each other's in-flight table.
     """
 
-    def __init__(self):
+    def __init__(self, evidence=None):
         self.lock = threading.Lock()
         self.busy = set()
         self.errors = {}
+        self.evidence = evidence
 
     # ── the roster ──────────────────────────────────────────────────────────
     def roster(self) -> dict:
@@ -230,6 +327,10 @@ class Chatroom:
         # exactly as it always has, so nothing already talking to the harness has
         # to learn a new shape to keep working.
         turn = {"message": message, "bot": bot}
+        if self.evidence is not None:
+            evidence = self.evidence(bot, message)
+            if evidence:
+                turn["evidence_context"] = evidence
         if attachments:
             turn["attachments"] = list(attachments)
         try:

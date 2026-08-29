@@ -310,6 +310,10 @@ class World:
         with self.lock:
             return list(reversed(self.decisions))
 
+    def bot_evidence(self, bot: str, message: str) -> dict:
+        with self.lock:
+            return chat.office_evidence(self.snapshot, bot, message)
+
 
 def validate(body: dict):
     """Exactly the Worker's validation, restated. A bad decision is refused here,
@@ -861,7 +865,7 @@ def make_server(world: World, port: int = 8790):
                               refresh=world.refresh_desk,
                               receipts=office_sync.RECEIPTS)
     handler = type("BoundHandler", (Handler,),
-                   {"world": world, "chatroom": chat.Chatroom(),
+                   {"world": world, "chatroom": chat.Chatroom(world.bot_evidence),
                     "mailbox": mailbox, "trigger": trigger})
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
 

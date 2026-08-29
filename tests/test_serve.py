@@ -947,6 +947,40 @@ class ChatTest(unittest.TestCase):
         self.assertTrue(self.until(lambda: self.bot("chief")[1]["last"] is not None))
         self.assertEqual(self.bot("chief")[1]["last"]["text"], "heard status?")
 
+    def test_a_bot_turn_carries_bounded_live_office_evidence(self):
+        with self.world.lock:
+            previous = self.world.snapshot
+            self.world.snapshot = {
+                "generated": "2026-08-29T08:00:00Z",
+                "owners": ["ariaxhan", "other"],
+                "stations": [
+                    {"repo": "ariaxhan/one", "hidden": False, "issues": [{
+                        "number": 7, "title": "Choose a direction",
+                        "labels": ["waiting on human"], "url": "https://example/7",
+                        "body": "evidence", "last_word": "question posted",
+                    }], "prs": []},
+                    {"repo": "other/two", "hidden": False, "issues": [{
+                        "number": 8, "title": "Wrong owner", "labels": [],
+                    }], "prs": []},
+                ],
+                "sections": {},
+            }
+        try:
+            code, _ = api_post(
+                self.port, "/api/chat",
+                {"bot": "chief", "message": "all ariaxhan decisions"},
+            )
+            self.assertEqual(code, 202)
+            body = self.last_body("chief")
+            evidence = body["evidence_context"]
+            self.assertEqual(evidence["owner_filter"], "ariaxhan")
+            self.assertEqual(evidence["counts"]["issues"], 1)
+            self.assertEqual([row["repo"] for row in evidence["issues"]], ["ariaxhan/one"])
+            self.assertNotIn("other/two", json.dumps(evidence))
+        finally:
+            with self.world.lock:
+                self.world.snapshot = previous
+
     def test_a_second_message_while_the_bot_is_busy_is_refused(self):
         """Two agents writing one session file is a corrupted transcript, not a
         fast conversation."""
@@ -1016,19 +1050,23 @@ class ChatTest(unittest.TestCase):
             return [b for b in self.harness.bodies if b.get("bot") == bot][-1]
 
     def test_a_turn_without_a_picture_is_the_same_turn_it_always_was(self):
-        """The Mac app sends no attachments today. Nothing it sends may grow a
-        new key on the wire, or the harness sees a shape it never agreed to."""
+        """The Mac app sends no attachments today. Besides the evidence block the
+        harness agreed to, nothing it sends may grow a new key on the wire."""
         code, _ = api_post(self.port, "/api/chat", {"bot": "chief", "message": "morning"})
         self.assertEqual(code, 202)
-        self.assertEqual(self.last_body("chief"), {"bot": "chief", "message": "morning"})
+        body = self.last_body("chief")
+        self.assertEqual(set(body), {"bot", "message", "evidence_context"})
+        self.assertEqual((body["bot"], body["message"]), ("chief", "morning"))
+        self.assertEqual(body["evidence_context"]["source"], "nexus-office:/api/world")
 
     def test_an_attachment_reaches_the_harness_exactly_as_it_was_sent(self):
         shot = self.shot(name="desk.png", data_base64="QUJD")
         code, _ = api_post(self.port, "/api/chat",
                            {"bot": "chief", "message": "look", "attachments": [shot]})
         self.assertEqual(code, 202)
-        self.assertEqual(self.last_body("chief"),
-                         {"bot": "chief", "message": "look", "attachments": [shot]})
+        body = self.last_body("chief")
+        self.assertEqual(body["attachments"], [shot])
+        self.assertEqual((body["bot"], body["message"]), ("chief", "look"))
 
     def test_a_jpeg_is_a_picture_too(self):
         shot = self.shot(name="desk.jpg", mime_type="image/jpeg")
