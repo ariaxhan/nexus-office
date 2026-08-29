@@ -1,11 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The left column: who you can talk to, then what is on the floor.
+/// The left column: who you can talk to, what the machine knows, then the floor.
 ///
-/// Bots come first because they are colleagues you message, and the desks are
-/// one more thing in the list rather than the whole point. Same row shape for
-/// both, so the eye reads one list and not two widgets.
+/// Bots come first because they are colleagues you message. The wall follows
+/// with the machine-wide picture before the longer list of individual desks.
+/// Everything keeps the same row shape, so the eye reads one list.
 struct RosterView: View {
     @Bindable var store: Store
 
@@ -26,6 +26,8 @@ struct RosterView: View {
                             .contentShape(Rectangle())
                             .onTapGesture { store.select(.bot(bot.id)) }
                     }
+
+                    wall
 
                     header("desks", trailing: deskControls)
                         .padding(.top, 14)
@@ -62,8 +64,6 @@ struct RosterView: View {
                     }
 
                     putAway
-
-                    wall
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 16)
@@ -75,11 +75,9 @@ struct RosterView: View {
                 guard opened else { return }
                 withAnimation { scroll.scrollTo(putAwayAnchor, anchor: .bottom) }
             }
-            // The wall is under every desk on the floor, so a wall row can be
-            // selected while sitting a long way below what a person is looking
-            // at. A selected row nobody can see reads as a click that did not
-            // land, which is the same failure the drawer anchor above exists
-            // to prevent.
+            // A selected wall row must remain visible when selection changes
+            // from elsewhere, just as the put-away drawer scrolls to what it
+            // revealed.
             .onChange(of: store.selection) { _, now in
                 guard case .section(let id)? = now else { return }
                 withAnimation { scroll.scrollTo(rowID(section: id), anchor: .center) }
