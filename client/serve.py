@@ -314,6 +314,52 @@ class World:
         with self.lock:
             return chat.office_evidence(self.snapshot, bot, message)
 
+    def knows_issue(self, repo: str, issue) -> bool:
+        """Only an issue on the wall right now: a bot's block names what it was
+        shown, never an arbitrary repo it might have typed."""
+        with self.lock:
+            for st in ((self.snapshot or {}).get("stations") or []):
+                if str(st.get("repo") or "") != repo:
+                    continue
+                return any(str(i.get("number")) == str(issue) for i in st.get("issues") or [])
+        return False
+
+    def apply_now(self, body: dict):
+        """(ok, result) for one decision, applied this instant: validated, run
+        through office-sync with a fresh push probe, recorded, and the one desk
+        it moved refetched. The button and a bot's block both come through here."""
+        err, d = validate(body)
+        if err:
+            return False, err
+        ok, result = office_sync.apply_decision(d, self.access(), dry=False)
+        self.record(d["kind"], d["repo"], d["issue"], ok, result)
+        log(f"{d['kind']} {d['repo']}#{d['issue'] or '-'}: {'ok' if ok else 'FAILED'} {result}")
+        if ok and d["kind"] in GITHUB_KINDS:
+            try:
+                self.refresh_desk(d["repo"])
+            except Exception as exc:  # noqa: BLE001 - the decision already landed
+                log(f"{d['repo']} was decided but could not be refetched: "
+                    f"{type(exc).__name__}: {exc}")
+        return ok, result
+
+    def bot_decisions(self, bot: str, reply: str) -> list:
+        """Every decision block in a bot's reply, applied. Only Sphinx decides,
+        and only about an issue the wall shows; anything else is refused and said."""
+        out = []
+        for d in chat.decision_blocks(reply):
+            row = {"bot": bot, "repo": d["repo"], "issue": d["issue"], "answer": d["answer"]}
+            if bot != chat.DECIDER:
+                ok, result = False, f"{bot} does not decide"
+            elif not self.knows_issue(d["repo"], d["issue"]):
+                ok, result = False, "not an issue on the wall"
+            else:
+                body = f"{d['answer']}: {d['comment']}" if d["comment"] else d["answer"]
+                ok, result = self.apply_now({"kind": "unblock", "repo": d["repo"],
+                                             "issue": str(d["issue"]), "body": body})
+            row.update(ok=bool(ok), result=str(result)[:300])
+            out.append(row)
+        return out
+
 
 def validate(body: dict):
     """Exactly the Worker's validation, restated. A bad decision is refused here,
@@ -592,39 +638,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": f"{type(exc).__name__}: {exc}"[:300]}, 500)
 
     def _decision(self, body):
-        err, d = validate(body)
+        err, _ = validate(body)
         if err:
             return self._json({"error": err}, 400)
-        # Applied now, not queued. Everything that re-derives the intent from its
-        # own fields and re-probes push access still happens, in office-sync.py,
-        # exactly as it did when a drain ran it two minutes later.
-        ok, result = office_sync.apply_decision(d, self.world.access(), dry=False)
-        self.world.record(d["kind"], d["repo"], d["issue"], ok, result)
-        log(f"{d['kind']} {d['repo']}#{d['issue'] or '-'}: {'ok' if ok else 'FAILED'} {result}")
-        # The issue on GitHub has just moved, so the desk in the snapshot is now
-        # wrong about it, and the room would go on showing a closed issue until
-        # the next minute's build. Refetching that one desk costs about two
-        # GraphQL points and lands before the answer goes out, so the app's
-        # refresh straight afterwards already sees the shorter list.
-        #
-        # Only when something actually changed: a decision that failed left
-        # GitHub exactly as it was, and a runtime kind never asked it anything.
-        #
-        # And it can never unsay the decision. The refetch reaches GitHub again
-        # on its own, past the one guard `refresh_desk` has, so it can time out
-        # or throw while the issue is already closed. Letting that become a 500
-        # would tell a person their close failed when it did not, and what a
-        # person does with a button that failed is press it again. A stale desk
-        # for one more minute is the entire cost of this going wrong.
-        if ok and d["kind"] in GITHUB_KINDS:
-            try:
-                self.world.refresh_desk(d["repo"])
-            except Exception as exc:  # noqa: BLE001 - the decision already landed
-                log(f"{d['repo']} was decided but could not be refetched: "
-                    f"{type(exc).__name__}: {exc}")
+        ok, result = self.world.apply_now(body)
         # A permit that did not apply means the gate is closed or has moved on.
         # That is a conflict, not a server fault, and the room has to say which.
-        if not ok and d["kind"] == "permit":
+        if not ok and body.get("kind") == "permit":
             return self._json({"ok": False, "result": result}, 409)
         return self._json({"ok": bool(ok), "result": result})
 
@@ -865,7 +885,8 @@ def make_server(world: World, port: int = 8790):
                               refresh=world.refresh_desk,
                               receipts=office_sync.RECEIPTS)
     handler = type("BoundHandler", (Handler,),
-                   {"world": world, "chatroom": chat.Chatroom(world.bot_evidence),
+                   {"world": world,
+                    "chatroom": chat.Chatroom(world.bot_evidence, world.bot_decisions),
                     "mailbox": mailbox, "trigger": trigger})
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
 

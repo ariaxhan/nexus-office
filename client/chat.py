@@ -239,6 +239,41 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
     return evidence
 
 
+# Sphinx closes an answered question with one fenced block, and the Office acts
+# on it: the model interprets what Aria said, the block is what gets applied,
+# and the block is in the transcript for anyone to read. Only Sphinx decides.
+DECIDER = "sphinx"
+DECISION_FENCE = re.compile(r"```office-decisions\s*\n(.*?)\n```", re.DOTALL)
+MAX_DECISIONS_PER_TURN = 8
+
+
+def decision_blocks(reply) -> list:
+    """The decisions a reply carries, each {repo, issue, answer, comment}, or [].
+
+    Malformed is empty, not an error: a bot that muddled its block has said
+    nothing actionable, and the words above the block still reached Aria."""
+    text = reply if isinstance(reply, str) else ""
+    out = []
+    for block in DECISION_FENCE.findall(text):
+        try:
+            rows = json.loads(block)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            repo = str(row.get("repo") or "")
+            issue = str(row.get("issue") or "")
+            answer = str(row.get("answer") or "").strip()
+            if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo, re.ASCII) or not issue.isdigit() or not answer:
+                continue
+            out.append({"repo": repo, "issue": int(issue), "answer": answer[:200],
+                        "comment": str(row.get("comment") or "").strip()[:2000]})
+            if len(out) >= MAX_DECISIONS_PER_TURN:
+                return out
+    return out
+
+
 def _harness_get(path: str):
     """(body, error). error is a message when the harness could not answer."""
     try:
@@ -257,11 +292,15 @@ class Chatroom:
     never inherit each other's in-flight table.
     """
 
-    def __init__(self, evidence=None):
+    def __init__(self, evidence=None, decide=None):
         self.lock = threading.Lock()
         self.busy = set()
         self.errors = {}
         self.evidence = evidence
+        # decide(bot, reply) -> [{repo, issue, answer, ok, result}], run after a
+        # turn lands. None means a reply is only ever words.
+        self.decide = decide
+        self.decided = {}
 
     # ── the roster ──────────────────────────────────────────────────────────
     def roster(self) -> dict:
@@ -281,12 +320,15 @@ class Chatroom:
 
         with self.lock:
             busy, errors = set(self.busy), dict(self.errors)
+            decided = {k: list(v) for k, v in self.decided.items()}
 
         for bot in bots:
             bot["last"] = last_by_id.get(bot["id"])
             bot["busy"] = bot["id"] in busy
             if bot["id"] in errors:
                 bot["error"] = errors[bot["id"]]
+            if bot["id"] in decided:
+                bot["decided"] = decided[bot["id"]]
         return {"bots": bots, "runtime": state, "at": now_iso()}
 
     # ── the conversation ────────────────────────────────────────────────────
@@ -340,6 +382,25 @@ class Chatroom:
                          daemon=True).start()
         return 202, {"ok": True, "bot": bot}
 
+    def _act(self, bot: str, reply) -> None:
+        """Apply what the reply decided. A failure here is the bot's error, so
+        the desk says the words landed but the issue did not move."""
+        if self.decide is None:
+            return
+        try:
+            rows = self.decide(bot, reply)
+        except Exception as exc:  # noqa: BLE001
+            rows = [{"bot": bot, "ok": False, "result": f"{type(exc).__name__}: {exc}"[:300]}]
+        if not rows:
+            return
+        with self.lock:
+            self.decided[bot] = rows[-MAX_DECISIONS_PER_TURN:]
+            failed = [r for r in rows if not r.get("ok")]
+            if failed:
+                r = failed[0]
+                self.errors[bot] = (f"decision {r.get('repo', '?')}#{r.get('issue', '?')} "
+                                    f"did not apply: {r.get('result')}")[:300]
+
     def _turn(self, bot: str, message: str, attachments=()) -> None:
         # No attachment means no key: a turn without a picture goes on the wire
         # exactly as it always has, so nothing already talking to the harness has
@@ -352,7 +413,7 @@ class Chatroom:
         if attachments:
             turn["attachments"] = list(attachments)
         try:
-            rt.post("/api/chat", turn, timeout=TURN_TIMEOUT_S)
+            answer = rt.post("/api/chat", turn, timeout=TURN_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
             # Kept until the bot manages a whole turn. A failure that clears
             # itself on the next poll is a failure nobody ever sees.
@@ -361,6 +422,7 @@ class Chatroom:
         else:
             with self.lock:
                 self.errors.pop(bot, None)
+            self._act(bot, (answer or {}).get("reply"))
         finally:
             with self.lock:
                 self.busy.discard(bot)

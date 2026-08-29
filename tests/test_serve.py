@@ -734,7 +734,7 @@ class FakeHarness:
     exactly two bots so an unknown one still 404s.
     """
 
-    BOTS = ("chief", "inbox")
+    BOTS = ("chief", "inbox", "sphinx")
 
     def __init__(self):
         import urllib.parse as up
@@ -747,6 +747,7 @@ class FakeHarness:
         # is only forwarded correctly if it arrives here byte for byte.
         self.bodies = []
         self.hold = None  # an Event a test sets to keep a turn in flight
+        self.reply_with = None  # a test sets the exact reply text of the next turn
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -786,10 +787,11 @@ class FakeHarness:
                 with outer.lock:
                     outer.received.append((bot, msg))
                     outer.bodies.append(body)
+                    said = outer.reply_with or f"heard {msg}"
+                    outer.reply_with = None
                     outer.turns[bot].append({"role": "user", "text": msg, "at": "then"})
-                    outer.turns[bot].append({"role": "assistant", "text": f"heard {msg}",
-                                             "at": "then"})
-                self.reply({"ok": True, "bot": bot})
+                    outer.turns[bot].append({"role": "assistant", "text": said, "at": "then"})
+                self.reply({"ok": True, "bot": bot, "reply": said})
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.port = self.httpd.server_address[1]
@@ -828,6 +830,8 @@ class ChatTest(unittest.TestCase):
              "frequency": "morning", "identity": "SECRET-PERSONA-CHIEF"},
             {"id": "inbox", "name": "Inbox", "color": "#B7A8F0",
              "identity": "SECRET-PERSONA-INBOX"},
+            {"id": "sphinx", "name": "Sphinx", "color": "#B7A8F0",
+             "identity": "SECRET-PERSONA-SPHINX"},
         ]}))
 
         cls.env = {k: os.environ.get(k) for k in ("OFFICE_RUNTIME_ROOT", "OFFICE_RUNTIME_URL")}
@@ -891,8 +895,8 @@ class ChatTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body["runtime"], "down")
         self.assertTrue(body["at"])
-        self.assertEqual([b["id"] for b in body["bots"]], ["chief", "inbox"])
-        self.assertEqual([b["name"] for b in body["bots"]], ["Chief", "Inbox"])
+        self.assertEqual([b["id"] for b in body["bots"]], ["chief", "inbox", "sphinx"])
+        self.assertEqual([b["name"] for b in body["bots"]], ["Chief", "Inbox", "Sphinx"])
         self.assertEqual(body["bots"][0]["frequency"], "morning")
         for b in body["bots"]:
             self.assertIsNone(b["last"])
@@ -1735,3 +1739,106 @@ class OfficeEvidenceTest(unittest.TestCase):
         # the cut ate from the back, so what survived is raised hands only
         self.assertTrue(evidence["issues"])
         self.assertTrue(all("waiting on human" in r["labels"] for r in evidence["issues"]))
+
+
+BLOCK = """Noted.
+
+```office-decisions
+[{"repo": "%s", "issue": %s, "answer": "B", "comment": "leave the Worker dark"}]
+```
+"""
+
+
+class DecisionBlockTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import chat
+
+        cls.chat = chat
+
+    def test_a_well_formed_block_is_read_and_junk_is_not(self):
+        rows = self.chat.decision_blocks(BLOCK % ("ariaxhan/nexus-office", 20))
+        self.assertEqual(rows, [{"repo": "ariaxhan/nexus-office", "issue": 20, "answer": "B",
+                                 "comment": "leave the Worker dark"}])
+        self.assertEqual(self.chat.decision_blocks("no block here"), [])
+        self.assertEqual(self.chat.decision_blocks(BLOCK % ("evil repo", 20)), [])
+        self.assertEqual(self.chat.decision_blocks(BLOCK % ("a/b", '"x"')), [])
+        self.assertEqual(self.chat.decision_blocks("```office-decisions\nnot json\n```"), [])
+        self.assertEqual(self.chat.decision_blocks(None), [])
+
+    def test_a_block_is_capped(self):
+        many = json.dumps([{"repo": "a/b", "issue": i, "answer": "A"} for i in range(30)])
+        rows = self.chat.decision_blocks(f"```office-decisions\n{many}\n```")
+        self.assertEqual(len(rows), self.chat.MAX_DECISIONS_PER_TURN)
+
+
+class _BotDecisions:
+    """Sphinx's block moves the issue; nobody else's does, and never off the wall.
+    Mixed into ChatTest below so the door, harness and world are shared."""
+
+    ISSUE = ("acme/thing", 7)
+
+    def decisions_setup(self):
+        self.applied = []
+        self._apply = self.serve.office_sync.apply_decision
+        self._refresh = self.serve.World.refresh_desk
+        self.serve.office_sync.apply_decision = (
+            lambda d, access, dry: (self.applied.append(dict(d)) or (True, ["issue comment", "issue edit"])))
+        self.serve.World.refresh_desk = lambda self_, repo: None
+        with self.world.lock:
+            self._issues = self.world.snapshot["stations"][0]["issues"]
+            self.world.snapshot["stations"][0]["issues"] = [{"number": 7, "title": "M0", "labels": []}]
+
+    def decisions_teardown(self):
+        self.serve.office_sync.apply_decision = self._apply
+        self.serve.World.refresh_desk = self._refresh
+        with self.world.lock:
+            self.world.snapshot["stations"][0]["issues"] = self._issues
+
+    def decided(self, bot):
+        self.assertTrue(self.until(lambda: self.bot(bot)[1].get("decided")))
+        return self.bot(bot)[1]
+
+    def test_sphinx_block_is_applied_as_an_unblock_and_shown_on_the_roster(self):
+        self.decisions_setup()
+        try:
+            repo, num = self.ISSUE
+            self.harness.reply_with = BLOCK % (repo, num)
+            code, _ = api_post(self.port, "/api/chat", {"bot": "sphinx", "message": "7: B"})
+            self.assertEqual(code, 202)
+            row = self.decided("sphinx")
+            d = self.applied[0]
+            self.assertEqual((d["kind"], d["repo"], d["issue"]), ("unblock", repo, str(num)))
+            self.assertEqual(d["payload"]["body"], "B: leave the Worker dark")
+            self.assertTrue(row["decided"][0]["ok"])
+            self.assertNotIn("error", row)
+            self.assertEqual(self.world.recent()[0]["kind"], "unblock")
+        finally:
+            self.decisions_teardown()
+
+    def test_only_sphinx_decides(self):
+        self.decisions_setup()
+        try:
+            self.harness.reply_with = BLOCK % self.ISSUE
+            api_post(self.port, "/api/chat", {"bot": "chief", "message": "7: B"})
+            row = self.decided("chief")
+            self.assertEqual(self.applied, [])
+            self.assertIn("does not decide", row["error"])
+        finally:
+            self.decisions_teardown()
+
+    def test_an_issue_not_on_the_wall_is_refused(self):
+        self.decisions_setup()
+        try:
+            self.harness.reply_with = BLOCK % ("someone/else", 1)
+            api_post(self.port, "/api/chat", {"bot": "sphinx", "message": "1: B"})
+            row = self.decided("sphinx")
+            self.assertEqual(self.applied, [])
+            self.assertIn("not an issue on the wall", row["error"])
+        finally:
+            self.decisions_teardown()
+
+
+for _name in [n for n in dir(_BotDecisions) if n.startswith("test_")] + \
+             ["decisions_setup", "decisions_teardown", "decided", "ISSUE"]:
+    setattr(ChatTest, _name, getattr(_BotDecisions, _name))
