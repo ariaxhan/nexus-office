@@ -197,7 +197,9 @@ With `OFFICE_OWNERS` set, every repo you can push to gets a desk and the office
 works standalone.
 
 If you already run a pipeline, point `OFFICE_RECEIPTS` at a JSONL of what it did
-and the desks become a record of real work instead of a repo list:
+and those desks become a record of real work; `OFFICE_OWNERS` still adds the
+repos the pipeline never reached. A repo moved to another org is one desk under
+its current name, however old the receipts calling it by the old one:
 
 ```json
 {"at":"2026-08-25T23:14:38Z","repo":"owner/name","issue":"42","outcome":"landed","detail":"opened a PR"}

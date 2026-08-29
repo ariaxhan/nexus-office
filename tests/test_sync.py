@@ -485,6 +485,43 @@ class HiddenTest(SyncCase):
             self.mod.OWNERS = was
 
 
+class DeskListTest(SyncCase):
+    """Where the desks come from: receipts, plus every repo under OFFICE_OWNERS,
+    under the name GitHub uses today."""
+
+    def test_owners_add_desks_the_runner_never_reached(self):
+        path = pathlib.Path(self.tmp.name) / "receipts.jsonl"
+        path.write_text(json.dumps({"at": "2026-08-28T09:00:00Z", "repo": "acme/one",
+                                    "issue": "7", "outcome": "landed", "detail": "x"}) + "\n")
+        import office_sync_shim
+        mod = importlib.reload(office_sync_shim).mod
+        mod.log = lambda m: None
+        mod.RECEIPTS = path
+        mod.OWNERS = ["acme"]
+        mod.sh = lambda cmd, **kw: (0, json.dumps([
+            {"nameWithOwner": "acme/one", "pushedAt": "2026-08-29T01:00:00.000Z"},
+            {"nameWithOwner": "acme/three", "pushedAt": "2026-08-29T01:00:00.000Z"}]), "")
+        by_repo, _ = mod.receipts()
+        self.assertEqual(sorted(by_repo), ["acme/one", "acme/three"])
+        self.assertEqual(by_repo["acme/one"][0]["issue"], "7", "a receipt beats a listing")
+        self.assertEqual(by_repo["acme/three"][0]["outcome"], "survey")
+
+    def test_a_repo_moved_to_another_org_is_one_desk_under_its_new_name(self):
+        # The runner's receipts still say old/thing (the checkout's remote does),
+        # the org listing says neworg/thing, and GitHub's redirect ties them.
+        self.repos = ["old/thing", "neworg/thing"]
+        self.set_receipts(self.repos)
+        self.mod.write_hidden(["old/thing"])
+        access = FakeAccess()
+        access.canonical = lambda r: {"old/thing": "neworg/thing"}.get(r, r)
+
+        snap = self.build(access)
+        self.assertEqual([s["repo"] for s in snap["stations"]], ["neworg/thing"])
+        self.assertTrue(self.desk(snap, "neworg/thing")["hidden"],
+                        "put away travels with the desk")
+        self.assertNotIn("old/thing", self.asked(), "the old address is never fetched")
+
+
 class BudgetTest(SyncCase):
     def test_running_low_pauses_before_the_next_query_goes_out(self):
         repos = [f"acme/r{i:02d}" for i in range(23)]

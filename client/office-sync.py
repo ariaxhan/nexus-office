@@ -12,9 +12,9 @@ the machine; this file is the second lock behind that door.
 Configuration, all from the environment so nothing personal lives in this file:
 
   OFFICE_RECEIPTS   a JSONL of pipeline receipts         (optional)
-  OFFICE_OWNERS     comma separated GitHub owners        (optional; used when
-                    there is no receipts file, so every repo you can push to
-                    under those owners gets a desk)
+  OFFICE_OWNERS     comma separated GitHub owners        (optional; every repo
+                    you can push to under those owners gets a desk, with or
+                    without a receipt or a checkout on this machine)
   OFFICE_HEARTBEAT  file holding your runner's last-success stamp  (optional)
   OFFICE_KILLSWITCH file whose existence means "the runner is halted" (optional)
   OFFICE_MARKER     the comment marker your bot leaves    (default: pipeline-bot)
@@ -127,13 +127,20 @@ class Access:
     def __init__(self):
         self.mine = logins()
         self.cache = {}
+        self.names = {}
         try:
             raw = json.loads(ACCESS_CACHE.read_text())
             if time.time() - raw.get("at", 0) < ACCESS_TTL:
                 self.cache = raw.get("repos", {})
+                self.names = raw.get("names", {})
         except Exception:
             pass
         self.dirty = False
+
+    def canonical(self, nwo: str) -> str:
+        """The name GitHub calls nwo today. A repo moved to another org keeps
+        answering at the old address, so the old name is a redirect, not a desk."""
+        return self.names.get(nwo) or nwo
 
     def token_for(self, nwo: str):
         """(login, token) that can push to nwo, or (None, None)."""
@@ -148,9 +155,14 @@ class Access:
             tok = self._token(who)
             if not tok:
                 continue
-            rc, out, _ = sh(["gh", "api", f"repos/{nwo}", "--jq", ".permissions.push // false"],
+            rc, out, _ = sh(["gh", "api", f"repos/{nwo}", "--jq",
+                             "[(.permissions.push // false), .full_name] | @tsv"],
                             timeout=25, env={"GH_TOKEN": tok})
-            if rc == 0 and out.strip() == "true":
+            push, _, name = out.strip().partition("\t")
+            if rc == 0 and NWO_RE.match(name or "") and name != nwo:
+                self.names[nwo] = name
+                self.dirty = True
+            if rc == 0 and push == "true":
                 self.cache[nwo] = who
                 self.dirty = True
                 return who, tok
@@ -168,7 +180,8 @@ class Access:
         if not self.dirty:
             return
         STATE.mkdir(parents=True, exist_ok=True)
-        ACCESS_CACHE.write_text(json.dumps({"at": time.time(), "repos": self.cache}))
+        ACCESS_CACHE.write_text(json.dumps({"at": time.time(), "repos": self.cache,
+                                            "names": self.names}))
 
 
 # ── what the pipeline did ────────────────────────────────────────────────────
@@ -198,11 +211,14 @@ def discover_from_github():
 
 
 def receipts():
-    """Group the runner's own receipts by repo. This file, not a repo walk, is the
-    list of desks: a repo the runner never reached has no desk, and a repo it
-    reached has one whether or not it lives under this checkout."""
+    """Group the runner's own receipts by repo. This file is the list of desks: a
+    repo the runner reached has one whether or not it lives under this checkout.
+    OFFICE_OWNERS adds every repo you can push to under those owners on top, so
+    a repo with no checkout on this machine still has a desk (a receipt beats a
+    listing: the runner's rows say what happened, the listing only says it exists)."""
+    found = discover_from_github()
     if not RECEIPTS:
-        return discover_from_github(), {}
+        return found, {}
     rows = []
     try:
         for line in RECEIPTS.read_text().splitlines():
@@ -213,7 +229,7 @@ def receipts():
                 except Exception:
                     continue
     except FileNotFoundError:
-        return {}, {}
+        return found, {}
 
     # A rolling 24 hours, not the UTC calendar day. "Landed today" that resets to
     # zero at five in the afternoon local time is a number that lies twice a day.
@@ -236,7 +252,26 @@ def receipts():
         work = [r for r in rs if str(r.get("issue") or "").strip()]
         surveys = [r for r in rs if not str(r.get("issue") or "").strip()]
         rs[:] = sorted(work[:24] + surveys[:2], key=lambda x: x.get("at", ""), reverse=True)
+    for repo, rs in found.items():
+        by_repo.setdefault(repo, rs)
     return by_repo, counts
+
+
+def fold_renamed(by_repo: dict, tokens: dict, hidden: set, canonical) -> None:
+    """A repo GitHub now calls by another name is one desk, under that name. Its
+    receipts, token and put-away state travel with it; the old name is gone."""
+    for old in sorted(by_repo):
+        new = canonical(old)
+        if new == old:
+            continue
+        rows = by_repo.pop(old) + by_repo.get(new, [])
+        by_repo[new] = sorted(rows, key=lambda x: x.get("at", ""), reverse=True)
+        if not (tokens.get(new) or (None, None))[0]:
+            tokens[new] = tokens.get(old, (None, None))
+        tokens.pop(old, None)
+        if old in hidden:
+            hidden.discard(old)
+            hidden.add(new)
 
 
 # The outcomes that describe the RUN rather than the repo. A desk whose last
@@ -949,6 +984,9 @@ def build_snapshot(access: Access):
     # this rewrite is about. It stays parallel because a cold cache is 72 calls.
     with ThreadPoolExecutor(max_workers=8) as pool:
         tokens = dict(zip(visible, pool.map(access.token_for, visible)))
+    fold_renamed(by_repo, tokens, hidden, getattr(access, "canonical", lambda r: r))
+    desks = sorted(by_repo)
+    visible = [r for r in desks if r not in hidden and NWO_RE.match(r)]
 
     fresh, errors = {}, {}
     cost, gh_error = _fetch_visible(visible, tokens, fresh, errors)
