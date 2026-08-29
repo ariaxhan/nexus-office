@@ -5,62 +5,86 @@
     "at": "2026-08-26T18:40:00Z",
     "bots": [
       {
-        "id": "chief",
-        "name": "Chief",
-        "color": "#4fd1c5",
-        "purpose": "What is running, what is blocked, what was decided. Hands work to the other three.",
+        "id": "north",
+        "name": "North",
+        "color": "#8FD3C7",
+        "purpose": "Where are we going?",
+        "frequency": "08:30 · 13:00 · 20:30",
         "busy": false,
         "last": {
           "role": "assistant",
-          "at": "2026-08-26T18:42:00Z",
-          "text": "That is the old total, so the fix is not on the box you photographed."
+          "at": "2026-08-26T18:30:00Z",
+          "text": "104 open issues span 12 ariaxhan repos; 57 carry ‘waiting on human.’ Classify before acting: 35 already have PRs and 12 are unlabelled."
         }
       },
       {
-        "id": "inbox",
-        "name": "Inbox",
-        "color": "#8b7cf6",
-        "purpose": "What arrived and what needs you today: mail, meetings, captures, issues waiting on a person.",
-        "busy": false,
-        "last": {
-          "role": "assistant",
-          "at": "2026-08-26T18:31:00Z",
-          "content": "**Two** things came in: `deploy-prod` failed on [northwind/api](https://example.com/a) and a human replied on #58"
-        }
-      },
-      {
-        "id": "release",
-        "name": "Release",
-        "color": "#f0a13a",
-        "purpose": "What is green, what can merge, what shipped. Says committed, pushed, merged or live, never just done.",
+        "id": "relay",
+        "name": "Relay",
+        "color": "#F0B37E",
+        "purpose": "What actually happened?",
+        "frequency": "event driven",
         "busy": true,
         "last": {
           "role": "assistant",
-          "at": "2026-08-26T18:38:00Z",
-          "text": "Asking for the push now. main is protected, so this one comes to you."
+          "at": "2026-08-26T18:42:00Z",
+          "content": "#213 merged, but no deploy has run since. The photographed box is still serving the old total."
         }
       },
       {
-        "id": "research",
-        "name": "Research",
-        "color": "#5b8def",
-        "purpose": "Looks before anyone builds: prior work, failure modes, what was tried. A short map with sources.",
+        "id": "rune",
+        "name": "Rune",
+        "color": "#7FB3F0",
+        "purpose": "What do we know now?",
+        "frequency": "08:00 · 20:00",
         "busy": false,
-        "error": "URLError: the harness stopped answering halfway through the last turn",
+        "error": "URLError: the research source stopped answering halfway through the pass",
         "last": {
           "role": "assistant",
           "at": "2026-08-26T14:05:00Z",
-          "text": "Failure map for the webhook retries is written. Two prior attempts, both abandoned for the same reason."
+          "text": "Two earlier webhook retry designs failed at the same ownership boundary; the newer queue already solves it."
+        }
+      },
+      {
+        "id": "sphinx",
+        "name": "Sphinx",
+        "color": "#B7A8F0",
+        "purpose": "What must Aria decide?",
+        "frequency": "immediate",
+        "busy": false,
+        "last": {
+          "role": "assistant",
+          "at": "2026-08-26T18:38:00Z",
+          "text": "The refund window cannot be inferred safely. Choose 14 days for lower exposure, or 30 days for the stated customer promise."
+        }
+      },
+      {
+        "id": "parallax",
+        "name": "Parallax",
+        "color": "#E889A8",
+        "purpose": "What aren't we seeing?",
+        "frequency": "08:15 · 20:15",
+        "busy": false,
+        "last": {
+          "role": "assistant",
+          "at": "2026-08-26T18:35:00Z",
+          "text": "Three deploy incidents share the same gap: merged code was treated as live before any serving-host check."
         }
       }
     ]
   },
   "chats": {
-    "chief": [
+    "north": [
       {
         "role": "assistant",
-        "at": "2026-08-26T09:02:00Z",
-        "content": "Morning. Six PRs landed overnight, four repos were refused, and one agent is about to ask you for a push."
+        "at": "2026-08-26T18:30:00Z",
+        "content": "104 open issues span 12 ariaxhan repos; 57 carry ‘waiting on human.’ Classify before acting: 35 already have PRs and 12 are unlabelled."
+      }
+    ],
+    "relay": [
+      {
+        "role": "assistant",
+        "at": "2026-08-26T18:30:00Z",
+        "content": "21 ariaxhan PRs are clean and mergeable; 6 are conflicting. None is done until merge, deploy, and live proof."
       },
       {
         "role": "user",
@@ -70,7 +94,7 @@
       {
         "role": "assistant",
         "at": "2026-08-26T18:12:00Z",
-        "content": "Nothing in code. #213 landed an hour ago and its PR is clean.\n\nBilling #58 is the real block: the refund policy is a business decision, and the runner refused it twice rather than guess at one. It has had the last word there since yesterday, which is why that desk is red."
+        "content": "#213 merged an hour ago and CI is green. The deploy has not run, so the live checkout is still old. Billing #58 is separately waiting for Sphinx to resolve the refund window."
       },
       {
         "role": "user",
@@ -87,30 +111,44 @@
       {
         "role": "assistant",
         "at": "2026-08-26T18:42:00Z",
-        "content": "That is the old total, so the fix is not on the box you photographed. #213 landed an hour ago and the deploy has not run since."
+        "content": "That is the old total. #213 merged an hour ago, but no deploy has run since."
       },
       {
         "role": "assistant",
         "at": "2026-08-26T18:44:00Z",
         "_note": "A reply written the way an agent writes one. The thread renders it as a page: a list is a list, the fenced block is monospace on the recessed surface, and the roster row under this bot's name shows the words with none of the syntax.",
-        "content": "Three things are still open on **storefront**, in the order they block each other:\n\n- `host_name` is dropped by the checkout serialiser when the cart is empty\n- billing #58 needs a *human* decision about the refund window\n- the deploy has not run since #213 landed, so the box you photographed is old\n\nThe serialiser is one guard:\n\n```swift\nguard let host = order.host, !host.isEmpty else {\n    return .failure(.missingHost)\n}\n```\n\nThe refund window is written down in [the billing runbook](https://example.com/runbook) and I am not going to guess at it."
+        "content": "Three execution states remain on **storefront**:\n\n- `host_name` still drops when the cart is empty\n- billing #58 is paused on Sphinx's refund decision\n- #213 is merged but not deployed, so live still serves the old total\n\nThe serializer fix is one guard:\n\n```swift\nguard let host = order.host, !host.isEmpty else {\n    return .failure(.missingHost)\n}\n```\n\nNothing is verified live yet."
       }
     ],
-    "release": [
+    "rune": [
       {
         "role": "assistant",
-        "at": "2026-08-26T18:20:00Z",
-        "content": "0.4.2 is staged. Changelog written, tag not cut."
-      },
+        "at": "2026-08-26T18:30:00Z",
+        "content": "‘Waiting on human’ is not a decision type. It mixes reviews, ambiguity, and stale work, so the label cannot drive Sphinx directly."
+      }
+    ],
+    "sphinx": [
       {
-        "role": "user",
-        "at": "2026-08-26T18:36:00Z",
-        "content": "Cut it and push."
+        "role": "assistant",
+        "at": "2026-08-26T18:30:00Z",
+        "content": "I found 57 ariaxhan issues marked ‘waiting on human.’ I’m separating true decisions from reviews and stale work, then I’ll ask one decision at a time with a recommended answer."
       },
       {
         "role": "assistant",
         "at": "2026-08-26T18:38:00Z",
-        "content": "Asking for the push now. main is protected, so this one comes to you."
+        "content": "The refund window cannot be inferred safely. Choose **14 days** for lower exposure, or **30 days** to preserve the stated customer promise. I recommend 30 days because the public policy already commits to it."
+      }
+    ],
+    "parallax": [
+      {
+        "role": "assistant",
+        "at": "2026-08-26T18:30:00Z",
+        "content": "The wall’s 57-person backlog is inflated by one label covering different states; 35 issues already have PRs. This is workflow drift, not 57 independent decisions."
+      },
+      {
+        "role": "assistant",
+        "at": "2026-08-26T18:35:00Z",
+        "content": "Three deploy incidents in seven days share one gap: merged code was reported as live before the serving host was checked. The common failure is verification, not deployment."
       }
     ]
   },
@@ -122,7 +160,7 @@
       "target": "git push origin main --follow-tags",
       "detail": "Cutting 0.4.2. The tag is written and the changelog is committed. This is the push that makes it real.",
       "waiting_s": 47,
-      "bot": "release"
+      "bot": "sphinx"
     },
     {
       "state": "pending",
@@ -131,7 +169,7 @@
       "target": "rm -rf ~/code/acme/storefront/node_modules",
       "detail": "The install is wedged on a lockfile conflict and this is the clean start. Nothing here is tracked.",
       "waiting_s": 12,
-      "bot": "chief"
+    "bot": "sphinx"
     }
   ],
   "world": {
@@ -163,7 +201,7 @@
         "target": "git push origin main --follow-tags",
         "detail": "Cutting 0.4.2. The tag is written and the changelog is committed. This is the push that makes it real.",
         "waiting_s": 47,
-        "bot": "release"
+        "bot": "sphinx"
       }
     },
     "sections": {
@@ -634,12 +672,12 @@
         "detail": "",
         "card": {
           "title": "Flows",
-          "headline": "1 of 8 flows needs a look: Inbox did nothing (rc 0)",
+          "headline": "1 of 8 flows needs a look: Mail intake did nothing (rc 0)",
           "needs": 1,
           "as_of": "2026-08-27T09:05:20Z",
           "facts": [
             {
-              "label": "Inbox",
+              "label": "Mail intake",
               "value": "did nothing (rc 0) · 18h39m ago",
               "tone": "bad"
             },
@@ -1477,11 +1515,11 @@
     }
   },
   "reactions": {
-    "chief": {
+    "relay": {
       "2": "loved",
       "5": "flagged"
     },
-    "release": {
+    "sphinx": {
       "2": "unclear"
     }
   },

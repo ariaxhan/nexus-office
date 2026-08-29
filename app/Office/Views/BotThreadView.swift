@@ -34,7 +34,7 @@ struct BotThreadView: View {
     /// The message being written, kept by the office.
     ///
     /// This was `@State`, so switching to another name and back threw it away:
-    /// two sentences in, click Inbox to check something, come back to an empty
+    /// two sentences in, click another bot to check something, come back to an empty
     /// box. A half-written message is work, and the view it happens to be
     /// displayed in is not where work should live.
     private var key: String { Store.draftKey(bot: bot.id) }
@@ -77,6 +77,11 @@ struct BotThreadView: View {
                         Text("working")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.blue)
+                    }
+                    if !bot.frequency.isEmpty {
+                        Text(bot.frequency)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Theme.faint)
                     }
                 }
                 // What to ask this one for. The paragraph of identity behind it

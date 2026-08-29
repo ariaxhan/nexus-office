@@ -112,22 +112,29 @@ public struct Bot: Decodable, Identifiable, Hashable {
     /// that the app deliberately never shows: a person picking who to message
     /// needs to know what a colleague is for, not how they were told to think.
     public var purpose: String
+    /// Its reporting cadence, kept separate from purpose because when a bot
+    /// speaks and what it judges are different promises.
+    public var frequency: String
     public var last: ChatTurn?
     public var busy: Bool
     public var error: String?
 
     public init(id: String, name: String, color: String = "", purpose: String = "",
+                frequency: String = "",
                 last: ChatTurn? = nil, busy: Bool = false, error: String? = nil) {
         self.id = id
         self.name = name
         self.color = color
         self.purpose = purpose
+        self.frequency = frequency
         self.last = last
         self.busy = busy
         self.error = error
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, color, purpose, last, busy, error }
+    enum CodingKeys: String, CodingKey {
+        case id, name, color, purpose, frequency, last, busy, error
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -135,6 +142,7 @@ public struct Bot: Decodable, Identifiable, Hashable {
         name = c.str(.name) ?? id
         color = c.str(.color) ?? ""
         purpose = c.str(.purpose) ?? ""
+        frequency = c.str(.frequency) ?? ""
         last = (try? c.decodeIfPresent(ChatTurn.self, forKey: .last)) ?? nil
         busy = c.bool(.busy) ?? false
         error = c.str(.error)
@@ -143,7 +151,7 @@ public struct Bot: Decodable, Identifiable, Hashable {
 
 public struct BotsResponse: Decodable {
     public var bots: [Bot] = []
-    /// "up" or "down". The roster is read off disk, so four quiet bots and a
+    /// "up" or "down". The roster is read off disk, so quiet bots and a
     /// dead harness is a normal state, not an empty screen.
     public var runtime: String = "down"
     public var at: String?

@@ -95,6 +95,16 @@ final class ThreadRulesTests: XCTestCase {
         XCTAssertEqual(StateRules.botSubtitle(bot: bot), "watches the pipeline")
     }
 
+    func testBotFrequencyIsVisibleButBackwardCompatible() throws {
+        let data = Data(#"{"id":"north","name":"North","frequency":"08:30 · 13:00 · 20:30"}"#.utf8)
+        let bot = try JSONDecoder().decode(Bot.self, from: data)
+        XCTAssertEqual(bot.frequency, "08:30 · 13:00 · 20:30")
+
+        let old = try JSONDecoder().decode(
+            Bot.self, from: Data(#"{"id":"legacy","name":"Legacy"}"#.utf8))
+        XCTAssertEqual(old.frequency, "")
+    }
+
     // MARK: - whether a reply moves the screen
 
     func testAThreadOnTheBottomFollowsTheNewestTurn() {

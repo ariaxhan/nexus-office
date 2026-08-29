@@ -1,10 +1,10 @@
-"""The chatroom: four bots you talk to like colleagues.
+"""The chatroom: named bots you talk to like colleagues.
 
 The roster and the conversation come from two different places on purpose.
 
   the roster   a FILE at <root>/_meta/bots.json
                Who exists, what they are called, what colour they are. Read
-               straight off disk so the room can draw four desks even when the
+               straight off disk so the room can draw the roster even when the
                harness is not running. A chatroom that vanishes because a dev
                server is closed is a chatroom nobody trusts.
 
@@ -96,6 +96,7 @@ def read_bots() -> list:
                     # One line saying what to ask this bot. Short enough to sit
                     # under the name on a desk, which is why it is not `identity`.
                     "purpose": str(row.get("purpose") or ""),
+                    "frequency": str(row.get("frequency") or ""),
                     "color": str(row.get("color") or "")})
     return out
 

@@ -48,7 +48,7 @@ REGISTRY = clock.REGISTRY
 # drift ahead of reality in silence.
 FLOWS = [
     ("com.aria.granola-sync", "Granola"),
-    ("com.nexus.inbox-fill", "Inbox"),
+    ("com.nexus.inbox-fill", "Mail intake"),
     ("com.nexus.morning-briefing", "Morning briefing"),
     ("com.nexus.issue-dispatch", "Issue pipeline"),
     ("com.nexus.money-swarm", "Money swarm"),

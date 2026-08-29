@@ -439,7 +439,7 @@ function drawGate() {
   band.appendChild(card);
 }
 
-/* "1 of 3, Release is next", or nothing at all when only one hand is up:
+/* "1 of 3, North is next", or nothing at all when only one hand is up:
  * "1 of 1" is noise, and answering the question in front of you must never be
  * a guess about how many more there are. */
 function gateQueueLine() {
@@ -1228,7 +1228,8 @@ function drawThread() {
   const bar = el("header", "top");
   bar.appendChild(button("back", null, closeThread));
   bar.appendChild(el("p", "mark", bot.name));
-  bar.appendChild(el("p", "stamp", bot.busy ? "working" : (bot.purpose || "")));
+  const cadence = bot.frequency ? bot.frequency + " · " : "";
+  bar.appendChild(el("p", "stamp", bot.busy ? "working" : cadence + (bot.purpose || "")));
   panel.appendChild(bar);
 
   const turns = el("div", "turns");

@@ -430,7 +430,7 @@ enum ShotHarness {
     // MARK: - what to point it at
 
     private static func preferredBot(_ store: Store) -> String? {
-        if store.bot("chief") != nil { return "chief" }
+        if store.bot("north") != nil { return "north" }
         return store.bots.first?.id
     }
 

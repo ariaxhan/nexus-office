@@ -124,9 +124,9 @@ class States(Base):
         c = self.flows.card(d, now=NOW)
         assert_card(self, c, "did nothing")
         self.assertEqual(c["headline"],
-                         "1 of 8 flows needs a look: Inbox did nothing (rc 0)")
+                         "1 of 8 flows needs a look: Mail intake did nothing (rc 0)")
         self.assertEqual(c["needs"], 1)
-        self.assertEqual(c["facts"][0]["label"], "Inbox")
+        self.assertEqual(c["facts"][0]["label"], "Mail intake")
         self.assertEqual(c["facts"][0]["tone"], "bad")
         self.assertIn("did nothing", c["facts"][0]["value"])
         self.assertIn("17h ago", c["facts"][0]["value"])
@@ -264,9 +264,9 @@ class States(Base):
         self.assertEqual(d["alarm"], 3)
         c = self.flows.card(d, now=NOW)
         assert_card(self, c, "mixed")
-        self.assertTrue(c["headline"].startswith("3 of 8 flows need a look: Inbox"))
+        self.assertTrue(c["headline"].startswith("3 of 8 flows need a look: Mail intake"))
         self.assertEqual([f["label"] for f in c["facts"]][:3],
-                         ["Inbox", "Outbound", "Money swarm"])
+                         ["Mail intake", "Outbound", "Money swarm"])
         self.assertEqual(c["facts"][-1]["label"], "Distillations")
 
 

@@ -825,7 +825,7 @@ class ChatTest(unittest.TestCase):
         # `identity` is the whole persona and must never reach the wire.
         (root / "_meta" / "bots.json").write_text(json.dumps({"bots": [
             {"id": "chief", "name": "Chief", "color": "#8FD3C7",
-             "identity": "SECRET-PERSONA-CHIEF"},
+             "frequency": "morning", "identity": "SECRET-PERSONA-CHIEF"},
             {"id": "inbox", "name": "Inbox", "color": "#B7A8F0",
              "identity": "SECRET-PERSONA-INBOX"},
         ]}))
@@ -893,6 +893,7 @@ class ChatTest(unittest.TestCase):
         self.assertTrue(body["at"])
         self.assertEqual([b["id"] for b in body["bots"]], ["chief", "inbox"])
         self.assertEqual([b["name"] for b in body["bots"]], ["Chief", "Inbox"])
+        self.assertEqual(body["bots"][0]["frequency"], "morning")
         for b in body["bots"]:
             self.assertIsNone(b["last"])
             self.assertFalse(b["busy"])

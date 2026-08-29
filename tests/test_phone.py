@@ -221,6 +221,10 @@ class SourceTest(unittest.TestCase):
         js = JS.read_text(encoding="utf-8")
         self.assertIn('read("/api/gates")', js)
 
+    def test_a_bot_thread_shows_its_cadence(self):
+        js = JS.read_text(encoding="utf-8")
+        self.assertIn("bot.frequency", js)
+
     def test_the_gate_answer_carries_the_id_the_card_drew(self):
         """The sharpest edge in the project, on the smallest screen. Between a
         gate being shown and being tapped the agent can time out and a different
