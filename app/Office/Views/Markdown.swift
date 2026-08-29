@@ -69,6 +69,10 @@ enum Markdown {
             case item(String)
             case code(String?)
             case quote
+            /// Rows of cells, header first. Columns are whatever the widest
+            /// row has; a short row is padded rather than dropped.
+            case table([[AttributedString]])
+            case rule
         }
 
         let id: Int
@@ -126,6 +130,31 @@ enum Markdown {
                 continue
             }
 
+            // A table arrives one cell at a time, every cell its own intent.
+            // Folded into one block keyed on the table's identity, so the view
+            // draws a grid rather than a column of welded words.
+            if let cell = tableCell(of: intent) {
+                if var last = out.popLast(), case .table(var rows) = last.kind,
+                   last.id == -cell.table {
+                    while rows.count <= cell.row { rows.append([]) }
+                    while rows[cell.row].count <= cell.column { rows[cell.row].append(AttributedString()) }
+                    rows[cell.row][cell.column] += piece
+                    last = Block(id: last.id, kind: .table(rows), text: last.text, code: last.code)
+                    out.append(last)
+                } else {
+                    var rows: [[AttributedString]] = Array(repeating: [], count: cell.row + 1)
+                    rows[cell.row] = Array(repeating: AttributedString(), count: cell.column + 1)
+                    rows[cell.row][cell.column] = piece
+                    // Identified by the table, not by its position in `out`,
+                    // so the next cell finds it again; negative so it can never
+                    // collide with a positional id.
+                    out.append(Block(id: -cell.table, kind: .table(rows),
+                                     text: AttributedString(), code: ""))
+                }
+                openIdentity = nil
+                continue
+            }
+
             openIdentity = identity
             let kind = kind(of: intent)
             if case .code = kind {
@@ -142,6 +171,28 @@ enum Markdown {
             return [Block(id: 0, kind: .paragraph, text: AttributedString(raw), code: "")]
         }
         return out
+    }
+
+    /// Where a run sits in a table, if it is in one at all.
+    private static func tableCell(of intent: PresentationIntent?)
+        -> (table: Int, row: Int, column: Int)? {
+        guard let intent else { return nil }
+        var table: Int?
+        var row: Int?
+        var column: Int?
+        for component in intent.components {
+            switch component.kind {
+            case .table: table = component.identity
+            case .tableRow(let r): row = r
+            case .tableHeaderRow: row = 0
+            case .tableCell(let c): column = c
+            default: continue
+            }
+        }
+        guard let table, let column else { return nil }
+        // Foundation numbers body rows from 1 and the header row is 0, so the
+        // header lands on top and nothing has to be shifted.
+        return (table, row ?? 0, column)
     }
 
     /// What kind of line this is, read off the intent stack.
@@ -168,6 +219,8 @@ enum Markdown {
                 return .item("\u{00b7}")
             case .blockQuote:
                 quoted = true
+            case .thematicBreak:
+                return .rule
             default:
                 continue
             }
@@ -184,13 +237,25 @@ enum Markdown {
 /// is no longer a single `Text`.
 struct MarkdownText: View {
     let raw: String
-    var size: Double = 13
+    /// The size at scale one. Every glyph below is drawn at `size * scale`.
+    var base: Double = 13
     var color: Color = Theme.text
     /// How many blocks to draw. `nil` is all of them. A card that shows the
     /// opening paragraph and offers the rest passes 1, which is a real first
     /// paragraph rather than a fixed height with the second one sliced through
     /// the middle of a word.
     var limit: Int?
+
+    @Environment(\.typeScale) private var scale
+
+    init(raw: String, size: Double = 13, color: Color = Theme.text, limit: Int? = nil) {
+        self.raw = raw
+        self.base = size
+        self.color = color
+        self.limit = limit
+    }
+
+    private var size: Double { base * scale }
 
     private var blocks: [Markdown.Block] {
         let all = Markdown.blocks(raw)
@@ -248,6 +313,40 @@ struct MarkdownText: View {
                     .foregroundStyle(color)
                     .textSelection(.enabled)
                     .padding(9)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.well)
+            )
+
+        case .rule:
+            Rectangle()
+                .fill(Theme.hairline)
+                .frame(height: 1)
+                .padding(.vertical, 4)
+
+        case .table(let rows):
+            let columns = rows.map(\.count).max() ?? 0
+            ScrollView(.horizontal, showsIndicators: false) {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 0) {
+                    ForEach(rows.indices, id: \.self) { r in
+                        GridRow {
+                            ForEach(0..<columns, id: \.self) { c in
+                                Text(c < rows[r].count ? rows[r][c] : AttributedString())
+                                    .font(.system(size: size - 0.5, weight: r == 0 ? .semibold : .regular))
+                                    .foregroundStyle(r == 0 ? color : Theme.dim)
+                                    .padding(.vertical, 5)
+                                    .padding(.horizontal, 2)
+                                    .gridColumnAlignment(.leading)
+                            }
+                        }
+                        if r == 0 {
+                            Divider().overlay(Theme.hairline)
+                                .gridCellUnsizedAxes(.horizontal)
+                                .gridCellColumns(columns)
+                        }
+                    }
+                }
+                .padding(.horizontal, 6)
             }
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.well)

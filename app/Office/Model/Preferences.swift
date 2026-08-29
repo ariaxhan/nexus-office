@@ -58,6 +58,7 @@ public final class Preferences {
     private static let layoutKey = "settings.layout.v1"
     private static let botsKey = "settings.pane.bots.v1"
     private static let wallKey = "settings.pane.wall.v1"
+    private static let typeScaleKey = "settings.typeScale.v1"
     /// The key the faces already shipped under, kept as it was: renaming it
     /// would silently strip every colour somebody has already picked.
     private static let facesKey = "faces.v1"
@@ -73,6 +74,10 @@ public final class Preferences {
     /// sheet over the whole window, so turning a group off cannot bury one.
     public private(set) var showBots = true
     public private(set) var showWall = true
+    /// How big the reading type is, as a multiplier on every size a page
+    /// draws at. Cmd + and Cmd - step it; Cmd 0 puts it back. Persisted,
+    /// because a person who needs bigger type needs it every day.
+    public private(set) var typeScale: Double = 1
     /// repo -> `#rrggbb`, only the desks somebody actually dressed. `FaceBook`
     /// reads and writes it through here so there is one place that decides what
     /// a preference is and where it lands.
@@ -101,6 +106,11 @@ public final class Preferences {
         // roster if this were read the way `needsOnly` is.
         if let bots = defaults.object(forKey: Self.botsKey) as? Bool { showBots = bots }
         if let wall = defaults.object(forKey: Self.wallKey) as? Bool { showWall = wall }
+        // Clamped on the way in as well as on the way out: a value written by
+        // hand or by a newer build must not come up as unreadable type.
+        if let scale = defaults.object(forKey: Self.typeScaleKey) as? Double {
+            typeScale = Self.clamp(scale)
+        }
         if let raw = defaults.dictionary(forKey: Self.facesKey) as? [String: String] {
             for (repo, hex) in raw {
                 if let clean = Faces.normalise(hex: hex) { faceOverrides[repo] = clean }
@@ -131,6 +141,29 @@ public final class Preferences {
     public func set(showWall: Bool) {
         self.showWall = showWall
         defaults?.set(showWall, forKey: Self.wallKey)
+    }
+
+    /// The steps Cmd + and Cmd - walk. Eight sizes from four fifths to twice,
+    /// and no fractional ones in between: a scale a person cannot land on twice
+    /// is a scale nobody can describe to somebody else.
+    public static let typeScales: [Double] = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2]
+
+    static func clamp(_ scale: Double) -> Double {
+        guard scale.isFinite else { return 1 }
+        return min(max(scale, typeScales.first!), typeScales.last!)
+    }
+
+    public func set(typeScale: Double) {
+        self.typeScale = Self.clamp(typeScale)
+        defaults?.set(self.typeScale, forKey: Self.typeScaleKey)
+    }
+
+    /// One step bigger (`+1`) or smaller (`-1`); past the end stays put.
+    public func stepTypeScale(_ direction: Int) {
+        let scales = Self.typeScales
+        let nearest = scales.indices.min { abs(scales[$0] - typeScale) < abs(scales[$1] - typeScale) } ?? 2
+        let next = min(max(nearest + (direction > 0 ? 1 : -1), 0), scales.count - 1)
+        set(typeScale: scales[next])
     }
 
     /// Dress a desk. An unparseable string is refused rather than stored, so a

@@ -61,6 +61,19 @@ enum Theme {
     static func color(_ mood: StateRules.SectionMood) -> Color { mood.swatch.color }
 }
 
+/// The reading type's multiplier, handed down from the root so every page in
+/// the window grows and shrinks together under Cmd + and Cmd -.
+private struct TypeScaleKey: EnvironmentKey {
+    static let defaultValue: Double = 1
+}
+
+extension EnvironmentValues {
+    var typeScale: Double {
+        get { self[TypeScaleKey.self] }
+        set { self[TypeScaleKey.self] = newValue }
+    }
+}
+
 extension Palette.Swatch {
     /// One colour that knows which room it is in.
     ///

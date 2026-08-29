@@ -121,16 +121,39 @@ class IndexTest(ContextBase):
         self.assertEqual(sorted(self.paths()), ["README.Md", "_meta/SHOUTED.MD"])
 
     def test_code_and_other_files_are_never_in_the_index(self):
-        """The index rule is the whole allow-list. A source file under `_meta`
-        is still a source file, and a `.env` is the reason this is a list of two
+        """The index rule is the whole allow-list. A source file anywhere is
+        still a source file, and a `.env` is the reason this is a list of two
         shapes rather than a walk with exclusions."""
         for rel in ("_meta/build.py", "_meta/secrets.env", "_meta/notes.txt",
                     "_meta/data.json", "serve.py", "src/app.ts", ".env",
-                    "docs/guide.md", "CHANGELOG.md"):
+                    "id_rsa", "db.sqlite", "notes.txt"):
             self.write(rel, "x")
         self.write("README.md")
         self.assertEqual(self.paths(), ["README.md"],
-                         "only root README markdown and .md under _meta")
+                         "only Markdown, wherever it sits")
+
+    def test_every_markdown_anywhere_in_the_checkout_is_indexed(self):
+        """The whole repo, not just the front page and `_meta`: a CHANGELOG, a
+        docs folder, a skill file under `.claude` are all things a person opens
+        a desk to read."""
+        for rel in ("docs/guide.md", "CHANGELOG.md", ".claude/skills/ship/SKILL.md",
+                    "src/notes.markdown", "_meta/plans/one.md"):
+            self.write(rel)
+        self.write("README.md")
+        self.assertEqual(self.paths(), [
+            "README.md", ".claude/skills/ship/SKILL.md", "CHANGELOG.md",
+            "_meta/plans/one.md", "docs/guide.md", "src/notes.markdown"])
+
+    def test_dependencies_caches_and_git_are_never_walked(self):
+        """A checkout's node_modules alone holds thousands of READMEs that are
+        not its own, and .git is not a folder of documents."""
+        for rel in ("node_modules/left-pad/README.md", ".git/description.md",
+                    "build/out.md", "dist/x.md", ".venv/lib/y.md",
+                    "sub/node_modules/z.md", "docs/real.md"):
+            self.write(rel)
+        self.assertEqual(self.paths(), ["docs/real.md"])
+        code, _ = self.context.read(REPO, "node_modules/left-pad/README.md")
+        self.assertEqual(code, 404)
 
     def test_a_readme_that_is_not_markdown_is_not_context(self):
         self.write("README.rst", "not markdown")
@@ -146,10 +169,11 @@ class IndexTest(ContextBase):
             self.write(rel)
         self.write("README.md")
         self.write("READMEDEV.md")
+        self.write("docs/x.md")
         first = self.paths()
         self.assertEqual(first, ["README.md", "READMEDEV.md",
                                  "_meta/a.md", "_meta/m/a.md",
-                                 "_meta/m/b.md", "_meta/z.md"])
+                                 "_meta/m/b.md", "_meta/z.md", "docs/x.md"])
         self.assertEqual(self.paths(), first, "two reads, one order")
 
     def test_each_entry_carries_what_the_app_draws_and_nothing_more(self):
@@ -166,7 +190,7 @@ class IndexTest(ContextBase):
 
 
 class LimitTest(ContextBase):
-    def test_more_than_five_hundred_files_are_capped_and_the_cap_is_admitted(self):
+    def test_more_than_the_cap_are_capped_and_the_cap_is_admitted(self):
         """A truncated list presented as a complete one is the defect this repo
         exists to prevent, so the cap travels with the data."""
         for i in range(self.context.MAX_FILES + 25):
@@ -236,8 +260,8 @@ class RefusalTest(ContextBase):
 
     def test_an_unindexed_path_that_exists_is_still_not_context(self):
         """Being on disk is not the test. Being in the index is."""
-        self.write("secrets.md", "# do not draw me\n")
-        code, body = self.context.read(REPO, "secrets.md")
+        self.write("secrets.txt", "# do not draw me\n")
+        code, body = self.context.read(REPO, "secrets.txt")
         self.assertEqual(code, 404)
         self.assertNotIn("text", body)
 

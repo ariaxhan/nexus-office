@@ -1,4 +1,4 @@
-"""What a desk says about itself: its README, and the Markdown under `_meta`.
+"""What a desk says about itself: every Markdown file in the checkout.
 
 Every other read in this office is a summary somebody else already wrote. This
 one hands back the bytes of a file on this machine, which makes it the one place
@@ -14,9 +14,12 @@ and then fail somewhere further in, or worse, name somebody else's folder that
 happens to share a name.
 
 **What it may list.** Two shapes, and no third: a root file whose name begins
-`README` and whose extension is Markdown or absent, and a `.md` file at any
-depth under `_meta`. That is an allow-list, so a `.env`, a key, a source file and
-a database are all out by construction rather than by being remembered.
+`README` and whose extension is Markdown or absent, and a `.md` or `.markdown`
+file at any depth in the checkout. That is an allow-list, so a `.env`, a key, a
+source file and a database are all out by construction rather than by being
+remembered. `.git`, `node_modules` and the usual build caches are not walked:
+nothing in them is a document somebody wrote for this repo, and a checkout's
+`node_modules` alone can hold ten thousand READMEs that are not its own.
 
 **What it may follow.** Nothing. A symlink file and a symlink directory are both
 skipped, because a link planted anywhere under `_meta` is otherwise a one line
@@ -50,16 +53,22 @@ NWO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 # The index is a list a person scans, not a search result. Five hundred is more
 # entries than anyone reads and small enough that walking it is free; past that
 # the answer says out loud that it was cut.
-MAX_FILES = 500
-# How many candidates the walk will look at before it stops. A checkout with a
-# pathological `_meta` must not turn one click into a filesystem crawl.
-MAX_SCAN = 20_000
+MAX_FILES = 2000
+# How many directory entries the walk will look at before it stops. A checkout
+# with a pathological tree must not turn one click into a filesystem crawl.
+MAX_SCAN = 60_000
+# Folders that are never walked. Not documents of this repo: a dependency's
+# README, a build product, a cache, or git's own object store.
+SKIP_DIRS = frozenset({
+    ".git", "node_modules", ".venv", "venv", "__pycache__", ".build", "build",
+    "dist", "DerivedData", ".next", ".turbo", ".cache", "target", "Pods",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache",
+})
 # Half a megabyte of Markdown is about 250 pages. A file bigger than that is not
 # a document somebody wrote, and shipping it down a loopback socket to be laid
 # out by a text view is not something to do by accident.
 MAX_BYTES = 512 * 1024
 
-META = "_meta"
 MD_SUFFIXES = ("", ".md", ".markdown")
 README = "readme"
 
@@ -140,47 +149,38 @@ def _entry(root: str, candidate: pathlib.Path, rel: str) -> dict | None:
 def index(root: str) -> tuple[list[dict], bool]:
     """Everything this desk offers to show, and whether the list was cut.
 
-    Sorted before it is cut, so which five hundred you get is a fact about the
-    checkout rather than a fact about the order the filesystem happened to hand
-    them over in.
+    Root READMEs first, then every other Markdown by path, so the front page is
+    the first row and the tree under it reads in folder order. Sorted before it
+    is cut, so which two thousand you get is a fact about the checkout rather
+    than a fact about the order the filesystem happened to hand them over in.
     """
     base = pathlib.Path(root)
     found: list[tuple[int, str, dict]] = []
     scanned = 0
 
-    try:
-        names = sorted(p.name for p in base.iterdir())
-    except OSError:
-        return [], False
-    for name in names:
-        if not _is_readme(name):
-            continue
-        scanned += 1
-        entry = _entry(root, base / name, name)
-        if entry:
-            found.append((0, name, entry))
-
-    meta = base / META
-    if meta.is_dir() and not meta.is_symlink():
-        for dirpath, dirnames, filenames in os.walk(meta, followlinks=False):
-            here = pathlib.Path(dirpath)
-            # `followlinks=False` already declines to descend into a linked
-            # directory; dropping it from the listing as well means nothing
-            # downstream can be handed one by accident.
-            dirnames[:] = sorted(d for d in dirnames if not (here / d).is_symlink())
-            for fname in sorted(filenames):
-                if not _is_markdown(fname):
-                    continue
-                scanned += 1
-                if scanned > MAX_SCAN:
-                    break
-                candidate = here / fname
-                rel = candidate.relative_to(base).as_posix()
-                entry = _entry(root, candidate, rel)
-                if entry:
-                    found.append((1, rel, entry))
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        here = pathlib.Path(dirpath)
+        # `followlinks=False` already declines to descend into a linked
+        # directory; dropping it from the listing as well means nothing
+        # downstream can be handed one by accident.
+        dirnames[:] = sorted(d for d in dirnames
+                             if d not in SKIP_DIRS and not (here / d).is_symlink())
+        scanned += len(dirnames)
+        at_root = here == base
+        for fname in sorted(filenames):
+            scanned += 1
             if scanned > MAX_SCAN:
                 break
+            readme = at_root and _is_readme(fname)
+            if not readme and not _is_markdown(fname):
+                continue
+            candidate = here / fname
+            rel = candidate.relative_to(base).as_posix()
+            entry = _entry(root, candidate, rel)
+            if entry:
+                found.append((0 if readme else 1, rel, entry))
+        if scanned > MAX_SCAN:
+            break
 
     found.sort(key=lambda row: (row[0], row[1]))
     files = [row[2] for row in found]

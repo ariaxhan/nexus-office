@@ -941,6 +941,69 @@ public struct DeskContext: Decodable, Hashable {
     }
 }
 
+/// The index as a tree, flattened to the rows the pane draws.
+///
+/// The server sends paths; the folders are read off them here, because a
+/// folder is nothing but the part of a path before the last slash, and the
+/// server carrying a second, parallel list of folders is a list that can
+/// disagree with the paths. Root READMEs stay first, as the server sorted
+/// them; everything else is in path order under its folder.
+///
+/// Foundation only, so it proves out headless.
+public enum FileTree {
+    public struct Row: Identifiable {
+        /// The path of the file, or of the folder with a trailing slash.
+        public let id: String
+        public let name: String
+        public let depth: Int
+        public let file: ContextFile?
+        /// How many files are under a folder, for the count on a shut one.
+        public let count: Int
+        public var isFolder: Bool { file == nil }
+    }
+
+    public static func rows(of files: [ContextFile], closed: Set<String> = []) -> [Row] {
+        var out: [Row] = []
+        var opened: [String] = []
+        var counts: [String: Int] = [:]
+        for file in files {
+            var parts = file.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            parts.removeLast()
+            var key = ""
+            for part in parts {
+                key += part + "/"
+                counts[key, default: 0] += 1
+            }
+        }
+        for file in files {
+            let parts = file.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            let folders = Array(parts.dropLast())
+            // The deepest folder already open that this path shares.
+            var shared = 0
+            while shared < min(opened.count, folders.count), opened[shared] == folders[shared] {
+                shared += 1
+            }
+            opened = Array(opened.prefix(shared))
+            var key = opened.map { $0 + "/" }.joined()
+            var hidden = opened.indices.contains { closed.contains(opened.prefix($0 + 1).map { $0 + "/" }.joined()) }
+            for folder in folders.dropFirst(shared) {
+                key += folder + "/"
+                if !hidden {
+                    out.append(Row(id: key, name: folder, depth: opened.count,
+                                   file: nil, count: counts[key] ?? 0))
+                }
+                if closed.contains(key) { hidden = true }
+                opened.append(folder)
+            }
+            if !hidden {
+                out.append(Row(id: file.path, name: file.name, depth: folders.count,
+                               file: file, count: 0))
+            }
+        }
+        return out
+    }
+}
+
 /// A section slot that swallows its own decode failure, so `[String: MaybeSection]`
 /// survives one bad value where `[String: Section]` would throw the lot away.
 struct MaybeSection: Decodable {

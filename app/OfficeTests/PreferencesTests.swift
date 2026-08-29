@@ -76,6 +76,38 @@ final class PreferencesTests: XCTestCase {
         XCTAssertTrue(Preferences(defaults: defaults).needsOnly)
     }
 
+    // MARK: - the type scale
+
+    func test_the_type_scale_is_one_until_somebody_steps_it() {
+        XCTAssertEqual(Preferences(defaults: defaults).typeScale, 1)
+    }
+
+    func test_a_step_lands_on_the_next_named_size_and_survives_a_relaunch() {
+        let prefs = Preferences(defaults: defaults)
+        prefs.stepTypeScale(+1)
+        XCTAssertEqual(prefs.typeScale, 1.1)
+        prefs.stepTypeScale(+1)
+        XCTAssertEqual(prefs.typeScale, 1.25)
+        prefs.stepTypeScale(-1)
+        XCTAssertEqual(prefs.typeScale, 1.1)
+        XCTAssertEqual(Preferences(defaults: defaults).typeScale, 1.1)
+    }
+
+    func test_the_scale_stops_at_both_ends_rather_than_running_away() {
+        let prefs = Preferences(defaults: defaults)
+        for _ in 0..<40 { prefs.stepTypeScale(+1) }
+        XCTAssertEqual(prefs.typeScale, Preferences.typeScales.last!)
+        for _ in 0..<40 { prefs.stepTypeScale(-1) }
+        XCTAssertEqual(prefs.typeScale, Preferences.typeScales.first!)
+    }
+
+    func test_an_unreadable_stored_scale_comes_up_readable() {
+        defaults.set(0.05, forKey: "settings.typeScale.v1")
+        XCTAssertEqual(Preferences(defaults: defaults).typeScale, 0.8)
+        defaults.set(Double.nan, forKey: "settings.typeScale.v1")
+        XCTAssertEqual(Preferences(defaults: defaults).typeScale, 1)
+    }
+
     // MARK: - the layout
 
     func test_a_preset_survives_the_process_that_chose_it() {

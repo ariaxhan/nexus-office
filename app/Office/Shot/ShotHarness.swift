@@ -183,6 +183,17 @@ enum ShotHarness {
             // calls, and photographing between them is a picture of a list
             // beside an empty pane, which is the one state this is not about.
             await frame(store, window, directory, "context", settling: 2.2)
+            // The same pane two steps bigger, on a file with a table in it:
+            // Cmd + is a fact about the whole page or it is nothing, and a
+            // table drawn as one welded paragraph is exactly what a build
+            // cannot see.
+            if let table = store.context(at: desk)?.files.first(where: { $0.path.hasPrefix("docs/api") }) {
+                await store.loadContext(repo: desk, path: table.path)
+            }
+            store.biggerType()
+            store.biggerType()
+            await frame(store, window, directory, "bigger", settling: 1.4)
+            store.resetType()
             store.showWork(at: desk)
         }
 

@@ -42,6 +42,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Store.shared.start()
         showOffice()
         ShotHarness.startIfAsked(store: .shared)
+        watchTypeKeys()
+    }
+
+    /// Cmd + / Cmd = / Cmd - / Cmd 0, the way every Mac text surface reads
+    /// them. A local monitor rather than a menu item, because this app's menu
+    /// bar is the dot and the window has no menu of its own to hang a shortcut
+    /// on. Only while the office window is key: a keystroke meant for another
+    /// app is never this app's business.
+    private func watchTypeKeys() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, let window = self.window, window.isKeyWindow,
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                      .subtracting(.shift) == .command
+            else { return event }
+            switch event.charactersIgnoringModifiers {
+            case "+", "=": Store.shared.biggerType()
+            case "-", "_": Store.shared.smallerType()
+            case "0": Store.shared.resetType()
+            default: return event
+            }
+            return nil
+        }
     }
 
     /// Closing the window is not quitting. The dot outlives it.
@@ -113,6 +135,7 @@ struct RootView: View {
     var body: some View {
         room
             .background(Theme.ink)
+            .environment(\.typeScale, store.typeScale)
             .task {
                 guard store.selection == nil else { return }
                 await store.refreshBots()

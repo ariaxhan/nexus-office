@@ -263,35 +263,44 @@ struct DeskContextView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - the list
+    // MARK: - the tree
+
+    @Environment(\.typeScale) private var scale
+    /// Folders a person has shut. Shut rather than open, so a checkout with a
+    /// hundred folders comes up with every one of them open and a file two
+    /// levels down is one click away rather than three.
+    @State private var closed: Set<String> = []
 
     @ViewBuilder private var index: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
+            LazyVStack(alignment: .leading, spacing: 1) {
                 if let context {
-                    ForEach(SortedGroups.of(context.files)) { group in
-                        Text(group.name)
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(Theme.faint)
-                            .padding(.top, 10)
-                            .padding(.horizontal, 8)
-                        ForEach(group.files) { file in
-                            entry(file, open: context.path == file.path)
+                    ForEach(FileTree.rows(of: context.files, closed: closed)) { row in
+                        if row.isFolder {
+                            folder(row)
+                        } else if let file = row.file {
+                            entry(file, depth: row.depth, open: context.path == file.path)
                         }
                     }
                     if context.capped {
                         // A truncated list presented as a whole one is the
                         // defect this project exists to prevent.
                         Text("this list was cut; the checkout has more")
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 10.5 * scale))
                             .foregroundStyle(Theme.amber)
                             .padding(8)
                     }
                     if context.files.isEmpty {
-                        Text("no README and nothing under _meta")
-                            .font(.system(size: 11.5))
+                        Text("no Markdown in this checkout")
+                            .font(.system(size: 11.5 * scale))
                             .foregroundStyle(Theme.faint)
                             .padding(10)
+                    } else {
+                        Text("\(context.files.count) files")
+                            .font(.system(size: 10.5 * scale))
+                            .foregroundStyle(Theme.faint)
+                            .padding(.horizontal, 8)
+                            .padding(.top, 10)
                     }
                 }
             }
@@ -303,21 +312,58 @@ struct DeskContextView: View {
         .background(Theme.well)
     }
 
-    private func entry(_ file: ContextFile, open: Bool) -> some View {
+    private func folder(_ row: FileTree.Row) -> some View {
+        let shut = closed.contains(row.id)
+        return Button {
+            if shut { closed.remove(row.id) } else { closed.insert(row.id) }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: shut ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 8 * scale, weight: .semibold))
+                    .foregroundStyle(Theme.faint)
+                    .frame(width: 10)
+                Text(row.name)
+                    .font(.system(size: 11.5 * scale, weight: .medium))
+                    .foregroundStyle(Theme.dim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                if shut {
+                    Text("\(row.count)")
+                        .font(.system(size: 10 * scale))
+                        .foregroundStyle(Theme.faint)
+                }
+            }
+            .padding(.leading, 8 + CGFloat(row.depth) * 14)
+            .padding(.trailing, 8)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func entry(_ file: ContextFile, depth: Int, open: Bool) -> some View {
         Button {
             Task { await store.loadContext(repo: repo, path: file.path) }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 9 * scale))
+                    .foregroundStyle(open ? Theme.blue : Theme.faint)
+                    .frame(width: 10)
                 Text(file.name)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * scale))
                     .foregroundStyle(open ? Theme.text : Theme.dim)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.leading, 8 + CGFloat(depth) * 14)
+            .padding(.trailing, 8)
+            .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(open ? Theme.raised : Color.clear))
         }
@@ -333,17 +379,17 @@ struct DeskContextView: View {
                     // The reason, in the server's own words. A desk the office
                     // cannot place must never draw as a desk with nothing in it.
                     Text(said)
-                        .font(.system(size: 12.5))
+                        .font(.system(size: 12.5 * scale))
                         .foregroundStyle(Theme.amber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let context, !context.path.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(context.title)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 13 * scale, weight: .medium))
                             .foregroundStyle(Theme.text)
                         Text(context.path)
-                            .font(.system(size: 10.5, design: .monospaced))
+                            .font(.system(size: 10.5 * scale, design: .monospaced))
                             .foregroundStyle(Theme.faint)
                             .textSelection(.enabled)
                     }
@@ -361,7 +407,7 @@ struct DeskContextView: View {
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 16)
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 760 * scale, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
         .background(Theme.ink)
@@ -375,22 +421,6 @@ struct DeskContextView: View {
         }
     }
 
-    /// The index under its folder headings, in the order the server sent them.
-    struct SortedGroups: Identifiable {
-        let name: String
-        let files: [ContextFile]
-        var id: String { name }
-
-        static func of(_ files: [ContextFile]) -> [SortedGroups] {
-            var order: [String] = []
-            var byName: [String: [ContextFile]] = [:]
-            for file in files {
-                if byName[file.group] == nil { order.append(file.group) }
-                byName[file.group, default: []].append(file)
-            }
-            return order.map { SortedGroups(name: $0, files: byName[$0] ?? []) }
-        }
-    }
 }
 
 /// The one line about freshness.

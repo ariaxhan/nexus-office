@@ -144,6 +144,14 @@ public final class Store {
     public var showWall = true {
         didSet { prefs.set(showWall: showWall) }
     }
+    /// The reading type's multiplier. Stepped by Cmd + / Cmd -, reset by Cmd 0.
+    public var typeScale: Double = 1 {
+        didSet { prefs.set(typeScale: typeScale) }
+    }
+
+    public func biggerType() { prefs.stepTypeScale(+1); typeScale = prefs.typeScale }
+    public func smallerType() { prefs.stepTypeScale(-1); typeScale = prefs.typeScale }
+    public func resetType() { typeScale = 1 }
 
     /// What is open in the second detail pane, in `compare` only.
     ///
@@ -242,6 +250,7 @@ public final class Store {
         layout = prefs.layout
         showBots = prefs.showBots
         showWall = prefs.showWall
+        typeScale = prefs.typeScale
     }
 
     // MARK: - derived
