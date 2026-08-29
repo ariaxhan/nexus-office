@@ -329,7 +329,8 @@ class StartTest(FakeHcom):
         code, body = sessions.start({"tool": "codex", "directory": str(target)})
         self.assertEqual(code, 200)
         self.assertTrue(body["ok"])
-        self.assertEqual(self.argv()[-1]["argv"], ["codex", "--dir", str(target.resolve())])
+        self.assertEqual(self.argv()[-1]["argv"],
+                         ["codex", "--headless", "--dir", str(target.resolve())])
 
     def test_a_folder_an_agent_already_runs_in_is_allowed_wherever_it_is(self):
         """This grants no reach the machine did not already have: something is
@@ -401,6 +402,13 @@ class StartTest(FakeHcom):
                                   "prompt": "read the failing test"})
         self.assertEqual(code, 200)
         self.assertEqual(self.argv()[-1]["argv"][-2:], ["--hcom-prompt", "read the failing test"])
+
+    def test_an_office_launch_runs_headless_so_the_request_can_return(self):
+        """A terminal launch owns the hcom process until that terminal closes.
+        The phone request must return while the new agent stays alive."""
+        code, _ = sessions.start({"tool": "codex", "directory": str(self.root)})
+        self.assertEqual(code, 200)
+        self.assertEqual(self.argv()[-1]["argv"][:3], ["codex", "--headless", "--dir"])
 
     def test_an_enormous_prompt_is_refused_rather_than_trimmed(self):
         code, body = sessions.start({"tool": "claude", "directory": str(self.root),

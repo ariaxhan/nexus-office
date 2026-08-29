@@ -120,6 +120,10 @@ const state = {
   sessions: null,
   openSession: "",
   scripts: Object.create(null),
+  /* One desk's launch controls, and launches still waiting for hcom. A second
+   * tap must not start a second paid agent while the first request is open. */
+  launchDesk: "",
+  launching: Object.create(null),
 };
 
 let toastTimer = null;
@@ -648,7 +652,7 @@ function drawBots() {
 
 /* ── desks ───────────────────────────────────────────────────────────────── */
 
-function deskRow(desk) {
+function deskRow(desk, canStart) {
   const kind = deskState(desk, state.gate);
   const row = el("div", "row");
   row.appendChild(el("span", "dot s-" + kind));
@@ -662,7 +666,31 @@ function deskRow(desk) {
   const old = asOf(desk, state.generated);
   if (old) row.appendChild(el("span", "asof", old));
   else row.appendChild(el("span", "under", stamp(desk.at)));
+  if (canStart) {
+    const open = state.launchDesk === desk.repo;
+    const starter = button(open ? "hide" : "start", "chipout", function () {
+      state.launchDesk = open ? "" : desk.repo;
+      drawDesks();
+    });
+    starter.setAttribute("aria-expanded", open ? "true" : "false");
+    row.appendChild(starter);
+  }
   return row;
+}
+
+function deskLaunchers(desk) {
+  const wrap = el("div", "deskstart");
+  wrap.appendChild(el("span", "under", "run here"));
+  const active = state.launching[desk.repo] || "";
+  ["claude", "codex"].forEach(function (tool) {
+    const label = active === tool ? "starting " + tool : tool;
+    const launch = button(label, "chipout", function () {
+      startDeskSession(desk.repo, tool);
+    });
+    launch.disabled = Boolean(active);
+    wrap.appendChild(launch);
+  });
+  return wrap;
 }
 
 function drawDesks() {
@@ -679,7 +707,8 @@ function drawDesks() {
   }
 
   shown.forEach(function (desk) {
-    band.appendChild(deskRow(desk));
+    band.appendChild(deskRow(desk, true));
+    if (state.launchDesk === desk.repo) band.appendChild(deskLaunchers(desk));
     const notice = staleNotice(desk, state.github, state.generated);
     if (notice) band.appendChild(el("p", "notice", notice));
   });
@@ -699,11 +728,35 @@ function drawDesks() {
   if (wants) summary.appendChild(el("span", "wants", " · " + wants + " needs you"));
   box.appendChild(summary);
   away.forEach(function (desk) {
-    const row = deskRow(desk);
+    const row = deskRow(desk, false);
     row.appendChild(button("bring back", null, function () { bringBack(desk.repo); }));
     box.appendChild(row);
   });
   band.appendChild(box);
+}
+
+async function startDeskSession(repo, tool) {
+  if (state.launching[repo]) return;
+  state.launching[repo] = tool;
+  drawDesks();
+  let got = null;
+  try {
+    got = await write("/api/session/start", { tool: tool, repo: repo });
+  } catch (err) {
+    delete state.launching[repo];
+    say("the office could not start " + tool);
+    drawDesks();
+    return;
+  }
+  delete state.launching[repo];
+  if (got.code === 200) {
+    state.launchDesk = "";
+    say(tool + " started at " + repo);
+    await pollSessions();
+  } else {
+    say(got.body.error || ("the door said " + got.code));
+  }
+  drawDesks();
 }
 
 async function bringBack(repo) {

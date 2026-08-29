@@ -405,6 +405,15 @@ class AutomationAndSessionsTest(unittest.TestCase):
         window = js[at:at + 900]
         self.assertIn("state.drafts[key] = words;", window)
 
+    def test_a_desk_can_start_either_agent_through_the_office(self):
+        """A pocket can start work, not only answer work already running."""
+        js = self.js()
+        at = js.index("async function startDeskSession")
+        window = js[at:at + 800]
+        self.assertIn('write("/api/session/start", { tool: tool, repo: repo })', window)
+        self.assertIn('["claude", "codex"]', js)
+        self.assertIn("got.body.error", window)
+
     def test_not_being_able_to_see_never_draws_as_nothing_running(self):
         """An empty list is a claim that nothing is running. When hcom cannot be
         asked, the office does not get to make that claim."""

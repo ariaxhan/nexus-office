@@ -152,8 +152,9 @@ carried, so the Mac app and the phone say one sentence about one machine.
 
 **What is running in this folder?** Every desk now shows the Claude Code and
 Codex sessions sitting in its checkout, what each one is doing, and a box to
-answer the one that is waiting on you. `start claude` and `start codex` open a new
-terminal in that folder. It reads `hcom`, which is the only thing on this machine
+answer the one that is waiting on you. `start claude` and `start codex` launch a
+background session in that folder, so the phone request returns while the agent
+keeps running. It reads `hcom`, which is the only thing on this machine
 that knows both which sessions are alive and how to reach one, so a session that
 never ran `hcom start` is invisible here and the office says so rather than
 drawing an empty list, which would be a claim that nothing is running.

@@ -91,7 +91,7 @@ LIST_TIMEOUT_S = 8
 TRANSCRIPT_TIMEOUT_S = 20
 SCREEN_TIMEOUT_S = 10
 SEND_TIMEOUT_S = 15
-# Launching opens a terminal window and waits for the agent to report ready.
+# Launching starts a background agent and waits for hcom to report ready.
 # Longer than the rest, and still a cap: a launch that hangs is a failed launch.
 START_TIMEOUT_S = 90
 GIT_TIMEOUT_S = 5
@@ -446,7 +446,7 @@ def say(body: dict) -> tuple[int, dict]:
 
 
 def start(body: dict, desks: dict | None = None) -> tuple[int, dict]:
-    """Open a new Claude Code or Codex session in a desk's folder.
+    """Start a new Claude Code or Codex session in a desk's folder.
 
     This spawns a real agent with Aria's credentials from a button, so the two
     things it will not do are the two that matter:
@@ -482,7 +482,12 @@ def start(body: dict, desks: dict | None = None) -> tuple[int, dict]:
     if not binary:
         return 503, {"error": NO_HCOM}
 
-    args = [binary, tool, "--dir", directory]
+    # A normal hcom terminal launch owns this subprocess until the terminal
+    # closes. That makes the Office request time out even after the agent is
+    # ready. Headless is hcom's background mode: it returns after readiness and
+    # the agent remains reachable here, which is the point of starting it from
+    # the phone instead of walking back to the Mac.
+    args = [binary, tool, "--headless", "--dir", directory]
     if prompt:
         args += ["--hcom-prompt", prompt]
     rc, out, err = _run(args, START_TIMEOUT_S)

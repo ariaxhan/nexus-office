@@ -94,7 +94,7 @@ struct SessionsView: View {
                 .padding(.vertical, 4)
                 .background(Capsule().fill(Theme.well))
             }
-            Text("opens a terminal in this folder")
+            Text("runs in this folder")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.faint)
         }
