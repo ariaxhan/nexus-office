@@ -111,43 +111,71 @@ struct RootView: View {
     @Bindable var store: Store
 
     var body: some View {
-        HStack(spacing: 0) {
-            RosterView(store: store)
-            Divider().overlay(Theme.hairline)
-            detail
-        }
-        .background(Theme.ink)
-        .task {
-            guard store.selection == nil else { return }
-            await store.refreshBots()
-            await store.refreshWorld()
-            if let first = store.bots.first {
-                store.select(.bot(first.id))
-            } else if let desk = store.stations.first {
-                store.select(.desk(desk.repo))
+        room
+            .background(Theme.ink)
+            .task {
+                guard store.selection == nil else { return }
+                await store.refreshBots()
+                await store.refreshWorld()
+                if let first = store.bots.first {
+                    store.select(.bot(first.id))
+                } else if let desk = store.stations.first {
+                    store.select(.desk(desk.repo))
+                }
             }
-        }
-        // The sheet is presented over whatever is on screen, because a gate is
-        // never scoped to the thread you happen to be reading.
-        .sheet(isPresented: .constant(store.showsGateSheet)) {
-            GateSheet(store: store)
+            // The sheet is presented over whatever is on screen, because a gate is
+            // never scoped to the thread you happen to be reading.
+            .sheet(isPresented: .constant(store.showsGateSheet)) {
+                GateSheet(store: store)
+            }
+    }
+
+    /// The three shapes this window comes in.
+    ///
+    /// `HSplitView` rather than an `HStack` with a fixed roster: the columns
+    /// were a decision this file made once and a person could never change,
+    /// which is wrong for a window whose whole content is other people's repo
+    /// names of wildly different lengths. AppKit owns the divider, so the drag
+    /// is the real one and the position is remembered by the window itself.
+    @ViewBuilder private var room: some View {
+        switch store.layout {
+        case .minimal:
+            // The narrowest sensible framing: the floor alone, filling the
+            // window, with no detail pane at all.
+            RosterView(store: store)
+        case .focus:
+            HSplitView {
+                RosterView(store: store)
+                detail(store.selection)
+            }
+        case .compare:
+            HSplitView {
+                RosterView(store: store)
+                detail(store.selection)
+                    .deskDrop { store.select(.desk($0)) }
+                detail(store.compared, second: true)
+                    .deskDrop { store.compared = .desk($0) }
+            }
         }
     }
 
-    @ViewBuilder private var detail: some View {
+    @ViewBuilder private func detail(_ selection: Selection?, second: Bool = false) -> some View {
         // The automation page is a whole screen, not a card, and it is about the
         // room rather than about whatever is selected. So it takes the detail
         // pane while it is open and gives it straight back, which keeps the
-        // selection underneath it exactly where it was.
-        if store.automationOpen {
+        // selection underneath it exactly where it was. Only ever the first
+        // pane: it is one page and two of it is a bug.
+        if store.automationOpen && !second {
             AutomationView(store: store)
+                .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            selected
+            selected(selection, second: second)
+                .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    @ViewBuilder private var selected: some View {
-        switch store.selection {
+    @ViewBuilder private func selected(_ selection: Selection?, second: Bool) -> some View {
+        switch selection {
         case .bot(let id):
             if let bot = store.bot(id) {
                 BotThreadView(store: store, bot: bot)
@@ -167,7 +195,9 @@ struct RootView: View {
                 Empty(text: "That is not on the wall any more.")
             }
         case nil:
-            Empty(text: "Pick a bot to talk to it, a desk to work its issues, or a card on the wall to see a flow. A raised hand opens by itself.")
+            Empty(text: second
+                  ? "Drag a desk in here to read it beside the one on the left."
+                  : "Pick a bot to talk to it, a desk to work its issues, or a card on the wall to see a flow. A raised hand opens by itself.")
         }
     }
 }

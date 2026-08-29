@@ -1,6 +1,34 @@
 import Foundation
 import Observation
 
+/// How much of the office is on screen at once.
+///
+/// Three, because there are exactly three questions a person asks of this
+/// window and no fourth one worth a control: *what is this desk doing*, *how do
+/// these two desks differ*, and *leave me alone, I only want the floor*.
+///
+/// - `focus`: the roster and one detail pane. What this app has always been.
+/// - `compare`: the roster and TWO detail panes, so two desks are open at once
+///   and a desk dragged out of the roster lands in whichever half it was
+///   dropped on. The reason the whole preset exists: reading one desk, going to
+///   another, and coming back is not comparing, it is remembering.
+/// - `minimal`: the roster alone, filling the window, with no detail pane at
+///   all. The narrowest sensible framing: the floor is the whole point of
+///   glancing at this window, and a detail pane is a thing you open on purpose.
+public enum LayoutPreset: String, CaseIterable, Identifiable, Sendable {
+    case focus, compare, minimal
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .focus: return "Focus"
+        case .compare: return "Compare"
+        case .minimal: return "Minimal"
+        }
+    }
+}
+
 /// The choices a person made about how the floor looks, kept between launches.
 ///
 /// Everything in here is a view of the same office: an order and a filter.
@@ -27,12 +55,28 @@ public final class Preferences {
 
     private static let sortKey = "settings.deskSort.v1"
     private static let needsOnlyKey = "settings.needsOnly.v1"
+    private static let layoutKey = "settings.layout.v1"
+    private static let botsKey = "settings.pane.bots.v1"
+    private static let wallKey = "settings.pane.wall.v1"
+    /// The key the faces already shipped under, kept as it was: renaming it
+    /// would silently strip every colour somebody has already picked.
+    private static let facesKey = "faces.v1"
 
     /// The one the real app uses.
     public static let shared = Preferences(defaults: Reactions.isDemoRun ? nil : .standard)
 
     public private(set) var deskSort: StateRules.DeskSort = .owner
     public private(set) var needsOnly = false
+    public private(set) var layout: LayoutPreset = .focus
+    /// Which groups of the roster are drawn. Both default to on, and neither is
+    /// allowed to hide a raised hand: a gate comes from the runtime and opens a
+    /// sheet over the whole window, so turning a group off cannot bury one.
+    public private(set) var showBots = true
+    public private(set) var showWall = true
+    /// repo -> `#rrggbb`, only the desks somebody actually dressed. `FaceBook`
+    /// reads and writes it through here so there is one place that decides what
+    /// a preference is and where it lands.
+    public private(set) var faceOverrides: [String: String] = [:]
 
     public init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
@@ -45,6 +89,23 @@ public final class Preferences {
             deskSort = order
         }
         needsOnly = defaults.bool(forKey: Self.needsOnlyKey)
+        // Same honest read as the order above: a preset from a newer version is
+        // a word this one cannot draw, and picking one of the three at random
+        // rearranges the window into a shape nobody chose.
+        if let raw = defaults.string(forKey: Self.layoutKey),
+           let preset = LayoutPreset(rawValue: raw) {
+            layout = preset
+        }
+        // `bool(forKey:)` cannot tell "off" from "never set", and these two
+        // default to ON, so an untouched install would come up with an empty
+        // roster if this were read the way `needsOnly` is.
+        if let bots = defaults.object(forKey: Self.botsKey) as? Bool { showBots = bots }
+        if let wall = defaults.object(forKey: Self.wallKey) as? Bool { showWall = wall }
+        if let raw = defaults.dictionary(forKey: Self.facesKey) as? [String: String] {
+            for (repo, hex) in raw {
+                if let clean = Faces.normalise(hex: hex) { faceOverrides[repo] = clean }
+            }
+        }
     }
 
     public func set(deskSort: StateRules.DeskSort) {
@@ -55,5 +116,40 @@ public final class Preferences {
     public func set(needsOnly: Bool) {
         self.needsOnly = needsOnly
         defaults?.set(needsOnly, forKey: Self.needsOnlyKey)
+    }
+
+    public func set(layout: LayoutPreset) {
+        self.layout = layout
+        defaults?.set(layout.rawValue, forKey: Self.layoutKey)
+    }
+
+    public func set(showBots: Bool) {
+        self.showBots = showBots
+        defaults?.set(showBots, forKey: Self.botsKey)
+    }
+
+    public func set(showWall: Bool) {
+        self.showWall = showWall
+        defaults?.set(showWall, forKey: Self.wallKey)
+    }
+
+    /// Dress a desk. An unparseable string is refused rather than stored, so a
+    /// half-typed hex never lands as a colour.
+    @discardableResult
+    public func set(face hex: String, for repo: String) -> Bool {
+        guard let clean = Faces.normalise(hex: hex) else { return false }
+        faceOverrides[repo] = clean
+        saveFaces()
+        return true
+    }
+
+    /// Back to the coat the desk was born with.
+    public func clearFace(repo: String) {
+        faceOverrides.removeValue(forKey: repo)
+        saveFaces()
+    }
+
+    private func saveFaces() {
+        defaults?.set(faceOverrides, forKey: Self.facesKey)
     }
 }

@@ -15,17 +15,7 @@ struct RosterView: View {
             ScrollViewReader { scroll in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
-                    header("bots", trailing: nil)
-                    if let notice = store.botsNotice {
-                        notary(notice)
-                    }
-                    ForEach(store.visibleBots) { bot in
-                        BotRow(bot: bot,
-                               selected: store.selection == .bot(bot.id),
-                               hasGate: store.gateBelongsTo(bot: bot.id))
-                            .contentShape(Rectangle())
-                            .onTapGesture { store.select(.bot(bot.id)) }
-                    }
+                    bots
 
                     wall
 
@@ -84,7 +74,15 @@ struct RosterView: View {
             }
             }
         }
-        .frame(width: Theme.rosterWidth)
+        // A range rather than one number, because the roster is a column of
+        // other people's repo names and the right width for them is not a
+        // decision this file gets to make once. `HSplitView` starts it at the
+        // width it has always had and lets the divider move it from there;
+        // `minimal` has no divider to drag, so it takes the whole window.
+        .frame(minWidth: 220,
+               idealWidth: Theme.rosterWidth,
+               maxWidth: store.layout == .minimal ? .infinity : 560,
+               maxHeight: .infinity)
         .background(Theme.roster)
     }
 
@@ -179,8 +177,28 @@ struct RosterView: View {
     /// this file knows what any one of them measures. A new source is a new
     /// python file and no Swift at all, which is the only way six of them stay
     /// cheap to keep.
+    /// The colleagues. Behind a toggle, like the wall: a person who never talks
+    /// to a bot is scrolling past them all day. Turning the group off hides
+    /// rows, never a raised hand: a gate comes from the runtime and opens a
+    /// sheet over the whole window whatever this is set to.
+    @ViewBuilder private var bots: some View {
+        if store.showBots {
+            header("bots", trailing: nil)
+            if let notice = store.botsNotice {
+                notary(notice)
+            }
+            ForEach(store.visibleBots) { bot in
+                BotRow(bot: bot,
+                       selected: store.selection == .bot(bot.id),
+                       hasGate: store.gateBelongsTo(bot: bot.id))
+                    .contentShape(Rectangle())
+                    .onTapGesture { store.select(.bot(bot.id)) }
+            }
+        }
+    }
+
     @ViewBuilder private var wall: some View {
-        if !store.sections.isEmpty {
+        if store.showWall, !store.sections.isEmpty {
             header("wall", trailing: wallCount)
                 .padding(.top, 14)
             // The automation, as one page, above the cards it is assembled from.
@@ -667,7 +685,47 @@ struct PinDropDelegate: DropDelegate {
     }
 }
 
+/// A detail pane taking a desk dragged out of the roster.
+///
+/// Same `DropDelegate` shape as the pins and for the same reason: the closure
+/// form of `.onDrop` cannot say "this pane will take it" while the pointer is
+/// still moving, so the cursor shows a refusal right up until the release.
+struct DeskPaneDropDelegate: DropDelegate {
+    let open: (String) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.utf8PlainText])
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .copy)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let item = info.itemProviders(for: [.utf8PlainText]).first else {
+            DragLog.say("dropped on a pane with nothing in it")
+            return false
+        }
+        _ = item.loadObject(ofClass: NSString.self) { value, error in
+            guard let repo = value as? String else {
+                DragLog.say("could not read the dragged desk: \(error?.localizedDescription ?? "no value")")
+                return
+            }
+            DragLog.say("dropped \(repo) into a pane")
+            Task { @MainActor in self.open(repo) }
+        }
+        return true
+    }
+}
+
 extension View {
+    /// This pane opens whatever desk is dropped on it. The way a second desk
+    /// gets open at all in `compare`: clicking the roster drives the left pane,
+    /// so the right one needs a gesture of its own.
+    func deskDrop(_ open: @escaping (String) -> Void) -> some View {
+        onDrop(of: [.utf8PlainText], delegate: DeskPaneDropDelegate(open: open))
+    }
+
     /// The drag half, applied only where a drag means something.
     @ViewBuilder
     func ifPickedUp(_ pickUp: Bool, repo: String) -> some View {

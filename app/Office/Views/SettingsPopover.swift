@@ -2,9 +2,9 @@ import SwiftUI
 
 /// What a person can decide about this window, in the one place they can find.
 ///
-/// Only what exists. Layout presets, pane visibility and per-desk colour are
-/// #41 and are not built, so there is nothing here pretending to hold them: a
-/// control for a thing that does not exist reads as a broken control.
+/// Only what exists, and all of it persists. A per-desk colour is not here on
+/// purpose: it is a property of one desk, so it lives on that desk's row, and a
+/// list of seventy-two colour wells in a popover is a worse way to change one.
 ///
 /// Everything on this panel is a view of the same floor. None of it changes
 /// what is polled, what a desk says, or what the door accepts — the server's
@@ -17,6 +17,34 @@ struct SettingsPopover: View {
             Text("Settings")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.text)
+
+            VStack(alignment: .leading, spacing: 6) {
+                label("layout")
+                Picker("", selection: $store.layout) {
+                    ForEach(LayoutPreset.allCases) { preset in
+                        Text(preset.label).tag(preset)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                Text(layoutBlurb)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 220, alignment: .leading)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                label("panes")
+                Toggle("Bots", isOn: $store.showBots)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text)
+                Toggle("Wall", isOn: $store.showWall)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.text)
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 label("desk order")
@@ -45,6 +73,14 @@ struct SettingsPopover: View {
                 .frame(width: 220, alignment: .leading)
         }
         .padding(16)
+    }
+
+    private var layoutBlurb: String {
+        switch store.layout {
+        case .focus: return "The roster and one pane."
+        case .compare: return "Two panes. Drag a desk from the roster into either one."
+        case .minimal: return "The roster alone, filling the window."
+        }
     }
 
     private func label(_ text: String) -> some View {

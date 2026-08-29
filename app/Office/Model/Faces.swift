@@ -94,56 +94,46 @@ public enum Faces {
 /// reaches the door, the pipeline or GitHub, because there is no consumer for it
 /// on the other side. Losing it costs one hash away from the colour it started
 /// as.
+///
+/// The dictionary itself lives in `Preferences`, which is the one place that
+/// decides what a preference is and where it lands. This type stays because the
+/// views ask a face question ("what colour is this desk wearing") and not a
+/// storage question, and because `hex(repo:)` has to fall back to the derived
+/// coat, which a preferences bag has no business knowing about.
 @MainActor
 @Observable
 public final class FaceBook {
-    /// repo → `#rrggbb`. Only the desks somebody actually dressed.
-    private var chosen: [String: String] = [:]
+    private let prefs: Preferences
 
-    /// Where it persists, or `nil` to keep it in memory and never write. The
-    /// demo floor and the tests both pass `nil`: a screenshot run opens the real
-    /// app on this machine, and a harness that could recolour Aria's desks would
-    /// be a check that damages the thing it checks.
-    private let defaults: UserDefaults?
+    public static let shared = FaceBook(prefs: .shared)
 
-    private static let storeKey = "faces.v1"
+    public init(prefs: Preferences) {
+        self.prefs = prefs
+    }
 
-    public static let shared = FaceBook(defaults: Reactions.isDemoRun ? nil : .standard)
-
-    public init(defaults: UserDefaults? = .standard) {
-        self.defaults = defaults
-        if let raw = defaults?.dictionary(forKey: Self.storeKey) as? [String: String] {
-            for (repo, hex) in raw {
-                if let clean = Faces.normalise(hex: hex) { chosen[repo] = clean }
-            }
-        }
+    /// Kept for the callers that only have a defaults suite: the tests and
+    /// anything building an in-memory book with `nil`.
+    public convenience init(defaults: UserDefaults? = .standard) {
+        self.init(prefs: Preferences(defaults: defaults))
     }
 
     /// What to draw: the chosen colour, or the one the desk was born with.
     public func hex(repo: String) -> String {
-        chosen[repo] ?? Faces.coat(repo: repo)
+        prefs.faceOverrides[repo] ?? Faces.coat(repo: repo)
     }
 
     /// Whether this desk is wearing something a person picked.
-    public func isChosen(repo: String) -> Bool { chosen[repo] != nil }
+    public func isChosen(repo: String) -> Bool { prefs.faceOverrides[repo] != nil }
 
     /// Dress a desk. An unparseable string is refused rather than stored, so a
     /// half-typed hex in the field never lands as a colour.
     @discardableResult
     public func choose(repo: String, hex: String) -> Bool {
-        guard let clean = Faces.normalise(hex: hex) else { return false }
-        chosen[repo] = clean
-        save()
-        return true
+        prefs.set(face: hex, for: repo)
     }
 
     /// Back to the coat the villager was wearing.
     public func reset(repo: String) {
-        chosen.removeValue(forKey: repo)
-        save()
-    }
-
-    private func save() {
-        defaults?.set(chosen, forKey: Self.storeKey)
+        prefs.clearFace(repo: repo)
     }
 }

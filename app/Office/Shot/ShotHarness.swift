@@ -251,6 +251,23 @@ enum ShotHarness {
         store.settingsOpen = false
         await settle(0.6)
 
+        // Two desks open at once. Its own framing because the Compare preset is
+        // the one layout no other picture can reach: every other framing is the
+        // Focus room, and a second pane that silently draws the same desk as the
+        // first, or draws nothing at all, looks exactly like a window that never
+        // switched preset. Two DIFFERENT desks on purpose, so the picture fails
+        // loudly if the second pane is following the selection.
+        let pair = store.stations.filter { !$0.hidden }.prefix(2).map(\.repo)
+        if pair.count == 2 {
+            store.layout = .compare
+            store.select(.desk(pair[0]))
+            store.compared = .desk(pair[1])
+            await frame(store, window, directory, "compare", settling: 1.8)
+            store.compared = nil
+            store.layout = .focus
+            await settle(0.8)
+        }
+
         // A picture picked and not yet sent. The composer is the one part of
         // this app whose state nothing else photographs: the chip, the size
         // after the downscale and the way out of it all live for the seconds

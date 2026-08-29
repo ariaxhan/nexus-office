@@ -131,6 +131,28 @@ public final class Store {
     public var deskSort: StateRules.DeskSort = .owner {
         didSet { prefs.set(deskSort: deskSort) }
     }
+    /// How much of the office is on screen. A view, never a fetch: no preset
+    /// changes what is polled or what a desk says, and none of them can hide a
+    /// raised hand, which arrives as a sheet over the whole window.
+    public var layout: LayoutPreset = .focus {
+        didSet { prefs.set(layout: layout) }
+    }
+    /// Which groups the roster draws.
+    public var showBots = true {
+        didSet { prefs.set(showBots: showBots) }
+    }
+    public var showWall = true {
+        didSet { prefs.set(showWall: showWall) }
+    }
+
+    /// What is open in the second detail pane, in `compare` only.
+    ///
+    /// Not persisted: which two desks you were reading is a fact about a
+    /// sitting, and restoring a stale pair on launch is a window telling you
+    /// something that stopped being true overnight. The preset persists; the
+    /// contents of the panes do not.
+    public var compared: Selection?
+
     public var toast: String?
     public var gateNotice: String?
     /// Whether the put-away section is open. On the store rather than the view
@@ -217,6 +239,9 @@ public final class Store {
         // it just read.
         deskSort = prefs.deskSort
         needsOnly = prefs.needsOnly
+        layout = prefs.layout
+        showBots = prefs.showBots
+        showWall = prefs.showWall
     }
 
     // MARK: - derived
@@ -654,6 +679,9 @@ public final class Store {
         // look at is choosing to leave the page. Opening the page is not itself
         // a choice about anything, so it still leaves the selection alone.
         automationOpen = false
+        // Two panes showing the same desk is a comparison with itself, and it
+        // reads as a window that lost one of them.
+        if compared == selection { compared = nil }
         self.selection = selection
         if case .bot(let id) = selection {
             Task { await loadChat(id) }
