@@ -155,6 +155,19 @@ class IndexTest(ContextBase):
         code, _ = self.context.read(REPO, "node_modules/left-pad/README.md")
         self.assertEqual(code, 404)
 
+    def test_a_folder_that_is_itself_a_checkout_is_not_this_desk_s_context(self):
+        """`matra` keeps 2,872 Markdown files under `.claude/worktrees`, each a
+        second copy of a file it already lists. A repo inside a repo has its own
+        desk; listing it here buries the README of the desk you are looking at.
+        A worktree's `.git` is a file and a clone's is a folder; both count."""
+        self.write(".claude/worktrees/one/docs/copy.md")
+        self.write(".claude/worktrees/one/.git", "gitdir: /elsewhere\n")
+        self.write("vendor/dep/README.md")
+        self.write("sub/nested/notes.md")
+        (pathlib.Path(self.root) / "sub" / "nested" / ".git").mkdir()
+        self.write("docs/real.md")
+        self.assertEqual(self.paths(), ["docs/real.md"])
+
     def test_a_readme_that_is_not_markdown_is_not_context(self):
         self.write("README.rst", "not markdown")
         self.write("README.html", "<p>no</p>")

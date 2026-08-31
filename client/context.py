@@ -16,9 +16,13 @@ happens to share a name.
 `README` and whose extension is Markdown or absent, and a `.md` or `.markdown`
 file at any depth in the checkout. That is an allow-list, so a `.env`, a key, a
 source file and a database are all out by construction rather than by being
-remembered. `.git`, `node_modules` and the usual build caches are not walked:
+remembered. `.git`, `node_modules`, `vendor` and the usual build caches are not walked:
 nothing in them is a document somebody wrote for this repo, and a checkout's
 `node_modules` alone can hold ten thousand READMEs that are not its own.
+Neither is a folder that is itself a checkout. A repo that contains another repo
+contains that repo's documents, not its own: `matra` keeps 2,872 Markdown files
+under `.claude/worktrees`, every one of them a second copy of a file the desk
+already lists, and they buried the README on the desk they were listed under.
 
 **What it may follow.** Nothing. A symlink file and a symlink directory are both
 skipped, because a link planted anywhere under `_meta` is otherwise a one line
@@ -61,7 +65,7 @@ MAX_SCAN = 60_000
 SKIP_DIRS = frozenset({
     ".git", "node_modules", ".venv", "venv", "__pycache__", ".build", "build",
     "dist", "DerivedData", ".next", ".turbo", ".cache", "target", "Pods",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", "vendor",
 })
 # Half a megabyte of Markdown is about 250 pages. A file bigger than that is not
 # a document somebody wrote, and shipping it down a loopback socket to be laid
@@ -163,7 +167,9 @@ def index(root: str) -> tuple[list[dict], bool]:
         # directory; dropping it from the listing as well means nothing
         # downstream can be handed one by accident.
         dirnames[:] = sorted(d for d in dirnames
-                             if d not in SKIP_DIRS and not (here / d).is_symlink())
+                             if d not in SKIP_DIRS
+                             and not (here / d).is_symlink()
+                             and not (here / d / ".git").exists())
         scanned += len(dirnames)
         at_root = here == base
         for fname in sorted(filenames):
