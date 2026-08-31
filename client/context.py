@@ -8,8 +8,7 @@ exclusions bolted to it.
 
 **Where it may look.** `sessions.desk_dir(repo)` and nowhere else. That function
 finds a checkout from what is actually on disk: a session already running there,
-the desks the office has cached, or the vault walked one level with the origin
-checked. A path derived from the repo slug would name a folder that is not there
+or the vault walked to a bounded depth with every checkout's origin asked. A path derived from the repo slug would name a folder that is not there
 and then fail somewhere further in, or worse, name somebody else's folder that
 happens to share a name.
 
@@ -188,7 +187,7 @@ def index(root: str) -> tuple[list[dict], bool]:
     return files[:MAX_FILES], capped
 
 
-def read(repo: str, path: str = "", desks: dict | None = None) -> tuple[int, dict]:
+def read(repo: str, path: str = "") -> tuple[int, dict]:
     """(status, body). The index of one desk, and one file out of it.
 
     The index rides along with the file so the pane draws from one call: an app
@@ -204,7 +203,7 @@ def read(repo: str, path: str = "", desks: dict | None = None) -> tuple[int, dic
     if refusal:
         return 400, {"error": refusal}
 
-    found = sessions.desk_dir(repo, desks)
+    found = sessions.desk_dir(repo)
     if not found:
         return 404, {"error": sessions.NO_VAULT if sessions.no_vault()
                      else f"the office does not know where {repo} is checked out"}

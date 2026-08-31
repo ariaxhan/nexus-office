@@ -445,7 +445,7 @@ def say(body: dict) -> tuple[int, dict]:
                  "result": (proc.stdout or "").strip()[:200]}
 
 
-def start(body: dict, desks: dict | None = None) -> tuple[int, dict]:
+def start(body: dict) -> tuple[int, dict]:
     """Start a new Claude Code or Codex session in a desk's folder.
 
     This spawns a real agent with Aria's credentials from a button, so the two
@@ -467,7 +467,7 @@ def start(body: dict, desks: dict | None = None) -> tuple[int, dict]:
     if tool not in TOOLS:
         return 400, {"error": BAD_TOOL}
 
-    directory, why = resolve_dir(body, desks)
+    directory, why = resolve_dir(body)
     if why:
         return 400, {"error": why}
 
@@ -499,7 +499,7 @@ def start(body: dict, desks: dict | None = None) -> tuple[int, dict]:
     return 502, {"error": text or f"hcom {tool} exited {rc}"}
 
 
-def resolve_dir(body: dict, desks: dict | None = None) -> tuple[str, str | None]:
+def resolve_dir(body: dict) -> tuple[str, str | None]:
     """(directory, the reason it was refused). Exactly one is falsy.
 
     A caller may name a desk or a path. A desk is preferred, because it is the
@@ -514,7 +514,7 @@ def resolve_dir(body: dict, desks: dict | None = None) -> tuple[str, str | None]
     if repo:
         if not NWO_RE.match(repo):
             return "", "bad repo"
-        found = desk_dir(repo, desks)
+        found = desk_dir(repo)
         if not found:
             return "", f"the office does not know where {repo} is checked out"
         return found, None
@@ -571,7 +571,7 @@ def no_vault() -> bool:
     return not os.environ.get("OFFICE_RUNTIME_ROOT", "").strip()
 
 
-def desk_dir(repo: str, desks: dict | None = None) -> str:
+def desk_dir(repo: str) -> str:
     """Where a desk is checked out on this machine, or "".
 
     Found the way everything else here is found: from what is actually on disk.
@@ -583,11 +583,6 @@ def desk_dir(repo: str, desks: dict | None = None) -> str:
     for row in read().get("sessions") or []:
         if row["repo"] == repo and row["directory"]:
             return row["directory"]
-
-    if isinstance(desks, dict):
-        hit = str(desks.get(repo) or "").strip()
-        if hit and os.path.isdir(hit):
-            return str(pathlib.Path(hit).resolve())
 
     root = os.environ.get("OFFICE_RUNTIME_ROOT", "").strip()
     if not root:
@@ -687,7 +682,7 @@ README_NAMES = ("README.md", "readme.md", "README.markdown", "README.txt", "READ
 MAX_README = 64_000
 
 
-def readme(repo: str, desks: dict | None = None) -> tuple[int, dict]:
+def readme(repo: str) -> tuple[int, dict]:
     """One desk's README. (http status, body).
 
     Nothing a caller sends becomes part of a path: the repo is matched against
@@ -706,7 +701,7 @@ def readme(repo: str, desks: dict | None = None) -> tuple[int, dict]:
     # than relying on the next function along to keep being careful.
     if not NWO_RE.match(repo) or any(part in (".", "..") for part in repo.split("/")):
         return 400, {"error": "bad repo"}
-    directory = desk_dir(repo, desks)
+    directory = desk_dir(repo)
     if not directory:
         return 200, {"repo": repo, "state": "elsewhere", "text": "",
                      "detail": NO_VAULT if no_vault()

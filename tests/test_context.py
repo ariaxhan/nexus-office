@@ -58,8 +58,8 @@ class ContextBase(unittest.TestCase):
         self.asked = []
         original = self.context.sessions.desk_dir
 
-        def desk_dir(repo, desks=None):
-            self.asked.append((repo, desks))
+        def desk_dir(repo):
+            self.asked.append(repo)
             return str(self.root) if repo == REPO else ""
 
         self.context.sessions.desk_dir = desk_dir
@@ -287,10 +287,7 @@ class RefusalTest(ContextBase):
 
     def test_the_checkout_comes_only_from_desk_dir(self):
         self.context.read(REPO, "README.md")
-        self.assertEqual(self.asked, [(REPO, None)])
-        self.asked.clear()
-        self.context.read(REPO, "", desks={REPO: "/somewhere"})
-        self.assertEqual(self.asked, [(REPO, {REPO: "/somewhere"})])
+        self.assertEqual(self.asked, [REPO])
 
 
 class SymlinkTest(ContextBase):

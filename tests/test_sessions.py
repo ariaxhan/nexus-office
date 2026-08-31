@@ -454,27 +454,35 @@ class ReadmeTest(FakeHcom):
 
     def setUp(self):
         super().setUp()
-        self.checkout = self.dir / "docs"
-        self.checkout.mkdir()
-        self.desks = {"acme/docs": str(self.checkout)}
+        # A real checkout in a real vault, found the way the door finds one: by
+        # its origin. There is no other way in, which is the point.
+        self.root = self.dir / "vault"
+        self.was_root = os.environ.get("OFFICE_RUNTIME_ROOT", "")
+        os.environ["OFFICE_RUNTIME_ROOT"] = str(self.root)
+        self.addCleanup(lambda: os.environ.__setitem__("OFFICE_RUNTIME_ROOT", self.was_root))
+        self.checkout = self.root / "CodingVault" / "docs"
+        (self.checkout / ".git").mkdir(parents=True)
+        sessions._origin_cache[str(self.checkout)] = "acme/docs"
 
     def test_the_readme_comes_back_with_the_name_it_has_on_disk(self):
         (self.checkout / "README.md").write_text("# acme docs\n\nthe front page\n")
-        code, body = sessions.readme("acme/docs", self.desks)
+        code, body = sessions.readme("acme/docs")
         self.assertEqual((code, body["state"], body["name"]), (200, "ok", "README.md"))
         self.assertIn("the front page", body["text"])
         self.assertFalse(body["clipped"])
         self.assertTrue(body["at"])
 
     def test_a_checkout_with_no_readme_says_so_rather_than_answering_blank(self):
-        code, body = sessions.readme("acme/docs", self.desks)
+        code, body = sessions.readme("acme/docs")
         self.assertEqual((code, body["state"], body["text"]), (200, "none", ""))
         self.assertTrue(body["detail"])
 
     def test_a_desk_this_machine_does_not_have_is_its_own_answer(self):
+        elsewhere = self.dir / "another-vault"
+        elsewhere.mkdir()
         with unittest.mock.patch.dict(os.environ,
-                                      {"OFFICE_RUNTIME_ROOT": str(self.dir)}):
-            code, body = sessions.readme("acme/docs", {})
+                                      {"OFFICE_RUNTIME_ROOT": str(elsewhere)}):
+            code, body = sessions.readme("acme/docs")
         self.assertEqual((code, body["state"]), (200, "elsewhere"))
         self.assertIn("acme/docs", body["detail"])
 
@@ -483,13 +491,13 @@ class ReadmeTest(FakeHcom):
         "not checked out" points a person at the repo when the thing to fix is
         the door, which was started without `--root`."""
         with unittest.mock.patch.dict(os.environ, {"OFFICE_RUNTIME_ROOT": ""}):
-            code, body = sessions.readme("acme/docs", {})
+            code, body = sessions.readme("acme/docs")
         self.assertEqual((code, body["state"]), (200, "elsewhere"))
         self.assertEqual(body["detail"], sessions.NO_VAULT)
 
     def test_an_enormous_readme_is_clipped_and_says_it_was(self):
         (self.checkout / "README.md").write_text("x" * (sessions.MAX_README + 500))
-        _, body = sessions.readme("acme/docs", self.desks)
+        _, body = sessions.readme("acme/docs")
         self.assertEqual(len(body["text"]), sessions.MAX_README)
         self.assertTrue(body["clipped"])
 
@@ -499,7 +507,7 @@ class ReadmeTest(FakeHcom):
         outside = self.dir / "secret.md"
         outside.write_text("not this checkout's front page")
         (self.checkout / "README.md").symlink_to(outside)
-        code, body = sessions.readme("acme/docs", self.desks)
+        code, body = sessions.readme("acme/docs")
         self.assertEqual((code, body["state"], body["text"]), (200, "unreadable", ""))
         self.assertNotIn("not this checkout", str(body))
 
@@ -507,7 +515,7 @@ class ReadmeTest(FakeHcom):
         secret = self.dir / "README.md"
         secret.write_text("not a desk")
         for bad in ("../..", "acme/../../etc/passwd", "/etc/passwd", "", "acme"):
-            code, body = sessions.readme(bad, self.desks)
+            code, body = sessions.readme(bad)
             self.assertEqual(code, 400, bad)
             self.assertEqual(body["error"], "bad repo")
 
