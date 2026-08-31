@@ -70,6 +70,8 @@ class FakeHcom(unittest.TestCase):
         self.addCleanup(lambda: os.environ.__setitem__("PATH", self.was_path))
         sessions._origin_cache.clear()
         self.addCleanup(sessions._origin_cache.clear)
+        sessions._checkout_cache.clear()
+        self.addCleanup(sessions._checkout_cache.clear)
         self.install()
 
     def install(self, list_out="[]", transcript_out="[]", term_out="{}",
@@ -369,6 +371,27 @@ class StartTest(FakeHcom):
         sessions._origin_cache[str(decoy)] = "acme/site-spec-private"
         sessions._origin_cache[str(real)] = "acme/site-spec"
         self.assertEqual(sessions.desk_dir("acme/site-spec"), str(real.resolve()))
+
+    def test_a_checkout_inside_another_checkout_is_found(self):
+        """`jessstrom/matra` lives in `CodingVault/blinkbuild/matra-suite/matra`:
+        a suite repo is a checkout that contains other checkouts, and a walk that
+        stops one level down cannot see any of them."""
+        suite = self.root / "CodingVault" / "blinkbuild" / "matra-suite"
+        inner = suite / "matra"
+        for d in (suite, inner):
+            (d / ".git").mkdir(parents=True)
+        sessions._origin_cache[str(suite)] = "acme/matra-suite"
+        sessions._origin_cache[str(inner)] = "jessstrom/matra"
+        self.assertEqual(sessions.desk_dir("jessstrom/matra"), str(inner.resolve()))
+        self.assertEqual(sessions.desk_dir("acme/matra-suite"), str(suite.resolve()))
+
+    def test_the_walk_does_not_descend_into_a_folder_that_holds_no_desk(self):
+        """A vendored clone under `node_modules` is not a desk, and walking
+        thousands of them is what makes a bounded walk affordable at all."""
+        buried = self.root / "CodingVault" / "app" / "node_modules" / "dep"
+        (buried / ".git").mkdir(parents=True)
+        sessions._origin_cache[str(buried)] = "acme/dep"
+        self.assertEqual(sessions.desk_dir("acme/dep"), "")
 
     def test_the_walk_still_refuses_a_folder_no_origin_claims(self):
         (self.root / "CodingVault" / "unrelated" / ".git").mkdir(parents=True)

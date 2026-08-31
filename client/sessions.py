@@ -576,10 +576,9 @@ def desk_dir(repo: str, desks: dict | None = None) -> str:
 
     Found the way everything else here is found: from what is actually on disk.
     A session already running in that repo names its directory outright; failing
-    that, the vault is walked one level under each of its two vault folders,
-    which is where every checkout in this workspace lives. No list, and no
-    guessing a path from the repo name: a folder that is not there must read as
-    "not checked out", never as a path that will fail later.
+    that, the vault is walked and every checkout in it is asked for its origin.
+    No list, and no guessing a path from the repo name: a folder that is not
+    there must read as "not checked out", never as a path that will fail later.
     """
     for row in read().get("sessions") or []:
         if row["repo"] == repo and row["directory"]:
@@ -600,21 +599,70 @@ def desk_dir(repo: str, desks: dict | None = None) -> str:
         if _is_checkout_of(candidate, repo):
             return str(candidate.resolve())
 
-    # The folder is not always named after the repo: `ariacam` is `aria-cam`,
-    # and `site-spec` is somebody else's `site-spec-private` while the real one
-    # sits in `site-spec-public`. So the same one level is walked and asked,
-    # rather than the name being trusted. The origin is still what decides, so
-    # this reaches no folder the name guess was allowed to reach.
-    for vault in ("CodingVault", "CollabVault", ""):
-        folder = (base / vault) if vault else base
+    # The folder is not always named after the repo (`ariacam` is `aria-cam`),
+    # and it is not always one level down: `jessstrom/matra` lives three deep,
+    # in `CodingVault/blinkbuild/matra-suite/matra`, because a suite repo is a
+    # checkout that contains other checkouts. So the vault is walked to a bounded
+    # depth and every checkout in it is asked for its origin, including the ones
+    # inside another checkout. The origin is still the only thing that decides,
+    # so this reaches no folder the name guess was not already allowed to reach.
+    for found_repo, found_dir in _checkouts(base).items():
+        if found_repo == repo:
+            return found_dir
+    return ""
+
+
+# Deep enough for a checkout inside a suite repo inside a vault folder, and no
+# deeper: past this every hit is somebody's vendored dependency, and the walk
+# starts costing more than the answer is worth.
+WALK_DEPTH = 4
+# Folders that never hold a desk and always hold thousands of files.
+WALK_SKIP = {"node_modules", "_archive", "venv", "build", "dist", "Pods",
+             "DerivedData", "target", "vendor", "__pycache__"}
+# The walk costs about a second over a hundred checkouts, so it is cached, but
+# not for the life of the process: a repo cloned after the door started must
+# become findable without a restart, and two minutes is short enough that
+# nobody notices and long enough that a pane opening does not re-walk the disk.
+WALK_TTL_S = 120
+_checkout_cache: dict[str, tuple[float, dict[str, str]]] = {}
+
+
+def _checkouts(base: pathlib.Path) -> dict[str, str]:
+    """Every checkout under `base`, as {owner/name: directory}.
+
+    Shallowest wins on a tie: two clones of one repo is a person's scratch copy
+    next to the real one, and the real one is the one nearer the top.
+    """
+    key = str(base)
+    cached = _checkout_cache.get(key)
+    if cached and (time.time() - cached[0]) < WALK_TTL_S:
+        return cached[1]
+    found: dict[str, str] = {}
+    stack: list[tuple[pathlib.Path, int]] = [(base, 0)]
+    while stack:
+        folder, depth = stack.pop(0)
+        if depth > WALK_DEPTH:
+            continue
         try:
             children = sorted(folder.iterdir())
         except OSError:
             continue
         for candidate in children:
-            if candidate.name != name and _is_checkout_of(candidate, repo):
-                return str(candidate.resolve())
-    return ""
+            name = candidate.name
+            if name.startswith(".") or name in WALK_SKIP:
+                continue
+            try:
+                if not candidate.is_dir():
+                    continue
+            except OSError:
+                continue
+            if (candidate / ".git").exists():
+                nwo = origin_nwo(str(candidate))
+                if nwo and nwo not in found:
+                    found[nwo] = str(candidate.resolve())
+            stack.append((candidate, depth + 1))
+    _checkout_cache[key] = (time.time(), found)
+    return found
 
 
 def _is_checkout_of(candidate: pathlib.Path, repo: str) -> bool:
