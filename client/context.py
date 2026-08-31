@@ -146,7 +146,10 @@ def _entry(root: str, candidate: pathlib.Path, rel: str) -> dict | None:
     parent = str(pathlib.PurePosixPath(rel).parent)
     return {"path": rel, "name": candidate.name,
             "group": "root" if parent == "." else parent,
-            "bytes": int(st.st_size)}
+            "bytes": int(st.st_size),
+            # When it last changed. A desk holds hundreds of documents in folder
+            # order, so the one written an hour ago is invisible without this.
+            "mtime": int(st.st_mtime)}
 
 
 def index(root: str) -> tuple[list[dict], bool]:

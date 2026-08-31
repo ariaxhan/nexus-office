@@ -371,13 +371,31 @@ private final class DemoFloor {
         var files: [ContextFile]
         var texts: [String: String]
 
-        enum CodingKeys: String, CodingKey { case root, files, texts }
+        enum CodingKeys: String, CodingKey {
+            case root, files, texts
+            case recentHoursAgo = "recent_hours_ago"
+        }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             root = c.str(.root) ?? ""
             files = c.list(.files, ContextFile.self)
             texts = ((try? c.decodeIfPresent([String: String].self, forKey: .texts)) ?? nil) ?? [:]
+            // A fixture cannot carry a fixed mtime and stay a picture of a
+            // working desk: "recent" is a window, so an absolute timestamp is
+            // recent in September and ancient by Christmas. The demo says how
+            // long ago instead, and the age is resolved when it is loaded.
+            let ago = ((try? c.decodeIfPresent([String: Double].self,
+                                               forKey: .recentHoursAgo)) ?? nil) ?? [:]
+            if !ago.isEmpty {
+                let now = Date().timeIntervalSince1970
+                files = files.map { file in
+                    guard let hours = ago[file.path] else { return file }
+                    var touched = file
+                    touched.mtime = Int(now - hours * 3600)
+                    return touched
+                }
+            }
         }
     }
 

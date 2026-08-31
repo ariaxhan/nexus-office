@@ -1492,6 +1492,12 @@
       "root": "/Users/aria/code/checkout-api",
       "files": [
         {
+          "path": "CHANGELOG.md",
+          "name": "CHANGELOG.md",
+          "group": "root",
+          "bytes": 193
+        },
+        {
           "path": "README.md",
           "name": "README.md",
           "group": "root",
@@ -1504,10 +1510,28 @@
           "bytes": 129
         },
         {
-          "path": "CHANGELOG.md",
-          "name": "CHANGELOG.md",
-          "group": "root",
-          "bytes": 193
+          "path": "_meta/canon/failures/2026-06-double-capture.md",
+          "name": "2026-06-double-capture.md",
+          "group": "_meta/canon/failures",
+          "bytes": 1880
+        },
+        {
+          "path": "_meta/canon/webhook-ordering.md",
+          "name": "webhook-ordering.md",
+          "group": "_meta/canon",
+          "bytes": 2140
+        },
+        {
+          "path": "_meta/chronicles/2026/2026-06-ledger.md",
+          "name": "2026-06-ledger.md",
+          "group": "_meta/chronicles/2026",
+          "bytes": 990
+        },
+        {
+          "path": "_meta/chronicles/2026/2026-07-ledger.md",
+          "name": "2026-07-ledger.md",
+          "group": "_meta/chronicles/2026",
+          "bytes": 1210
         },
         {
           "path": "_meta/chronicles/2026/2026-08-ledger.md",
@@ -1516,10 +1540,22 @@
           "bytes": 902
         },
         {
+          "path": "_meta/commissions/2026-07-11-refund-parity.md",
+          "name": "2026-07-11-refund-parity.md",
+          "group": "_meta/commissions",
+          "bytes": 1460
+        },
+        {
           "path": "_meta/commissions/2026-08-24-idempotent-capture.md",
           "name": "2026-08-24-idempotent-capture.md",
           "group": "_meta/commissions",
           "bytes": 1104
+        },
+        {
+          "path": "_meta/plans/idempotency-keys.md",
+          "name": "idempotency-keys.md",
+          "group": "_meta/plans",
+          "bytes": 1320
         },
         {
           "path": "_meta/plans/retry-budget.md",
@@ -1528,16 +1564,52 @@
           "bytes": 764
         },
         {
+          "path": "_meta/plans/settlement-window.md",
+          "name": "settlement-window.md",
+          "group": "_meta/plans",
+          "bytes": 1105
+        },
+        {
+          "path": "_meta/reports/chargeback-audit.md",
+          "name": "chargeback-audit.md",
+          "group": "_meta/reports",
+          "bytes": 1770
+        },
+        {
+          "path": "_meta/reports/latency-2026-08.md",
+          "name": "latency-2026-08.md",
+          "group": "_meta/reports",
+          "bytes": 2310
+        },
+        {
           "path": "docs/api/capture.md",
           "name": "capture.md",
           "group": "docs/api",
           "bytes": 400
         },
         {
+          "path": "docs/api/dispute.md",
+          "name": "dispute.md",
+          "group": "docs/api",
+          "bytes": 860
+        },
+        {
+          "path": "docs/api/payout.md",
+          "name": "payout.md",
+          "group": "docs/api",
+          "bytes": 940
+        },
+        {
           "path": "docs/api/refund.md",
           "name": "refund.md",
           "group": "docs/api",
           "bytes": 212
+        },
+        {
+          "path": "docs/onboarding.md",
+          "name": "onboarding.md",
+          "group": "docs",
+          "bytes": 1530
         },
         {
           "path": "docs/runbook.md",
@@ -1556,6 +1628,11 @@
         "docs/api/refund.md": "# Refund\n\n`POST /v1/refund`\n\nA refund never exceeds what was captured. Over is a `422`, not a clamp: the caller asked for something that cannot be true, and a smaller number quietly done is a lie with a receipt.\n",
         "docs/runbook.md": "# Runbook\n\n## The capture queue is growing\n\n1. `bin/queue depth` and note the number\n2. check the processor status page\n3. if the processor is up, restart one worker and watch depth for two minutes\n4. if it is not, do nothing: the retry budget drains it when they come back\n",
         ".claude/skills/ship/SKILL.md": "# ship\n\nBuild, test, tag, push. Never `--no-verify`.\n\n- `npm test`\n- `npm run build`\n- `git tag v$(jq -r .version package.json)`\n"
+      },
+      "recent_hours_ago": {
+        "_meta/plans/retry-budget.md": 3,
+        "_meta/reports/latency-2026-08.md": 20,
+        "_meta/commissions/2026-08-24-idempotent-capture.md": 52
       }
     },
     "acme/storefront": {

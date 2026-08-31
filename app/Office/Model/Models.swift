@@ -861,18 +861,22 @@ public struct ContextFile: Decodable, Hashable, Identifiable {
     /// The folder it sits in, or `root`. The index is drawn under these.
     public var group: String
     public var bytes: Int
+    /// Unix seconds, when the file last changed. Zero when the server did not
+    /// say, which is treated as "not recent" rather than "epoch".
+    public var mtime: Int
 
     public var id: String { path }
 
     public init(path: String = "", name: String = "", group: String = "",
-                bytes: Int = 0) {
+                bytes: Int = 0, mtime: Int = 0) {
         self.path = path
         self.name = name
         self.group = group
         self.bytes = bytes
+        self.mtime = mtime
     }
 
-    enum CodingKeys: String, CodingKey { case path, name, group, bytes }
+    enum CodingKeys: String, CodingKey { case path, name, group, bytes, mtime }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -880,6 +884,7 @@ public struct ContextFile: Decodable, Hashable, Identifiable {
         name = c.str(.name) ?? ""
         group = c.str(.group) ?? ""
         bytes = max(0, c.int(.bytes) ?? 0)
+        mtime = max(0, c.int(.mtime) ?? 0)
     }
 }
 
@@ -960,6 +965,25 @@ public enum FileTree {
         /// How many files are under a folder, for the count on a shut one.
         public let count: Int
         public var isFolder: Bool { file == nil }
+    }
+
+    /// The handful of documents somebody has actually touched lately, newest
+    /// first.
+    ///
+    /// A desk holds hundreds of Markdown files in folder order, so the brief
+    /// written an hour ago sits wherever the alphabet put it and is invisible.
+    /// This is deliberately small and deliberately silent: no recent files, or
+    /// an index short enough to read whole, and the caller draws nothing.
+    public static func recent(of files: [ContextFile], now: Int,
+                              within days: Int = 7, limit: Int = 5,
+                              floor: Int = 12) -> [ContextFile] {
+        guard files.count > floor else { return [] }
+        let cutoff = now - days * 86_400
+        return files
+            .filter { $0.mtime >= cutoff && $0.mtime > 0 && $0.mtime <= now }
+            .sorted { $0.mtime == $1.mtime ? $0.path < $1.path : $0.mtime > $1.mtime }
+            .prefix(limit)
+            .map { $0 }
     }
 
     public static func rows(of files: [ContextFile], closed: Set<String> = []) -> [Row] {

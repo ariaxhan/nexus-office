@@ -276,6 +276,20 @@ struct DeskContextView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
                 if let context {
+                    let recent = FileTree.recent(of: context.files,
+                                                 now: Int(Date().timeIntervalSince1970))
+                    if !recent.isEmpty {
+                        Text("recent")
+                            .font(.system(size: 10 * scale, weight: .semibold))
+                            .foregroundStyle(Theme.faint)
+                            .padding(.horizontal, 8)
+                            .padding(.bottom, 2)
+                        ForEach(recent) { file in
+                            entry(file, depth: 0, open: context.path == file.path)
+                        }
+                        Divider()
+                            .padding(.vertical, 6)
+                    }
                     ForEach(FileTree.rows(of: context.files, closed: closed)) { row in
                         if row.isFolder {
                             folder(row)

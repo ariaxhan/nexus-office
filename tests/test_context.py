@@ -192,10 +192,24 @@ class IndexTest(ContextBase):
     def test_each_entry_carries_what_the_app_draws_and_nothing_more(self):
         self.write("_meta/plans/one.md", "# one\n")
         entry = self.index()["files"][0]
-        self.assertEqual(set(entry), {"path", "name", "group", "bytes"})
+        self.assertEqual(set(entry), {"path", "name", "group", "bytes", "mtime"})
         self.assertEqual(entry["name"], "one.md")
         self.assertEqual(entry["group"], "_meta/plans")
         self.assertEqual(entry["bytes"], len("# one\n"))
+        self.assertGreater(entry["mtime"], 0)
+
+    def test_mtime_is_the_file_s_own_and_distinguishes_a_fresh_document(self):
+        """The index is folder-ordered, so without this the brief written an hour
+        ago is indistinguishable from a note from March."""
+        import os
+        self.write("_meta/plans/old.md", "# old\n")
+        self.write("_meta/plans/new.md", "# new\n")
+        old_path = pathlib.Path(self.root) / "_meta/plans/old.md"
+        long_ago = old_path.stat().st_mtime - 90 * 24 * 3600
+        os.utime(old_path, (long_ago, long_ago))
+        by_path = {f["path"]: f for f in self.index()["files"]}
+        self.assertLess(by_path["_meta/plans/old.md"]["mtime"],
+                        by_path["_meta/plans/new.md"]["mtime"])
 
     def test_a_root_readme_is_grouped_apart_from_the_meta_tree(self):
         self.write("README.md")
