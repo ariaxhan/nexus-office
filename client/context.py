@@ -53,13 +53,6 @@ KEY = "context"
 # lookup, so a name that is not a name never reaches the filesystem.
 NWO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
-# The index is a list a person scans, not a search result. Five hundred is more
-# entries than anyone reads and small enough that walking it is free; past that
-# the answer says out loud that it was cut.
-MAX_FILES = 2000
-# How many directory entries the walk will look at before it stops. A checkout
-# with a pathological tree must not turn one click into a filesystem crawl.
-MAX_SCAN = 60_000
 # Folders that are never walked. Not documents of this repo: a dependency's
 # README, a build product, a cache, or git's own object store.
 SKIP_DIRS = frozenset({
@@ -156,14 +149,12 @@ def index(root: str) -> tuple[list[dict], bool]:
     """Everything this desk offers to show, and whether the list was cut.
 
     Root READMEs first, then every other Markdown by path, so the front page is
-    the first row and the tree under it reads in folder order. Sorted before it
-    is cut, so which two thousand you get is a fact about the checkout rather
-    than a fact about the order the filesystem happened to hand them over in.
+    the first row and the tree under it reads in folder order. The index is
+    complete: truncating it makes later paths fail the exact-match read
+    permission even though they are valid documents in the checkout.
     """
     base = pathlib.Path(root)
     found: list[tuple[int, str, dict]] = []
-    scanned = 0
-
     for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
         here = pathlib.Path(dirpath)
         # `followlinks=False` already declines to descend into a linked
@@ -173,12 +164,8 @@ def index(root: str) -> tuple[list[dict], bool]:
                              if d not in SKIP_DIRS
                              and not (here / d).is_symlink()
                              and not (here / d / ".git").exists())
-        scanned += len(dirnames)
         at_root = here == base
         for fname in sorted(filenames):
-            scanned += 1
-            if scanned > MAX_SCAN:
-                break
             readme = at_root and _is_readme(fname)
             if not readme and not _is_markdown(fname):
                 continue
@@ -187,13 +174,9 @@ def index(root: str) -> tuple[list[dict], bool]:
             entry = _entry(root, candidate, rel)
             if entry:
                 found.append((0 if readme else 1, rel, entry))
-        if scanned > MAX_SCAN:
-            break
-
     found.sort(key=lambda row: (row[0], row[1]))
     files = [row[2] for row in found]
-    capped = len(files) > MAX_FILES or scanned > MAX_SCAN
-    return files[:MAX_FILES], capped
+    return files, False
 
 
 def read(repo: str, path: str = "") -> tuple[int, dict]:

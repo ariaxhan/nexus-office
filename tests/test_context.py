@@ -217,18 +217,23 @@ class IndexTest(ContextBase):
 
 
 class LimitTest(ContextBase):
-    def test_more_than_the_cap_are_capped_and_the_cap_is_admitted(self):
-        """A truncated list presented as a complete one is the defect this repo
-        exists to prevent, so the cap travels with the data."""
-        for i in range(self.context.MAX_FILES + 25):
+    def test_more_than_the_old_file_cap_are_all_indexed(self):
+        """A large checkout is still one desk, not its alphabetic first slice."""
+        for i in range(2025):
             self.write(f"_meta/many/n{i:04d}.md", "x")
         body = self.index()
-        self.assertEqual(len(body["files"]), self.context.MAX_FILES)
-        self.assertTrue(body["capped"])
+        self.assertEqual(len(body["files"]), 2025)
+        self.assertFalse(body["capped"])
 
-    def test_a_short_index_never_claims_to_be_capped(self):
-        self.write("README.md")
-        self.assertFalse(self.index()["capped"])
+    def test_scan_count_does_not_truncate_the_index(self):
+        # Lower the former boundary so this catches truncation without creating
+        # sixty thousand files. Once removed, this assignment has no effect.
+        self.context.MAX_SCAN = 3
+        for i in range(5):
+            self.write(f"docs/{i}.md")
+        body = self.index()
+        self.assertEqual(len(body["files"]), 5)
+        self.assertFalse(body["capped"])
 
     def test_a_file_over_the_size_cap_is_not_listed_and_cannot_be_read(self):
         """Skipped at index time, so the oversize path is never opened at all
