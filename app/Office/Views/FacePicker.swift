@@ -29,10 +29,10 @@ struct FacePicker: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(repo)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .officeFont(size: 12.5, weight: .medium)
                     .foregroundStyle(Theme.text)
                 Text(Faces.name(repo: repo))
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
 
@@ -44,12 +44,12 @@ struct FacePicker: View {
                     typed = hex
                 }
             ), supportsOpacity: false)
-            .font(.system(size: 12))
+            .officeFont(size: 12)
 
             HStack(spacing: 6) {
                 TextField("#rrggbb", text: $typed)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12, design: .monospaced))
+                    .officeFont(size: 12, design: .monospaced)
                     .frame(width: 96)
                     .onSubmit { commit() }
                 Button("Set") { commit() }
@@ -61,7 +61,7 @@ struct FacePicker: View {
                 }
                 .disabled(!faces.isChosen(repo: repo))
             }
-            .font(.system(size: 12))
+            .officeFont(size: 12)
         }
         .padding(14)
         .frame(width: 260)

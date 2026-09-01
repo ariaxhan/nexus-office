@@ -15,7 +15,7 @@ struct SettingsPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Settings")
-                .font(.system(size: 12, weight: .semibold))
+                .officeFont(size: 12, weight: .semibold)
                 .foregroundStyle(Theme.text)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -28,7 +28,7 @@ struct SettingsPopover: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 Text(layoutBlurb)
-                    .font(.system(size: 10.5))
+                    .officeFont(size: 10.5)
                     .foregroundStyle(Theme.faint)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(width: 220, alignment: .leading)
@@ -38,11 +38,11 @@ struct SettingsPopover: View {
                 label("panes")
                 Toggle("Bots", isOn: $store.showBots)
                     .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
+                    .officeFont(size: 12)
                     .foregroundStyle(Theme.text)
                 Toggle("Wall", isOn: $store.showWall)
                     .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
+                    .officeFont(size: 12)
                     .foregroundStyle(Theme.text)
             }
 
@@ -62,12 +62,12 @@ struct SettingsPopover: View {
                 label("filter")
                 Toggle("Only desks that need a person", isOn: $store.needsOnly)
                     .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
+                    .officeFont(size: 12)
                     .foregroundStyle(Theme.text)
             }
 
             Text("Kept between launches. A raised hand is never hidden by any of it.")
-                .font(.system(size: 10.5))
+                .officeFont(size: 10.5)
                 .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 220, alignment: .leading)
@@ -85,7 +85,7 @@ struct SettingsPopover: View {
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
+            .officeFont(size: 10.5, weight: .semibold)
             .foregroundStyle(Theme.faint)
     }
 }

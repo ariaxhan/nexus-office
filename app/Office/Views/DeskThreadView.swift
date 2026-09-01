@@ -80,7 +80,7 @@ struct DeskThreadView: View {
                     }
                     if !station.prs.isEmpty {
                         Text("pull requests")
-                            .font(.system(size: 11, weight: .semibold))
+                            .officeFont(size: 11, weight: .semibold)
                             .foregroundStyle(Theme.faint)
                             .padding(.top, 8)
                     }
@@ -100,7 +100,7 @@ struct DeskThreadView: View {
                     if station.issues.isEmpty && station.prs.isEmpty
                         && notice == nil && gate == nil {
                         Text(station.detail.isEmpty ? "Nothing open here." : station.detail)
-                            .font(.system(size: 12.5))
+                            .officeFont(size: 12.5)
                             .foregroundStyle(Theme.faint)
                             .padding(.top, 20)
                         // A desk with nothing open used to be that one line and
@@ -129,7 +129,7 @@ struct DeskThreadView: View {
             StateDot(state: state, size: 22)
             VStack(alignment: .leading, spacing: 1) {
                 Text(station.repo)
-                    .font(.system(size: 13, weight: .medium))
+                    .officeFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.text)
                 HStack(spacing: 5) {
                     Text(state.label).foregroundStyle(Theme.color(state))
@@ -137,7 +137,7 @@ struct DeskThreadView: View {
                         Text(station.detail).foregroundStyle(Theme.faint)
                     }
                 }
-                .font(.system(size: 11))
+                .officeFont(size: 11)
                 .lineLimit(1)
             }
             Spacer()
@@ -146,8 +146,7 @@ struct DeskThreadView: View {
             // a second row in the roster, because it is the same desk.
             Picker("", selection: Binding(
                 get: { tab },
-                set: { $0 == .context ? store.showContext(at: station.repo)
-                                      : store.showWork(at: station.repo) })) {
+                set: { store.show($0, at: station.repo) })) {
                 ForEach(DeskTab.allCases, id: \.self) { choice in
                     Text(choice.label).tag(choice)
                 }
@@ -166,11 +165,11 @@ struct DeskThreadView: View {
             // the confidence of a live one.
             if let asOf {
                 Text(asOf)
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.amber.opacity(0.85))
             } else {
                 Text(StateRules.stamp(station.at))
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
         }
@@ -204,11 +203,11 @@ struct ReadmeBlock: View {
             if let readme, readme.isOK {
                 HStack(spacing: 8) {
                     Text(readme.name.isEmpty ? "readme" : readme.name.lowercased())
-                        .font(.system(size: 11, weight: .semibold))
+                        .officeFont(size: 11, weight: .semibold)
                         .foregroundStyle(Theme.faint)
                     if readme.clipped {
                         Text("first 64 KB")
-                            .font(.system(size: 11))
+                            .officeFont(size: 11)
                             .foregroundStyle(Theme.faint)
                     }
                 }
@@ -218,7 +217,7 @@ struct ReadmeBlock: View {
                 // Why there is no front page, in the door's own words. Not red:
                 // a repo that is not checked out here is not a broken repo.
                 Text(sentence)
-                    .font(.system(size: 12))
+                    .officeFont(size: 12)
                     .foregroundStyle(Theme.faint)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 620, alignment: .leading)
@@ -273,7 +272,6 @@ struct DeskContextView: View {
 
     // MARK: - the tree
 
-    @Environment(\.typeScale) private var scale
     /// Folders a person has shut. Shut rather than open, so a checkout with a
     /// hundred folders comes up with every one of them open and a file two
     /// levels down is one click away rather than three.
@@ -287,7 +285,7 @@ struct DeskContextView: View {
                                                  now: Int(Date().timeIntervalSince1970))
                     if !recent.isEmpty {
                         Text("recent")
-                            .font(.system(size: 10 * scale, weight: .semibold))
+                            .officeFont(size: 10, weight: .semibold)
                             .foregroundStyle(Theme.faint)
                             .padding(.horizontal, 8)
                             .padding(.bottom, 2)
@@ -308,18 +306,18 @@ struct DeskContextView: View {
                         // A truncated list presented as a whole one is the
                         // defect this project exists to prevent.
                         Text("this list was cut; the checkout has more")
-                            .font(.system(size: 10.5 * scale))
+                            .officeFont(size: 10.5)
                             .foregroundStyle(Theme.amber)
                             .padding(8)
                     }
                     if context.files.isEmpty {
                         Text("no Markdown in this checkout")
-                            .font(.system(size: 11.5 * scale))
+                            .officeFont(size: 11.5)
                             .foregroundStyle(Theme.faint)
                             .padding(10)
                     } else {
                         Text("\(context.files.count) files")
-                            .font(.system(size: 10.5 * scale))
+                            .officeFont(size: 10.5)
                             .foregroundStyle(Theme.faint)
                             .padding(.horizontal, 8)
                             .padding(.top, 10)
@@ -341,18 +339,18 @@ struct DeskContextView: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: shut ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 8 * scale, weight: .semibold))
+                    .officeSymbol(size: 8, weight: .semibold)
                     .foregroundStyle(Theme.faint)
                     .frame(width: 10)
                 Text(row.name)
-                    .font(.system(size: 11.5 * scale, weight: .medium))
+                    .officeFont(size: 11.5, weight: .medium)
                     .foregroundStyle(Theme.dim)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
                 if shut {
                     Text("\(row.count)")
-                        .font(.system(size: 10 * scale))
+                        .officeFont(size: 10)
                         .foregroundStyle(Theme.faint)
                 }
             }
@@ -372,11 +370,11 @@ struct DeskContextView: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "doc.text")
-                        .font(.system(size: 9 * scale))
+                        .officeSymbol(size: 9)
                         .foregroundStyle(open ? Theme.blue : Theme.faint)
                         .frame(width: 10)
                     Text(file.name)
-                        .font(.system(size: 12 * scale))
+                        .officeFont(size: 12)
                         .foregroundStyle(open ? Theme.text : Theme.dim)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -393,7 +391,7 @@ struct DeskContextView: View {
                 Task { await copy(file) }
             } label: {
                 Image(systemName: "doc.on.doc")
-                    .font(.system(size: 10 * scale))
+                    .officeSymbol(size: 10)
                     .foregroundStyle(Theme.faint)
                     .padding(4)
                     .contentShape(Rectangle())
@@ -437,17 +435,17 @@ struct DeskContextView: View {
                     // The reason, in the server's own words. A desk the office
                     // cannot place must never draw as a desk with nothing in it.
                     Text(said)
-                        .font(.system(size: 12.5 * scale))
+                        .officeFont(size: 12.5)
                         .foregroundStyle(Theme.amber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let context, !context.path.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(context.title)
-                            .font(.system(size: 13 * scale, weight: .medium))
+                            .officeFont(size: 13, weight: .medium)
                             .foregroundStyle(Theme.text)
                         Text(context.path)
-                            .font(.system(size: 10.5 * scale, design: .monospaced))
+                            .officeFont(size: 10.5, design: .monospaced)
                             .foregroundStyle(Theme.faint)
                             .textSelection(.enabled)
                     }
@@ -455,17 +453,17 @@ struct DeskContextView: View {
                         .lineSpacing(2)
                 } else if store.isLoadingContext(at: repo) {
                     Text("reading the checkout")
-                        .font(.system(size: 12))
+                        .officeFont(size: 12)
                         .foregroundStyle(Theme.faint)
                 } else if store.contextError(at: repo) == nil {
                     Text("nothing to read here.")
-                        .font(.system(size: 12.5))
+                        .officeFont(size: 12.5)
                         .foregroundStyle(Theme.faint)
                 }
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 16)
-            .frame(maxWidth: 760 * scale, alignment: .leading)
+            .frame(maxWidth: 760, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
         .background(Theme.ink)
@@ -497,7 +495,7 @@ struct StaleNotice: View {
                 .fill(Theme.amber.opacity(0.45))
                 .frame(width: 2)
             Text(text)
-                .font(.system(size: 12))
+                .officeFont(size: 12)
                 .foregroundStyle(Theme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -535,15 +533,15 @@ struct IssueCard: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("#\(issue.number)")
-                    .font(.system(size: 12, design: .monospaced))
+                    .officeFont(size: 12, design: .monospaced)
                     .foregroundStyle(Theme.faint)
                 Text(issue.title)
-                    .font(.system(size: 14, weight: .medium))
+                    .officeFont(size: 14, weight: .medium)
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 Text(StateRules.stamp(issue.updatedAt))
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
 
@@ -554,7 +552,7 @@ struct IssueCard: View {
                         // the same sentence the runner uses to decide.
                         HStack(spacing: 5) {
                             Circle().fill(Theme.red).frame(width: 6, height: 6)
-                            Text("waiting on you").font(.system(size: 11, weight: .medium))
+                            Text("waiting on you").officeFont(size: 11, weight: .medium)
                         }
                         .foregroundStyle(Theme.red)
                         .padding(.horizontal, 7)
@@ -569,7 +567,7 @@ struct IssueCard: View {
 
             if !issue.body.isEmpty {
                 Text(Markdown.render(issue.body))
-                    .font(.system(size: 12.5))
+                    .officeFont(size: 12.5)
                     .foregroundStyle(Theme.dim)
                     .textSelection(.enabled)
                     .tint(Theme.blue)
@@ -592,7 +590,7 @@ struct IssueCard: View {
                 Spacer()
                 if let url = URL(string: issue.url), url.scheme == "https" {
                     Link("open on GitHub", destination: url)
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
             }
@@ -602,7 +600,7 @@ struct IssueCard: View {
                     TextField("Answer it. A reply without the bot's marker is what re-queues it.",
                               text: draft, axis: .vertical)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12.5))
+                        .officeFont(size: 12.5)
                         .foregroundStyle(Theme.text)
                         .lineLimit(2...8)
                         .padding(9)
@@ -670,15 +668,15 @@ struct PullRequestCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("#\(pr.number)")
-                    .font(.system(size: 12, design: .monospaced))
+                    .officeFont(size: 12, design: .monospaced)
                     .foregroundStyle(Theme.faint)
                 Text(pr.title)
-                    .font(.system(size: 13.5, weight: .medium))
+                    .officeFont(size: 13.5, weight: .medium)
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 Text(StateRules.stamp(pr.updatedAt))
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
             HStack(spacing: 6) {
@@ -709,24 +707,24 @@ struct PullRequestCard: View {
                         withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .medium))
+                    .officeFont(size: 11, weight: .medium)
                     .foregroundStyle(Theme.blue)
                 }
                 ForEach(pr.closes, id: \.self) { number in
                     if openIssues.contains(number) {
                         Button("closes #\(number)") { jump(number) }
                             .buttonStyle(.plain)
-                            .font(.system(size: 11))
+                            .officeFont(size: 11)
                             .foregroundStyle(Theme.blue)
                     } else {
                         Text("closes #\(number)")
-                            .font(.system(size: 11))
+                            .officeFont(size: 11)
                             .foregroundStyle(Theme.faint)
                     }
                 }
                 if !StateRules.moment(pr.updatedAt).isEmpty {
                     Text("updated \(StateRules.moment(pr.updatedAt))")
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
                 Spacer(minLength: 0)
@@ -747,13 +745,13 @@ struct PullRequestCard: View {
                     Text(!pr.pipeline ? "view only; the Office did not open this PR"
                          : pr.draft ? "a draft is a statement that it is not ready"
                          : "GitHub has not said this can merge")
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
                 Spacer()
                 if let url = URL(string: pr.url), url.scheme == "https" {
                     Link("open on GitHub", destination: url)
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
             }
@@ -775,7 +773,7 @@ struct CardButton: View {
     var body: some View {
         Button(action: action) {
             Text(busy ? "working" : title)
-                .font(.system(size: 11.5, weight: .medium))
+                .officeFont(size: 11.5, weight: .medium)
                 .foregroundStyle(tint)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
@@ -796,13 +794,13 @@ struct ToastBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(text)
-                .font(.system(size: 12))
+                .officeFont(size: 12)
                 .foregroundStyle(Theme.text)
                 .lineLimit(2)
             Spacer()
             Button(action: dismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .officeSymbol(size: 10, weight: .semibold)
                     .foregroundStyle(Theme.faint)
             }
             .buttonStyle(.plain)

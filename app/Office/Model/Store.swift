@@ -611,6 +611,17 @@ public final class Store {
         deskTabs[repo] = .work
     }
 
+    /// One exhaustive entry point for the desk switch. A three-choice Picker
+    /// must not encode two choices as a Boolean and silently turn the third
+    /// into Work.
+    public func show(_ tab: DeskTab, at repo: String) {
+        switch tab {
+        case .work: showWork(at: repo)
+        case .context: showContext(at: repo)
+        case .feed: showFeed(at: repo)
+        }
+    }
+
     /// Flip a desk to its own timeline, and read it. The read is fired here
     /// rather than only in the view so the tab is never photographed, or opened,
     /// showing "reading the feed" over a repo that has posted all morning.

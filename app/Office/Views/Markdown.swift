@@ -246,16 +246,12 @@ struct MarkdownText: View {
     /// the middle of a word.
     var limit: Int?
 
-    @Environment(\.typeScale) private var scale
-
     init(raw: String, size: Double = 13, color: Color = Theme.text, limit: Int? = nil) {
         self.raw = raw
         self.base = size
         self.color = color
         self.limit = limit
     }
-
-    private var size: Double { base * scale }
 
     private var blocks: [Markdown.Block] {
         let all = Markdown.blocks(raw)
@@ -277,13 +273,13 @@ struct MarkdownText: View {
         switch block.kind {
         case .paragraph:
             Text(block.text)
-                .font(.system(size: size))
+                .officeFont(size: base)
                 .foregroundStyle(color)
                 .fixedSize(horizontal: false, vertical: true)
 
         case .heading(let level):
             Text(block.text)
-                .font(.system(size: size + (level <= 1 ? 2 : 1), weight: .semibold))
+                .officeFont(size: base + (level <= 1 ? 2 : 1), weight: .semibold)
                 .foregroundStyle(color)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 2)
@@ -291,14 +287,14 @@ struct MarkdownText: View {
         case .item(let marker):
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(marker)
-                    .font(.system(size: size))
+                    .officeFont(size: base)
                     .foregroundStyle(Theme.faint)
                     // A hanging indent: the marker column is fixed so the
                     // sentences line up down one edge rather than each one
                     // starting wherever its bullet happened to end.
                     .frame(minWidth: 12, alignment: .trailing)
                 Text(block.text)
-                    .font(.system(size: size))
+                    .officeFont(size: base)
                     .foregroundStyle(color)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -309,7 +305,7 @@ struct MarkdownText: View {
             // mis-copies a command.
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(block.code.trimmingCharacters(in: .newlines))
-                    .font(.system(size: size - 1, design: .monospaced))
+                    .officeFont(size: base - 1, design: .monospaced)
                     .foregroundStyle(color)
                     .textSelection(.enabled)
                     .padding(9)
@@ -332,7 +328,7 @@ struct MarkdownText: View {
                         GridRow {
                             ForEach(0..<columns, id: \.self) { c in
                                 Text(c < rows[r].count ? rows[r][c] : AttributedString())
-                                    .font(.system(size: size - 0.5, weight: r == 0 ? .semibold : .regular))
+                                    .officeFont(size: base - 0.5, weight: r == 0 ? .semibold : .regular)
                                     .foregroundStyle(r == 0 ? color : Theme.dim)
                                     .padding(.vertical, 5)
                                     .padding(.horizontal, 2)
@@ -358,7 +354,7 @@ struct MarkdownText: View {
                     .fill(Theme.hairline)
                     .frame(width: 2)
                 Text(block.text)
-                    .font(.system(size: size))
+                    .officeFont(size: base)
                     .foregroundStyle(Theme.dim)
                     .fixedSize(horizontal: false, vertical: true)
             }

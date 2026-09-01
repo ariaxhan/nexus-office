@@ -71,16 +71,16 @@ struct BotThreadView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 7) {
                     Text(bot.name)
-                        .font(.system(size: 13, weight: .medium))
+                        .officeFont(size: 13, weight: .medium)
                         .foregroundStyle(Theme.text)
                     if bot.busy {
                         Text("working")
-                            .font(.system(size: 11))
+                            .officeFont(size: 11)
                             .foregroundStyle(Theme.blue)
                     }
                     if !bot.frequency.isEmpty {
                         Text(bot.frequency)
-                            .font(.system(size: 10, weight: .medium))
+                            .officeFont(size: 10, weight: .medium)
                             .foregroundStyle(Theme.faint)
                     }
                 }
@@ -89,7 +89,7 @@ struct BotThreadView: View {
                 // needs the job, not the briefing.
                 if !bot.purpose.isEmpty {
                     Text(bot.purpose)
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -98,7 +98,7 @@ struct BotThreadView: View {
             Spacer()
             if !store.runtimeUp {
                 Text("the harness is not running")
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
         }
@@ -124,12 +124,12 @@ struct BotThreadView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             if !bot.purpose.isEmpty {
                                 Text(bot.purpose)
-                                    .font(.system(size: 13))
+                                    .officeFont(size: 13)
                                     .foregroundStyle(Theme.dim)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Text("Message \(bot.name) to start.")
-                                .font(.system(size: 12.5))
+                                .officeFont(size: 12.5)
                                 .foregroundStyle(Theme.faint)
                         }
                         .frame(maxWidth: 520, alignment: .leading)
@@ -157,7 +157,7 @@ struct BotThreadView: View {
                     }
                     if let error = bot.error {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 12))
+                            .officeLabel(size: 12)
                             .foregroundStyle(Theme.red)
                             .padding(.vertical, 4)
                             .id("error")
@@ -256,7 +256,7 @@ struct BotThreadView: View {
             HStack(spacing: 8) {
                 Button(action: pick) {
                     Image(systemName: "paperclip")
-                        .font(.system(size: 15))
+                        .officeSymbol(size: 15)
                         .foregroundStyle(Theme.faint)
                         .frame(width: 26, height: 26)
                 }
@@ -265,7 +265,7 @@ struct BotThreadView: View {
 
                 TextField("Message \(bot.name)", text: draft, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13))
+                    .officeFont(size: 13)
                     .foregroundStyle(Theme.text)
                     // Six lines and then it scrolls inside itself. A composer
                     // that keeps growing eats the transcript it is a reply to.
@@ -279,7 +279,7 @@ struct BotThreadView: View {
                     )
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22))
+                        .officeSymbol(size: 22)
                         .foregroundStyle(canSend ? color : Theme.faint)
                 }
                 .buttonStyle(.plain)
@@ -428,19 +428,19 @@ struct AttachmentChip: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "photo")
-                .font(.system(size: 12))
+                .officeSymbol(size: 12)
                 .foregroundStyle(Theme.dim)
             Text(picked.name)
-                .font(.system(size: 12))
+                .officeFont(size: 12)
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Text("\(picked.readable) after downscale")
-                .font(.system(size: 11))
+                .officeFont(size: 11)
                 .foregroundStyle(Theme.faint)
             Button(action: remove) {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 12))
+                    .officeSymbol(size: 12)
                     .foregroundStyle(Theme.faint)
             }
             .buttonStyle(.plain)
@@ -482,9 +482,9 @@ struct NewRepliesPill: View {
         Button(action: go) {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .officeSymbol(size: 9, weight: .semibold)
                 Text(text)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .officeFont(size: 11.5, weight: .medium)
             }
             .foregroundStyle(Theme.text)
             .padding(.horizontal, 11)
@@ -536,7 +536,7 @@ struct Bubble: View {
                 // there rather than offering to show one it cannot produce.
                 if turn.hasPhoto {
                     Label("with a photo", systemImage: "photo")
-                        .font(.system(size: 11))
+                        .officeLabel(size: 11)
                         .foregroundStyle(Theme.faint)
                         .padding(.horizontal, 4)
                 }
@@ -568,7 +568,7 @@ struct Bubble: View {
     @ViewBuilder private var said: some View {
         if turn.isUser {
             Text(turn.content)
-                .font(.system(size: 13))
+                .officeFont(size: 13)
                 .foregroundStyle(Theme.text)
                 .textSelection(.enabled)
         } else {
@@ -624,22 +624,22 @@ struct GateCard: View {
             HStack(spacing: 7) {
                 GateMark(size: 11)
                 Text("asking permission")
-                    .font(.system(size: 12, weight: .semibold))
+                    .officeFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.amber)
                 Spacer()
                 if let waiting = gate.waitingS {
                     Text("waiting \(StateRules.waited(seconds: waiting))")
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
             }
             if !gate.permission.isEmpty {
                 Text(gate.permission)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .officeFont(size: 12.5, weight: .medium)
                     .foregroundStyle(Theme.text)
             }
             Text(gate.target)
-                .font(.system(size: 12.5, design: .monospaced))
+                .officeFont(size: 12.5, design: .monospaced)
                 .foregroundStyle(Theme.text)
                 .textSelection(.enabled)
                 .padding(10)
@@ -647,7 +647,7 @@ struct GateCard: View {
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.well))
             if !gate.detail.isEmpty {
                 Text(gate.detail)
-                    .font(.system(size: 12))
+                    .officeFont(size: 12)
                     .foregroundStyle(Theme.dim)
             }
             HStack(spacing: 8) {
@@ -657,7 +657,7 @@ struct GateCard: View {
             }
             if let notice {
                 Text(notice)
-                    .font(.system(size: 11.5))
+                    .officeFont(size: 11.5)
                     .foregroundStyle(Theme.faint)
             }
         }
@@ -682,7 +682,7 @@ struct GateButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .officeFont(size: 12, weight: .medium)
                 .foregroundStyle(tint)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)

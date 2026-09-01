@@ -157,7 +157,7 @@ struct RosterView: View {
     /// otherwise, exactly as the spacer past the last pin covers the bottom.
     private func groupHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 10.5, weight: .semibold))
+            .officeFont(size: 10.5, weight: .semibold)
             .foregroundStyle(Theme.faint)
             .padding(.horizontal, 10)
             .padding(.top, 8)
@@ -241,10 +241,10 @@ struct RosterView: View {
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("the feed")
-                        .font(.system(size: 12.5, weight: .medium))
+                        .officeFont(size: 12.5, weight: .medium)
                         .foregroundStyle(Theme.text)
                     Text(feed.posts.first?.text ?? feed.emptyLine)
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(wants > 0 ? Theme.amber.opacity(0.85) : Theme.dim)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -284,10 +284,10 @@ struct RosterView: View {
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("automation")
-                        .font(.system(size: 12.5, weight: .medium))
+                        .officeFont(size: 12.5, weight: .medium)
                         .foregroundStyle(Theme.text)
                     Text(page.headline.isEmpty ? "not read yet" : page.headline)
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(page.needsSomebody ? Theme.amber.opacity(0.85) : Theme.dim)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -311,7 +311,7 @@ struct RosterView: View {
         guard !line.isEmpty else { return nil }
         return AnyView(
             Text(line)
-                .font(.system(size: 11, weight: .semibold))
+                .officeFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.amber)
         )
     }
@@ -330,9 +330,9 @@ struct RosterView: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: store.putAwayOpen ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
+                        .officeSymbol(size: 8, weight: .semibold)
                     Text(store.putAwayHeadline)
-                        .font(.system(size: 11, weight: .semibold))
+                        .officeFont(size: 11, weight: .semibold)
                     Spacer()
                 }
                 .foregroundStyle(store.putAwayNeedsSomeone ? Theme.amber : Theme.faint)
@@ -381,7 +381,7 @@ struct RosterView: View {
             store.settingsOpen.toggle()
         } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: 12, weight: .medium))
+                .officeSymbol(size: 12, weight: .medium)
                 .foregroundStyle(store.settingsOpen ? Theme.text : Theme.faint)
                 .frame(width: 26, height: 26)
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -397,18 +397,18 @@ struct RosterView: View {
     private var search: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11, weight: .medium))
+                .officeSymbol(size: 11, weight: .medium)
                 .foregroundStyle(Theme.faint)
             TextField("Search", text: $store.query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
+                .officeFont(size: 12.5)
                 .foregroundStyle(Theme.text)
             if !store.query.isEmpty {
                 Button {
                     store.query = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                        .officeSymbol(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
                 .buttonStyle(.plain)
@@ -422,7 +422,7 @@ struct RosterView: View {
     private func header(_ title: String, trailing: AnyView?) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .officeFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.faint)
             Spacer()
             trailing
@@ -454,6 +454,7 @@ struct RosterView: View {
                 } label: {
                     if store.deskSort == order {
                         Label(order.label, systemImage: "checkmark")
+                            .officeLabel()
                     } else {
                         Text(order.label)
                     }
@@ -462,9 +463,9 @@ struct RosterView: View {
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .officeSymbol(size: 9, weight: .semibold)
                 Text(store.deskSort.label)
-                    .font(.system(size: 11, weight: store.deskSort == .owner ? .regular : .semibold))
+                    .officeFont(size: 11, weight: store.deskSort == .owner ? .regular : .semibold)
             }
             .foregroundStyle(store.deskSort == .owner ? Theme.faint : Theme.text)
         }
@@ -479,7 +480,7 @@ struct RosterView: View {
                 store.needsOnly.toggle()
             } label: {
                 Text("needs me")
-                    .font(.system(size: 11, weight: store.needsOnly ? .semibold : .regular))
+                    .officeFont(size: 11, weight: store.needsOnly ? .semibold : .regular)
                     .foregroundStyle(store.needsOnly ? Theme.amber : Theme.faint)
         }
         .buttonStyle(.plain)
@@ -488,7 +489,7 @@ struct RosterView: View {
 
     private func notary(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11.5))
+            .officeFont(size: 11.5)
             .foregroundStyle(Theme.faint)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -496,7 +497,7 @@ struct RosterView: View {
 
     private func counter(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10.5))
+            .officeFont(size: 10.5)
             .foregroundStyle(Theme.faint)
             .padding(.horizontal, 10)
             .padding(.bottom, 5)
@@ -517,13 +518,13 @@ struct BotRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(bot.name)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .officeFont(size: 13.5, weight: .medium)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
                     if hasGate { GateMark(size: 9) }
                     Spacer(minLength: 4)
                     Text(StateRules.stamp(bot.last?.at ?? ""))
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
                 second
@@ -540,19 +541,19 @@ struct BotRow: View {
     @ViewBuilder private var second: some View {
         if hasGate {
             Text("waiting for you to answer")
-                .font(.system(size: 12)).foregroundStyle(Theme.amber).lineLimit(1)
+                .officeFont(size: 12).foregroundStyle(Theme.amber).lineLimit(1)
         } else if let error = bot.error {
             Text(StateRules.line(error, limit: 60))
-                .font(.system(size: 12)).foregroundStyle(Theme.red).lineLimit(1)
+                .officeFont(size: 12).foregroundStyle(Theme.red).lineLimit(1)
         } else if bot.busy {
             Text("working")
-                .font(.system(size: 12)).foregroundStyle(Theme.blue).lineLimit(1)
+                .officeFont(size: 12).foregroundStyle(Theme.blue).lineLimit(1)
         } else {
             // The last thing it said, or, before it has said anything, what it
             // is FOR. A column of rows all reporting an empty transcript
             // tells a person nothing about which colleague to open.
             Text(StateRules.botSubtitle(bot: bot, limit: 64))
-                .font(.system(size: 12))
+                .officeFont(size: 12)
                 .foregroundStyle(Theme.dim)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -581,13 +582,13 @@ struct DeskRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(station.repo)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .officeFont(size: 13.5, weight: .medium)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 4)
                     Text(StateRules.stamp(station.at))
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
                 HStack(spacing: 5) {
@@ -597,7 +598,7 @@ struct DeskRow: View {
                         Text(detail).foregroundStyle(Theme.dim)
                     }
                 }
-                .font(.system(size: 12))
+                .officeFont(size: 12)
                 .lineLimit(1)
                 .truncationMode(.tail)
             }
@@ -641,7 +642,7 @@ struct SectionRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(section.title)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .officeFont(size: 13.5, weight: .medium)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -652,12 +653,12 @@ struct SectionRow: View {
                         Pill(text: badge, color: Theme.amber)
                     } else {
                         Text(StateRules.stamp(section.card.asOf))
-                            .font(.system(size: 11))
+                            .officeFont(size: 11)
                             .foregroundStyle(Theme.faint)
                     }
                 }
                 Text(StateRules.sectionSubtitle(section))
-                    .font(.system(size: 12))
+                    .officeFont(size: 12)
                     .foregroundStyle(section.isOK ? Theme.dim : Theme.amber.opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.tail)

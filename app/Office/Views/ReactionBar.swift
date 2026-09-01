@@ -41,6 +41,7 @@ struct ReactionMenu<Content: View>: View {
                         // should say the thing it is about to do.
                         Label(current == reaction ? "remove \(reaction.label)" : reaction.label,
                               systemImage: reaction.symbol)
+                            .officeLabel()
                     }
                 }
             }
@@ -65,7 +66,7 @@ struct ReactionBadge: View {
                 reactions.clear(thread: thread, turn: turn)
             } label: {
                 Image(systemName: mark.symbol)
-                    .font(.system(size: 9, weight: .semibold))
+                    .officeSymbol(size: 9, weight: .semibold)
                     .foregroundStyle(color)
                     .frame(width: 18, height: 18)
                     .background(

@@ -57,7 +57,7 @@ struct AutomationView: View {
         HStack(spacing: 9) {
             Circle().fill(mood).frame(width: 9, height: 9)
             Text("Automation")
-                .font(.system(size: 13, weight: .medium))
+                .officeFont(size: 13, weight: .medium)
                 .foregroundStyle(Theme.text)
             if page.now.running {
                 Pill(text: "running", color: Theme.green)
@@ -68,7 +68,7 @@ struct AutomationView: View {
             Spacer()
             Button("close") { store.automationOpen = false }
                 .buttonStyle(.plain)
-                .font(.system(size: 11))
+                .officeFont(size: 11)
                 .foregroundStyle(Theme.dim)
         }
         .padding(.horizontal, 18)
@@ -80,7 +80,7 @@ struct AutomationView: View {
 
     private var headline: some View {
         Text(page.headline.isEmpty ? "the office has not read the pipeline yet" : page.headline)
-            .font(.system(size: 14))
+            .officeFont(size: 14)
             .foregroundStyle(page.needsSomebody ? Theme.amber : Theme.text)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 720, alignment: .leading)
@@ -131,7 +131,7 @@ struct AutomationView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("webhooks")
-                    .font(.system(size: 11, weight: .semibold))
+                    .officeFont(size: 11, weight: .semibold)
                     .foregroundStyle(Theme.faint)
                 Pill(text: page.trigger.state,
                      color: hurt ? Theme.red : (page.trigger.reachable ? Theme.green : Theme.amber))
@@ -141,12 +141,12 @@ struct AutomationView: View {
             }
             if hurt {
                 Text(page.trigger.blockedBy)
-                    .font(.system(size: 12.5))
+                    .officeFont(size: 12.5)
                     .foregroundStyle(Theme.red)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(triggerLine)
-                    .font(.system(size: 12.5))
+                    .officeFont(size: 12.5)
                     .foregroundStyle(Theme.dim)
             }
         }
@@ -169,20 +169,20 @@ struct AutomationView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text("what it touched")
-                    .font(.system(size: 11, weight: .semibold))
+                    .officeFont(size: 11, weight: .semibold)
                     .foregroundStyle(Theme.faint)
                 // Never a silent cap. A list that quietly stops reads as "that
                 // is everything that happened".
                 if page.activityDropped > 0 {
                     Text("newest \(page.activity.count) of \(page.activity.count + page.activityDropped)")
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
             }
             if page.activity.isEmpty {
                 Text("no issue touched in the last day. The sweeps that only counted "
                      + "open issues are not listed here.")
-                    .font(.system(size: 12.5))
+                    .officeFont(size: 12.5)
                     .foregroundStyle(Theme.faint)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 620, alignment: .leading)
@@ -208,16 +208,16 @@ struct AutomationView: View {
         if !page.how.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("how it works")
-                    .font(.system(size: 11, weight: .semibold))
+                    .officeFont(size: 11, weight: .semibold)
                     .foregroundStyle(Theme.faint)
                 ForEach(Array(page.how.enumerated()), id: \.offset) { index, line in
                     HStack(alignment: .top, spacing: 10) {
                         Text("\(index + 1)")
-                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .officeFont(size: 11, weight: .semibold, monospacedDigits: true)
                             .foregroundStyle(Theme.faint)
                             .frame(width: 14, alignment: .trailing)
                         Text(line)
-                            .font(.system(size: 12.5))
+                            .officeFont(size: 12.5)
                             .foregroundStyle(Theme.dim)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -237,10 +237,10 @@ private struct Tile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 10.5, weight: .semibold))
+                .officeFont(size: 10.5, weight: .semibold)
                 .foregroundStyle(Theme.faint)
             Text(value)
-                .font(.system(size: 12.5))
+                .officeFont(size: 12.5)
                 .foregroundStyle(tone)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -268,17 +268,17 @@ private struct ActivityRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     Text("\(row.repo)#\(row.issue)")
-                        .font(.system(size: 12.5, weight: .medium))
+                        .officeFont(size: 12.5, weight: .medium)
                         .foregroundStyle(Theme.text)
                     Pill(text: StateRules.outcomeLabel(row.outcome), color: tone)
                         .fixedSize(horizontal: true, vertical: false)
                     Text(row.ago)
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                 }
                 if !row.title.isEmpty {
                     Text(row.title)
-                        .font(.system(size: 12))
+                        .officeFont(size: 12)
                         .foregroundStyle(Theme.dim)
                         .lineLimit(1)
                 }
@@ -286,14 +286,14 @@ private struct ActivityRow: View {
                 // dispatch.sh. The runner's own detail wins when it wrote one,
                 // because it is about this issue and the other is about the word.
                 Text(row.detail.isEmpty ? row.means : row.detail)
-                    .font(.system(size: 11.5))
+                    .officeFont(size: 11.5)
                     .foregroundStyle(Theme.faint)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
             if let link = row.link {
                 Link(row.hasComment ? "read the comment" : "open the issue", destination: link)
-                    .font(.system(size: 11.5))
+                    .officeFont(size: 11.5)
                     .foregroundStyle(Theme.blue)
             }
         }

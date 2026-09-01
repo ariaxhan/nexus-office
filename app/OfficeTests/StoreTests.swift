@@ -488,6 +488,18 @@ final class StoreTests: XCTestCase {
 
     // MARK: - what a desk says about itself
 
+    func testEveryDeskTabSelectionLandsAndStays() throws {
+        let store = try wallFloor()
+        let repo = "acme/storefront"
+
+        store.show(.context, at: repo)
+        XCTAssertEqual(store.tab(at: repo), .context)
+        store.show(.feed, at: repo)
+        XCTAssertEqual(store.tab(at: repo), .feed)
+        store.show(.work, at: repo)
+        XCTAssertEqual(store.tab(at: repo), .work)
+    }
+
     func testOpeningContextLoadsTheIndexAndPicksTheReadmeFirst() async throws {
         let store = try wallFloor()
         await store.refreshWorld()

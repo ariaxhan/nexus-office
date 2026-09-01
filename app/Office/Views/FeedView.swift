@@ -79,7 +79,7 @@ struct FeedView: View {
             }
             TextField("search", text: $query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11))
+                .officeFont(size: 11)
                 .frame(width: 120)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Theme.well))
@@ -98,7 +98,7 @@ struct FeedView: View {
             store.feedKind = on ? "" : value
         } label: {
             Text(label)
-                .font(.system(size: 11, weight: on ? .semibold : .regular))
+                .officeFont(size: 11, weight: on ? .semibold : .regular)
                 .lineLimit(1)
                 .fixedSize()
                 .foregroundStyle(on ? Theme.onFilled : Theme.dim)
@@ -116,13 +116,13 @@ struct FeedView: View {
             TextField(repo.isEmpty ? "say something" : "say something to @\(repo)",
                       text: $draft)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .officeFont(size: 12)
                 .padding(.horizontal, 9).padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.well))
                 .onSubmit { publish() }
             Button("post") { publish() }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .semibold))
+                .officeFont(size: 11, weight: .semibold)
                 .foregroundStyle(draft.isEmpty ? Theme.faint : Theme.blue)
                 .disabled(draft.isEmpty)
         }
@@ -140,7 +140,7 @@ struct FeedView: View {
     private var head: some View {
         HStack(spacing: 8) {
             Text(repo.isEmpty ? "the feed" : "@\(repo)")
-                .font(.system(size: 13, weight: .semibold))
+                .officeFont(size: 13, weight: .semibold)
                 .foregroundStyle(Theme.text)
             if feed.asking > 0 {
                 Pill(text: "\(feed.asking) asking", color: Theme.amber)
@@ -153,13 +153,13 @@ struct FeedView: View {
             // capped timeline never reads as the whole of it.
             if feed.total > feed.posts.count {
                 Text("\(feed.posts.count) of \(feed.total)")
-                    .font(.system(size: 11)).foregroundStyle(Theme.faint)
+                    .officeFont(size: 11).foregroundStyle(Theme.faint)
             } else if feed.total > 0 {
-                Text("\(feed.total)").font(.system(size: 11)).foregroundStyle(Theme.faint)
+                Text("\(feed.total)").officeFont(size: 11).foregroundStyle(Theme.faint)
             }
             if repo.isEmpty && !feed.accounts.isEmpty {
                 Text("\(feed.accounts.count) repos")
-                    .font(.system(size: 11)).foregroundStyle(Theme.faint)
+                    .officeFont(size: 11).foregroundStyle(Theme.faint)
             }
         }
         .padding(.horizontal, 14)
@@ -171,7 +171,7 @@ struct FeedView: View {
     /// so the two can never be confused for one another.
     private var empty: some View {
         Text(feed.emptyLine)
-            .font(.system(size: 12))
+            .officeFont(size: 12)
             .foregroundStyle(feed.state == "ok" ? Theme.faint : Theme.amber)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 560, alignment: .leading)
@@ -213,12 +213,12 @@ struct PostRow: View {
                 // reads as one thing somebody said and not as a labelled row.
                 if let mark = post.kind.mark {
                     Image(systemName: mark)
-                        .font(.system(size: 12))
+                        .officeSymbol(size: 12)
                         .foregroundStyle(Theme.faint)
                         .padding(.top, 2)
                 }
                 Text(Self.mentioned(post.text))
-                    .font(.system(size: post.kind.isVoice ? 14 : 13))
+                    .officeFont(size: post.kind.isVoice ? 14 : 13)
                     .foregroundStyle(post.unreadable ? Theme.red : Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -230,14 +230,14 @@ struct PostRow: View {
                 // worth reading, and unlike an identity claim it is checkable
                 // against the dispatch that produced it.
                 Text(post.contract)
-                    .font(.system(size: 11, design: .monospaced))
+                    .officeFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.faint)
                     .lineLimit(open ? nil : 1)
                     .frame(maxWidth: 640, alignment: .leading)
             }
             if open && !post.body.isEmpty {
                 Text(post.body)
-                    .font(.system(size: 11, design: .monospaced))
+                    .officeFont(size: 11, design: .monospaced)
                     .foregroundStyle(Theme.dim)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -260,7 +260,7 @@ struct PostRow: View {
         HStack(spacing: 7) {
             if showAccount {
                 Text("@\(post.account)")
-                    .font(.system(size: 12, weight: .semibold))
+                    .officeFont(size: 12, weight: .semibold)
                     .foregroundStyle(Theme.text)
             }
             if !post.kind.label.isEmpty {
@@ -269,13 +269,13 @@ struct PostRow: View {
             // Who typed it, beside the account and never instead of it: the repo
             // is the identity, the lane is a detail.
             if !post.by.isEmpty {
-                Text(post.by).font(.system(size: 11)).foregroundStyle(Theme.faint)
+                Text(post.by).officeFont(size: 11).foregroundStyle(Theme.faint)
             }
             Spacer()
             if post.answered {
                 Pill(text: "answered", color: Theme.green)
             }
-            Text(post.age).font(.system(size: 11)).foregroundStyle(Theme.faint)
+            Text(post.age).officeFont(size: 11).foregroundStyle(Theme.faint)
         }
     }
 
@@ -288,7 +288,7 @@ struct PostRow: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
                             Text("@\(reply.account)")
-                                .font(.system(size: 11, weight: .semibold))
+                                .officeFont(size: 11, weight: .semibold)
                                 .foregroundStyle(Theme.dim)
                             // The whole authorization model, drawn: a reply from
                             // the person decided something, a reply from a lane
@@ -296,10 +296,10 @@ struct PostRow: View {
                             if reply.authorizes {
                                 Pill(text: "decided", color: Theme.green)
                             }
-                            Text(reply.age).font(.system(size: 10))
+                            Text(reply.age).officeFont(size: 10)
                                 .foregroundStyle(Theme.faint)
                         }
-                        Text(reply.text).font(.system(size: 12))
+                        Text(reply.text).officeFont(size: 12)
                             .foregroundStyle(Theme.dim)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -315,13 +315,13 @@ struct PostRow: View {
             TextField(post.gateId.isEmpty ? "reply" : "reply, and unblock the agent",
                       text: $draft)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .officeFont(size: 12)
                 .padding(.horizontal, 9).padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Theme.well))
                 .onSubmit { send() }
             Button("send") { send() }
                 .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .semibold))
+                .officeFont(size: 11, weight: .semibold)
                 .foregroundStyle(draft.isEmpty ? Theme.faint : Theme.blue)
                 .disabled(draft.isEmpty || sending)
         }

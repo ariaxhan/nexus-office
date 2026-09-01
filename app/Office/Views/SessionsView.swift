@@ -46,7 +46,7 @@ struct SessionsView: View {
     private var head: some View {
         HStack(spacing: 8) {
             Text("sessions here")
-                .font(.system(size: 11, weight: .semibold))
+                .officeFont(size: 11, weight: .semibold)
                 .foregroundStyle(Theme.faint)
             if roster.blocked > 0 {
                 Pill(text: "\(roster.blocked) waiting on you", color: Theme.amber)
@@ -62,7 +62,7 @@ struct SessionsView: View {
         Text(roster.detail.isEmpty
              ? "the office cannot see the sessions on this machine right now"
              : roster.detail)
-            .font(.system(size: 12))
+            .officeFont(size: 12)
             .foregroundStyle(Theme.amber)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 620, alignment: .leading)
@@ -70,7 +70,7 @@ struct SessionsView: View {
 
     private var empty: some View {
         Text("nothing running in this folder. Only sessions connected to hcom are visible here.")
-            .font(.system(size: 12))
+            .officeFont(size: 12)
             .foregroundStyle(Theme.faint)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 620, alignment: .leading)
@@ -81,21 +81,21 @@ struct SessionsView: View {
     private var starters: some View {
         HStack(spacing: 8) {
             Text("start")
-                .font(.system(size: 11))
+                .officeFont(size: 11)
                 .foregroundStyle(Theme.faint)
             ForEach(["claude", "codex"], id: \.self) { tool in
                 Button(tool) {
                     Task { await store.startSession(tool: tool, at: repo) }
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11.5, weight: .medium))
+                .officeFont(size: 11.5, weight: .medium)
                 .foregroundStyle(Theme.text)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(Capsule().fill(Theme.well))
             }
             Text("runs in this folder")
-                .font(.system(size: 11))
+                .officeFont(size: 11)
                 .foregroundStyle(Theme.faint)
         }
     }
@@ -145,7 +145,7 @@ struct SessionRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     Text(session.name)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .officeFont(size: 12.5, weight: .medium)
                         .foregroundStyle(Theme.text)
                     if !session.tool.isEmpty {
                         Pill(text: session.tool, color: Theme.faint)
@@ -158,19 +158,19 @@ struct SessionRow: View {
                     }
                     if !session.branch.isEmpty {
                         Text(session.branch)
-                            .font(.system(size: 11))
+                            .officeFont(size: 11)
                             .foregroundStyle(Theme.faint)
                     }
                 }
                 Text(session.doing.isEmpty ? session.status : session.doing)
-                    .font(.system(size: 11.5))
+                    .officeFont(size: 11.5)
                     .foregroundStyle(Theme.dim)
                     .lineLimit(1)
                 // The tool call under way. One line, already clipped by the
                 // server: a bash heredoc in here would be the whole desk.
                 if !session.detail.isEmpty && open {
                     Text(session.detail)
-                        .font(.system(size: 11).monospaced())
+                        .officeFont(size: 11, monospaced: true)
                         .foregroundStyle(Theme.faint)
                         .lineLimit(3)
                         .padding(8)
@@ -181,7 +181,7 @@ struct SessionRow: View {
             }
             Spacer(minLength: 8)
             Text(open ? "hide" : "open")
-                .font(.system(size: 11))
+                .officeFont(size: 11)
                 .foregroundStyle(Theme.dim)
         }
         .contentShape(Rectangle())
@@ -197,13 +197,13 @@ struct SessionRow: View {
                     VStack(alignment: .leading, spacing: 4) {
                         if !turn.you.isEmpty {
                             Text(turn.you)
-                                .font(.system(size: 12))
+                                .officeFont(size: 12)
                                 .foregroundStyle(Theme.text)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if !turn.them.isEmpty {
                             Text(turn.them)
-                                .font(.system(size: 12))
+                                .officeFont(size: 12)
                                 .foregroundStyle(Theme.dim)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -215,7 +215,7 @@ struct SessionRow: View {
             .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.well))
         } else if script != nil {
             Text("nothing said yet")
-                .font(.system(size: 11.5))
+                .officeFont(size: 11.5)
                 .foregroundStyle(Theme.faint)
         }
     }
@@ -232,7 +232,7 @@ struct SessionRow: View {
                                         set: { store.drafts[key] = $0 }),
                           axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12.5))
+                    .officeFont(size: 12.5)
                     .lineLimit(1...5)
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -241,7 +241,7 @@ struct SessionRow: View {
                     .onSubmit { send(key) }
                 Button("send") { send(key) }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11.5, weight: .medium))
+                    .officeFont(size: 11.5, weight: .medium)
                     .foregroundStyle(session.reachable ? Theme.onFilled : Theme.faint)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 5)
@@ -250,7 +250,7 @@ struct SessionRow: View {
             }
             if !session.reachable {
                 Text("\(session.name) is \(session.status), so it would never read this")
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
         }

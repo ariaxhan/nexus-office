@@ -74,6 +74,59 @@ extension EnvironmentValues {
     }
 }
 
+/// The only way this app chooses a point size. The modifier reads the root's
+/// persisted scale itself, so a leaf view cannot forget to thread it through.
+private struct OfficeFontModifier: ViewModifier {
+    @Environment(\.typeScale) private var scale
+    let size: Double
+    let weight: Font.Weight
+    let design: Font.Design
+    let monospaced: Bool
+    let monospacedDigits: Bool
+
+    func body(content: Content) -> some View {
+        var font = Font.system(size: size * scale, weight: weight, design: design)
+        if monospaced { font = font.monospaced() }
+        if monospacedDigits { font = font.monospacedDigit() }
+        return content.font(font)
+    }
+}
+
+private struct OfficeLabelStyle: LabelStyle {
+    let size: Double
+    let symbolSize: Double
+    let weight: Font.Weight
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 5) {
+            configuration.icon.officeSymbol(size: symbolSize, weight: weight)
+            configuration.title.officeFont(size: size, weight: weight)
+        }
+    }
+}
+
+extension View {
+    func officeFont(size: Double, weight: Font.Weight = .regular,
+                    design: Font.Design = .default, monospaced: Bool = false,
+                    monospacedDigits: Bool = false) -> some View {
+        modifier(OfficeFontModifier(size: size, weight: weight, design: design,
+                                    monospaced: monospaced,
+                                    monospacedDigits: monospacedDigits))
+    }
+
+    /// SF Symbols are controls and landmarks, not text. They keep their
+    /// footprint while the words around them become easier to read.
+    func officeSymbol(size: Double, weight: Font.Weight = .regular) -> some View {
+        font(.system(size: size, weight: weight))
+    }
+
+    func officeLabel(size: Double = 13, symbolSize: Double = 12,
+                     weight: Font.Weight = .regular) -> some View {
+        labelStyle(OfficeLabelStyle(size: size, symbolSize: symbolSize,
+                                    weight: weight))
+    }
+}
+
 extension Palette.Swatch {
     /// One colour that knows which room it is in.
     ///
@@ -258,7 +311,7 @@ struct Pill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11))
+            .officeFont(size: 11)
             .foregroundStyle(color)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)

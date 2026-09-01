@@ -21,6 +21,8 @@ struct OfficeApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarContents()
+                .officeFont(size: 13)
+                .environment(\.typeScale, Store.shared.typeScale)
         } label: {
             Image(nsImage: MenuDot.image(for: Store.shared.dot))
         }
@@ -145,6 +147,7 @@ struct RootView: View {
 
     var body: some View {
         room
+            .officeFont(size: 13)
             .background(Theme.ink)
             .environment(\.typeScale, store.typeScale)
             .task {
@@ -247,7 +250,7 @@ struct Empty: View {
         VStack {
             Spacer()
             Text(text)
-                .font(.system(size: 12.5))
+                .officeFont(size: 12.5)
                 .foregroundStyle(Theme.faint)
             Spacer()
         }

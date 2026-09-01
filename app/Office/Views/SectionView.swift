@@ -46,7 +46,7 @@ struct SectionView: View {
         HStack(spacing: 9) {
             MoodDot(mood: mood, size: 22)
             Text(section.title)
-                .font(.system(size: 13, weight: .medium))
+                .officeFont(size: 13, weight: .medium)
                 .foregroundStyle(Theme.text)
             // The state in the source's own word. `ok` is not worth a badge,
             // so only the states that mean something get one.
@@ -59,7 +59,7 @@ struct SectionView: View {
             Spacer()
             if !asOf.isEmpty {
                 Text(asOf)
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
         }
@@ -74,7 +74,7 @@ struct SectionView: View {
     /// what is wrong, in its own words rather than in a word this app guessed.
     private var headline: some View {
         Text(section.headline)
-            .font(.system(size: 14))
+            .officeFont(size: 14)
             .foregroundStyle(section.isOK ? Theme.text : Theme.amber)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 720, alignment: .leading)
@@ -94,12 +94,12 @@ struct SectionView: View {
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, fact in
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
                         Text(fact.label)
-                            .font(.system(size: 12.5))
+                            .officeFont(size: 12.5)
                             .foregroundStyle(Theme.dim)
                             .lineLimit(2)
                         Spacer(minLength: 16)
                         Text(fact.value)
-                            .font(.system(size: 12.5, weight: .medium))
+                            .officeFont(size: 12.5, weight: .medium)
                             .foregroundStyle(Theme.tone(StateRules.tone(fact)))
                             .lineLimit(1)
                     }
@@ -126,7 +126,7 @@ struct SectionView: View {
     @ViewBuilder private var detail: some View {
         if !section.detail.isEmpty && section.detail != section.headline {
             Text(section.detail)
-                .font(.system(size: 12))
+                .officeFont(size: 12)
                 .foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 720, alignment: .leading)
@@ -164,10 +164,10 @@ struct SectionView: View {
                         if !group.name.isEmpty {
                             HStack(spacing: 7) {
                                 Text(group.name)
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .officeFont(size: 11, weight: .semibold)
                                     .foregroundStyle(Theme.faint)
                                 Text("\(group.rows.count)")
-                                    .font(.system(size: 11))
+                                    .officeFont(size: 11)
                                     .foregroundStyle(Theme.faint.opacity(0.7))
                                 Spacer(minLength: 0)
                             }
@@ -220,13 +220,13 @@ struct SectionRowView: View {
                 title
                 if !row.subtitle.isEmpty {
                     Text(row.subtitle)
-                        .font(.system(size: 11.5))
+                        .officeFont(size: 11.5)
                         .foregroundStyle(Theme.dim)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if !row.detail.isEmpty {
                     Text(row.detail)
-                        .font(.system(size: 11))
+                        .officeFont(size: 11)
                         .foregroundStyle(Theme.faint)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -245,12 +245,12 @@ struct SectionRowView: View {
     @ViewBuilder private var title: some View {
         if let destination = row.destination {
             Link(row.title, destination: destination)
-                .font(.system(size: 12.5, weight: .medium))
+                .officeFont(size: 12.5, weight: .medium)
                 .foregroundStyle(Theme.blue)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Text(row.title)
-                .font(.system(size: 12.5, weight: .medium))
+                .officeFont(size: 12.5, weight: .medium)
                 .foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
         }

@@ -32,11 +32,11 @@ struct GateSheet: View {
             HStack(spacing: 8) {
                 GateMark(size: 13)
                 Text("An agent is asking permission")
-                    .font(.system(size: 14, weight: .semibold))
+                    .officeFont(size: 14, weight: .semibold)
                     .foregroundStyle(Theme.text)
                 Spacer()
                 Text("waiting \(StateRules.waited(seconds: waiting))")
-                    .font(.system(size: 12, design: .monospaced))
+                    .officeFont(size: 12, design: .monospaced)
                     .foregroundStyle(Theme.amber)
             }
 
@@ -45,23 +45,23 @@ struct GateSheet: View {
                 // question in front of you must never become a guess about how
                 // many more there are.
                 Text(queue)
-                    .font(.system(size: 11.5))
+                    .officeFont(size: 11.5)
                     .foregroundStyle(Theme.faint)
             }
 
             if !gate.permission.isEmpty {
                 Text(gate.permission)
-                    .font(.system(size: 13, weight: .medium))
+                    .officeFont(size: 13, weight: .medium)
                     .foregroundStyle(Theme.text)
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("it wants to run")
-                    .font(.system(size: 11))
+                    .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
                 ScrollView {
                     Text(gate.target)
-                        .font(.system(size: 13, design: .monospaced))
+                        .officeFont(size: 13, design: .monospaced)
                         .foregroundStyle(Theme.text)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -77,7 +77,7 @@ struct GateSheet: View {
 
             if !gate.detail.isEmpty {
                 Text(gate.detail)
-                    .font(.system(size: 12.5))
+                    .officeFont(size: 12.5)
                     .foregroundStyle(Theme.dim)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -87,7 +87,7 @@ struct GateSheet: View {
                     BotAvatar(color: named.color.isEmpty ? .derived(from: named.id)
                                                          : Color(hex: named.color), size: 18)
                     Text("asked by \(named.name)")
-                        .font(.system(size: 11.5))
+                        .officeFont(size: 11.5)
                         .foregroundStyle(Theme.faint)
                 }
             }
@@ -96,7 +96,7 @@ struct GateSheet: View {
                 // The server's own words. A 409 means the agent moved on, and the
                 // sheet stays until the gate itself is gone.
                 Text(notice)
-                    .font(.system(size: 12))
+                    .officeFont(size: 12)
                     .foregroundStyle(Theme.amber)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -153,7 +153,7 @@ struct SheetButton: View {
     var body: some View {
         Button(action: action) {
             Text(busy ? "sending" : title)
-                .font(.system(size: 12.5, weight: .medium))
+                .officeFont(size: 12.5, weight: .medium)
                 .foregroundStyle(filled ? Theme.onFilled : tint)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
