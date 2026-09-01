@@ -34,8 +34,9 @@ checkout itself sits under a link.
 Matching against the index rather than re-deriving safety at read time means a
 request is answered by a lookup, and a lookup cannot be tricked by an encoding.
 
-Read only. There is no write route here, and there is no shell: a context click
-opens a file and does nothing else at all.
+Writes use the same allow-list and containment proof. They replace one indexed
+Markdown file atomically, and only when its current text still matches what the
+editor opened. There is no shell.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ import os
 import pathlib
 import re
 import stat
+import tempfile
 
 import sessions
 
@@ -238,3 +240,60 @@ def read(repo: str, path: str = "") -> tuple[int, dict]:
     body["text"] = text
     body["bytes"] = hit["bytes"]
     return 200, body
+
+
+def write(body: dict) -> tuple[int, dict]:
+    """Replace one indexed Markdown file without clobbering a newer version.
+
+    `expected` is the exact text the editor opened. An agent or another editor
+    changing the file first turns this save into a conflict instead of making
+    the last network request silently win.
+    """
+    if not isinstance(body, dict):
+        return 400, {"error": "bad write"}
+    repo, want = body.get("repo"), body.get("path")
+    text, expected = body.get("text"), body.get("expected")
+    if not all(isinstance(value, str) for value in (repo, want, text, expected)):
+        return 400, {"error": "repo, path, text and expected must be text"}
+    encoded = text.encode("utf-8")
+    if len(encoded) > MAX_BYTES:
+        return 400, {"error": "that document is too large to save here"}
+
+    code, current = read(repo, want)
+    if code != 200:
+        return code, current
+    if current["text"] != expected:
+        return 409, {"error": "that file changed on disk; reopen it before saving"}
+    if text == expected:
+        return 200, current
+
+    target = pathlib.Path(current["root"]) / want
+    real = _inside(current["root"], target)
+    if not real or target.is_symlink():
+        return 409, {"error": "that file changed on disk; reopen it before saving"}
+    try:
+        mode = stat.S_IMODE(os.stat(real).st_mode)
+        fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.",
+                                         suffix=".office-save", dir=str(target.parent))
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, mode)
+            # Staging and fsync take time. Re-read at the last possible point so
+            # a writer that landed after the first comparison wins rather than
+            # being silently replaced by this older editor revision.
+            if pathlib.Path(real).read_text(encoding="utf-8", errors="replace") != expected:
+                return 409, {"error": "that file changed on disk; reopen it before saving"}
+            os.replace(temporary, real)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+    except PermissionError:
+        return 403, {"error": "that file is not writable"}
+    except OSError as exc:
+        return 409, {"error": f"could not save that file: {exc}"[:200]}
+    return read(repo, want)

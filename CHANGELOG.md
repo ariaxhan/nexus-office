@@ -17,6 +17,10 @@ which never matches the version.
 
 ## [Unreleased]
 
+### Added
+- Context Markdown is editable in place and autosaves after typing pauses.
+  Saves replace atomically, reject stale drafts, and recheck after staging.
+
 ### Fixed
 - Desks show every open pull request. Human and dependency-update branches stay
   read-only; only pipeline branches offer the Office merge control.

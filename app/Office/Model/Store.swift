@@ -674,6 +674,18 @@ public final class Store {
         }
     }
 
+    /// Persist one editor revision. The server checks the opened text before
+    /// replacing the file, so an agent changing it first becomes a conflict.
+    @discardableResult
+    public func saveContext(repo: String, path: String, text: String,
+                            expected: String) async throws -> DeskContext {
+        let got = try await api.saveContext(repo: repo, path: path, text: text,
+                                            expected: expected)
+        if contexts[repo]?.path == path { contexts[repo] = got }
+        contextErrors[repo] = nil
+        return got
+    }
+
     public func openSessionThread(_ name: String) {
         openSession = name
         Task { await loadSessionTranscript(name) }

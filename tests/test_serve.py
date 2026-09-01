@@ -526,8 +526,17 @@ class SessionRoutesTest(ServeTest):
         self.assertEqual(self.get("/api/context")[0], 400)
         self.assertEqual(seen[0][0], ("", ""))
 
-    def test_context_is_read_only_and_has_no_write_route(self):
-        self.assertEqual(self.post("/api/context", {"repo": "acme/thing"})[0], 404)
+    def test_a_context_write_reaches_the_same_bounded_module(self):
+        mod = self.serve.context
+        was = getattr(mod, "write", None)
+        self.addCleanup(lambda: setattr(mod, "write", was) if was else delattr(mod, "write"))
+        seen = []
+        mod.write = lambda body: (seen.append(body) or (200, {"text": body["text"]}))
+        payload = {"repo": "acme/thing", "path": "README.md",
+                   "text": "# saved\n", "expected": "# old\n"}
+        code, body = self.post("/api/context", payload)
+        self.assertEqual((code, body["text"]), (200, "# saved\n"))
+        self.assertEqual(seen, [payload])
 
 
 class DoorTest(ServeTest):

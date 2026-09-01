@@ -379,5 +379,62 @@ class BodyTest(ContextBase):
                                          "path", "title", "text", "bytes"}, path)
 
 
+class WriteTest(ContextBase):
+    def setUp(self):
+        super().setUp()
+        self.file = self.write("docs/plan.md", "# first\n")
+
+    def payload(self, **changes):
+        body = {"repo": REPO, "path": "docs/plan.md",
+                "text": "# second\n", "expected": "# first\n"}
+        body.update(changes)
+        return body
+
+    def test_an_indexed_markdown_file_is_replaced_and_returned(self):
+        code, body = self.context.write(self.payload())
+        self.assertEqual(code, 200, body)
+        self.assertEqual(self.file.read_text(), "# second\n")
+        self.assertEqual(body["text"], "# second\n")
+        self.assertEqual(body["bytes"], len("# second\n"))
+
+    def test_an_external_change_is_a_conflict_not_an_overwrite(self):
+        self.file.write_text("# changed elsewhere\n")
+        code, body = self.context.write(self.payload())
+        self.assertEqual(code, 409)
+        self.assertIn("changed", body["error"])
+        self.assertEqual(self.file.read_text(), "# changed elsewhere\n")
+
+    def test_only_an_indexed_markdown_path_can_be_written(self):
+        secret = self.write("secrets.txt", "keep\n")
+        code, _ = self.context.write(self.payload(
+            path="secrets.txt", expected="keep\n", text="lost\n"))
+        self.assertEqual(code, 404)
+        self.assertEqual(secret.read_text(), "keep\n")
+
+    def test_invalid_fields_and_oversize_text_are_refused(self):
+        for body in ({}, self.payload(text=7), self.payload(expected=7),
+                     self.payload(text="x" * (self.context.MAX_BYTES + 1))):
+            self.assertEqual(self.context.write(body)[0], 400)
+        self.assertEqual(self.file.read_text(), "# first\n")
+
+    def test_a_write_preserves_the_file_mode(self):
+        self.file.chmod(0o640)
+        code, _ = self.context.write(self.payload())
+        self.assertEqual(code, 200)
+        self.assertEqual(self.file.stat().st_mode & 0o777, 0o640)
+
+    def test_a_change_during_staging_is_not_replaced(self):
+        real_fsync = self.context.os.fsync
+
+        def change_then_sync(fd):
+            real_fsync(fd)
+            self.file.write_text("# changed during save\n")
+
+        with unittest.mock.patch.object(self.context.os, "fsync", change_then_sync):
+            code, body = self.context.write(self.payload())
+        self.assertEqual(code, 409, body)
+        self.assertEqual(self.file.read_text(), "# changed during save\n")
+
+
 if __name__ == "__main__":
     unittest.main()

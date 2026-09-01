@@ -633,6 +633,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._desks(self._read_json())
             if path == "/api/pins":
                 return self._pins(self._read_json())
+            if path == "/api/context":
+                code, body = context.write(
+                    self._read_json(limit=context.MAX_BYTES + 4096))
+                return self._json(body, code)
             if path == "/api/chat":
                 # Returns before the turn has run: a chat turn is an agent run,
                 # and nothing on the other end of this socket waits two minutes.

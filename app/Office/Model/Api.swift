@@ -194,8 +194,8 @@ public final class Api {
     ///
     /// `path` empty asks for the index alone. Both come back in one answer, so
     /// the list and the document on screen can never be about different desks.
-    /// The server decides what is listable and what is readable; nothing here
-    /// builds a path, and there is no write half of this route.
+    /// The server decides what is listable and readable; nothing here builds a
+    /// path. The write half below carries the opened text as a conflict guard.
     public func context(repo: String, path: String = "") async throws -> DeskContext {
         if let demo { return try demo.context(repo: repo, path: path) }
         let desk = repo.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? repo
@@ -205,6 +205,18 @@ public final class Api {
             query += "&path=\(file)"
         }
         return try await get(query, as: DeskContext.self)
+    }
+
+    /// Save the exact document the editor opened. `expected` makes an external
+    /// change a 409 instead of letting a delayed autosave overwrite it.
+    public func saveContext(repo: String, path: String, text: String,
+                            expected: String) async throws -> DeskContext {
+        guard demo == nil else {
+            throw ApiError(status: 403, message: "the demo floor cannot edit files")
+        }
+        return try await post("/api/context", ["repo": repo, "path": path,
+                                               "text": text, "expected": expected],
+                              as: DeskContext.self)
     }
 
     /// Which desks a person has put away. The whole list every time, never a

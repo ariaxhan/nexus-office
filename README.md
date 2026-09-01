@@ -11,7 +11,8 @@ work.
 It looks like a chat app on purpose, and it is not one. It is the face of two
 things that already run on this machine without a screen: an
 [issue-to-PR pipeline](#what-feeds-it) that files issues, works them and opens
-PRs, and an agent runtime (the harness) that runs bots on a schedule and stops
+PRs, edit and autosave a repo's Markdown, and an agent runtime (the harness)
+that runs bots on a schedule and stops
 at permission gates. Both are invisible by nature. This gives them a face.
 
 Office is not the runner and not the source of truth. GitHub owns work, the

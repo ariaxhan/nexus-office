@@ -249,11 +249,9 @@ struct ReadmeBlock: View {
 
 /// The Markdown a checkout keeps: its README, and everything under `_meta`.
 ///
-/// An index down the left and the document beside it. Nothing on this screen
-/// writes anything or runs anything: a click chooses which of the files the
-/// server already listed to ask for, and the server decides whether that is a
-/// file it will read. There is no path built here, no folder to walk into, and
-/// no way to name a file that was not offered.
+/// An index down the left and an autosaving editor beside it. The server still
+/// decides which listed file may be read or written; this view never builds a
+/// filesystem path.
 struct DeskContextView: View {
     @Bindable var store: Store
     let repo: String
@@ -429,8 +427,7 @@ struct DeskContextView: View {
     // MARK: - the document
 
     @ViewBuilder private var document: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
                 if let said = store.contextError(at: repo) {
                     // The reason, in the server's own words. A desk the office
                     // cannot place must never draw as a desk with nothing in it.
@@ -449,8 +446,9 @@ struct DeskContextView: View {
                             .foregroundStyle(Theme.faint)
                             .textSelection(.enabled)
                     }
-                    MarkdownText(raw: context.text, size: 12.5, color: Theme.dim)
-                        .lineSpacing(2)
+                    MarkdownEditor(store: store, repo: repo, path: context.path,
+                                   source: context.text)
+                        .id("\(repo):\(context.path)")
                 } else if store.isLoadingContext(at: repo) {
                     Text("reading the checkout")
                         .officeFont(size: 12)
@@ -460,12 +458,10 @@ struct DeskContextView: View {
                         .officeFont(size: 12.5)
                         .foregroundStyle(Theme.faint)
                 }
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 16)
-            .frame(maxWidth: 760, alignment: .leading)
         }
-        .scrollContentBackground(.hidden)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.ink)
         .onAppear {
             // Reached by clicking the switch OR by landing on a desk that was
@@ -477,6 +473,93 @@ struct DeskContextView: View {
         }
     }
 
+}
+
+/// Plain Markdown source, saved after typing pauses. The last saved source is
+/// sent back with every revision so a background edit cannot be overwritten.
+private struct MarkdownEditor: View {
+    @Bindable var store: Store
+    let repo: String
+    let path: String
+    let source: String
+
+    @State private var draft: String
+    @State private var saved: String
+    @State private var status = "saved"
+    @State private var pendingSave: Task<Void, Never>?
+    @State private var isSaving = false
+
+    init(store: Store, repo: String, path: String, source: String) {
+        self.store = store
+        self.repo = repo
+        self.path = path
+        self.source = source
+        _draft = State(initialValue: source)
+        _saved = State(initialValue: source)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Spacer()
+                Text(status)
+                    .officeFont(size: 10.5)
+                    .foregroundStyle(status == "saved" ? Theme.faint : Theme.amber)
+            }
+            TextEditor(text: $draft)
+                .officeFont(size: 12.5, design: .monospaced)
+                .foregroundStyle(Theme.dim)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, -5)
+                .frame(maxWidth: 760, maxHeight: .infinity, alignment: .topLeading)
+                .onChange(of: draft) { _, _ in scheduleAutosave() }
+        }
+        .onChange(of: source) { _, newValue in
+            guard draft == saved else { return }
+            draft = newValue
+            saved = newValue
+        }
+    }
+
+    @MainActor private func scheduleAutosave() {
+        guard draft != saved else { return }
+        status = "waiting to save"
+        // Never cancel a request already at the door: it may have committed
+        // before URLSession reports cancellation. Queue the newer draft after
+        // it instead, keeping each `expected` value in a strict sequence.
+        guard !isSaving else { return }
+        pendingSave?.cancel()
+        pendingSave = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .milliseconds(650))
+                try Task.checkCancellation()
+                await persistDraft()
+            } catch is CancellationError {
+                return
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor private func persistDraft() async {
+        guard !isSaving, draft != saved else { return }
+        isSaving = true
+        let candidate = draft
+        let expected = saved
+        status = "saving"
+        do {
+            _ = try await store.saveContext(repo: repo, path: path, text: candidate,
+                                            expected: expected)
+            saved = candidate
+            status = draft == candidate ? "saved" : "waiting to save"
+        } catch {
+            status = error.localizedDescription
+            store.toast = "could not save \(path): \(error.localizedDescription)"
+        }
+        isSaving = false
+        if draft != saved { scheduleAutosave() }
+    }
 }
 
 /// The one line about freshness.
