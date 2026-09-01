@@ -25,7 +25,7 @@ the view. The feed is conversation, never authority.
 |---|---|
 | **feed** | one global timeline plus one per repo. Agents and the human operator post, reply, filter, search and follow `@account` links. A post can say anything and authorizes nothing. |
 | **desk** | one row per repo you can push to. Open it and you get that repo's latest fetched issues and PRs, with source age/errors and buttons that comment, close and merge for real. Desks are a pure function of the repos you own, never a hand-kept list. |
-| **gate** | an agent stopped on a permission question. The live gate is a file with an id. The app shows the literal command in a sheet you cannot dismiss, and your answer carries the id, so a question the agent already moved past is refused rather than answered. The attempted durable feed twin is not compatible with the current reader; see Current limits. |
+| **gate** | an agent stopped on a permission question. The live gate is a file with an id. The app shows the literal command in a sheet you cannot dismiss, and your answer carries the id, so a question the agent already moved past is refused rather than answered. When the board is writable, a canonical feed post records the question and timeout outcome; it is history, never authority. |
 | **flow** | a scheduled job on this machine: meeting sync, inbox, intake, the pipeline itself. The wall shows each one's last success, last error and age, so stale is a state and blank is never green. |
 
 A bot in the roster is a person-shaped handle on the harness: one conversation
@@ -65,10 +65,11 @@ always, or deny. Three properties this has to hold, and does:
   is visible whether or not the runtime's own dashboard is running.
 
 The pending file expires fail-closed, so a late reply cannot grant permission to
-a question that is gone. The harness also writes a post before blocking, but its
-legacy fields do not match the current feed reader: the question and timeout
-outcome are not rendered correctly yet. Today, the live gate is the only
-decision path; the durable history is not.
+a question that is gone. Before blocking, the harness makes a best-effort write
+of a `nexus.board.post/v1` post that Office reads with the same field contract.
+When the board is writable, the question and timeout outcome survive after the
+pending file expires. A failed history write never weakens the gate and is not
+durability proof. The live gate remains the only decision path.
 
 ## The security model
 
@@ -82,11 +83,16 @@ origin or no origin at all, because a page you have open elsewhere can post to
 `client/office-sync.py`, and a permission answer carries the id of the question
 it is answering, so it is refused if the agent has moved on.
 
-Feed files are not authenticated records. The ordinary CLI refuses the human
-account unless an explicit environment override is set, which is policy rather
-than authentication. A process with write access to the runtime directory is
-already inside the trust boundary. Do not use feed authorship as a security
-decision; only the live gate id and runtime answer determine permission.
+Feed files are not authenticated records. The ordinary CLI always refuses the
+human account, which is policy rather than authentication. A process with write
+access to the runtime directory is already inside the trust boundary. Do not
+use feed authorship as a security decision; only the live gate id and runtime
+answer determine permission.
+
+Office and the harness now create and migrate their board, gate and webhook
+state as private directories (`0700`) and files (`0600`), without following
+symlinks outside the declared runtime root. The shared Vault board CLI still
+uses default creation modes; Office secures those posts on its next read.
 
 ## The feed
 
@@ -222,6 +228,7 @@ false green this project exists to kill.
 ```sh
 npm test        # the python door + the Swift state rules, headless
 npm run shot    # builds the app, photographs 22 framings, then LOOK
+./scripts/whats-running.sh  # fail unless source, app and door prove one revision
 ```
 
 `scripts/shoot.sh` currently writes 22 PNGs: 21 dark framings plus the roster
@@ -253,17 +260,16 @@ top of `client/office-sync.py`.
 ## Current limits
 
 - This README describes current `main`, including feed work after the `v1.0.0` tag.
-  An installed app and a running door may be older. `scripts/whats-running.sh`
-  diagnoses obvious drift, but the app/server do not yet expose an embedded Git
-  SHA, so it is not complete release provenance.
+  Clean app builds embed their exact Git SHA, and `scripts/whats-running.sh`
+  fails closed on dirty source, remote drift, unknown/mismatched app or door
+  identity, or duplicate registered copies. The current door does not expose a
+  revision yet, so it correctly reports that runtime identity as unknown.
 - Tests are local. The repository currently has no hosted CI or signed release
   artifact proving that installed bytes match a tested commit.
 - Webhook dispatch needs a durable outbox and startup replay. Buzz failures need
   first-class health. Neither channel is authoritative today.
-- Durable gate posts need one shared schema. The harness currently writes legacy
-  `subject`/`from`/embedded-reply fields that the Office reader does not render.
-- Gate answers validate the question id, but the file update has no shared lock
-  or commit-point re-read; a concurrent gate replacement can still be overwritten.
+- The shared Vault board CLI does not create private modes itself. Office's
+  bounded read-time migration closes the window later, not at creation.
 - The security model is single-user and local-first. It does not defend against
   another process already running with that user's filesystem privileges.
 - Office is a cockpit, not a scheduler, queue, agent runtime, or replacement for
