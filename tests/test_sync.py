@@ -643,6 +643,17 @@ class DecisionTest(SyncCase):
         self.assertEqual(err, "")
         self.assertEqual(cmd[-1], self.mod.REQUEUE_LINE)
 
+    def test_a_close_pick_closes_the_issue_now(self):
+        steps, err = self.mod._issue_steps("choose", "7", "acme/one", "**4.** Close as done", {})
+        self.assertEqual(err, "")
+        self.assertEqual([s[:3] for s in steps],
+                         [["gh", "issue", "comment"], ["gh", "issue", "close"]])
+        steps, _ = self.mod._issue_steps("choose", "7", "acme/one", "**1.** Trim PR #3", {})
+        self.assertEqual([s[:3] for s in steps], [["gh", "issue", "comment"]])
+        # "Close" inside the label is not a close; only the leading word decides.
+        steps, _ = self.mod._issue_steps("choose", "7", "acme/one", "**2.** Do not close yet", {})
+        self.assertEqual([s[:3] for s in steps], [["gh", "issue", "comment"]])
+
     def test_edit_steps_per_kind(self):
         steps, err = self.mod._edit_steps("unblock", "7", "acme/one", {})
         self.assertEqual((err, len(steps)), ("", 1))
