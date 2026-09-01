@@ -118,6 +118,110 @@ public enum StateRules {
         stations.reduce(0) { $0 + $1.issues.filter { needsHuman(issue: $0) }.count }
     }
 
+    // MARK: - the home: everything waiting on a person, in the order they can act
+
+    /// One issue, and the desk it is on. The desk does not travel with an issue
+    /// in the snapshot, and a card that cannot say which repo it belongs to is a
+    /// card nobody can act on.
+    public struct WaitingIssue: Hashable, Identifiable {
+        public let repo: String
+        public let issue: Issue
+
+        public var id: String { "\(repo)#\(issue.number)" }
+
+        public init(repo: String, issue: Issue) {
+            self.repo = repo
+            self.issue = issue
+        }
+    }
+
+    /// Everything waiting on a person, in the order a person can act on it: a
+    /// stated question with buttons, then a fix already written and waiting to
+    /// be merged, then the parks the pipeline has not turned into a question
+    /// yet.
+    ///
+    /// The last group is still counted and still shown, because a park nobody
+    /// can see is a park nobody answers. It is grouped by desk rather than
+    /// listed: there is nothing to decide on one until the runner states the
+    /// choice, and forty rows of "nothing to do here yet" buries the two rows
+    /// that do have something.
+    ///
+    /// Put-away is deliberately not consulted. Putting a desk away stops it
+    /// being polled; it never removes a raised hand that is already in the
+    /// snapshot.
+    public struct NeedsQueue {
+        public var decisions: [WaitingIssue] = []
+        public var landed: [WaitingIssue] = []
+        public var parks: [WaitingIssue] = []
+
+        public var all: [WaitingIssue] { decisions + landed + parks }
+        public var count: Int { decisions.count + landed.count + parks.count }
+
+        /// The parks by desk, most waiting first, then alphabetically so the
+        /// same floor draws the same way twice.
+        public var parksByDesk: [(repo: String, count: Int)] {
+            var tally: [String: Int] = [:]
+            for row in parks { tally[row.repo, default: 0] += 1 }
+            return tally.map { (repo: $0.key, count: $0.value) }
+                .sorted { $0.count == $1.count ? $0.repo < $1.repo : $0.count > $1.count }
+        }
+    }
+
+    public static func needsQueue(_ stations: [Station]) -> NeedsQueue {
+        var queue = NeedsQueue()
+        for station in stations {
+            for issue in station.issues where needsHuman(issue: issue) {
+                let row = WaitingIssue(repo: station.repo, issue: issue)
+                if issue.hasDecision {
+                    queue.decisions.append(row)
+                } else if issue.landedPr != nil {
+                    queue.landed.append(row)
+                } else {
+                    queue.parks.append(row)
+                }
+            }
+        }
+        let newestFirst: (WaitingIssue, WaitingIssue) -> Bool = { a, b in
+            let left = date(a.issue.updatedAt)?.timeIntervalSince1970 ?? 0
+            let right = date(b.issue.updatedAt)?.timeIntervalSince1970 ?? 0
+            // A tie on the timestamp is settled by the issue number, so a floor
+            // whose desks all arrived in one snapshot still draws the same way
+            // on every poll.
+            return left == right ? a.issue.number > b.issue.number : left > right
+        }
+        queue.decisions.sort(by: newestFirst)
+        queue.landed.sort(by: newestFirst)
+        queue.parks.sort(by: newestFirst)
+        return queue
+    }
+
+    /// What happened while nobody was looking.
+    ///
+    /// Counted off the runner's own receipts, which are already filtered to the
+    /// ones naming an issue, so a row here is a thing that happened TO
+    /// something and never a sweep counting itself. `since` of `nil` is a
+    /// machine that has never had this screen opened on it: there is no window
+    /// to count over, so nothing is counted rather than everything.
+    public struct CatchUp: Equatable {
+        public var worked = 0
+        public var landed = 0
+        public var asked = 0
+    }
+
+    public static func catchUp(_ automation: Automation, since: Date?) -> CatchUp {
+        guard let since else { return CatchUp() }
+        var got = CatchUp()
+        var touched: Set<String> = []
+        for row in automation.activity {
+            guard let at = date(row.at), at > since else { continue }
+            touched.insert("\(row.repo)#\(row.issue)")
+            if row.outcome == "landed" { got.landed += 1 }
+            if row.outcome == "parked" { got.asked += 1 }
+        }
+        got.worked = touched.count
+        return got
+    }
+
     // MARK: - the gate needs a desk to stand at
 
     /// Attach a pending gate to the station it belongs to.
@@ -848,6 +952,11 @@ public enum StateRules {
     public static func moment(_ isoString: String, now: Date = Date(),
                               calendar: Calendar = .current) -> String {
         guard let when = date(isoString) else { return "" }
+        return moment(when, now: now, calendar: calendar)
+    }
+
+    public static func moment(_ when: Date, now: Date = Date(),
+                              calendar: Calendar = .current) -> String {
         let clock = DateFormatter()
         clock.dateFormat = "h:mm a"
         let time = clock.string(from: when)

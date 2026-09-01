@@ -186,6 +186,71 @@ public struct ChatResponse: Decodable {
 
 // MARK: - the floor
 
+/// One way out of a stated question, as the runner wrote it.
+///
+/// `n` is the number the runner printed and the number the door validates: a
+/// choice is answered by its number, never by its position in a list this app
+/// happens to have sorted. Sorting the recommended option to the top and then
+/// sending an index would approve the option nobody clicked.
+public struct DecisionOption: Decodable, Hashable, Identifiable {
+    public var n: Int
+    public var label: String
+    public var consequence: String
+    public var recommended: Bool
+
+    public var id: Int { n }
+
+    public init(n: Int, label: String, consequence: String = "", recommended: Bool = false) {
+        self.n = n
+        self.label = label
+        self.consequence = consequence
+        self.recommended = recommended
+    }
+
+    enum CodingKeys: String, CodingKey { case n, label, consequence, recommended }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        n = c.int(.n) ?? 0
+        label = c.str(.label) ?? ""
+        consequence = c.str(.consequence) ?? ""
+        recommended = c.bool(.recommended) ?? false
+    }
+}
+
+/// A question the runner stated, with the ways out of it.
+///
+/// The server only emits this key when a bot comment really is the contract:
+/// a `❓` first line and two to four numbered options. So its presence is the
+/// whole test for "this issue has buttons", and this app never has to re-parse
+/// a comment to find out.
+public struct Decision: Decodable, Hashable {
+    public var question: String
+    public var options: [DecisionOption]
+
+    /// Recommended first, then by the runner's own numbering. The number rides
+    /// on every option, so reordering here changes what is read, never what is
+    /// sent.
+    public var ordered: [DecisionOption] {
+        options.sorted { a, b in
+            a.recommended == b.recommended ? a.n < b.n : a.recommended
+        }
+    }
+
+    public init(question: String, options: [DecisionOption]) {
+        self.question = question
+        self.options = options
+    }
+
+    enum CodingKeys: String, CodingKey { case question, options }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        question = c.str(.question) ?? ""
+        options = c.list(.options, DecisionOption.self)
+    }
+}
+
 public struct Issue: Decodable, Hashable, Identifiable {
     public var number: Int
     public var title: String
@@ -198,12 +263,23 @@ public struct Issue: Decodable, Hashable, Identifiable {
     /// is never read as yes.
     public var botLast: Bool?
     public var lastWord: String
+    /// The question the runner stated in its last word, when it stated one.
+    /// Absent is the ordinary case: a park with no choice in it yet.
+    public var decision: Decision?
+    /// The PR the runner says closes this issue, when it has already written
+    /// the fix. Absent means there is nothing to merge from here.
+    public var landedPr: Int?
 
     public var id: Int { number }
 
+    /// A stated question with at least one way out of it. An empty option list
+    /// is a decision block that decoded to nothing, and drawing a question with
+    /// no buttons under it is worse than drawing no question.
+    public var hasDecision: Bool { !(decision?.options.isEmpty ?? true) }
+
     public init(number: Int, title: String, body: String = "", labels: [String] = [],
                 url: String = "", updatedAt: String = "", botLast: Bool? = nil,
-                lastWord: String = "") {
+                lastWord: String = "", decision: Decision? = nil, landedPr: Int? = nil) {
         self.number = number
         self.title = title
         self.body = body
@@ -212,12 +288,15 @@ public struct Issue: Decodable, Hashable, Identifiable {
         self.updatedAt = updatedAt
         self.botLast = botLast
         self.lastWord = lastWord
+        self.decision = decision
+        self.landedPr = landedPr
     }
 
     enum CodingKeys: String, CodingKey {
-        case number, title, body, labels, url, updatedAt
+        case number, title, body, labels, url, updatedAt, decision
         case botLast = "bot_last"
         case lastWord = "last_word"
+        case landedPr = "landed_pr"
     }
 
     public init(from decoder: Decoder) throws {
@@ -230,6 +309,11 @@ public struct Issue: Decodable, Hashable, Identifiable {
         updatedAt = c.str(.updatedAt) ?? ""
         botLast = c.bool(.botLast)
         lastWord = c.str(.lastWord) ?? ""
+        // Absent, null, or the wrong shape all mean the same thing here: this
+        // issue carries no stated question. A malformed block must not take the
+        // whole desk down, so it decodes to nothing like every other field.
+        decision = (try? c.decodeIfPresent(Decision.self, forKey: .decision)) ?? nil
+        landedPr = c.int(.landedPr)
     }
 }
 
