@@ -1393,11 +1393,19 @@ def _edit_steps(kind, num, repo, payload):
     return steps, ""
 
 
+# A picked option whose label starts with "close" is a person saying close it.
+# Waiting fifteen minutes for a lane to read the word and run the same command
+# is a round trip nobody asked for, so the door closes it in the same decision.
+CLOSE_PICK = re.compile(r"^\*\*\d\.\*\*\s*close\b", re.IGNORECASE)
+
+
 def _issue_steps(kind, num, repo, body, payload):
     """Every gh command one issue decision turns into, as (commands, refusal)."""
     comment, err = _comment_step(kind, num, repo, body)
     if err:
         return None, err
+    if kind == "choose" and CLOSE_PICK.match(body or ""):
+        kind = "close"
     edits, err = _edit_steps(kind, num, repo, payload)
     if err:
         return None, err
