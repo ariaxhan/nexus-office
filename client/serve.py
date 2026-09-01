@@ -55,6 +55,7 @@ import board  # noqa: E402
 import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import context  # noqa: E402
+import live  # noqa: E402
 import runtime as rt  # noqa: E402
 import sessions  # noqa: E402
 import webhook  # noqa: E402
@@ -579,6 +580,25 @@ class Handler(BaseHTTPRequestHandler):
                 q = urllib.parse.parse_qs(query)
                 code, body = context.read((q.get("repo") or [""])[0],
                                           (q.get("path") or [""])[0])
+                return self._json(body, code)
+            if path == "/api/live":
+                # The other half of `/api/sessions`, and deliberately not folded
+                # into it: that one is the list of sessions that joined the
+                # harness, which is what can be ANSWERED, and this one is the
+                # process table, which is what is RUNNING. One route answering
+                # both would have to pick which of the two counts to be wrong
+                # about. Nothing here writes, and there is no POST beside it.
+                return self._json(live.read())
+            if path == "/api/live/transcript":
+                # The key is the whole of what a caller controls: `engine-pid`,
+                # refused before it is looked up. The file that gets opened is
+                # the one on the row this process built from `pgrep`, so no
+                # string off this query string ever reaches a path join.
+                q = urllib.parse.parse_qs(query)
+                code, body = live.transcript((q.get("key") or [""])[0],
+                                             (q.get("offset") or ["0"])[0],
+                                             (q.get("limit") or [""])[0]
+                                             or live.DEFAULT_LIMIT)
                 return self._json(body, code)
             if path == "/api/sessions":
                 repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
