@@ -41,7 +41,16 @@ import runtime as rt
 BOARD = "_meta/board"
 REPLIES = "_replies"
 HUMAN = "aria"
-KINDS = ("working", "found", "landed", "blocked", "asking", "note")
+# Two halves, and the split is what gives the feed a voice.
+#
+#   the machine reporting   working found landed blocked asking   automatic, never empty
+#   somebody talking        til quirk opinion                     never automatic, worth reading
+#
+# The second set is drawn without any of the operational chrome, because a thing an agent
+# thought worth saying is not a status and should not look like one.
+WORK_KINDS = ("working", "found", "landed", "blocked", "asking")
+VOICE_KINDS = ("til", "quirk", "opinion")
+KINDS = WORK_KINDS + VOICE_KINDS + ("note",)
 # A feed is scrolled, not paged, but the room must never try to draw ten thousand posts
 # because a loop went wrong at four in the morning.
 MAX_POSTS = 300

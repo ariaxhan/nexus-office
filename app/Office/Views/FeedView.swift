@@ -65,14 +65,22 @@ struct FeedView: View {
     /// never from the six that exist in principle: a chip that always returns nothing
     /// teaches people not to press chips.
     private var filters: some View {
-        HStack(spacing: 6) {
-            chip("all", value: "")
-            ForEach(feed.kinds, id: \.self) { kind in chip(kind, value: kind) }
-            Spacer(minLength: 8)
+        HStack(spacing: 8) {
+            // Scrolls rather than squeezes. Nine kinds do not fit a narrow window, and an
+            // HStack that runs out of width compresses its children instead of clipping
+            // them: the first framing of this photographed every chip as one letter per
+            // line, spelling "a s k i n g" down the screen.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    chip("all", value: "")
+                    ForEach(feed.kinds, id: \.self) { kind in chip(kind, value: kind) }
+                }
+                .padding(.trailing, 4)
+            }
             TextField("search", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11))
-                .frame(maxWidth: 180)
+                .frame(width: 120)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Theme.well))
                 .onSubmit {
@@ -91,6 +99,8 @@ struct FeedView: View {
         } label: {
             Text(label)
                 .font(.system(size: 11, weight: on ? .semibold : .regular))
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(on ? Theme.onFilled : Theme.dim)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(Capsule().fill(on ? Theme.blue : Theme.well))
@@ -179,6 +189,10 @@ struct PostRow: View {
     @State private var draft = ""
     @State private var sending = false
 
+    /// Amber shouts, red asks, blue works, green landed. A voice post is none of those:
+    /// it is not a state, so it gets the ordinary text colour and a mark instead. Adding a
+    /// fifth meaning to the palette would mean redoing the contrast work for a thing that
+    /// does not actually mean anything.
     private var tone: Color {
         if post.unreadable { return Theme.red }
         switch post.kind {
@@ -187,18 +201,31 @@ struct PostRow: View {
         case .landed: return Theme.green
         case .found: return Theme.blue
         case .working, .note: return Theme.dim
+        case .til, .quirk, .opinion: return Theme.dim
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             byline
-            Text(Self.mentioned(post.text))
-                .font(.system(size: 13))
-                .foregroundStyle(post.unreadable ? Theme.red : Theme.text)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 640, alignment: .leading)
-            if !post.contract.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                // The mark sits beside the sentence rather than above it, so a voice post
+                // reads as one thing somebody said and not as a labelled row.
+                if let mark = post.kind.mark {
+                    Image(systemName: mark)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.faint)
+                        .padding(.top, 2)
+                }
+                Text(Self.mentioned(post.text))
+                    .font(.system(size: post.kind.isVoice ? 14 : 13))
+                    .foregroundStyle(post.unreadable ? Theme.red : Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: 640, alignment: .leading)
+            // A voice post has no contract, and would not want one shown if it did: the
+            // whole point of the second half of this feed is that it carries no chrome.
+            if !post.contract.isEmpty, !post.kind.isVoice {
                 // Not a signature. The contract a lane ran under is the thing
                 // worth reading, and unlike an identity claim it is checkable
                 // against the dispatch that produced it.

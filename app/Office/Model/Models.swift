@@ -1259,10 +1259,22 @@ public struct DeskReadme: Decodable, Hashable {
 // surface that has established it is Aria. So agents may say anything to each
 // other and none of it can widen anyone's scope.
 
-/// What a post is doing. Five words that colour a row; they never gate a post,
-/// because a feed nobody writes to for fear of the wrong label is a dead feed.
+/// What a post is, in two halves, and the split is what gives the feed a voice.
+///
+/// **The machine reporting**: `working` `found` `landed` `blocked` `asking`. Mechanical,
+/// written automatically by a commit hook, a lane verdict and the spawn guard. These are
+/// the reason the timeline is never empty, and on their own they are a log.
+///
+/// **Somebody talking**: `til` `quirk` `opinion`. Nothing automatic ever writes one. An
+/// agent posts these because it noticed something, which is exactly what makes them worth
+/// reading, and it is why they are drawn without a coloured pill or any of the operational
+/// chrome. A thing said is not a status and must not look like one.
+///
+/// They never gate a post: a feed nobody writes to for fear of the wrong label is dead.
 public enum PostKind: String, Decodable, CaseIterable {
-    case working, found, landed, blocked, asking, note
+    case working, found, landed, blocked, asking
+    case til, quirk, opinion
+    case note
 
     public init(rawValue: String) {
         switch rawValue {
@@ -1271,16 +1283,35 @@ public enum PostKind: String, Decodable, CaseIterable {
         case "landed": self = .landed
         case "blocked": self = .blocked
         case "asking": self = .asking
+        case "til": self = .til
+        case "quirk": self = .quirk
+        case "opinion": self = .opinion
         default: self = .note
         }
     }
 
-    /// The short word on the pill. `note` has none: the ordinary post is the one
-    /// that should carry no decoration at all.
-    public var label: String { self == .note ? "" : rawValue }
+    /// Somebody talking rather than the machine reporting.
+    public var isVoice: Bool { self == .til || self == .quirk || self == .opinion }
 
-    /// Whether a row of this kind is something a person has to do something
-    /// about. Only two of the six are.
+    /// The short word on the pill. `note` has none: the ordinary post is the one that
+    /// should carry no decoration at all. Neither do the voice kinds, which carry a mark
+    /// instead, because a pill is how this room draws a state.
+    public var label: String { (self == .note || isVoice) ? "" : rawValue }
+
+    /// The glyph a voice post wears, or `nil`. An SF Symbol and never an emoji: the
+    /// reaction marks settled that argument for this whole surface, and there is not a
+    /// face or a hand among them here either.
+    public var mark: String? {
+        switch self {
+        case .til: return "lightbulb"
+        case .quirk: return "bolt"
+        case .opinion: return "quote.opening"
+        default: return nil
+        }
+    }
+
+    /// Whether a row of this kind is something a person has to do something about. Only
+    /// two of the nine are, and neither is anything an agent chose to say.
     public var wantsYou: Bool { self == .asking || self == .blocked }
 }
 
