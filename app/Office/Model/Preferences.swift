@@ -59,6 +59,7 @@ public final class Preferences {
     private static let botsKey = "settings.pane.bots.v1"
     private static let wallKey = "settings.pane.wall.v1"
     private static let typeScaleKey = "settings.typeScale.v1"
+    private static let homeSeenKey = "settings.home.lastSeen.v1"
     /// The key the faces already shipped under, kept as it was: renaming it
     /// would silently strip every colour somebody has already picked.
     private static let facesKey = "faces.v1"
@@ -82,6 +83,12 @@ public final class Preferences {
     /// reads and writes it through here so there is one place that decides what
     /// a preference is and where it lands.
     public private(set) var faceOverrides: [String: String] = [:]
+    /// When this person last opened the home. Local to this Mac and to this
+    /// person: nothing on the server reads it, no other device sees it, and it
+    /// is the only thing "since you were last here" is measured from. `nil` is
+    /// an install that has never opened it, which is honestly nothing to count
+    /// over rather than a licence to count everything.
+    public private(set) var homeLastSeen: Date?
 
     public init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
@@ -111,6 +118,7 @@ public final class Preferences {
         if let scale = defaults.object(forKey: Self.typeScaleKey) as? Double {
             typeScale = Self.clamp(scale)
         }
+        homeLastSeen = defaults.object(forKey: Self.homeSeenKey) as? Date
         if let raw = defaults.dictionary(forKey: Self.facesKey) as? [String: String] {
             for (repo, hex) in raw {
                 if let clean = Faces.normalise(hex: hex) { faceOverrides[repo] = clean }
@@ -131,6 +139,15 @@ public final class Preferences {
     public func set(layout: LayoutPreset) {
         self.layout = layout
         defaults?.set(layout.rawValue, forKey: Self.layoutKey)
+    }
+
+    public func set(homeLastSeen: Date?) {
+        self.homeLastSeen = homeLastSeen
+        if let homeLastSeen {
+            defaults?.set(homeLastSeen, forKey: Self.homeSeenKey)
+        } else {
+            defaults?.removeObject(forKey: Self.homeSeenKey)
+        }
     }
 
     public func set(showBots: Bool) {

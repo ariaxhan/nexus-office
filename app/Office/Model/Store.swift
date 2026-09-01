@@ -16,6 +16,10 @@ import UserNotifications
 public enum Selection: Hashable {
     case bot(String)
     case desk(String)
+    /// Everything waiting on a person, across every desk, in one place. Its own
+    /// case rather than a desk's or the feed's: it belongs to no repo and it is
+    /// a list of things to answer rather than a record of what happened.
+    case home
     /// The global timeline, across every repo that has posted. Its own case
     /// rather than a desk's, because it belongs to no repo: it is the one place
     /// that shows the whole machine talking at once.
@@ -878,6 +882,22 @@ public final class Store {
         if case .bot(let id) = selection {
             Task { await loadChat(id) }
         }
+        if case .home = selection { markHomeSeen() }
+    }
+
+    /// What "since you were last here" is measured from, held for as long as the
+    /// home is open.
+    ///
+    /// Opening the home is the "I have seen this" gesture, so the stamp moves
+    /// the moment it opens. The window it describes cannot move with it: a
+    /// catch-up line that recomputed against the stamp it just wrote would say
+    /// "0 issues worked" on every single visit. So the old stamp is kept here
+    /// and the new one goes to disk.
+    public private(set) var homeSince: Date?
+
+    public func markHomeSeen() {
+        homeSince = prefs.homeLastSeen
+        prefs.set(homeLastSeen: Date())
     }
 
     /// Say something, with or without a picture.
@@ -1035,9 +1055,11 @@ public final class Store {
     }
 
     public func decide(kind: String, repo: String, issue: String,
-                       body: String? = nil, pr: Int? = nil) async -> Bool {
+                       body: String? = nil, pr: Int? = nil,
+                       label: String? = nil, n: Int? = nil) async -> Bool {
         do {
-            let ack = try await api.decide(kind: kind, repo: repo, issue: issue, body: body, pr: pr)
+            let ack = try await api.decide(kind: kind, repo: repo, issue: issue, body: body,
+                                           label: label, pr: pr, n: n)
             toast = ack.spoken
             await refreshWorld()
             return ack.ok
