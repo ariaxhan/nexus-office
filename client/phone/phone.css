@@ -1014,6 +1014,13 @@ details.away > summary .wants { color: var(--amber); }
   overflow-wrap: anywhere;
 }
 .r-result .rtool { color: var(--faint); }
+/* Collapsed means ONE line. A three line preview of a heredoc is the wall this
+ * reader exists to keep out of the way of the sentences. */
+.rline:not(.open) .rtool {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .rline.open .rtool { background: var(--roster); padding: 6px 8px; border-radius: 8px; }
 
 /* The footer says the one thing that is structurally true about this panel and
