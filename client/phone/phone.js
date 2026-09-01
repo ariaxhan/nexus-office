@@ -33,12 +33,18 @@ const SESSION_EVERY_MS = 6000;
 const SESSION_TURNS = 4;
 const THREAD_EVERY_MS = 4000;
 
-/* How many things to answer the band actually puts on screen. The office has
- * had 157 issues waiting at once, which is thirty-six thousand pixels of phone:
- * a list that long is not a list, it is a wall you scroll past. So the most
- * recently touched ones get cards and the rest get counted out loud, because
- * the failure to avoid is not a long band, it is a quiet one. */
-const NEEDS_SHOWN = 20;
+/* The cap is on the DIM half only. The office has had 157 issues waiting at
+ * once, which is thirty-six thousand pixels of phone, and a list that long is a
+ * wall you scroll past. But a stated question is the whole reason this band
+ * exists, so those are never cut: only the parks the pipeline has not turned
+ * into a question yet, and what is cut is counted out loud, because the failure
+ * to avoid is not a long band, it is a quiet one. */
+const PARK_DESKS_SHOWN = 8;
+const PARK_ISSUES_SHOWN = 3;
+
+/* When this browser last looked at the queue. Local to the phone: nothing on
+ * the server reads it and no other device sees it. */
+const LAST_SEEN_KEY = "office.lastSeen";
 
 /* A picture, on the way to a door that takes one attachment of at most half a
  * megabyte. A phone camera hands over four megabytes, so the page shrinks it
@@ -487,43 +493,120 @@ async function answer(drawn, verdict, always) {
   await pollGate();
 }
 
+/* ── since you were last here ────────────────────────────────────────────── */
+
+/* One line for the things that happened while nobody was looking, so the queue
+ * below is a list of decisions and not also a changelog. The stamp is this
+ * browser's own: it never leaves the phone and nothing on the server reads it. */
+
+function lastSeen() {
+  try {
+    const at = when(window.localStorage.getItem(LAST_SEEN_KEY));
+    return at ? at.getTime() : 0;
+  } catch (err) {
+    // Private mode throws on the read itself. A page that cannot remember
+    // still draws; it just has nothing to say about "since".
+    return 0;
+  }
+}
+
+function markSeen() {
+  try { window.localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString()); }
+  catch (err) { /* nothing to remember with */ }
+}
+
+/* The runner's receipts are already filtered to the ones naming an issue, so a
+ * row here is a thing that happened TO something, never a sweep counting. */
+function sinceThen(world, from) {
+  const rows = ((world && world.automation) || {}).activity || [];
+  const touched = new Set();
+  let landed = 0, asked = 0;
+  rows.forEach(function (row) {
+    const at = when(row.at);
+    if (!at || at.getTime() <= from) return;
+    touched.add(row.repo + "#" + row.issue);
+    if (row.outcome === "landed") landed += 1;
+    if (row.outcome === "parked") asked += 1;
+  });
+  return { worked: touched.size, landed: landed, asked: asked };
+}
+
+function drawCatchup() {
+  const band = document.getElementById("catchup");
+  clear(band);
+  const from = lastSeen();
+  const card = el("div", "card catchup");
+  card.appendChild(el("p", "when", from ? "since " + moment(new Date(from).toISOString())
+                                        : "since you were last here"));
+
+  if (from) {
+    const got = sinceThen(state.world, from);
+    card.appendChild(el("p", "count", got.worked + " issues worked"));
+    card.appendChild(el("p", "count", got.landed + " landed"));
+    card.appendChild(el("p", "count", got.asked + " asked you something"));
+  }
+  const waiting = queue(state.world).all.length
+                + wallSections(state.world).filter(function (s) { return s.needs > 0; }).length;
+  card.appendChild(el("p", "count wants", "needs you: " + waiting));
+
+  // Tapping is the "I have seen this" gesture. Nothing else moves the stamp,
+  // so opening the page in a pocket never marks the queue as read.
+  card.addEventListener("click", function () {
+    markSeen();
+    drawCatchup();
+  });
+  band.hidden = false;
+  band.appendChild(card);
+}
+
 /* ── needs you ───────────────────────────────────────────────────────────── */
 
-function waitingIssues(world) {
-  const out = [];
+/* The queue, in the order a person can act on it: a stated question with
+ * buttons, then a fix waiting to be merged, then the parks the pipeline has not
+ * turned into a question yet. The last group is still shown, because a park
+ * nobody can see is a park nobody answers. */
+function queue(world) {
+  const decisions = [], landed = [], parks = [];
   ((world && world.stations) || []).forEach(function (desk) {
     (desk.issues || []).filter(needsHuman).forEach(function (issue) {
-      out.push({ repo: desk.repo, issue: issue });
+      const row = { repo: desk.repo, issue: issue };
+      if (issue.decision && (issue.decision.options || []).length) decisions.push(row);
+      else if (issue.landed_pr) landed.push(row);
+      else parks.push(row);
     });
   });
-  return out.sort(function (a, b) {
-    const left = when(a.issue.updatedAt), right = when(b.issue.updatedAt);
-    return (right ? right.getTime() : 0) - (left ? left.getTime() : 0);
-  });
+  [decisions, landed, parks].forEach(function (group) { group.sort(newestFirst); });
+  return { decisions: decisions, landed: landed, parks: parks,
+           all: decisions.concat(landed, parks) };
+}
+
+function newestFirst(a, b) {
+  const left = when(a.issue.updatedAt), right = when(b.issue.updatedAt);
+  return (right ? right.getTime() : 0) - (left ? left.getTime() : 0);
+}
+
+function waitingIssues(world) {
+  return queue(world).all;
 }
 
 function draftKey(repo, number) {
   return repo + "#" + number;
 }
 
-function issueCard(repo, issue) {
-  const key = draftKey(repo, issue.number);
-  const card = el("div", "card issue");
-
+/* The two lines every card in this band starts with: which issue, on which
+ * desk, last touched when. */
+function issueHead(card, repo, issue) {
   const top = el("div", "head");
   top.appendChild(el("span", "num", "#" + issue.number));
   top.appendChild(el("span", "title", issue.title || ""));
   card.appendChild(top);
-
   card.appendChild(el("p", "where", repo + " · " + stamp(issue.updatedAt)));
+}
 
-  const word = line(issue.last_word || "", 260);
-  if (word) card.appendChild(el("p", "word", word));
-
-  const acts = el("div", "acts");
+/* The comment button and, when it is open, the box. Shared by every card here:
+ * whatever else a card offers, typing a sentence is always still allowed. */
+function commentToggle(acts, key, busy) {
   const open = state.commenting[key] === true;
-  const busy = state.busy[key] === true;
-
   const talk = button(open ? "cancel" : "comment", null, function () {
     state.commenting[key] = !open;
     if (open) delete state.drafts[key];
@@ -531,39 +614,144 @@ function issueCard(repo, issue) {
   });
   talk.disabled = busy;
   acts.appendChild(talk);
+}
 
-  ["nudge", "close"].forEach(function (kind) {
-    const b = button(kind, null, function () { decide(key, kind, repo, issue.number, null); });
-    b.disabled = busy;
-    acts.appendChild(b);
+function commentBox(card, key, repo, number, busy) {
+  if (state.commenting[key] !== true) return;
+  const box = el("textarea");
+  box.value = state.drafts[key] || "";
+  box.placeholder = "Answer it. A reply without the bot's marker is what re-queues it.";
+  box.addEventListener("input", function () { state.drafts[key] = box.value; });
+  card.appendChild(box);
+
+  const send = el("div", "acts");
+  const go = button("send comment", "send", function () {
+    decide(key, "comment", repo, number, box.value);
   });
-  card.appendChild(acts);
+  go.disabled = busy;
+  send.appendChild(go);
+  card.appendChild(send);
+}
 
-  if (open) {
-    const box = el("textarea");
-    box.value = state.drafts[key] || "";
-    box.placeholder = "Answer it. A reply without the bot's marker is what re-queues it.";
-    box.addEventListener("input", function () { state.drafts[key] = box.value; });
-    card.appendChild(box);
+/* A stated question, as buttons. The recommended option is first and says so,
+ * and every consequence is on screen: an option whose cost is behind a tap is
+ * an option nobody read before they tapped it. */
+function decisionCard(repo, issue) {
+  const key = draftKey(repo, issue.number);
+  const busy = state.busy[key] === true;
+  const card = el("div", "card issue decision");
+  issueHead(card, repo, issue);
+  card.appendChild(el("p", "ask", issue.decision.question));
 
-    const send = el("div", "acts");
-    const go = button("send comment", "send", function () {
-      decide(key, "comment", repo, issue.number, box.value);
+  const options = (issue.decision.options || []).slice().sort(function (a, b) {
+    if (a.recommended !== b.recommended) return a.recommended ? -1 : 1;
+    return a.n - b.n;
+  });
+  const grid = el("div", "options");
+  options.forEach(function (option) {
+    const b = el("button", "option" + (option.recommended ? " best" : ""));
+    b.type = "button";
+    b.disabled = busy;
+    const pick = el("span", "pick", option.n + ". " + option.label);
+    if (option.recommended) pick.appendChild(el("span", "tag", "recommended"));
+    b.appendChild(pick);
+    if (option.consequence) b.appendChild(el("span", "why", option.consequence));
+    b.addEventListener("click", function () {
+      decide(key, "choose", repo, issue.number, null,
+             { n: option.n, label: option.label });
     });
-    go.disabled = busy;
-    send.appendChild(go);
-    card.appendChild(send);
-  }
+    grid.appendChild(b);
+  });
+  card.appendChild(grid);
 
+  const acts = el("div", "acts");
+  commentToggle(acts, key, busy);
+  card.appendChild(acts);
+  commentBox(card, key, repo, issue.number, busy);
   return card;
 }
 
-async function decide(key, kind, repo, number, body) {
+/* A fix that is already written. The one button that matters is merge, and the
+ * door re-reads the PR before it touches anything, so this is a request and
+ * never a permission. */
+function landedCard(repo, issue) {
+  const key = draftKey(repo, issue.number);
+  const busy = state.busy[key] === true;
+  const card = el("div", "card issue landed");
+  issueHead(card, repo, issue);
+  // The runner writes markdown; this page draws text. Two asterisks read as
+  // two asterisks on a phone, which is the runner's shouting leaking through.
+  const word = line(String(issue.last_word || "").replace(/\*\*/g, ""), 200);
+  if (word) card.appendChild(el("p", "word", word));
+
+  const acts = el("div", "acts");
+  const merge = button("merge PR #" + issue.landed_pr, "send", function () {
+    decide(key, "merge", repo, issue.number, null, { pr: String(issue.landed_pr) });
+  });
+  merge.disabled = busy;
+  acts.appendChild(merge);
+  const shut = button("close issue", null, function () {
+    decide(key, "close", repo, issue.number, null);
+  });
+  shut.disabled = busy;
+  acts.appendChild(shut);
+  commentToggle(acts, key, busy);
+  card.appendChild(acts);
+  commentBox(card, key, repo, issue.number, busy);
+  return card;
+}
+
+/* A park with no question in it yet. Dim on purpose: there is nothing to decide
+ * until the pipeline states the choice. Never hidden, because a park the office
+ * does not draw is one nobody nudges. */
+function parkCard(repo, rows) {
+  const card = el("div", "card park");
+  const top = el("div", "head");
+  top.appendChild(el("span", "title", repo));
+  top.appendChild(el("span", "badge", String(rows.length)));
+  card.appendChild(top);
+  card.appendChild(el("p", "under",
+    rows.length + (rows.length === 1 ? " issue is" : " issues are")
+    + " waiting for the pipeline to state the question"));
+  rows.slice(0, PARK_ISSUES_SHOWN).forEach(function (row) {
+    card.appendChild(parkLine(repo, row.issue));
+  });
+  if (rows.length > PARK_ISSUES_SHOWN) {
+    card.appendChild(el("p", "empty",
+      (rows.length - PARK_ISSUES_SHOWN) + " more on this desk, in its own pane"));
+  }
+  return card;
+}
+
+function parkLine(repo, issue) {
+  const key = draftKey(repo, issue.number);
+  const busy = state.busy[key] === true;
+  const wrap = el("div", "parkline");
+  const top = el("div", "head");
+  top.appendChild(el("span", "num", "#" + issue.number));
+  top.appendChild(el("span", "title", line(issue.title || "", 70)));
+  wrap.appendChild(top);
+  const acts = el("div", "acts");
+  commentToggle(acts, key, busy);
+  const nudge = button("nudge", null, function () {
+    decide(key, "nudge", repo, issue.number, null);
+  });
+  nudge.disabled = busy;
+  acts.appendChild(nudge);
+  wrap.appendChild(acts);
+  commentBox(wrap, key, repo, issue.number, busy);
+  return wrap;
+}
+
+async function decide(key, kind, repo, number, body, extra) {
   if (kind === "comment" && !String(body || "").trim()) return;
   state.busy[key] = true;
   drawNeeds();
   const payload = { kind: kind, repo: repo, issue: String(number) };
   if (kind === "comment") payload.body = body;
+  // A choice sends a number and a label; the door writes the sentence. A merge
+  // sends the PR the runner named. Neither is free text from this page.
+  if (extra) Object.keys(extra).forEach(function (k) { payload[k] = extra[k]; });
   const sent = await write("/api/decision", payload);
   delete state.busy[key];
   const words = String(sent.body.result || sent.body.error || "");
@@ -584,27 +772,26 @@ function drawNeeds() {
   if (band.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA") {
     return;
   }
-  const issues = waitingIssues(state.world);
+  const q = queue(state.world);
   const wanted = wallSections(state.world).filter(function (s) { return s.needs > 0; });
   clear(band);
-  if (!issues.length && !wanted.length) {
+  if (!q.all.length && !wanted.length) {
     band.hidden = true;
     return;
   }
   band.hidden = false;
-  band.appendChild(head("needs you", String(issues.length + wanted.length), true));
-  issues.slice(0, NEEDS_SHOWN).forEach(function (row) {
-    band.appendChild(issueCard(row.repo, row.issue));
+  band.appendChild(head("needs you", String(q.all.length + wanted.length), true));
+
+  // Every stated question, uncapped. This band exists for exactly these, and a
+  // question cut off by a limit is a question nobody answers.
+  q.decisions.forEach(function (row) {
+    band.appendChild(decisionCard(row.repo, row.issue));
   });
-  if (issues.length > NEEDS_SHOWN) {
-    // Counted, never dropped in silence. The desks band below still shows every
-    // one of these repos as waiting on you.
-    const rest = issues.slice(NEEDS_SHOWN);
-    const desks = new Set(rest.map(function (row) { return row.repo; }));
-    band.appendChild(el("p", "empty", rest.length + " more waiting on you, on "
-      + desks.size + (desks.size === 1 ? " desk" : " desks")
-      + " further down"));
-  }
+  q.landed.forEach(function (row) {
+    band.appendChild(landedCard(row.repo, row.issue));
+  });
+  drawParks(band, q.parks);
+
   wanted.forEach(function (section) {
     const row = el("div", "row");
     row.appendChild(el("span", "dot m-needs"));
@@ -615,6 +802,28 @@ function drawNeeds() {
     row.appendChild(el("span", "badge", String(section.needs)));
     band.appendChild(row);
   });
+}
+
+function drawParks(band, parks) {
+  if (!parks.length) return;
+  const byRepo = new Map();
+  parks.forEach(function (row) {
+    if (!byRepo.has(row.repo)) byRepo.set(row.repo, []);
+    byRepo.get(row.repo).push(row);
+  });
+  const desks = Array.from(byRepo.keys());
+  desks.slice(0, PARK_DESKS_SHOWN).forEach(function (repo) {
+    band.appendChild(parkCard(repo, byRepo.get(repo)));
+  });
+  if (desks.length > PARK_DESKS_SHOWN) {
+    // Counted, never dropped in silence. The desks band below still shows every
+    // one of these repos as waiting on you.
+    const rest = desks.slice(PARK_DESKS_SHOWN);
+    let issues = 0;
+    rest.forEach(function (repo) { issues += byRepo.get(repo).length; });
+    band.appendChild(el("p", "empty", issues + " more waiting on you, on "
+      + rest.length + (rest.length === 1 ? " desk" : " desks") + " further down"));
+  }
 }
 
 /* ── bots ────────────────────────────────────────────────────────────────── */
@@ -1814,6 +2023,7 @@ async function pollWorld(nowPlease) {
       state.github = (state.world && state.world.github) || null;
       if (nowPlease && got.body.fresh === false) say("asked less than a minute ago; this is the cache");
       drawStamp();
+      drawCatchup();
       drawNeeds();
       drawDesks();
       drawAutomation();

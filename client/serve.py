@@ -77,7 +77,8 @@ FRESH_MIN_S = 60.0
 FRESH_WAIT_S = 45
 BUILD_WAIT_S = 300
 
-GITHUB_KINDS = {"comment", "unblock", "close", "reopen", "label", "nudge", "merge"}
+GITHUB_KINDS = {"comment", "unblock", "close", "reopen", "label", "nudge", "merge",
+                "choose"}
 RUNTIME_KINDS = {"permit", "chat", "run", "stop"}
 # fullmatch with ASCII: Python's `$` forgives a trailing newline and `\w` is Unicode,
 # neither of which the Worker's JS regexes allowed. Parity, not paranoia.
@@ -134,6 +135,11 @@ DRAIN_LIMIT = 8 * 1024 * 1024
 
 BAD_ID = "permit needs the question id it is answering"
 BAD_ANSWER = "permit answer must be allow or deny"
+BAD_OPTION = "a choice needs an option number 1 to 4"
+BAD_LABEL = "a choice needs the label it is choosing"
+# The whole option contract, in one place: the pipeline writes at most four, so
+# a fifth is a page drawing a button the runner will never understand.
+CHOICE_MAX = 4
 NO_ROOT = "no runtime root configured (OFFICE_RUNTIME_ROOT)"
 NO_PAGE = "the office is at /; there is nothing else here"
 
@@ -390,6 +396,19 @@ def validate(body: dict):
     if kind == "merge" and not NUM_RE.match(str(body.get("pr") or "")):
         return "a merge needs a numeric pr", None
 
+    # A choice is a comment with one shape. It is validated as a number and a
+    # label here and turned into the sentence the runner reads, so nothing the
+    # browser typed reaches GitHub as free text under this kind.
+    choice = ""
+    if kind == "choose":
+        n = str(body.get("n") or "")
+        if not NUM_RE.match(n) or not 1 <= int(n) <= CHOICE_MAX:
+            return BAD_OPTION, None
+        label = str(body.get("label") or "").strip()
+        if not label:
+            return BAD_LABEL, None
+        choice = f"**{int(n)}.** {label[:200]}"
+
     # A permit answers ONE specific question. The id travels with it so a gate
     # that has already moved on cannot be answered by position.
     if kind == "permit":
@@ -399,7 +418,8 @@ def validate(body: dict):
             return BAD_ANSWER, None
 
     payload = {
-        "body": body["body"][:20000] if isinstance(body.get("body"), str) else "",
+        # A choice writes the body; it never carries one of its own.
+        "body": choice or (body["body"][:20000] if isinstance(body.get("body"), str) else ""),
         "label": body["label"][:100] if isinstance(body.get("label"), str) else "",
         "question_id": body["question_id"][:64] if isinstance(body.get("question_id"), str) else "",
         "answer": body["answer"] if body.get("answer") in ("allow", "deny") else "",

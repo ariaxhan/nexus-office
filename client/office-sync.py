@@ -554,8 +554,82 @@ def _bot_last_word(node) -> dict:
     return {"body": body, "url": last.get("url") or "", "at": last.get("createdAt") or ""}
 
 
+# ── the decision block a parked issue carries ────────────────────────────────
+#
+# The pipeline's contract: when it parks an issue, the bot's last comment OPENS
+# with a question and two to four numbered options, and the human answers with a
+# plain comment "**N.** <label>". Parsing it here is what turns a comment nobody
+# can act on from a phone into buttons.
+#
+#   ❓ <one-line question>
+#   - [ ] **1.** <label>: <consequence> (recommended)
+#   - [ ] **2.** <label>: <consequence>
+#
+# Strict on purpose. A half-parsed block would draw buttons that answer a
+# question nobody asked, which is worse than the comment shown as text: an
+# unparsed park still gets its comment box, so nothing is ever hidden.
+
+DECISION_MARK = "❓"
+DECISION_MIN, DECISION_MAX = 2, 4
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+OPTION_RE = re.compile(r"^\s*[-*]\s*\[[ xX]?\]\s*\*\*(\d+)\.\*\*\s*(\S.*?)\s*$")
+RECOMMENDED_RE = re.compile(r"\s*\(recommended\)\s*$", re.I)
+LANDED_PR_RE = re.compile(r"merging\s+PR\s+#(\d+)", re.I)
+
+
+def parse_decision(text):
+    """The decision block in a bot comment, or None when there is not one.
+
+    None is the answer for anything that is not exactly the contract: no ❓ on
+    the first line, fewer than two or more than four options, numbers that are
+    not 1..N in order. Trailing HTML comments (the bot marker) are stripped
+    first, because the marker is how the comment is identified in the first
+    place and it always rides at the end.
+    """
+    body = HTML_COMMENT_RE.sub("", str(text or ""))
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if not lines or not lines[0].startswith(DECISION_MARK):
+        return None
+    question = lines[0][len(DECISION_MARK):].strip()
+    if not question:
+        return None
+
+    options = []
+    for raw in lines[1:]:
+        hit = OPTION_RE.match(raw)
+        if not hit:
+            continue
+        rest = hit.group(2)
+        recommended = bool(RECOMMENDED_RE.search(rest))
+        rest = RECOMMENDED_RE.sub("", rest).strip()
+        label, sep, consequence = rest.partition(": ")
+        label = label.strip()
+        if not label:
+            continue
+        options.append({"n": int(hit.group(1)), "label": label,
+                        "consequence": consequence.strip() if sep else "",
+                        "recommended": recommended})
+
+    if not DECISION_MIN <= len(options) <= DECISION_MAX:
+        return None
+    if [o["n"] for o in options] != list(range(1, len(options) + 1)):
+        return None
+    return {"question": question, "options": options}
+
+
+def parse_landed_pr(text):
+    """The PR number a landed comment says closes this issue, or None."""
+    hit = LANDED_PR_RE.search(str(text or ""))
+    return int(hit.group(1)) if hit else None
+
+
 def _issue_row(i) -> dict:
     last_word = _bot_last_word(i)
+    full = str(last_word.get("body") or "")
+    # Parsed from the WHOLE comment, never from the 1500-character copy below:
+    # a block that fell off the end of a trim is a question with no buttons.
+    decision = parse_decision(full)
+    landed_pr = parse_landed_pr(full)
     return {
         "number": i.get("number"),
         "title": i.get("title") or "",
@@ -571,6 +645,10 @@ def _issue_row(i) -> dict:
         # thing the runner actually left rather than to the issue it left it on.
         "last_word_url": str(last_word.get("url") or ""),
         "last_word_at": str(last_word.get("at") or "")[:20],
+        # Present only when the comment really is one, so "has a decision" is a
+        # key test on the phone and not a truthiness dance over an empty shape.
+        **({"decision": decision} if decision else {}),
+        **({"landed_pr": landed_pr} if landed_pr else {}),
     }
 
 
@@ -1283,11 +1361,11 @@ def _comment_step(kind, num, repo, body):
     runner's whole selection rule is "did the bot have the last word". This
     is the mechanism, not a side effect: answering a question IS the nudge.
     """
-    if kind not in ("comment", "unblock", "nudge", "close"):
+    if kind not in ("comment", "unblock", "nudge", "close", "choose"):
         return None, ""
     text = body or (REQUEUE_LINE if kind == "nudge" else "")
     if not text:
-        if kind in ("comment", "unblock"):
+        if kind in ("comment", "unblock", "choose"):
             return None, "nothing to say"
         return None, ""
     if not num:
