@@ -247,6 +247,46 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(code, 400)
         self.assertEqual(body["error"], "unknown kind delete")
 
+    # ── a choice, which is a comment with exactly one shape ─────────────────
+    def test_a_choice_becomes_the_numbered_line_the_runner_reads(self):
+        """The browser never types this sentence. It sends a number and a label,
+        and the door writes the line, so `choose` cannot smuggle free text."""
+        err, out = self.serve.validate({"kind": "choose", "repo": "a/b", "issue": "7",
+                                        "n": 2, "label": "flag it"})
+        self.assertIsNone(err)
+        self.assertEqual(out["payload"]["body"], "**2.** flag it")
+        self.assertEqual(out["kind"], "choose")
+
+    def test_a_choice_carrying_its_own_body_never_gets_to_use_it(self):
+        _, out = self.serve.validate({"kind": "choose", "repo": "a/b", "issue": "7",
+                                      "n": 1, "label": "ship", "body": "rm -rf /"})
+        self.assertEqual(out["payload"]["body"], "**1.** ship")
+
+    def test_an_option_outside_one_to_four_or_with_no_label_is_refused(self):
+        v = self.serve.validate
+        for bad in ({"n": 0, "label": "a"}, {"n": 5, "label": "a"},
+                    {"n": "two", "label": "a"}, {"n": 1, "label": "   "},
+                    {"n": 1}):
+            body = {"kind": "choose", "repo": "a/b", "issue": "7"}
+            body.update(bad)
+            self.assertIsNotNone(v(body)[0], repr(bad))
+        code, body = self.post("/api/decision", {"kind": "choose", "repo": "a/b",
+                                                 "issue": "7", "n": 9, "label": "a"})
+        self.assertEqual(code, 400)
+
+    def test_a_choice_is_posted_down_the_same_path_as_a_comment(self):
+        """One GitHub call, the one `comment` already had. A second code path to
+        the same API is a second place for the marker rule to be got wrong."""
+        steps, err = self.serve.office_sync._issue_steps(
+            "choose", "7", "a/b", "**2.** flag it", {})
+        self.assertEqual(err, "")
+        self.assertEqual(steps, [["gh", "issue", "comment", "7", "--repo", "a/b",
+                                  "--body", "**2.** flag it"]])
+        # And a choice with nothing chosen says so rather than posting an empty
+        # comment, which would re-queue the issue with no answer in it.
+        self.assertEqual(self.serve.office_sync._issue_steps(
+            "choose", "7", "a/b", "", {})[1], "nothing to say")
+
     def test_a_permit_without_a_well_formed_id_is_refused(self):
         code, body = self.post("/api/decision",
                                {"kind": "permit", "question_id": "nope", "answer": "allow"})

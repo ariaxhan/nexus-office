@@ -371,6 +371,28 @@ textarea:focus-visible {
 .always { color: var(--dim); background: rgba(138, 138, 138, 0.15); }
 .once { color: #000000; background: var(--green); font-weight: 600; }
 
+/* ── since you were last here ───────────────────────────────────────────── */
+
+/* Dim by design: this band is context for the queue below it, never a thing to
+   answer. Tapping it is "I have seen this". */
+.catchup { cursor: pointer; }
+
+.catchup .when {
+  font-size: 12.5px;
+  color: var(--dim);
+  margin-bottom: 5px;
+}
+
+.catchup .count {
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+.catchup .count.wants {
+  color: var(--amber);
+  margin-top: 5px;
+}
+
 /* ── needs you ──────────────────────────────────────────────────────────── */
 
 .issue .head {
@@ -387,11 +409,19 @@ textarea:focus-visible {
   flex: none;
 }
 
+/* A flex item's default min-width is its content, so one long title used to
+   push the whole card past the right edge of a 375px phone and take every
+   consequence under it along. It wraps instead. */
 .issue .title {
   font-size: 14px;
   font-weight: 500;
   color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
+
+.parkline .title { min-width: 0; overflow-wrap: anywhere; }
+.park .head .title { min-width: 0; overflow-wrap: anywhere; }
 
 .issue .where {
   font-size: 11.5px;
@@ -408,13 +438,97 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* The question, verbatim. Never trimmed: the whole point of the pipeline
+   stating it is that it can be answered without opening GitHub. */
+.decision .ask {
+  font-size: 13.5px;
+  color: var(--text);
+  margin-bottom: 10px;
+  overflow-wrap: anywhere;
+}
+
+/* One column on a phone, two once there is room. Every consequence is on
+   screen: an option whose cost is behind a tap is one nobody read. */
+.options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.options .option {
+  display: block;
+  min-height: 44px;
+  padding: 11px 12px;
+  text-align: left;
+  color: var(--text);
+  background: var(--selected);
+  white-space: normal;
+}
+
+.options .option.best {
+  color: #000000;
+  background: var(--green);
+}
+
+.option .pick {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.option .tag {
+  margin-left: 7px;
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: lowercase;
+  opacity: 0.7;
+}
+
+.option .why {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+/* A desk whose parks carry no question yet. Dim, grouped, and still tappable:
+   there is nothing to decide here, and it is never hidden either. */
+.park .head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.park .head .title { font-size: 13px; font-weight: 500; color: var(--dim); }
+.park .head .badge {
+  font-size: 11px;
+  color: var(--amber);
+  background: rgba(255, 176, 32, 0.14);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.park .under { font-size: 11.5px; color: var(--faint); margin-bottom: 8px; }
+.park .empty { padding: 8px 0 0; }
+
+.parkline {
+  padding: 9px 0;
+  border-top: 1px solid var(--hairline);
+}
+.parkline .head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.parkline .num { font-family: var(--mono); font-size: 12px; color: var(--faint); flex: none; }
+.parkline .title { font-size: 13px; color: var(--dim); }
+
 .acts {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
 }
 
-.acts button { min-height: 38px; }
+/* Thumb-sized, everywhere. 44px is the smallest thing a person hits without
+   looking, and this page is used one-handed. */
+.acts button { min-height: 44px; }
 .acts .send { color: #000000; background: var(--green); font-weight: 600; }
 
 textarea {
@@ -777,6 +891,12 @@ details.away > summary .wants { color: var(--amber); }
 
 @media (min-width: 700px) {
   main, .composer, .turns { max-width: 680px; margin-inline: auto; }
+}
+
+/* A tablet or a desktop window fits two options side by side, which puts the
+   whole choice on one line of sight instead of one under the other. */
+@media (min-width: 768px) {
+  .options { grid-template-columns: 1fr 1fr; }
 }
 
 /* ── the automation band, and the sessions band ──────────────────────────── */
