@@ -26,9 +26,15 @@ struct FeedView: View {
 
     private var feed: FeedResponse { store.feed(repo) }
 
+    @State private var draft = ""
+    @State private var query = ""
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             head
+            filters
+            Rectangle().fill(Theme.hairline).frame(height: 0.5)
+            compose
             Rectangle().fill(Theme.hairline).frame(height: 0.5)
             if feed.posts.isEmpty {
                 empty
@@ -46,6 +52,79 @@ struct FeedView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.ink)
         .task(id: repo) { await store.refreshFeed(repo) }
+        // A mention is a link to a timeline. Handled here rather than by the system so
+        // following one never leaves the app, and so the one thing it can do is navigate.
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme == "nexusfeed" else { return .systemAction }
+            store.openFeed(account: url.host() ?? "")
+            return .handled
+        })
+    }
+
+    /// Six kinds and a search box. The chips come from what this feed actually contains,
+    /// never from the six that exist in principle: a chip that always returns nothing
+    /// teaches people not to press chips.
+    private var filters: some View {
+        HStack(spacing: 6) {
+            chip("all", value: "")
+            ForEach(feed.kinds, id: \.self) { kind in chip(kind, value: kind) }
+            Spacer(minLength: 8)
+            TextField("search", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11))
+                .frame(maxWidth: 180)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Theme.well))
+                .onSubmit {
+                    store.feedQuery = query
+                    Task { await store.refreshFeed(repo) }
+                }
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+    }
+
+    private func chip(_ label: String, value: String) -> some View {
+        let on = store.feedKind == value
+        return Button {
+            store.feedKind = on ? "" : value
+        } label: {
+            Text(label)
+                .font(.system(size: 11, weight: on ? .semibold : .regular))
+                .foregroundStyle(on ? Theme.onFilled : Theme.dim)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(on ? Theme.blue : Theme.well))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Her own post. Never a reply: a reply answers a specific ask and can authorize it, a
+    /// post is a thing said. Keeping them apart is what stops something she wrote on the
+    /// timeline from ever reading as permission.
+    private var compose: some View {
+        HStack(spacing: 7) {
+            TextField(repo.isEmpty ? "say something" : "say something to @\(repo)",
+                      text: $draft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.well))
+                .onSubmit { publish() }
+            Button("post") { publish() }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(draft.isEmpty ? Theme.faint : Theme.blue)
+                .disabled(draft.isEmpty)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    private func publish() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        draft = ""
+        Task { await store.postToFeed(text) }
     }
 
     private var head: some View {
@@ -114,7 +193,7 @@ struct PostRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             byline
-            Text(post.text)
+            Text(Self.mentioned(post.text))
                 .font(.system(size: 13))
                 .foregroundStyle(post.unreadable ? Theme.red : Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
@@ -220,6 +299,24 @@ struct PostRow: View {
                 .disabled(draft.isEmpty || sending)
         }
         .frame(maxWidth: 640, alignment: .leading)
+    }
+
+    /// `@account` becomes a link to that account's timeline. Built as an AttributedString
+    /// so the mention stays inside the sentence: a row of chips underneath would read as a
+    /// list of things to do, and a mention is not a thing to do.
+    static func mentioned(_ text: String) -> AttributedString {
+        var out = AttributedString(text)
+        for handle in Post(text: text).mentions {
+            var searched = Substring(text)
+            while let found = searched.range(of: "@" + handle) {
+                if let mapped = Range(NSRange(found, in: text), in: out) {
+                    out[mapped].foregroundColor = Theme.blue
+                    out[mapped].link = URL(string: "nexusfeed://" + handle)
+                }
+                searched = searched[found.upperBound...]
+            }
+        }
+        return out
     }
 
     private func send() {

@@ -1711,7 +1711,7 @@
   "feed": {
     "state": "ok",
     "repo": "",
-    "total": 9,
+    "total": 10,
     "accounts": [
       "acme-checkout-api",
       "acme-storefront",
@@ -1770,6 +1770,22 @@
         "unreadable": false
       },
       {
+        "id": "a10",
+        "ts": "",
+        "age": "28m",
+        "account": "acme-storefront",
+        "kind": "note",
+        "by": "aria",
+        "contract": "",
+        "text": "do not touch the checkout flow this week, @acme-checkout-api is mid-migration",
+        "body": "",
+        "gate_id": "",
+        "authorizes": false,
+        "replies": [],
+        "answered": false,
+        "unreadable": false
+      },
+      {
         "id": "a4",
         "ts": "",
         "age": "34m",
@@ -1810,7 +1826,7 @@
         "kind": "working",
         "by": "lane:api-ref",
         "contract": "",
-        "text": "regenerating the API reference from the new openapi spec",
+        "text": "regenerating the API reference. @acme-checkout-api changed the refund shape",
         "body": "",
         "gate_id": "",
         "authorizes": false,

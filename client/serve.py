@@ -533,6 +533,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(board.read_feed(
                     repo=(q.get("repo") or [""])[0],
                     kind=(q.get("kind") or [""])[0],
+                    q=(q.get("q") or [""])[0],
                     limit=limit))
             if path == "/api/bots":
                 return self._json(self.chatroom.roster())
@@ -704,7 +705,15 @@ class Handler(BaseHTTPRequestHandler):
         of the board, and it is why it is safe for agents to post freely into it. They can
         say anything; only what comes back through this method carries permission.
         """
-        ok, result = board.reply(str(body.get("id") or ""), str(body.get("text") or ""))
+        text = str(body.get("text") or "")
+        post_id = str(body.get("id") or "")
+        # No id is a post of her own rather than an answer to somebody. Two different acts:
+        # a reply can authorize, a post never does, and conflating them would make anything
+        # she happened to say on the timeline read as permission.
+        if not post_id:
+            ok, result = board.compose(text, repo=str(body.get("repo") or ""))
+        else:
+            ok, result = board.reply(post_id, text)
         return self._json(result if ok else {"ok": False, **result}, 200 if ok else 409)
 
     def _desks(self, body):

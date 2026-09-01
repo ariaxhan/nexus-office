@@ -107,7 +107,20 @@ def _shape(path: pathlib.Path, now: float | None = None) -> dict:
         "text": str(row.get("text") or ""),
         "body": str(row.get("body") or "")[:MAX_TEXT],
         "gate_id": str(row.get("gate_id") or ""),
-        "authorizes": bool(row.get("authorizes")),
+        # DERIVED, never read off the file.
+        #
+        # A test wrote a reply with `"authorizes": true` the way a lane with filesystem
+        # access would, and the office believed it. That is the entire failure this feed is
+        # built against, reintroduced as a JSON key: a lane granting itself permission.
+        # Authorization is a property of WHO wrote a thing, so it is computed from the
+        # account and the file's own claim is ignored.
+        #
+        # The honest limit, stated rather than papered over: the perimeter is this machine,
+        # so anything that can write `_meta/board` can also write `"account": "aria"`. What
+        # this buys is that forging authority now requires impersonating the person, which
+        # is a loud and visible act, instead of setting a boolean nobody would look at. The
+        # vault CLI refuses to post as her at all, so the ordinary agent path cannot do it.
+        "authorizes": str(row.get("account") or "") == HUMAN and bool(row.get("reply_to")),
         "replies": [],
         "answered": False,
         "unreadable": False,
@@ -131,7 +144,7 @@ def accounts(root: pathlib.Path) -> list:
                   if p.is_dir() and not p.name.startswith((".", "_")))
 
 
-def read_feed(repo: str = "", limit: int = 60, kind: str = "",
+def read_feed(repo: str = "", limit: int = 60, kind: str = "", q: str = "",
               now: float | None = None) -> dict:
     """The timeline. Reports its own reachability, because "no vault", "nothing has posted
     yet" and "this repo has posted nothing" are three different facts."""
@@ -159,6 +172,14 @@ def read_feed(repo: str = "", limit: int = 60, kind: str = "",
 
     if kind:
         rows = [r for r in rows if r["kind"] == kind]
+    if q:
+        # Substring, case-folded, over what a person can actually see: the line, the body,
+        # the account and who typed it. Not the id, not the timestamp: a search that
+        # matches on a hex id is a search that surprises you.
+        needle = q.strip().lower()
+        rows = [r for r in rows
+                if needle in (r["text"] + " " + r["body"] + " " + r["account"]
+                              + " " + r["by"]).lower()]
     rows.sort(key=lambda r: r["ts"], reverse=True)
     limit = max(1, min(int(limit or 60), MAX_POSTS))
     shown = rows[:limit]
@@ -178,6 +199,7 @@ def read_feed(repo: str = "", limit: int = 60, kind: str = "",
         # and how many of those nobody ever answered.
         "asking": sum(1 for r in rows if r["kind"] == "asking"),
         "blocked": sum(1 for r in rows if r["kind"] == "blocked"),
+        "kinds": sorted({r["kind"] for r in rows}),
     }
 
 
@@ -248,3 +270,43 @@ def reply(post_id: str, text: str) -> tuple[bool, dict]:
         ok, message = rt.answer_gate(root, gid, "allow", False)
         gate = "the agent was unblocked" if ok else message
     return True, {"ok": True, "id": row["id"], "gate": gate}
+
+
+def compose(text: str, repo: str = "") -> tuple[bool, dict]:
+    """Aria writes a post of her own.
+
+    It publishes to the account whose timeline she is looking at, attributed `by: aria`,
+    because that is what the feed means: a post belongs to the repo it is about, and the
+    person is who typed it. On the global feed there is no such repo, so it goes to her own
+    account.
+
+    Her posts do not authorize anything either. Authorization is a reply to a specific ask;
+    a post is a thing said. Keeping those separate is what stops "aria said do X somewhere
+    on the timeline" from ever reading as permission.
+    """
+    text = str(text or "").strip()
+    if not text:
+        return False, {"message": "an empty post is not a post"}
+    if repo and not _valid_account(repo):
+        return False, {"message": "bad account name"}
+    root = _root()
+    if root is None:
+        return False, {"message": "OFFICE_RUNTIME_ROOT is not set"}
+    account = repo or HUMAN
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    row = {
+        "id": os.urandom(16).hex(), "ts": stamp, "account": account, "kind": "note",
+        "by": HUMAN, "contract": "", "session": "", "text": text[:280],
+        "body": text[280:MAX_TEXT] if len(text) > 280 else "", "reply_to": "",
+        "authorizes": False, "resolved_at": "",
+    }
+    dest = (root / BOARD / account
+            / ("%s-%s.json" % (stamp.replace(":", ""), row["id"])))
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".tmp")
+        tmp.write_text(json.dumps(row, indent=2), encoding="utf-8")
+        tmp.replace(dest)
+    except OSError as exc:
+        return False, {"message": "could not write the post: %s" % str(exc)[:80]}
+    return True, {"ok": True, "id": row["id"], "account": account}

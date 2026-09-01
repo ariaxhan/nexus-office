@@ -240,6 +240,12 @@ public final class Store {
     /// not blank the screen while the next read lands.
     public private(set) var feeds: [String: FeedResponse] = [:]
 
+    /// What the feed is filtered to right now. On the store rather than the view because
+    /// the shot harness has to be able to set it to photograph it, which is the same
+    /// reason `putAwayOpen` lives here.
+    public var feedKind: String = "" { didSet { Task { await refreshFeed(openFeedAccount) } } }
+    public var feedQuery: String = ""
+
     /// Whether the settings popover is open. On the store rather than the view
     /// for the same reason `putAwayOpen` is: the shot harness has to be able to
     /// open it to photograph it.
@@ -729,7 +735,8 @@ public final class Store {
     public func refreshFeed(_ account: String? = "") async {
         guard let account else { return }
         do {
-            feeds[account] = try await api.board(repo: account)
+            feeds[account] = try await api.board(repo: account, kind: feedKind,
+                                                 query: feedQuery)
         } catch let error as ApiError {
             // A door that predates the feed answers 404 here. That is an office
             // with no board yet, not a broken app, and it draws as its own
@@ -749,6 +756,41 @@ public final class Store {
     /// Answer a post. The only call in this app that can authorize anything, and
     /// only because the door has already established it is her before the vault
     /// is touched. An agent replying to an agent is a note; this is a decision.
+    /// Post something of her own. It lands on the timeline she is looking at, because a
+    /// post belongs to the repo it is about; on the global feed there is no such repo and
+    /// it goes to her own account.
+    ///
+    /// Deliberately not the same call as a reply. A reply answers a specific ask and can
+    /// authorize it; a post is a thing said and never authorizes anything. Merging them
+    /// would make anything she happened to say on the timeline read as permission.
+    public func postToFeed(_ text: String) async {
+        let account = openFeedAccount ?? ""
+        do {
+            _ = try await api.boardCompose(repo: account, text: text)
+            await refreshFeed(account)
+            if !account.isEmpty { await refreshFeed("") }
+        } catch let error as ApiError {
+            toast = error.message
+        } catch {
+            toast = error.localizedDescription
+        }
+    }
+
+    /// Open one account's timeline from a mention. A mention is a pointer and nothing else:
+    /// following one navigates, and confers nothing on anybody.
+    public func openFeed(account: String) {
+        if let station = stations.first(where: { feedAccount(for: $0.repo) == account }) {
+            select(.desk(station.repo))
+            showFeed(at: station.repo)
+        } else {
+            // An account with no desk on this floor is still an account: the feed is not
+            // a view of the desks, it is a view of what posted.
+            select(.feed)
+            feedQuery = account
+            Task { await refreshFeed("") }
+        }
+    }
+
     public func replyToPost(_ id: String, text: String) async {
         do {
             let ack = try await api.boardReply(id: id, text: text)

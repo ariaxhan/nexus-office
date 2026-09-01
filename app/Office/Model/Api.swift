@@ -99,14 +99,24 @@ public final class Api {
     }
 
     /// The feed. No `repo` is the global timeline; a repo is one account's.
-    public func board(repo: String = "", limit: Int = 80) async throws -> FeedResponse {
-        if let demo { return try demo.board(repo: repo) }
+    public func board(repo: String = "", limit: Int = 80, kind: String = "",
+                      query: String = "") async throws -> FeedResponse {
+        if let demo { return try demo.board(repo: repo, kind: kind, query: query) }
         var path = "/api/board?limit=\(limit)"
-        if !repo.isEmpty,
-           let escaped = repo.addingPercentEncoding(withAllowedCharacters: .alphanumerics) {
-            path += "&repo=\(escaped)"
+        for (key, value) in [("repo", repo), ("kind", kind), ("q", query)] where !value.isEmpty {
+            if let escaped = value.addingPercentEncoding(
+                withAllowedCharacters: .alphanumerics) {
+                path += "&\(key)=\(escaped)"
+            }
         }
         return try await get(path, as: FeedResponse.self)
+    }
+
+    /// Aria posting something of her own, as opposed to answering somebody. A post never
+    /// authorizes anything; only a reply to a specific ask does.
+    public func boardCompose(repo: String, text: String) async throws -> Ack {
+        if let demo { return try demo.boardCompose(repo: repo, text: text) }
+        return try await post("/api/board", ["repo": repo, "text": text])
     }
 
     /// Reply to a post. This is the only call in the app that can authorize
@@ -553,9 +563,18 @@ private final class DemoFloor {
     /// The demo floor's feed. `npm run shot` runs against `app/Demo/demo.json`
     /// with no vault, no door and no network, so the fixture answers here or the
     /// twelve framings photograph an empty timeline and prove nothing.
-    func board(repo: String) throws -> FeedResponse {
+    func board(repo: String, kind: String = "", query: String = "") throws -> FeedResponse {
         lock.withLock {
-            let all = fixture.feed
+            var all = fixture.feed
+            if !kind.isEmpty { all.posts = all.posts.filter { $0.kind.rawValue == kind } }
+            if !query.isEmpty {
+                let needle = query.lowercased()
+                all.posts = all.posts.filter {
+                    ($0.text + " " + $0.body + " " + $0.account + " " + $0.by)
+                        .lowercased().contains(needle)
+                }
+            }
+            all.kinds = Array(Set(fixture.feed.posts.map(\.kind.rawValue))).sorted()
             guard !repo.isEmpty else { return all }
             let mine = all.posts.filter { $0.account == repo }
             // Counted over THIS account, never the floor's. The first framing of
@@ -565,7 +584,8 @@ private final class DemoFloor {
             return FeedResponse(state: all.state, repo: repo, posts: mine,
                                 total: mine.count, accounts: all.accounts,
                                 asking: mine.filter { $0.kind == .asking }.count,
-                                blocked: mine.filter { $0.kind == .blocked }.count)
+                                blocked: mine.filter { $0.kind == .blocked }.count,
+                                kinds: all.kinds)
         }
     }
 
@@ -582,6 +602,18 @@ private final class DemoFloor {
                 copy.answered = true
                 return copy
             }
+            fixture.feed = feed
+            return Ack(ok: true, message: "")
+        }
+    }
+
+    func boardCompose(repo: String, text: String) throws -> Ack {
+        lock.withLock {
+            var feed = fixture.feed
+            feed.posts.insert(Post(id: UUID().uuidString, age: "now",
+                                   account: repo.isEmpty ? "aria" : repo,
+                                   by: "aria", text: text), at: 0)
+            feed.total += 1
             fixture.feed = feed
             return Ack(ok: true, message: "")
         }

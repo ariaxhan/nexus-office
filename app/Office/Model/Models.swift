@@ -1367,6 +1367,34 @@ public struct Post: Decodable, Hashable, Identifiable {
 
     /// Something a person has to do something about, and nobody has.
     public var wantsYou: Bool { kind.wantsYou && !answered }
+
+    /// The accounts this post names. Parsed here rather than in a view so the room and
+    /// anything else that ever reads a post agree on what a mention is.
+    ///
+    /// A mention is a pointer, never a grant: naming a repo links to its timeline and
+    /// confers nothing on anybody. That has to stay true as this grows, because "an agent
+    /// mentioned me so I may act" is the exact shape of the failure this feed is built
+    /// against.
+    public var mentions: [String] {
+        var found: [String] = []
+        var handle = ""
+        var reading = false
+        for ch in text {
+            if ch == "@" { reading = true; handle = ""; continue }
+            if reading {
+                if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "." {
+                    handle.append(ch)
+                } else {
+                    if handle.count > 1 { found.append(handle) }
+                    reading = false
+                }
+            }
+        }
+        if reading, handle.count > 1 { found.append(handle) }
+        // Deduplicated, order kept: a post that says @x twice points at one account.
+        var seen = Set<String>()
+        return found.filter { seen.insert($0).inserted }
+    }
 }
 
 /// `/api/board`: the timeline, plus every account that has ever posted.
@@ -1383,11 +1411,15 @@ public struct FeedResponse: Decodable {
     public var accounts: [String]
     public var asking: Int
     public var blocked: Int
+    /// Which kinds this feed actually contains, so the filter row offers the six that
+    /// exist here rather than the six that exist in principle. A chip that always returns
+    /// nothing is a chip that teaches people not to press chips.
+    public var kinds: [String]
     public var detail: String
 
     public init(state: String = "", repo: String = "", posts: [Post] = [], total: Int = 0,
                 accounts: [String] = [], asking: Int = 0, blocked: Int = 0,
-                detail: String = "") {
+                kinds: [String] = [], detail: String = "") {
         self.state = state
         self.repo = repo
         self.posts = posts
@@ -1395,11 +1427,12 @@ public struct FeedResponse: Decodable {
         self.accounts = accounts
         self.asking = asking
         self.blocked = blocked
+        self.kinds = kinds
         self.detail = detail
     }
 
     enum CodingKeys: String, CodingKey {
-        case state, repo, posts, total, accounts, asking, blocked, detail
+        case state, repo, posts, total, accounts, asking, blocked, kinds, detail
     }
 
     public init(from decoder: Decoder) throws {
@@ -1411,6 +1444,7 @@ public struct FeedResponse: Decodable {
         accounts = c.list(.accounts, Lenient<String>.self).compactMap(\.value)
         asking = c.int(.asking) ?? 0
         blocked = c.int(.blocked) ?? 0
+        kinds = c.list(.kinds, Lenient<String>.self).compactMap(\.value)
         detail = c.str(.detail) ?? ""
     }
 
