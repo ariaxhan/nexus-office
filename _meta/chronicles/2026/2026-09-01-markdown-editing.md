@@ -18,4 +18,4 @@ created: 2026-09-01
 - The verifier proved compare then rename cannot be a universal compare-and-swap against arbitrary writers. That impossible absolute was narrowed to two explicit checks plus atomic replacement.
 - Logical `$PWD` still names retired `Documents/Vaults`; physical `pwd -P` is canonical `Developer/Vaults`.
 
-**Open:** Commit, push, and default-branch proof.
+**Open:** None. Feature commit `003d8ef` is merged and pushed on `main`.

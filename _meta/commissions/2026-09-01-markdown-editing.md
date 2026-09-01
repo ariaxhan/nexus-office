@@ -20,6 +20,7 @@ created: 2026-09-01
 **Proof so far.** 794 Python tests and the Swift suite pass. The installed app
 renders the source editor and saved state; the live door atomically changed a
 real indexed probe on disk. Fresh-context invariant review passed.
+Feature merged and pushed to `main` at `003d8ef`.
 
 **Accepted boundary.** The file API has no portable compare-and-swap against a
 non-cooperating writer inside the final compare/rename instruction gap. The
