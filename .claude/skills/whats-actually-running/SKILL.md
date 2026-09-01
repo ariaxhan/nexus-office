@@ -50,6 +50,14 @@ patches had been built on, in under a minute.
 **Two consecutive patches to one file with no change in the symptom means stop
 patching.** The next thing you write is a probe, not a fix.
 
+## Prove the visible control
+
+For user-facing navigation or input, enter through the control the person uses and
+verify the terminal screen. Calling `Store` directly proves the reducer only; an
+endpoint proves the endpoint only. Neither proves a tab, click, drag, or shortcut is
+wired. If screen automation is unavailable, name that gap and require the human check
+instead of claiming live acceptance.
+
 ## Driving the real app to get evidence
 
 The app can be driven with synthetic events when a human is not available to
