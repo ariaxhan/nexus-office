@@ -16,6 +16,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NexusSourceRevision</key>
+	<string>NEXUS_SOURCE_REVISION</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<!-- NOT an agent app. It has a window and a Dock icon, and it also keeps a
@@ -24,14 +26,14 @@
 	<false/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<!-- The asset catalog's icon set. Without this key the catalog compiles and
+	<!-- The asset catalog icon set. Without this key the catalog compiles and
 	     the Dock still draws the blank generic app, which is the failure this
 	     project keeps having: a build that passes and a screen that is wrong. -->
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<!-- nexus-office://open?repo=owner/name&path=docs/x.md opens that file in
-	     the desk's Context pane. This is how `nexus open <file>` reaches the
-	     window; the CLI works the repo out from the checkout's origin so the app
+	     the desk Context pane. This is how `nexus open <file>` reaches the
+	     window; the CLI works the repo out from the checkout origin so the app
 	     never has to map a path to a desk. -->
 	<key>CFBundleURLTypes</key>
 	<array>

@@ -96,6 +96,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import private_state as private
+
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -374,6 +376,9 @@ class Mailbox:
 
     def __init__(self, state_dir):
         self.dir = pathlib.Path(state_dir)
+        self.anchor = self.dir.parent
+        private.ensure_dir(self.dir, anchor=self.anchor)
+        private.migrate_tree(self.dir, anchor=self.anchor)
         self.seen_path = self.dir / SEEN_FILE
         self.events_path = self.dir / EVENTS_FILE
         self.runs_path = self.dir / RUNS_FILE
@@ -456,10 +461,8 @@ class Mailbox:
         """Whole file, then moved into place. A torn seen set reads as "nothing
         handled", which would re-run every delivery it could still see."""
         try:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            tmp = self.seen_path.with_name(self.seen_path.name + ".tmp")
-            tmp.write_text(json.dumps({"ids": self._rows}))
-            tmp.replace(self.seen_path)
+            private.atomic_write_text(
+                self.seen_path, json.dumps({"ids": self._rows}), anchor=self.anchor)
         except Exception as exc:  # noqa: BLE001 - a cache, not the delivery
             log(f"could not write the seen set: {exc}")
 
@@ -480,9 +483,7 @@ class Mailbox:
     def _append(self, path: pathlib.Path, row: dict) -> None:
         with self.lock:
             try:
-                self.dir.mkdir(parents=True, exist_ok=True)
-                with path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(row) + "\n")
+                private.append_text(path, json.dumps(row) + "\n", anchor=self.anchor)
                 self._trim(path)
             except Exception as exc:  # noqa: BLE001 - a log, never the answer
                 log(f"could not write {path.name}: {exc}")
@@ -496,9 +497,8 @@ class Mailbox:
             return
         if len(lines) <= EVENTS_MAX:
             return
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text("\n".join(lines[-EVENTS_KEEP:]) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        private.atomic_write_text(
+            path, "\n".join(lines[-EVENTS_KEEP:]) + "\n", anchor=self.anchor)
 
     def tail(self, path: pathlib.Path, n: int = 20) -> list:
         rows = []

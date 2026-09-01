@@ -37,6 +37,7 @@ import pathlib
 import time
 
 import runtime as rt
+import private_state as private
 
 BOARD = "_meta/board"
 REPLIES = "_replies"
@@ -56,6 +57,7 @@ KINDS = WORK_KINDS + VOICE_KINDS + ("note",)
 MAX_POSTS = 300
 MAX_TEXT = 8000
 ID_LEN = 32
+POST_SCHEMA = "nexus.board.post/v1"
 
 
 def _root() -> pathlib.Path | None:
@@ -91,6 +93,22 @@ def _age(ts: str, now: float | None = None) -> str:
     return "%dd" % (delta // 86400)
 
 
+def _embedded_reply(row: dict, parent_id: str, now: float | None = None) -> dict:
+    """A writer-owned outcome is visible context, never an authorization."""
+    return {
+        "id": str(row.get("id") or ""),
+        "ts": str(row.get("ts") or ""),
+        "age": _age(str(row.get("ts") or ""), now),
+        "account": str(row.get("account") or row.get("author") or ""),
+        "kind": str(row.get("kind") or "note"),
+        "by": str(row.get("by") or row.get("author") or ""),
+        "contract": "", "session": "",
+        "text": str(row.get("text") or ""), "body": "", "gate_id": "",
+        "reply_to": parent_id, "authorizes": False, "replies": [],
+        "answered": False, "unreadable": False,
+    }
+
+
 def _shape(path: pathlib.Path, now: float | None = None) -> dict:
     try:
         row = json.loads(path.read_text(encoding="utf-8"))
@@ -103,17 +121,24 @@ def _shape(path: pathlib.Path, now: float | None = None) -> dict:
                 "text": "a post could not be read: %s" % str(exc)[:60], "body": "",
                 "contract": "", "gate_id": "", "authorizes": False, "replies": [],
                 "answered": False, "unreadable": True}
+    canonical_account = str(row.get("account") or "")
+    account = canonical_account or str(row.get("to") or "")
+    kind = str(row.get("kind") or "note")
+    if kind == "raised-hand":
+        kind = "asking"
+    post_id = str(row.get("id") or "")
+    embedded = row.get("replies") if isinstance(row.get("replies"), list) else []
     return {
-        "id": str(row.get("id") or ""),
+        "id": post_id,
         "ts": str(row.get("ts") or ""),
         "age": _age(str(row.get("ts") or ""), now),
-        "account": str(row.get("account") or ""),
-        "kind": str(row.get("kind") or "note"),
+        "account": account,
+        "kind": kind,
         # Who typed it. Worth reading, worth nothing as an identity: the account is the repo.
-        "by": str(row.get("by") or ""),
+        "by": str(row.get("by") or row.get("from") or ""),
         "contract": str(row.get("contract") or ""),
         "session": str(row.get("session") or ""),
-        "text": str(row.get("text") or ""),
+        "text": str(row.get("text") or row.get("subject") or ""),
         "body": str(row.get("body") or "")[:MAX_TEXT],
         "gate_id": str(row.get("gate_id") or ""),
         # DERIVED, never read off the file.
@@ -129,8 +154,9 @@ def _shape(path: pathlib.Path, now: float | None = None) -> dict:
         # this buys is that forging authority now requires impersonating the person, which
         # is a loud and visible act, instead of setting a boolean nobody would look at. The
         # vault CLI refuses to post as her at all, so the ordinary agent path cannot do it.
-        "authorizes": str(row.get("account") or "") == HUMAN and bool(row.get("reply_to")),
-        "replies": [],
+        "authorizes": canonical_account == HUMAN and bool(row.get("reply_to")),
+        "replies": [_embedded_reply(x, post_id, now) for x in embedded
+                    if isinstance(x, dict)],
         "answered": False,
         "unreadable": False,
     }
@@ -165,6 +191,11 @@ def read_feed(repo: str = "", limit: int = 60, kind: str = "", q: str = "",
     if not base.is_dir():
         return {"state": "never", "posts": [], "accounts": [],
                 "detail": "no %s yet: nothing has posted" % BOARD}
+    try:
+        private.migrate_tree(base, anchor=root)
+    except OSError as exc:
+        return {"state": "error", "posts": [], "accounts": [],
+                "detail": "could not secure the board: %s" % str(exc)[:120]}
     if repo and not _valid_account(repo):
         return {"state": "error", "posts": [], "accounts": [],
                 "detail": "bad account name"}
@@ -193,7 +224,8 @@ def read_feed(repo: str = "", limit: int = 60, kind: str = "", q: str = "",
     limit = max(1, min(int(limit or 60), MAX_POSTS))
     shown = rows[:limit]
     for r in shown:
-        r["replies"] = _thread(root, r["id"], now)
+        r["replies"] = sorted(r["replies"] + _thread(root, r["id"], now),
+                              key=lambda x: x.get("ts", ""))
         # "Somebody replied" and "the person decided" are different facts, drawn
         # differently, so they are two keys and never one.
         r["answered"] = any(x["authorizes"] for x in r["replies"])
@@ -266,10 +298,11 @@ def reply(post_id: str, text: str) -> tuple[bool, dict]:
     dest = (root / BOARD / REPLIES / post_id
             / ("%s-%s.json" % (stamp.replace(":", ""), row["id"])))
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(".tmp")
-        tmp.write_text(json.dumps(row, indent=2), encoding="utf-8")
-        tmp.replace(dest)
+        private.migrate_tree(root / BOARD, anchor=root)
+        private.ensure_dir(root / BOARD, anchor=root)
+        private.ensure_dir(root / BOARD / REPLIES, anchor=root)
+        private.ensure_dir(root / BOARD / REPLIES / post_id, anchor=root)
+        private.atomic_write_text(dest, json.dumps(row, indent=2), anchor=root)
     except OSError as exc:
         return False, {"message": "could not write the reply: %s" % str(exc)[:80]}
 
@@ -312,10 +345,10 @@ def compose(text: str, repo: str = "") -> tuple[bool, dict]:
     dest = (root / BOARD / account
             / ("%s-%s.json" % (stamp.replace(":", ""), row["id"])))
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(".tmp")
-        tmp.write_text(json.dumps(row, indent=2), encoding="utf-8")
-        tmp.replace(dest)
+        private.migrate_tree(root / BOARD, anchor=root)
+        private.ensure_dir(root / BOARD, anchor=root)
+        private.ensure_dir(root / BOARD / account, anchor=root)
+        private.atomic_write_text(dest, json.dumps(row, indent=2), anchor=root)
     except OSError as exc:
         return False, {"message": "could not write the post: %s" % str(exc)[:80]}
     return True, {"ok": True, "id": row["id"], "account": account}

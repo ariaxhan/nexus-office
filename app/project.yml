@@ -28,12 +28,23 @@ targets:
   Office:
     type: application
     platform: macOS
+    settings:
+      base:
+        INFOPLIST_PREPROCESS: YES
+        INFOPLIST_PREFIX_HEADER: "$(DERIVED_FILE_DIR)/NexusBuildIdentity.h"
     sources:
       - path: Office
       # The demo fixture ships inside the bundle too, so the app has a floor to
       # draw even when `--demo` points at a path that has moved.
       - path: Demo
         buildPhase: resources
+    preBuildScripts:
+      - name: Embed immutable source revision
+        script: |
+          "$SRCROOT/../scripts/write-build-identity.sh" "$DERIVED_FILE_DIR/NexusBuildIdentity.h"
+        outputFiles:
+          - "$(DERIVED_FILE_DIR)/NexusBuildIdentity.h"
+        basedOnDependencyAnalysis: false
   # Standalone unit-test bundle: no app host, no signing, no AppKit. It compiles
   # only the Foundation-only files, so the rules that decide what a desk is,
   # which question an answer belongs to, and what survives switching threads are
