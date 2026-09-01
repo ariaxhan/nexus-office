@@ -1055,6 +1055,10 @@ def apply_merge(repo, who, tok, payload, dry: bool):
       * GitHub's own mergeable verdict must not be CONFLICTING. UNKNOWN means
         GitHub has not finished computing it, which is not permission: it is
         "ask again in a moment".
+      * a check run named "verify" must exist on the head commit and its
+        conclusion must be success. FAIL CLOSED: absent, pending, or any other
+        conclusion all refuse -- a deleted workflow leaves the check simply
+        absent, never red, so "nothing failed" must never read as "passed".
 
     Squash and delete the branch: one issue, one branch, one commit on main, and
     nothing left behind to drift.
@@ -1068,7 +1072,7 @@ def apply_merge(repo, who, tok, payload, dry: bool):
     if err:
         return False, err
     head = pr.get("headRefName") or ""
-    refusal = _merge_refusal(pr, num, head)
+    refusal = _merge_refusal(pr, num, head, repo, env)
     if refusal:
         return False, refusal
 
@@ -1086,7 +1090,7 @@ def apply_merge(repo, who, tok, payload, dry: bool):
 def _read_pr(repo, num, env):
     """The PR as GitHub describes it right now, as (pr, error)."""
     rc, out, err = sh(["gh", "pr", "view", num, "--repo", repo, "--json",
-                       "headRefName,isDraft,mergeable,state,title"],
+                       "headRefName,isDraft,mergeable,state,title,headRefOid"],
                       timeout=60, env=env)
     if rc != 0:
         return None, f"could not read PR #{num}: {(err.strip().splitlines() or ['failed'])[0][:120]}"
@@ -1096,7 +1100,45 @@ def _read_pr(repo, num, env):
         return None, f"could not read PR #{num}: {exc}"
 
 
-def _merge_refusal(pr: dict, num: str, head: str) -> str:
+VERIFY_CHECK_NAME = "verify"
+
+
+def _verify_check_refusal(repo: str, num: str, sha: str, env: dict) -> str:
+    """Why the required 'verify' check run must block the merge, or "" when it may
+    proceed. FAIL CLOSED: no sha, an unreadable API response, no check run named
+    'verify', a still-running one, or anything but conclusion == success all refuse.
+    This is the case that actually happened: a deleted workflow means the check
+    run is simply ABSENT, never red, so "no failure" must never read as "pass".
+    """
+    if not sha:
+        return f"refusing: PR #{num} has no head commit to check"
+    rc, out, err = sh(["gh", "api", f"repos/{repo}/commits/{sha}/check-runs"],
+                      timeout=30, env=env)
+    if rc != 0:
+        return (f"refusing: could not read check runs for PR #{num} "
+                f"({(err.strip().splitlines() or ['failed'])[0][:120]})")
+    try:
+        data = json.loads(out or "{}")
+        runs = data.get("check_runs") or []
+    except Exception as exc:
+        return f"refusing: could not parse check runs for PR #{num}: {exc}"
+
+    verify_runs = [r for r in runs if (r.get("name") or "") == VERIFY_CHECK_NAME]
+    if not verify_runs:
+        return (f"refusing: PR #{num} has no {VERIFY_CHECK_NAME!r} check run "
+                f"(absent is not passing)")
+    # Most recent run for the name, GitHub lists newest first but don't assume.
+    run = max(verify_runs, key=lambda r: r.get("started_at") or "")
+    status = (run.get("status") or "").lower()
+    conclusion = (run.get("conclusion") or "").lower()
+    if status != "completed" or conclusion != "success":
+        state = conclusion or status or "unknown"
+        return (f"refusing: PR #{num}'s {VERIFY_CHECK_NAME!r} check is {state}, "
+                f"not success")
+    return ""
+
+
+def _merge_refusal(pr: dict, num: str, head: str, repo: str = "", env: dict | None = None) -> str:
     """Why this PR must not be merged, or "" when it may."""
     if not PR_PREFIX or not PR_PREFIX.strip():
         return "refusing: the pipeline branch prefix is empty"
@@ -1111,6 +1153,10 @@ def _merge_refusal(pr: dict, num: str, head: str) -> str:
         return f"PR #{num} is a draft; a draft says it is not ready"
     if (pr.get("mergeable") or "").upper() == "CONFLICTING":
         return f"PR #{num} conflicts with its base and needs a human"
+    if repo and env is not None:
+        refusal = _verify_check_refusal(repo, num, pr.get("headRefOid") or "", env)
+        if refusal:
+            return refusal
     return ""
 
 
