@@ -59,6 +59,9 @@ MAX_ACTIVITY = 60
 # table IS the "how does it work" answer for the activity list: without it every
 # row is a word from a bash script that only dispatch.sh's author can read.
 OUTCOMES = {
+    "started": ("dim", "started an execution lane for this issue"),
+    "commissioned": ("dim", "bound this issue version to repo-owned authority"),
+    "superseded": ("dim", "discarded stale work after the issue changed or closed"),
     "landed": ("ok", "opened a PR that closes the issue"),
     "parked": ("dim", "left alone on purpose: this repo is configured to park"),
     "refused": ("warn", "would not touch it, and said why"),

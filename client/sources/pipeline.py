@@ -256,6 +256,37 @@ def read_lanes(runtime: pathlib.Path, now: float) -> dict:
             quiet = now - (d / "log").stat().st_mtime
         except OSError:
             quiet = None
+        commission = {"state": "missing"}
+        try:
+            raw_commission = json.loads((d / "commission.json").read_text(encoding="utf-8"))
+            if not isinstance(raw_commission, dict):
+                raise ValueError("commission must be an object")
+            authority = raw_commission.get("authority") or {}
+            verification = raw_commission.get("verification") or {}
+            source = raw_commission.get("source") or {}
+            actions = authority.get("actions")
+            if (raw_commission.get("kind") != "issue-backed"
+                    or not raw_commission.get("id")
+                    or not raw_commission.get("objective")
+                    or not authority.get("capability")
+                    or not isinstance(actions, list)
+                    or not all(isinstance(action, str) for action in actions)
+                    or not isinstance(verification, dict)
+                    or not issue.isdigit()
+                    or source.get("issue") != int(issue)):
+                raise ValueError("required commission fields are absent")
+            commission = {
+                "state": "recorded",
+                "id": str(raw_commission["id"]),
+                "objective": str(raw_commission["objective"]),
+                "capability": str(authority["capability"]),
+                "actions": actions,
+                "verification": str(verification.get("state") or "unknown"),
+            }
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            commission = {"state": "unreadable", "detail": str(exc)[:200]}
         lanes.append({
             "pid": pid,
             "repo": repo.rstrip("/").split("/")[-1] or repo,
@@ -264,6 +295,7 @@ def read_lanes(runtime: pathlib.Path, now: float) -> dict:
             "started": started,
             "started_age_s": (round(now - (_epoch(started) or now)) if started else None),
             "quiet_s": round(quiet) if quiet is not None else None,
+            "commission": commission,
         })
     return {"state": "ok", "lanes": lanes}
 
@@ -765,6 +797,8 @@ def card(data: dict) -> dict:
     rows = []
     for lane in lanes:
         quiet = lane.get("quiet_s")
+        commission = lane.get("commission") or {"state": "missing"}
+        recorded = commission.get("state") == "recorded"
         # Quiet is not lateness. A lane thinking hard says nothing for minutes,
         # and only hours of it means anything, so this is dim until it is not.
         quiet_txt = f"quiet {_human(quiet)}" if quiet and quiet > 300 else "working"
@@ -772,11 +806,15 @@ def card(data: dict) -> dict:
             id=f"lane-{lane.get('repo')}-{lane.get('issue')}",
             title=f"{lane.get('repo')}#{lane.get('issue')}" if lane.get("issue")
                   else str(lane.get("repo") or "a lane"),
-            subtitle=(f"started {_human(lane['started_age_s'])} ago"
-                      if lane.get("started_age_s") is not None else ""),
-            detail=quiet_txt,
-            badge="working",
-            tone="ok" if not (quiet and quiet > 3600) else "warn",
+            subtitle=(str(commission.get("objective")) if recorded else
+                      (f"started {_human(lane['started_age_s'])} ago"
+                       if lane.get("started_age_s") is not None else "")),
+            detail=((f"{commission.get('capability')} · "
+                     f"{len(commission.get('actions') or [])} actions · "
+                     f"check {commission.get('verification')}")
+                    if recorded else f"commission {commission.get('state')}; {quiet_txt}"),
+            badge="commissioned" if recorded else "unrecorded",
+            tone=("warn" if not recorded or (quiet and quiet > 3600) else "ok"),
             group="lanes"))
     for w in (data.get("queue") or []):
         n = int(w.get("issues") or 0)
@@ -813,7 +851,9 @@ def card(data: dict) -> dict:
               or (data.get("state") == "ok" and log_state != "ok")
               # Receipts nobody can read is a hole in the runner's own
               # accounting, and it is invisible in every field above.
-              or (data.get("covered") or {}).get("state") == "unreadable")
+              or (data.get("covered") or {}).get("state") == "unreadable"
+              or any((lane.get("commission") or {}).get("state") != "recorded"
+                     for lane in lanes))
     # The headline says what is being WORKED when anything is, because "a run is
     # in flight (pid 39792)" answers a question about the runner and not the one
     # a person is asking, which is whether their issue is moving.

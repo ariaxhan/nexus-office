@@ -475,7 +475,8 @@ class LaneTest(PipelineBase):
     reported as work in progress.
     """
 
-    def lane(self, repo: str, issue: str, pid: int, quiet_s: float = 0.0):
+    def lane(self, repo: str, issue: str, pid: int, quiet_s: float = 0.0,
+             commission: object = True):
         d = self.runtime / "lanes" / f"{repo.replace('/', '_')}__{issue}"
         d.mkdir(parents=True, exist_ok=True)
         (d / "pid").write_text(str(pid), encoding="utf-8")
@@ -486,6 +487,21 @@ class LaneTest(PipelineBase):
         if quiet_s:
             old = time.time() - quiet_s
             os.utime(log, (old, old))
+        if commission is True:
+            commission = {
+                "version": 1,
+                "id": f"github:{repo}#{issue}",
+                "kind": "issue-backed",
+                "objective": "Repair the broken thing",
+                "source": {"issue": int(issue)},
+                "authority": {
+                    "capability": "commit_and_pr",
+                    "actions": ["commit", "open_pr", "push_branch"],
+                },
+                "verification": {"state": "undeclared"},
+            }
+        if commission is not False:
+            (d / "commission.json").write_text(json.dumps(commission), encoding="utf-8")
         return d
 
     def test_lanes_are_running_even_when_no_sweep_holds_the_pid(self):
@@ -519,6 +535,32 @@ class LaneTest(PipelineBase):
         self.lane("acme/other", "7", self.live_dispatch())
         card = self.mod.card(self.mod.read())
         self.assertIn("2 issues being worked", card["headline"])
+
+    def test_a_lane_shows_its_issue_backed_commission(self):
+        self.lane("acme/thing", "42", self.live_dispatch())
+        card = self.mod.card(self.mod.read())
+        row = [r for r in card["rows"] if r["group"] == "lanes"][0]
+        self.assertEqual(row["badge"], "commissioned")
+        self.assertEqual(row["subtitle"], "Repair the broken thing")
+        self.assertIn("commit_and_pr", row["detail"])
+        self.assertIn("check undeclared", row["detail"])
+
+    def test_a_live_lane_without_a_commission_is_visible_but_needs_attention(self):
+        self.lane("acme/thing", "42", self.live_dispatch(), commission=False)
+        card = self.mod.card(self.mod.read())
+        self.assertEqual(card["needs"], 1)
+        row = [r for r in card["rows"] if r["group"] == "lanes"][0]
+        self.assertEqual(row["badge"], "unrecorded")
+        self.assertIn("commission missing", row["detail"])
+
+    def test_a_malformed_commission_does_not_hide_the_live_lane(self):
+        d = self.lane("acme/thing", "42", self.live_dispatch())
+        (d / "commission.json").write_text("not json", encoding="utf-8")
+        card = self.mod.card(self.mod.read())
+        self.assertEqual(card["needs"], 1)
+        row = [r for r in card["rows"] if r["group"] == "lanes"][0]
+        self.assertEqual(row["badge"], "unrecorded")
+        self.assertIn("commission unreadable", row["detail"])
 
     def test_the_queue_is_the_last_sweep_only(self):
         now = time.time()
