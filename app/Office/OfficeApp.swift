@@ -231,6 +231,11 @@ struct RootView: View {
             } else {
                 Empty(text: "That is not on the wall any more.")
             }
+        case .home:
+            // Everything waiting on a person, across every desk. The mirror of
+            // the phone page at `/`, and the only screen that answers "what
+            // needs me" without being asked about a particular repo.
+            NeedsView(store: store)
         case .feed:
             // The whole machine talking at once, across every repo. Not scoped
             // to a desk, because it belongs to none of them.

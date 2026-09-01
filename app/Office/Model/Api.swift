@@ -297,12 +297,18 @@ public final class Api {
         return try await post("/api/session/start", payload)
     }
 
+    /// `n` and `label` are the two halves of a choice, and they only ever
+    /// travel together: the door validates the number and writes the sentence
+    /// itself, so nothing this app types reaches GitHub as free text under
+    /// `choose`.
     public func decide(kind: String, repo: String, issue: String,
-                       body: String? = nil, label: String? = nil, pr: Int? = nil) async throws -> Ack {
+                       body: String? = nil, label: String? = nil, pr: Int? = nil,
+                       n: Int? = nil) async throws -> Ack {
         var payload: [String: Any] = ["kind": kind, "repo": repo, "issue": issue]
         if let body { payload["body"] = body }
         if let label { payload["label"] = label }
         if let pr { payload["pr"] = pr }
+        if let n { payload["n"] = n }
         if let demo { return try demo.decide(payload) }
         return try await post("/api/decision", payload)
     }

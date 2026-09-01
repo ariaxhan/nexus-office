@@ -593,6 +593,14 @@ struct IssueCard: View {
     @Bindable var store: Store
     let repo: String
     let issue: Issue
+    /// Drop the issue's own text and show the desk instead.
+    ///
+    /// The home stacks cards off twelve desks, where the question and its
+    /// options are the whole point and the issue body is the part a person
+    /// already read on the desk. Four essays push the merge button and the
+    /// parks off the bottom of the window, which is the same as not drawing
+    /// them. A desk pane, which is one repo at a time, still shows everything.
+    var brief = false
 
     @State private var opened = false
     @State private var busy = false
@@ -623,12 +631,20 @@ struct IssueCard: View {
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
+                // Which desk, when the card is not standing on one.
+                if brief {
+                    Text(repo)
+                        .officeFont(size: 11)
+                        .foregroundStyle(Theme.faint)
+                }
                 Text(StateRules.stamp(issue.updatedAt))
                     .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
 
-            if needsYou || !issue.labels.isEmpty {
+            // Not on the home: every card there is waiting on you, so the pill
+            // says nothing, and twelve desks' labels are twelve desks' noise.
+            if !brief, needsYou || !issue.labels.isEmpty {
                 HStack(spacing: 6) {
                     if needsYou {
                         // Not a label lookup. The bot had the last word, which is
@@ -648,7 +664,7 @@ struct IssueCard: View {
                 }
             }
 
-            if !issue.body.isEmpty {
+            if !issue.body.isEmpty && !brief {
                 Text(Markdown.render(issue.body))
                     .officeFont(size: 12.5)
                     .foregroundStyle(Theme.dim)
@@ -658,6 +674,24 @@ struct IssueCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // The runner's last word, where the issue's own text is not being
+            // drawn. On a card whose one button cannot be taken back, reading it
+            // is most of deciding whether to press it.
+            if brief, !issue.hasDecision, !issue.lastWord.isEmpty {
+                Text(Markdown.render(issue.lastWord))
+                    .officeFont(size: 12.5)
+                    .foregroundStyle(Theme.dim)
+                    .tint(Theme.blue)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let decision = issue.decision, !decision.options.isEmpty {
+                DecisionOptions(decision: decision, busy: busy) { option in
+                    apply("choose", n: option.n, label: option.label)
+                }
+            }
+
             HStack(spacing: 7) {
                 CardButton(title: commenting ? "cancel" : "comment", busy: busy) {
                     if commenting {
@@ -665,6 +699,14 @@ struct IssueCard: View {
                         store.drafts[key] = nil
                     } else {
                         opened = true
+                    }
+                }
+                // The fix is already written. The door re-reads the PR and
+                // re-checks whose branch it is before it touches anything, so
+                // this is a request and never a permission.
+                if let landed = issue.landedPr {
+                    CardButton(title: "merge PR #\(landed)", tint: Theme.green, busy: busy) {
+                        apply("merge", pr: landed)
                     }
                 }
                 CardButton(title: "close", busy: busy) { apply("close") }
@@ -710,12 +752,14 @@ struct IssueCard: View {
         )
     }
 
-    private func apply(_ kind: String, body: String? = nil) {
+    private func apply(_ kind: String, body: String? = nil,
+                       pr: Int? = nil, n: Int? = nil, label: String? = nil) {
         if kind == "comment" && (body ?? "").trimmingCharacters(in: .whitespaces).isEmpty { return }
         busy = true
         Task {
             let sent = await store.decide(kind: kind, repo: repo,
-                                          issue: String(issue.number), body: body)
+                                          issue: String(issue.number), body: body,
+                                          pr: pr, label: label, n: n)
             busy = false
             // The draft is only thrown away once the server has taken it. A
             // comment cleared by a refused write is a sentence a person has to
@@ -846,6 +890,63 @@ struct PullRequestCard: View {
 }
 
 // MARK: - small parts
+
+/// A stated question, as buttons.
+///
+/// The question is drawn exactly as the runner wrote it: an agent's own words
+/// paraphrased by the window are words nobody said. The recommended option is
+/// first and says so, and every consequence is on screen, because an option
+/// whose cost is behind a click is an option nobody read before they clicked
+/// it. Full width and wrapping, so a long consequence is a taller button and
+/// never a truncated one.
+struct DecisionOptions: View {
+    let decision: Decision
+    var busy = false
+    let choose: (DecisionOption) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(decision.question)
+                .officeFont(size: 13, weight: .medium)
+                .foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(decision.ordered) { option in
+                Button { choose(option) } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 7) {
+                            Text("\(option.n). \(option.label)")
+                                .officeFont(size: 12.5, weight: .semibold)
+                                .foregroundStyle(option.recommended ? Theme.onFilled : Theme.text)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if option.recommended {
+                                Text("recommended")
+                                    .officeFont(size: 10.5)
+                                    .foregroundStyle(Theme.onFilled.opacity(0.7))
+                            }
+                        }
+                        if !option.consequence.isEmpty {
+                            Text(option.consequence)
+                                .officeFont(size: 11.5)
+                                .foregroundStyle(option.recommended
+                                                 ? Theme.onFilled.opacity(0.75) : Theme.dim)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(option.recommended ? Theme.green : Theme.well))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(busy)
+                .opacity(busy ? 0.5 : 1)
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+}
 
 struct CardButton: View {
     let title: String

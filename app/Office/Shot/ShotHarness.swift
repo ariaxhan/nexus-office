@@ -147,12 +147,27 @@ enum ShotHarness {
         store.needsOnly = true
         store.select(.desk(deskNeedingAPerson(store)))
         await frame(store, window, directory, "needs")
+        store.needsOnly = false
+
+        // The home: every question, merge and park in the building at once.
+        // Its own framing because `needs` above is one desk with the roster
+        // filtered, and the whole claim here is the opposite one: the things
+        // waiting on a person, gathered off twelve desks into one list, in the
+        // order a person can act in.
+        //
+        // The stamp is pushed back before the screen opens, so the catch-up
+        // line photographs its counts rather than the empty "since you were
+        // last here" that a machine which has never opened it draws. A demo run
+        // holds its preferences in memory and writes none of them down, so this
+        // cannot move a real person's stamp.
+        store.prefs.set(homeLastSeen: Date(timeIntervalSince1970: 1_787_000_000))
+        store.select(.home)
+        await frame(store, window, directory, "home", settling: 1.4)
 
         // The wall: the local sources, which are not repos and not colleagues,
         // and the pane one of them opens into. Photographed with the source
         // that says something needs a person, because a wall of quiet rows
         // proves the group renders and proves nothing about the badge.
-        store.needsOnly = false
         store.select(.section(sectionNeedingAPerson(store)))
         await frame(store, window, directory, "wall", settling: 1.4)
 

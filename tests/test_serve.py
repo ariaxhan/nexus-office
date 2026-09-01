@@ -21,6 +21,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
@@ -484,6 +485,48 @@ class SessionRoutesTest(ServeTest):
         self.stub(start=(200, {"ok": True, "tool": "claude"}))
         self.assertEqual(self.post("/api/session/start", {"tool": "claude"})[0], 200)
         self.assertEqual(self.get("/api/session/start")[0], 404)
+
+    # ── the read-only window on every process, not only the joined ones ─────
+
+    def live_stub(self, **answers):
+        """The same swap as `stub` above, on the live module."""
+        mod = self.serve.live
+        seen = {}
+        for name, value in answers.items():
+            was = getattr(mod, name)
+            self.addCleanup(lambda n=name, w=was: setattr(mod, n, w))
+
+            def fake(*args, _v=value, _n=name, **kw):
+                seen[_n] = (args, kw)
+                return _v() if callable(_v) else _v
+
+            setattr(mod, name, fake)
+        return seen
+
+    def test_every_running_agent_comes_through_the_door(self):
+        self.live_stub(read={"state": "ok", "working": 1, "sessions": [
+            {"key": "claude-101", "engine": "claude", "pid": 101, "state": "working"}]})
+        code, body = self.get("/api/live")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["sessions"][0]["key"], "claude-101")
+
+    def test_a_transcript_is_asked_for_by_key_with_its_paging(self):
+        seen = self.live_stub(transcript=(200, {"lines": [], "total": 0, "offset": 0}))
+        code, _ = self.get("/api/live/transcript?key=codex-202&offset=40&limit=25")
+        self.assertEqual(code, 200)
+        self.assertEqual(seen["transcript"][0], ("codex-202", "40", "25"))
+
+    def test_a_key_that_is_a_path_is_refused_by_the_module_and_not_repaired(self):
+        """Nothing on this route builds a path out of the query string, and the
+        refusal arrives with its own status rather than as a 200 with an error
+        inside it."""
+        code, body = self.get("/api/live/transcript?key=" + urllib.parse.quote("../../etc/passwd"))
+        self.assertEqual(code, 400)
+        self.assertEqual(body["error"], self.serve.live.BAD_KEY)
+
+    def test_this_window_is_read_only_and_has_no_post_beside_it(self):
+        for path in ("/api/live", "/api/live/transcript"):
+            self.assertEqual(self.post(path, {"key": "claude-101"})[0], 404)
 
 
     # ── #42: the automation page, off the snapshot ──────────────────────────

@@ -32,6 +32,17 @@ const SESSION_EVERY_MS = 6000;
 /* One screen of a conversation. The whole run is a terminal's job. */
 const SESSION_TURNS = 4;
 const THREAD_EVERY_MS = 4000;
+/* What is running on the machine, and the open transcript. Both are local file
+ * reads, so they may be fast; neither touches GitHub or the harness. */
+const LIVE_EVERY_MS = 5000;
+/* One page of a transcript. The reader asks for the newest page, then only for
+ * what arrived after it: a session with forty thousand lines must never make
+ * this page carry forty thousand lines to show the last four. */
+const READER_PAGE = 200;
+/* A tool call and its output are one line each until they are tapped. A reader
+ * that pastes every heredoc in full is a reader you cannot find the sentences
+ * in. */
+const TOOL_PREVIEW = 140;
 
 /* The cap is on the DIM half only. The office has had 157 issues waiting at
  * once, which is thirty-six thousand pixels of phone, and a list that long is a
@@ -125,6 +136,18 @@ const state = {
    * snapshot: it moves on the scale of a tool call, not of a GitHub budget. */
   sessions: null,
   openSession: "",
+  /* Every agent process on this machine, and the transcript of the one being
+   * read. Its own poll and its own state, because it is a different question
+   * from `sessions` above: that one is who can be answered, this one is who is
+   * running. Nothing in here can be written to. */
+  live: null,
+  openLive: "",
+  reader: null,
+  readerBusy: false,
+  /* Which tool lines have been tapped open, by their absolute position in the
+   * transcript, so that loading an earlier page does not silently open a
+   * different set of them. */
+  readerOpen: Object.create(null),
   scripts: Object.create(null),
   /* A desk is a place, not a launch menu. Work owns GitHub and hcom; Context
    * owns the checkout's Markdown. */
@@ -1947,6 +1970,285 @@ async function pollThread() {
   drawThread();
 }
 
+/* ── what is running on this machine, and its transcript ─────────────────── */
+
+/* The band above the queue, and the reader behind it.
+ *
+ * READ ONLY, by construction and not by convention: there is no composer in
+ * this panel and no write anywhere in this section. The office can see far more
+ * sessions than it can reach, and the honest way to show one it cannot answer
+ * is to show it without a send button rather than to hide it.
+ *
+ * The band never empties itself on a failed poll. `state: unreadable` draws its
+ * own sentence, because an empty list is a claim that nothing is running and
+ * this page may only make that claim when the door actually said so. */
+
+function since(iso) {
+  const at = when(iso);
+  if (!at) return "";
+  const secs = Math.max(0, Math.round((Date.now() - at.getTime()) / 1000));
+  if (secs < 60) return "now";
+  if (secs < 3600) return Math.floor(secs / 60) + "m";
+  if (secs < 86400) return Math.floor(secs / 3600) + "h";
+  return Math.floor(secs / 86400) + "d";
+}
+
+/* A desk if it has one, otherwise the last two path parts: "wt/matra.10630.191"
+ * says which worktree, where the whole path says nothing you can read on a
+ * phone. */
+function liveWhere(session) {
+  if (session.repo) return session.repo;
+  const bits = String(session.cwd || "").split("/").filter(Boolean);
+  return bits.slice(-2).join("/") || "somewhere with no path";
+}
+
+function drawLive() {
+  const band = document.getElementById("live");
+  const roster = state.live;
+  clear(band);
+  if (!roster) {
+    band.hidden = true;
+    return;
+  }
+  band.hidden = false;
+  const rows = roster.sessions || [];
+  band.appendChild(head("running now", String(rows.length)));
+  if (roster.state === "unreadable") {
+    band.appendChild(el("p", "empty",
+      roster.detail || "this machine could not be asked what is running"));
+    return;
+  }
+  if (!rows.length) {
+    band.appendChild(el("p", "empty", "no agents running on this machine"));
+    return;
+  }
+  rows.forEach(function (session) { band.appendChild(liveRow(session)); });
+}
+
+function liveRow(session) {
+  const row = el("div", "row liverow");
+  row.appendChild(el("span", "dot " + (session.state === "working" ? "s-working" : "s-idle")));
+  const body = el("div", "body");
+
+  const top = el("div", "head");
+  top.appendChild(el("span", "name", liveWhere(session)));
+  top.appendChild(el("span", "pill", session.engine));
+  if (session.state === "unknown") top.appendChild(el("span", "pill", "no transcript"));
+  body.appendChild(top);
+
+  if (session.title) body.appendChild(el("p", "under", session.title));
+  if (session.last_line) body.appendChild(el("p", "lastline", session.last_line));
+  body.appendChild(el("p", "asof", [
+    session.state,
+    session.turns ? session.turns + " turns" : "",
+    since(session.last_activity),
+  ].filter(Boolean).join(" · ")));
+
+  row.appendChild(body);
+  row.addEventListener("click", function () { openReader(session.key); });
+  return row;
+}
+
+/* ── the reader ──────────────────────────────────────────────────────────── */
+
+function openReader(key) {
+  state.openLive = key;
+  state.reader = null;
+  state.readerOpen = Object.create(null);
+  setHash("live=" + key);
+  drawReader();
+  loadReaderPage(-1, "replace");
+}
+
+function closeReader() {
+  state.openLive = "";
+  state.reader = null;
+  setHash("");
+  drawReader();
+}
+
+/* The deep link. The Mac app and a notification both want to open one session
+ * straight from a click, and a hash is the only address this page has. */
+function setHash(value) {
+  const want = value ? "#" + value : "";
+  if (window.location.hash === want) return;
+  if (want) window.location.hash = want;
+  else history.replaceState(null, "", window.location.pathname);
+}
+
+function readHash() {
+  const raw = String(window.location.hash || "").replace(/^#/, "");
+  if (raw.indexOf("live=") !== 0) {
+    if (state.openLive) closeReader();
+    return;
+  }
+  const key = raw.slice(5);
+  if (key && key !== state.openLive) openReader(key);
+}
+
+/* One page, and only ever one in flight: a reader that fires a fetch on every
+ * poll while the last one is still out would append the same lines twice. */
+async function loadReaderPage(offset, how) {
+  if (state.readerBusy || !state.openLive) return;
+  state.readerBusy = true;
+  const key = state.openLive;
+  try {
+    const got = await read("/api/live/transcript?key=" + encodeURIComponent(key)
+                           + "&offset=" + offset + "&limit=" + READER_PAGE);
+    if (key !== state.openLive) return;
+    if (got.code !== 200) {
+      if (!state.reader) state.reader = { key: key, lines: [], total: 0, offset: 0 };
+      state.reader.error = String(got.body.error || ("the door said " + got.code));
+      drawReader();
+      return;
+    }
+    const body = got.body;
+    const lines = body.lines || [];
+    if (how === "replace" || !state.reader || state.reader.key !== key) {
+      state.reader = { key: key, lines: lines, total: body.total || 0,
+                       offset: body.offset || 0, title: body.title || "",
+                       cwd: body.cwd || "", repo: body.repo || "",
+                       engine: body.engine || "", state: body.state || "", error: "" };
+    } else if (how === "earlier") {
+      state.reader.lines = lines.concat(state.reader.lines);
+      state.reader.offset = body.offset || 0;
+      state.reader.total = body.total || state.reader.total;
+      state.reader.error = "";
+    } else {
+      state.reader.lines = state.reader.lines.concat(lines);
+      state.reader.total = body.total || state.reader.total;
+      state.reader.state = body.state || state.reader.state;
+      state.reader.error = "";
+      trimReader(state.reader);
+    }
+    drawReader();
+  } catch (err) {
+    /* Whatever was read stays on the screen. */
+  } finally {
+    state.readerBusy = false;
+  }
+}
+
+/* Only what arrived since the last page: the window this reader holds ends at
+ * offset + length, so that is where the next read starts. */
+function pollReader() {
+  const held = state.reader;
+  if (!state.openLive || !held || held.key !== state.openLive) return;
+  loadReaderPage(held.offset + held.lines.length, "append");
+}
+
+/* A reader left open on a working session grows by a page every few seconds.
+ * The window is capped from the front, and the offset moves with it, so "load
+ * earlier" still asks for exactly what was dropped. */
+const READER_WINDOW = 2000;
+
+function trimReader(held) {
+  const over = held.lines.length - READER_WINDOW;
+  if (over <= 0) return;
+  held.lines = held.lines.slice(over);
+  held.offset += over;
+}
+
+function drawReader() {
+  const panel = document.getElementById("reader");
+  if (!state.openLive) {
+    panel.hidden = true;
+    clear(panel);
+    return;
+  }
+  const held = state.reader;
+  /* Keep the reading position. The scroller is `.turns`, not the panel: the
+   * panel is a column with a fixed bar at each end. A view rebuilt under a
+   * thumb that has scrolled back forty lines must not throw away what a person
+   * was reading; one already at the bottom follows the session instead. */
+  const old = panel.querySelector(".turns");
+  const wasBottom = !old
+    || old.scrollHeight - old.scrollTop - old.clientHeight < 60;
+  const wasTop = old ? old.scrollTop : 0;
+  const wasHeight = old ? old.scrollHeight : 0;
+
+  panel.hidden = false;
+  clear(panel);
+
+  const bar = el("header", "top");
+  bar.appendChild(button("back", null, closeReader));
+  bar.appendChild(el("p", "mark", (held && (held.repo || held.cwd)) || state.openLive));
+  bar.appendChild(el("p", "stamp", (held && held.engine) || ""));
+  panel.appendChild(bar);
+
+  const turns = el("div", "turns reading");
+  if (held && held.title) turns.appendChild(el("p", "readertitle", held.title));
+  if (!held) {
+    turns.appendChild(el("p", "empty", "reading"));
+  } else if (held.error) {
+    turns.appendChild(el("p", "empty", held.error));
+  }
+  if (held && held.offset > 0) {
+    turns.appendChild(button("load earlier (" + held.offset + " above)", "chipout",
+      function () { loadReaderPage(Math.max(0, held.offset - READER_PAGE), "earlier"); }));
+  }
+  if (held) {
+    held.lines.forEach(function (line, index) {
+      turns.appendChild(readerLine(line, held.offset + index));
+    });
+    if (!held.lines.length && !held.error) {
+      turns.appendChild(el("p", "empty", "nothing said yet"));
+    }
+  }
+  panel.appendChild(turns);
+
+  const foot = el("div", "readerfoot");
+  foot.appendChild(el("p", "note",
+    "read only · this office cannot answer this session"));
+  foot.appendChild(button("newest", "chipout", function () {
+    loadReaderPage(-1, "replace");
+  }));
+  panel.appendChild(foot);
+
+  if (wasBottom) turns.scrollTop = turns.scrollHeight;
+  else turns.scrollTop = wasTop + (turns.scrollHeight - wasHeight);
+}
+
+function readerLine(line, at) {
+  const kind = line.kind || "text";
+  if (kind === "tool" || kind === "result") return toolLine(line, at, kind);
+  const who = line.who === "user" ? "user" : (line.who === "system" ? "system" : "agent");
+  const block = el("div", "rline r-" + who + (kind === "thinking" ? " thinking" : ""));
+  const label = kind === "thinking" ? "thinking" : who;
+  block.appendChild(el("p", "rwho", label));
+  block.appendChild(el("p", "rtext", line.text + (line.truncated ? " …[clipped]" : "")));
+  return block;
+}
+
+/* One line, tapped open for the whole thing. The preview is the head of it,
+ * because the first forty characters of a tool call are its name and its
+ * target and that is what a person is scanning for. */
+function toolLine(line, at, kind) {
+  const open = !!state.readerOpen[at];
+  const block = el("div", "rline r-" + kind + (open ? " open" : ""));
+  const text = String(line.text || "");
+  const shown = open ? text : text.slice(0, TOOL_PREVIEW).replace(/\s+/g, " ");
+  const tap = button((kind === "tool" ? "» " : "« ") + (shown || "(empty)"), "rtool",
+    function () {
+      state.readerOpen[at] = !open;
+      drawReader();
+    });
+  if (!open && text.length > TOOL_PREVIEW) tap.title = "tap to expand";
+  block.appendChild(tap);
+  return block;
+}
+
+async function pollLive() {
+  try {
+    const got = await read("/api/live");
+    if (got.code !== 200) return;
+    state.live = got.body;
+    drawLive();
+  } catch (err) {
+    /* The last roster stays up. */
+  }
+}
+
 /* ── the polls ───────────────────────────────────────────────────────────── */
 
 async function pollGate() {
@@ -2051,6 +2353,16 @@ function start() {
   pollWorld(false);
   pollBots();
   pollSessions();
+  pollLive();
+  /* A link straight to one session's transcript, read on load and on every
+   * change: `#live=claude-4821`. It is how the Mac app and a notification open
+   * this reader without a second surface knowing anything about the page. */
+  window.addEventListener("hashchange", readHash);
+  readHash();
+  setInterval(function () {
+    pollLive();
+    if (state.openLive) pollReader();
+  }, LIVE_EVERY_MS);
   setInterval(pollGate, GATE_EVERY_MS);
   setInterval(function () {
     /* Only while a session is open does its conversation reload; the roster

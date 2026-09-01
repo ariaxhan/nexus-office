@@ -863,7 +863,8 @@
             "bot_last": true,
             "last_word": "The automated pass landed a fix. **Merging this PR closes the issue.**",
             "last_word_url": "https://github.com/acme/storefront/issues/214#issuecomment-900301",
-            "last_word_at": "2026-08-26T18:31:00Z"
+            "last_word_at": "2026-08-26T18:31:00Z",
+            "landed_pr": 215
           },
           {
             "number": 211,
@@ -1069,7 +1070,24 @@
             "url": "https://github.com/acme/mobile/issues/31",
             "updatedAt": "2026-08-26T18:29:00Z",
             "bot_last": true,
-            "last_word": "Guard is in and the test reproduces the old crash. Hotfix now or wait for 0.5? Say which and I will carry on."
+            "last_word": "\u2753 Guard is in and the test reproduces the old crash. Hotfix now or wait for 0.5?\n- [ ] **1.** Ship 0.4.3 as a hotfix: the crash stops today, and it costs a review cycle nobody planned (recommended)\n- [ ] **2.** Hold it for 0.5: one release instead of two, and every cold start crashes until Thursday",
+            "decision": {
+              "question": "Guard is in and the test reproduces the old crash. Hotfix now or wait for 0.5?",
+              "options": [
+                {
+                  "n": 1,
+                  "label": "Ship 0.4.3 as a hotfix",
+                  "consequence": "the crash stops today, and it costs a review cycle nobody planned",
+                  "recommended": true
+                },
+                {
+                  "n": 2,
+                  "label": "Hold it for 0.5",
+                  "consequence": "one release instead of two, and every cold start crashes until Thursday",
+                  "recommended": false
+                }
+              ]
+            }
           }
         ],
         "issues_error": null,
@@ -1137,7 +1155,36 @@
             "url": "https://github.com/northwind/api/issues/402",
             "updatedAt": "2026-08-26T18:05:00Z",
             "bot_last": true,
-            "last_word": "Two ways to do this and they differ on whether existing clients break. Which one?"
+            "last_word": "\u2753 Rate limiting answers 500 today. Which behaviour do we ship?\n- [ ] **1.** Return 429 with Retry-After: correct, and every client that treats 5xx as retryable stops retrying\n- [ ] **2.** Return 429 behind a header opt-in: correct for anyone who asks for it, unchanged for everyone else (recommended)\n- [ ] **3.** Keep 500 and document it: nothing breaks and the bug stays a bug\n- [ ] **4.** Return 503 with Retry-After: retryable by every client already, and wrong about whose fault it is",
+            "decision": {
+              "question": "Rate limiting answers 500 today. Which behaviour do we ship?",
+              "options": [
+                {
+                  "n": 1,
+                  "label": "Return 429 with Retry-After",
+                  "consequence": "correct, and every client that treats 5xx as retryable stops retrying",
+                  "recommended": false
+                },
+                {
+                  "n": 2,
+                  "label": "Return 429 behind a header opt-in",
+                  "consequence": "correct for anyone who asks for it, unchanged for everyone else",
+                  "recommended": true
+                },
+                {
+                  "n": 3,
+                  "label": "Keep 500 and document it",
+                  "consequence": "nothing breaks and the bug stays a bug",
+                  "recommended": false
+                },
+                {
+                  "n": 4,
+                  "label": "Return 503 with Retry-After",
+                  "consequence": "retryable by every client already, and wrong about whose fault it is",
+                  "recommended": false
+                }
+              ]
+            }
           },
           {
             "number": 398,

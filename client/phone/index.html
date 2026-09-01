@@ -27,6 +27,11 @@
        The catch-up line sits under the raised hand and above the queue: it is
        context for the queue, never a thing to answer. -->
   <section class="band" id="catchup" hidden></section>
+  <!-- What is running on the machine this second, read from the process table
+       rather than from the harness: every Claude Code and Codex session, whether
+       or not it ever joined. It sits above the queue because it is the answer to
+       "what is happening right now", and it is read only. -->
+  <section class="band" id="live" hidden></section>
   <section class="band" id="needs" hidden></section>
   <section class="band" id="bots"></section>
   <section class="band" id="desks"></section>
@@ -36,6 +41,9 @@
 
 <div class="thread" id="thread" hidden></div>
 <div class="thread deskpanel" id="desk" hidden></div>
+<!-- The transcript reader. Same panel as a thread and deliberately without its
+     composer: this one is a window on a session nobody here can answer. -->
+<div class="thread reader" id="reader" hidden></div>
 <p class="toast" id="toast" hidden></p>
 
 <script src="/phone.js"></script>
