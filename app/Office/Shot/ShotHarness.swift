@@ -205,6 +205,26 @@ enum ShotHarness {
         store.select(.desk(deskShowingOldData(store)))
         await frame(store, window, directory, "putaway")
 
+        // The feed: every repo talking at once. Its own framing because it is a
+        // whole screen drawn from a route no other framing reads, and because
+        // the two states that matter, a question nobody answered and a post a
+        // person decided on, only exist here.
+        store.select(.feed)
+        await frame(store, window, directory, "feed", settling: 1.4)
+
+        // The same view filtered to one repo, which is the other half of the
+        // design: one timeline per folder, in the tab where that folder already
+        // lives. A framing of the global feed alone would not prove the desk tab
+        // renders at all.
+        if let desk = store.stations.first(where: { station in
+            store.feed().posts.contains { $0.account == store.feedAccount(for: station.repo) }
+        }) {
+            store.select(.desk(desk.repo))
+            store.showFeed(at: desk.repo)
+            await frame(store, window, directory, "deskfeed", settling: 1.4)
+            store.showWork(at: desk.repo)
+        }
+
         // The automation page: the schedule, the door, and the list of what the
         // runner touched with the link to what it said. It replaces the detail
         // pane rather than opening a sheet, so it photographs as the window.

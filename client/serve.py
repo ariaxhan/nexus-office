@@ -51,6 +51,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import board  # noqa: E402
 import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import context  # noqa: E402
@@ -520,6 +521,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(rt.read_gate())
             if path == "/api/gates":
                 return self._json(self._gates())
+            if path == "/api/board":
+                # The feed. Every account is a repo. No `repo` is the global timeline;
+                # `?repo=owner-name` is one account's. `/api/gates` next door is what is
+                # blocked this second; this is the durable record of everything said.
+                q = urllib.parse.parse_qs(query)
+                try:
+                    limit = int((q.get("limit") or ["60"])[0])
+                except ValueError:
+                    limit = 60
+                return self._json(board.read_feed(
+                    repo=(q.get("repo") or [""])[0],
+                    kind=(q.get("kind") or [""])[0],
+                    limit=limit))
             if path == "/api/bots":
                 return self._json(self.chatroom.roster())
             if path == "/api/chat":
@@ -612,6 +626,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._decision(self._read_json())
             if path == "/api/gate":
                 return self._gate(self._read_json())
+            if path == "/api/board":
+                return self._board(self._read_json())
             if path == "/api/desks":
                 return self._desks(self._read_json())
             if path == "/api/pins":
@@ -679,6 +695,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "message": NO_ROOT}, 409)
         ok, message = rt.answer_gate(root, qid, answer, body.get("always") is True)
         return self._json({"ok": ok, "message": message}, 200 if ok else 409)
+
+    def _board(self, body):
+        """Reply to a post in the feed.
+
+        A reply from this door is Aria's, because the door already decided that: nothing
+        reaches here without passing `_identity_ok`. That is the whole authorization model
+        of the board, and it is why it is safe for agents to post freely into it. They can
+        say anything; only what comes back through this method carries permission.
+        """
+        ok, result = board.reply(str(body.get("id") or ""), str(body.get("text") or ""))
+        return self._json(result if ok else {"ok": False, **result}, 200 if ok else 409)
 
     def _desks(self, body):
         """Put a desk away, or bring it back.

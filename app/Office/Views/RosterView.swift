@@ -15,6 +15,8 @@ struct RosterView: View {
             ScrollViewReader { scroll in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
+                    feedRow
+
                     bots
 
                     wall
@@ -216,6 +218,52 @@ struct RosterView: View {
                 notary(store.needsOnly ? "nothing on the wall needs you" : "nothing matches")
             }
         }
+    }
+
+    /// The way in to the global feed: every repo talking at once.
+    ///
+    /// Above the bots and the wall on purpose. It is the only row that answers
+    /// "what has this machine been doing", which is the first question anyone
+    /// walking up to the office actually has, and a row below the fold is a row
+    /// nobody reads.
+    ///
+    /// The count is the two kinds that want a person, never the total: a badge
+    /// that counts everything is a badge that means nothing within a day.
+    private var feedRow: some View {
+        let feed = store.feed()
+        let wants = feed.asking + feed.blocked
+        return Button {
+            store.select(.feed)
+        } label: {
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(wants > 0 ? Theme.amber : (feed.total > 0 ? Theme.green : Theme.faint))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("the feed")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(Theme.text)
+                    Text(feed.posts.first?.text ?? feed.emptyLine)
+                        .font(.system(size: 11))
+                        .foregroundStyle(wants > 0 ? Theme.amber.opacity(0.85) : Theme.dim)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 6)
+                if wants > 0 {
+                    Pill(text: "\(wants)", color: Theme.amber)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(store.selection == .feed ? Theme.selected : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// The way in to the automation page.

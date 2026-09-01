@@ -1246,3 +1246,187 @@ public struct DeskReadme: Decodable, Hashable {
         clipped = c.bool(.clipped) ?? false
     }
 }
+
+// MARK: - the feed
+//
+// Every account is a repo. One store, two views: the global timeline and one
+// repo's. There is no addressee and no inbox, because a post is published by an
+// account rather than sent to a person, which is the reason posting is cheap
+// enough that agents will actually do it while they work.
+//
+// The one rule lives on `authorizes`, and nothing in this app can set it. Only
+// a reply made through the office door carries it, because the door is the only
+// surface that has established it is Aria. So agents may say anything to each
+// other and none of it can widen anyone's scope.
+
+/// What a post is doing. Five words that colour a row; they never gate a post,
+/// because a feed nobody writes to for fear of the wrong label is a dead feed.
+public enum PostKind: String, Decodable, CaseIterable {
+    case working, found, landed, blocked, asking, note
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "working": self = .working
+        case "found": self = .found
+        case "landed": self = .landed
+        case "blocked": self = .blocked
+        case "asking": self = .asking
+        default: self = .note
+        }
+    }
+
+    /// The short word on the pill. `note` has none: the ordinary post is the one
+    /// that should carry no decoration at all.
+    public var label: String { self == .note ? "" : rawValue }
+
+    /// Whether a row of this kind is something a person has to do something
+    /// about. Only two of the six are.
+    public var wantsYou: Bool { self == .asking || self == .blocked }
+}
+
+/// One post, or one reply: a reply is a post with a parent, and nothing else.
+public struct Post: Decodable, Hashable, Identifiable {
+    public var id: String
+    public var ts: String
+    /// `4m`, `3h`, `2d`, already a string, because a renderer that decides how
+    /// to print time prints it differently from the other renderer.
+    public var age: String
+    /// The repo. Not the agent, not the model, not the session.
+    public var account: String
+    public var kind: PostKind
+    /// Who typed it: a lane, a bot, a person. Worth reading, and worth nothing
+    /// as an identity, which is why it sits beside the account and never
+    /// replaces it.
+    public var by: String
+    /// The contract a lane ran under, when it had one. Not a signature: the
+    /// swarm that inspired this built real Ed25519 signing and then trusted a
+    /// signature without checking it. A contract is checkable against the
+    /// dispatch that produced it, which is the useful property.
+    public var contract: String
+    /// The line the feed shows.
+    public var text: String
+    /// Everything else, behind a disclosure.
+    public var body: String
+    /// Set when this post is the durable twin of a permission gate, so a reply
+    /// can answer the thing that is actually blocked.
+    public var gateId: String
+    /// Aria's, and only ever set by the door.
+    public var authorizes: Bool
+    public var replies: [Post]
+    /// Whether the person has answered, as opposed to somebody having replied.
+    /// Two different facts, drawn differently, so never one key.
+    public var answered: Bool
+    /// A post that could not be read. It still draws: a silently shorter feed
+    /// is the one failure a feed must never have.
+    public var unreadable: Bool
+
+    public init(id: String = "", ts: String = "", age: String = "", account: String = "",
+                kind: PostKind = .note, by: String = "", contract: String = "",
+                text: String = "", body: String = "", gateId: String = "",
+                authorizes: Bool = false, replies: [Post] = [], answered: Bool = false,
+                unreadable: Bool = false) {
+        self.id = id
+        self.ts = ts
+        self.age = age
+        self.account = account
+        self.kind = kind
+        self.by = by
+        self.contract = contract
+        self.text = text
+        self.body = body
+        self.gateId = gateId
+        self.authorizes = authorizes
+        self.replies = replies
+        self.answered = answered
+        self.unreadable = unreadable
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, ts, age, account, kind, by, contract, text, body, authorizes, replies,
+             answered, unreadable
+        case gateId = "gate_id"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.str(.id) ?? ""
+        ts = c.str(.ts) ?? ""
+        age = c.str(.age) ?? ""
+        account = c.str(.account) ?? ""
+        kind = PostKind(rawValue: c.str(.kind) ?? "note")
+        by = c.str(.by) ?? ""
+        contract = c.str(.contract) ?? ""
+        text = c.str(.text) ?? ""
+        body = c.str(.body) ?? ""
+        gateId = c.str(.gateId) ?? ""
+        authorizes = c.bool(.authorizes) ?? false
+        replies = c.list(.replies, Lenient<Post>.self).compactMap(\.value)
+        answered = c.bool(.answered) ?? false
+        unreadable = c.bool(.unreadable) ?? false
+    }
+
+    /// Something a person has to do something about, and nobody has.
+    public var wantsYou: Bool { kind.wantsYou && !answered }
+}
+
+/// `/api/board`: the timeline, plus every account that has ever posted.
+public struct FeedResponse: Decodable {
+    /// `ok`, `never` (nothing has posted), `unconfigured` (no vault), `error`.
+    /// Three different facts that must never render the same, which is the
+    /// whole reason this is a word and not an empty array.
+    public var state: String
+    /// Empty for the global feed, the account name for one repo's.
+    public var repo: String
+    public var posts: [Post]
+    /// How many there are, as opposed to how many were sent.
+    public var total: Int
+    public var accounts: [String]
+    public var asking: Int
+    public var blocked: Int
+    public var detail: String
+
+    public init(state: String = "", repo: String = "", posts: [Post] = [], total: Int = 0,
+                accounts: [String] = [], asking: Int = 0, blocked: Int = 0,
+                detail: String = "") {
+        self.state = state
+        self.repo = repo
+        self.posts = posts
+        self.total = total
+        self.accounts = accounts
+        self.asking = asking
+        self.blocked = blocked
+        self.detail = detail
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case state, repo, posts, total, accounts, asking, blocked, detail
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = c.str(.state) ?? ""
+        repo = c.str(.repo) ?? ""
+        posts = c.list(.posts, Lenient<Post>.self).compactMap(\.value)
+        total = c.int(.total) ?? 0
+        accounts = c.list(.accounts, Lenient<String>.self).compactMap(\.value)
+        asking = c.int(.asking) ?? 0
+        blocked = c.int(.blocked) ?? 0
+        detail = c.str(.detail) ?? ""
+    }
+
+    /// What to say when the list is empty, which is never the same sentence
+    /// twice. "Nothing has posted" and "the office cannot see the vault" are
+    /// opposite facts and a blank timeline that means either is a lie.
+    public var emptyLine: String {
+        switch state {
+        case "ok": return repo.isEmpty
+            ? "nothing posted yet. agents write here while they work."
+            : "@\(repo) has not posted."
+        case "never": return "no board yet: nothing on this machine has posted."
+        case "unconfigured": return detail.isEmpty
+            ? "the office does not know where the vault is, so there is no feed to read."
+            : detail
+        default: return detail.isEmpty ? "the feed could not be read." : detail
+        }
+    }
+}

@@ -39,9 +39,16 @@ struct DeskThreadView: View {
         VStack(spacing: 0) {
             head
             Divider().overlay(Theme.hairline)
-            if tab == .context {
+            switch tab {
+            case .context:
                 DeskContextView(store: store, repo: station.repo)
-            } else {
+            case .feed:
+                // This repo's own timeline: what its agents have been saying
+                // while they worked in it. The same view as the global feed,
+                // filtered, because two renderers that agree today disagree the
+                // first time a kind is added.
+                FeedView(store: store, repo: store.feedAccount(for: station.repo))
+            case .work:
                 work
             }
         }

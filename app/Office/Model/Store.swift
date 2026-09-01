@@ -16,20 +16,25 @@ import UserNotifications
 public enum Selection: Hashable {
     case bot(String)
     case desk(String)
+    /// The global timeline, across every repo that has posted. Its own case
+    /// rather than a desk's, because it belongs to no repo: it is the one place
+    /// that shows the whole machine talking at once.
+    case feed
     /// One thing on the wall, by its source id. A section is not a repo and not
     /// a colleague, so it gets its own case rather than borrowing a desk's.
     case section(String)
 }
 
-/// The two halves of a desk: what is open on GitHub, and what the checkout on
-/// this machine says about itself.
+/// The three halves of a desk: what is open on GitHub, what the checkout on this
+/// machine says about itself, and what its agents have been posting.
 public enum DeskTab: String, Hashable, CaseIterable {
-    case work, context
+    case work, context, feed
 
     public var label: String {
         switch self {
         case .work: return "Work"
         case .context: return "Context"
+        case .feed: return "Feed"
         }
     }
 }
@@ -230,6 +235,11 @@ public final class Store {
     private var runtime: RuntimeInfo?
     private var loops: [Task<Void, Never>] = []
 
+    /// The feed, keyed by the account it was read for; `""` is the global one.
+    /// Cached per account so switching between a repo and the whole floor does
+    /// not blank the screen while the next read lands.
+    public private(set) var feeds: [String: FeedResponse] = [:]
+
     /// Whether the settings popover is open. On the store rather than the view
     /// for the same reason `putAwayOpen` is: the shot harness has to be able to
     /// open it to photograph it.
@@ -392,7 +402,23 @@ public final class Store {
     private func pollWorld() async {
         while !Task.isCancelled {
             await refreshWorld()
+            // The global one always: the roster row previews the newest post, so
+            // a feed nobody has opened yet still has to be read once or the row
+            // says "reading the feed" forever.
+            await refreshFeed("")
+            if let open = openFeedAccount, !open.isEmpty { await refreshFeed(open) }
             try? await Task.sleep(nanoseconds: 10_000_000_000)
+        }
+    }
+
+    /// Which feed is on screen, so the loop refreshes that one instead of every
+    /// account anyone has ever opened. Nothing on screen means nothing to poll:
+    /// the feed is a record, and a record nobody is reading can wait.
+    private var openFeedAccount: String? {
+        switch selection {
+        case .feed: return ""
+        case .desk(let repo): return tab(at: repo) == .feed ? feedAccount(for: repo) : nil
+        default: return nil
         }
     }
 
@@ -579,6 +605,15 @@ public final class Store {
         deskTabs[repo] = .work
     }
 
+    /// Flip a desk to its own timeline, and read it. The read is fired here
+    /// rather than only in the view so the tab is never photographed, or opened,
+    /// showing "reading the feed" over a repo that has posted all morning.
+    public func showFeed(at repo: String) {
+        deskTabs[repo] = .feed
+        let account = feedAccount(for: repo)
+        if feeds[account] == nil { Task { await refreshFeed(account) } }
+    }
+
     /// Open one Markdown file of one desk, the way `nexus open <file>` asks
     /// to: select the desk, flip it to Context, read that file. The path is
     /// still only a request; the door decides whether it is in the index.
@@ -667,6 +702,72 @@ public final class Store {
     /// Open a new engine at a desk. This runs a program, so the toast carries
     /// the server's own words about what happened rather than a cheerful
     /// sentence written here.
+    // MARK: - the feed
+
+    /// The timeline for an account, or the global one for `""`. Never nil: a
+    /// feed that has not loaded says so in its own state rather than drawing an
+    /// empty list that claims nothing was posted.
+    public func feed(_ account: String = "") -> FeedResponse {
+        feeds[account] ?? FeedResponse(state: "loading",
+                                       detail: "reading the feed")
+    }
+
+    /// A desk is `owner/name` on GitHub and `owner-name` on the board, because a
+    /// board account is a directory name before it is anything else. One place
+    /// converts, so the two can never disagree about who a repo is.
+    public func feedAccount(for repo: String) -> String {
+        repo.lowercased()
+            .map { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_"
+                   ? $0 : Character("-") }
+            .reduce(into: "") { out, c in
+                if c == "-" && out.hasSuffix("-") { return }
+                out.append(c)
+            }
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-."))
+    }
+
+    public func refreshFeed(_ account: String? = "") async {
+        guard let account else { return }
+        do {
+            feeds[account] = try await api.board(repo: account)
+        } catch let error as ApiError {
+            // A door that predates the feed answers 404 here. That is an office
+            // with no board yet, not a broken app, and it draws as its own
+            // sentence rather than as a timeline where nobody said anything.
+            feeds[account] = FeedResponse(
+                state: error.isMissing ? "never" : "error",
+                repo: account,
+                detail: error.isMissing
+                    ? "this door has no feed yet: update the office server"
+                    : error.message)
+        } catch {
+            feeds[account] = FeedResponse(state: "error", repo: account,
+                                          detail: error.localizedDescription)
+        }
+    }
+
+    /// Answer a post. The only call in this app that can authorize anything, and
+    /// only because the door has already established it is her before the vault
+    /// is touched. An agent replying to an agent is a note; this is a decision.
+    public func replyToPost(_ id: String, text: String) async {
+        do {
+            let ack = try await api.boardReply(id: id, text: text)
+            // The gate half, reported honestly: a post whose gate already timed
+            // out is the ordinary case, and the room must never imply an agent
+            // was unblocked when it was not.
+            if let said = ack.result, !said.isEmpty {
+                toast = said
+            } else if let said = ack.message, !said.isEmpty {
+                toast = said
+            }
+            await refreshFeed(openFeedAccount)
+        } catch let error as ApiError {
+            toast = error.message
+        } catch {
+            toast = error.localizedDescription
+        }
+    }
+
     public func startSession(tool: String, at repo: String, prompt: String = "") async {
         do {
             let ack = try await api.startSession(tool: tool, repo: repo, prompt: prompt)

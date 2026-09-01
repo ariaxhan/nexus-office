@@ -98,6 +98,24 @@ public final class Api {
         return try await get("/api/gate", as: Gate.self)
     }
 
+    /// The feed. No `repo` is the global timeline; a repo is one account's.
+    public func board(repo: String = "", limit: Int = 80) async throws -> FeedResponse {
+        if let demo { return try demo.board(repo: repo) }
+        var path = "/api/board?limit=\(limit)"
+        if !repo.isEmpty,
+           let escaped = repo.addingPercentEncoding(withAllowedCharacters: .alphanumerics) {
+            path += "&repo=\(escaped)"
+        }
+        return try await get(path, as: FeedResponse.self)
+    }
+
+    /// Reply to a post. This is the only call in the app that can authorize
+    /// anything, and it can only because the door already knows it is her.
+    public func boardReply(id: String, text: String) async throws -> Ack {
+        if let demo { return try demo.boardReply(id: id, text: text) }
+        return try await post("/api/board", ["id": id, "text": text])
+    }
+
     public func world() async throws -> World {
         if let demo { return try demo.world() }
         return try await get("/api/world", as: WorldResponse.self).world
@@ -425,11 +443,16 @@ private final class DemoFloor {
         /// here is a desk the office cannot place, which is a real state on the
         /// live door too and is the one this fixture is photographed showing.
         var context: [String: DemoContext]
+        /// The feed. A fixture written before it existed photographs a machine
+        /// where nothing has posted, which is a real state and draws as its own
+        /// sentence rather than as a blank timeline.
+        var feed: FeedResponse
 
         var gate: Gate { gates.first ?? .clear }
 
         enum CodingKeys: String, CodingKey {
-            case bots, world, gate, gates, chats, sessions, transcripts, reactions, readmes, context
+            case bots, world, gate, gates, chats, sessions, transcripts, reactions, readmes,
+                 context, feed
         }
 
         init(from decoder: Decoder) throws {
@@ -452,6 +475,8 @@ private final class DemoFloor {
             readmes = ((try? c.decodeIfPresent([String: String].self, forKey: .readmes)) ?? nil) ?? [:]
             context = ((try? c.decodeIfPresent([String: DemoContext].self,
                                                forKey: .context)) ?? nil) ?? [:]
+            feed = ((try? c.decodeIfPresent(FeedResponse.self, forKey: .feed)) ?? nil)
+                ?? FeedResponse(state: "never")
         }
 
         /// An empty floor, for a fixture that would not load.
@@ -465,6 +490,7 @@ private final class DemoFloor {
             transcripts = [:]
             readmes = [:]
             context = [:]
+            feed = FeedResponse(state: "never")
         }
     }
 
@@ -524,6 +550,43 @@ private final class DemoFloor {
     func gates() throws -> GatesResponse {
         lock.withLock { GatesResponse(at: Self.now(), gates: fixture.gates) }
     }
+    /// The demo floor's feed. `npm run shot` runs against `app/Demo/demo.json`
+    /// with no vault, no door and no network, so the fixture answers here or the
+    /// twelve framings photograph an empty timeline and prove nothing.
+    func board(repo: String) throws -> FeedResponse {
+        lock.withLock {
+            let all = fixture.feed
+            guard !repo.isEmpty else { return all }
+            let mine = all.posts.filter { $0.account == repo }
+            // Counted over THIS account, never the floor's. The first framing of
+            // the desk tab showed "2 asking" over a repo with none, because the
+            // demo passed the global counts through: a fixture that lies in a
+            // picture is worse than no fixture, since the picture is the check.
+            return FeedResponse(state: all.state, repo: repo, posts: mine,
+                                total: mine.count, accounts: all.accounts,
+                                asking: mine.filter { $0.kind == .asking }.count,
+                                blocked: mine.filter { $0.kind == .blocked }.count)
+        }
+    }
+
+    /// The demo floor accepts a reply and keeps it, so the framing after a reply
+    /// shows the thread the way the real one would.
+    func boardReply(id: String, text: String) throws -> Ack {
+        lock.withLock {
+            var feed = fixture.feed
+            feed.posts = feed.posts.map { post in
+                guard post.id == id else { return post }
+                var copy = post
+                copy.replies.append(Post(id: UUID().uuidString, age: "now", account: "aria",
+                                         by: "aria", text: text, authorizes: true))
+                copy.answered = true
+                return copy
+            }
+            fixture.feed = feed
+            return Ack(ok: true, message: "")
+        }
+    }
+
     func world() throws -> World { lock.withLock { fixture.world } }
 
     func chat(bot: String) throws -> [ChatTurn] {

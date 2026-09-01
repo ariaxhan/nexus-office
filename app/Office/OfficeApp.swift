@@ -228,6 +228,10 @@ struct RootView: View {
             } else {
                 Empty(text: "That is not on the wall any more.")
             }
+        case .feed:
+            // The whole machine talking at once, across every repo. Not scoped
+            // to a desk, because it belongs to none of them.
+            FeedView(store: store)
         case nil:
             Empty(text: second
                   ? "Drag a desk in here to read it beside the one on the left."
