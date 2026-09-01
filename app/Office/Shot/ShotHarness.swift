@@ -164,6 +164,14 @@ enum ShotHarness {
         store.select(.home)
         await frame(store, window, directory, "home", settling: 1.4)
 
+        // The other end of the same list. The questions are uncapped on purpose
+        // and four of them are taller than the window, so the parks by desk and
+        // the wall rows under them are only ever visible down here: a framing of
+        // the top alone cannot tell a park count that renders from one that
+        // decoded to nothing.
+        scrollDetailToEnd(window)
+        await frame(store, window, directory, "homerest", settling: 1.0)
+
         // The wall: the local sources, which are not repos and not colleagues,
         // and the pane one of them opens into. Photographed with the source
         // that says something needs a person, because a wall of quiet rows
@@ -364,6 +372,30 @@ enum ShotHarness {
     }
 
     // MARK: - the window
+
+    /// Scroll the detail pane to the end of whatever it is showing.
+    ///
+    /// A screen taller than the window is not a defect, and a harness that can
+    /// only ever photograph the first 900 points cannot tell "the bottom of
+    /// this list renders" from "the bottom of this list is missing". It scrolls
+    /// the real `NSScrollView` SwiftUI is drawing into, so the picture is of
+    /// the same view a person scrolls, not of a second layout built for a
+    /// camera. The widest one is the detail pane; the narrow one is the roster.
+    private static func scrollDetailToEnd(_ window: NSWindow) {
+        guard let root = window.contentView else { return }
+        var found: [NSScrollView] = []
+        func walk(_ view: NSView) {
+            if let scroller = view as? NSScrollView { found.append(scroller) }
+            view.subviews.forEach(walk)
+        }
+        walk(root)
+        guard let pane = found.max(by: { $0.frame.width < $1.frame.width }),
+              let document = pane.documentView else { return }
+        let clip = pane.contentView
+        let bottom = max(0, document.bounds.height - clip.bounds.height)
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: bottom))
+        pane.reflectScrolledClipView(clip)
+    }
 
     private static func officeWindow() -> NSWindow? {
         if let titled = NSApp.windows.first(where: { $0.isVisible && $0.title == "Office" }) {
