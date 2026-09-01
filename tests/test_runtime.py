@@ -12,10 +12,13 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
+import stat
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
@@ -129,6 +132,70 @@ class GateTest(unittest.TestCase):
         ok, _ = self.rt.answer_gate(self.root, qid, "deny", False)
         self.assertTrue(ok)
         self.assertEqual(json.loads(self.path.read_text())["answer"], "deny")
+
+    def test_answering_preserves_a_private_gate_mode_under_umask_022(self):
+        qid = self.ask()
+        os.chmod(self.path, 0o600)
+        previous = os.umask(0o022)
+        try:
+            ok, msg = self.rt.answer_gate(self.root, qid, "allow", False)
+        finally:
+            os.umask(previous)
+        self.assertTrue(ok, msg)
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+        lock = self.root / "_meta" / "state" / "pending-question.lock"
+        self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
+
+    def test_a_gate_replaced_before_the_commit_point_is_refused(self):
+        stale_id = self.ask(qid="1" * 12)
+        stale = json.loads(self.path.read_text())
+        replacement = stale | {"id": "2" * 12, "target": "rm -rf irreplaceable"}
+        self.path.write_text(json.dumps(replacement))
+
+        with mock.patch.object(
+            self.rt, "_pending_files", return_value=([(self.path, stale)], False)
+        ):
+            ok, msg = self.rt.answer_gate(self.root, stale_id, "allow", False)
+
+        self.assertFalse(ok, msg)
+        self.assertNotIn("answer", json.loads(self.path.read_text()))
+        self.assertEqual(json.loads(self.path.read_text())["id"], "2" * 12)
+
+    def test_answering_refuses_a_symlinked_meta_ancestor(self):
+        with tempfile.TemporaryDirectory() as outside_name:
+            outside = pathlib.Path(outside_name)
+            shutil.rmtree(self.root / "_meta")
+            (outside / "state").mkdir()
+            external_gate = outside / "state" / "pending-question.json"
+            external_gate.write_text(json.dumps({
+                "id": "3" * 12, "permission": "run_bash", "target": "npm ci",
+                "detail": "", "asked_at": time.time(),
+            }))
+            before = external_gate.read_bytes()
+            (self.root / "_meta").symlink_to(outside, target_is_directory=True)
+
+            ok, msg = self.rt.answer_gate(self.root, "3" * 12, "allow", False)
+
+            self.assertFalse(ok, msg)
+            self.assertIn("symlinked component", msg)
+            self.assertEqual(external_gate.read_bytes(), before)
+
+    def test_answering_refuses_a_symlinked_gate_file(self):
+        with tempfile.TemporaryDirectory() as outside_name:
+            external_gate = pathlib.Path(outside_name) / "pending-question.json"
+            external_gate.write_text(json.dumps({
+                "id": "4" * 12, "permission": "run_bash", "target": "npm ci",
+                "detail": "", "asked_at": time.time(),
+            }))
+            before = external_gate.read_bytes()
+            self.path.symlink_to(external_gate)
+
+            ok, msg = self.rt.answer_gate(self.root, "4" * 12, "allow", False)
+
+            self.assertFalse(ok, msg)
+            self.assertIn("symlink", msg)
+            self.assertEqual(external_gate.read_bytes(), before)
+            self.assertTrue(self.path.is_symlink())
 
 
 class ManyGatesTest(GateTest):

@@ -30,12 +30,16 @@ returns a status for each channel instead of an empty dict for both.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pathlib
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
+
+import private_state as private
 
 DEFAULT_URL = "http://127.0.0.1:8787"
 STATE = "_meta/state"
@@ -47,6 +51,7 @@ PENDING_NAME = "pending-question.json"
 PENDING_PREFIX = "pending-question."
 PENDING_SUFFIX = ".json"
 PENDING_GLOB = PENDING_PREFIX + "*" + PENDING_SUFFIX
+PENDING_LOCK_NAME = "pending-question.lock"
 # Kept for anyone who imported it: the unnamed gate, relative to the root.
 PENDING = STATE + "/" + PENDING_NAME
 
@@ -116,6 +121,23 @@ def _pending_files(root: pathlib.Path) -> tuple[list[tuple[pathlib.Path, dict]],
             torn = True
     found.sort(key=lambda pair: _asked_at(pair[1]))
     return found, torn
+
+
+@contextmanager
+def _pending_lock(root: pathlib.Path):
+    """Share the Harness lock for gate replacement, answering, and cleanup."""
+    root = pathlib.Path(root)
+    lock = root / STATE / PENDING_LOCK_NAME
+    private.append_text(lock, "", anchor=root)
+    flags = os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock, flags)
+    os.chmod(lock, private.FILE_MODE, follow_symlinks=False)
+    with os.fdopen(fd, "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _shape(path: pathlib.Path, data: dict) -> dict:
@@ -204,28 +226,44 @@ def answer_gate(root: pathlib.Path, question_id: str, answer: str, always: bool)
     This checks first anyway, so the office can say "that question is gone" out
     loud instead of silently writing into a file nobody is reading any more.
     """
-    files, torn = _pending_files(pathlib.Path(root))
-    target = next(((p, d) for p, d in files if str(d.get("id") or "") == question_id), None)
-    if target is None:
-        if torn:
-            return False, "could not read the gate: a gate file did not parse"
-        if not files:
-            return False, "that question is gone; the agent stopped waiting"
-        return False, "the agent has moved on; this answer was for an older question"
-
-    path, data = target
-    if data.get("answer"):
-        return False, "that question was already answered somewhere else"
-
-    data["answer"] = answer
-    data["always"] = bool(always)
-    tmp = path.with_name(path.name + ".tmp")
+    root = pathlib.Path(root)
     try:
-        tmp.write_text(json.dumps(data), encoding="utf-8")
-        tmp.replace(path)
+        with _pending_lock(root):
+            files, torn = _pending_files(root)
+            target = next(
+                ((p, d) for p, d in files if str(d.get("id") or "") == question_id),
+                None,
+            )
+            if target is None:
+                if torn:
+                    return False, "could not read the gate: a gate file did not parse"
+                if not files:
+                    return False, "that question is gone; the agent stopped waiting"
+                return False, "the agent has moved on; this answer was for an older question"
+
+            path, data = target
+            if data.get("answer"):
+                return False, "that question was already answered somewhere else"
+            if path.is_symlink():
+                return False, "could not write the answer: gate path is a symlink"
+
+            # Re-read at the commit point. The shared lock serializes first-party
+            # writers; the id check also refuses an uncoordinated replacement.
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return False, "could not read the gate at the answer commit point"
+            if not isinstance(current, dict) or str(current.get("id") or "") != question_id:
+                return False, "the agent has moved on; this answer was for an older question"
+            if current.get("answer"):
+                return False, "that question was already answered somewhere else"
+
+            current["answer"] = answer
+            current["always"] = bool(always)
+            private.atomic_write_text(path, json.dumps(current), anchor=root)
     except OSError as exc:
         return False, f"could not write the answer: {exc}"
-    return True, f"{answer}" + (" (always)" if always else "") + f" for {data.get('permission')}"
+    return True, f"{answer}" + (" (always)" if always else "") + f" for {current.get('permission')}"
 
 
 def _get(path: str):
