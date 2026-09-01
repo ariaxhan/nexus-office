@@ -228,7 +228,12 @@ struct RosterView: View {
     /// "what has this machine been doing" and this answers "what is it waiting
     /// on me for", and only one of those two is a thing nobody else can do.
     private var homeRow: some View {
-        let waiting = StateRules.needsQueue(store.stations).count + store.wallNeeds
+        // Things to open, not things to do: one card per issue and one row per
+        // source that wants somebody. The same arithmetic the home's own header
+        // does, because two counts of the same list that disagree on screen are
+        // two counts nobody trusts.
+        let waiting = StateRules.needsQueue(store.stations).count
+                    + store.sections.filter { $0.needs > 0 }.count
         return Button {
             store.select(.home)
         } label: {

@@ -593,6 +593,14 @@ struct IssueCard: View {
     @Bindable var store: Store
     let repo: String
     let issue: Issue
+    /// Drop the issue's own text and show the desk instead.
+    ///
+    /// The home stacks cards off twelve desks, where the question and its
+    /// options are the whole point and the issue body is the part a person
+    /// already read on the desk. Four essays push the merge button and the
+    /// parks off the bottom of the window, which is the same as not drawing
+    /// them. A desk pane, which is one repo at a time, still shows everything.
+    var brief = false
 
     @State private var opened = false
     @State private var busy = false
@@ -623,12 +631,20 @@ struct IssueCard: View {
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
+                // Which desk, when the card is not standing on one.
+                if brief {
+                    Text(repo)
+                        .officeFont(size: 11)
+                        .foregroundStyle(Theme.faint)
+                }
                 Text(StateRules.stamp(issue.updatedAt))
                     .officeFont(size: 11)
                     .foregroundStyle(Theme.faint)
             }
 
-            if needsYou || !issue.labels.isEmpty {
+            // Not on the home: every card there is waiting on you, so the pill
+            // says nothing, and twelve desks' labels are twelve desks' noise.
+            if !brief, needsYou || !issue.labels.isEmpty {
                 HStack(spacing: 6) {
                     if needsYou {
                         // Not a label lookup. The bot had the last word, which is
@@ -648,13 +664,25 @@ struct IssueCard: View {
                 }
             }
 
-            if !issue.body.isEmpty {
+            if !issue.body.isEmpty && !brief {
                 Text(Markdown.render(issue.body))
                     .officeFont(size: 12.5)
                     .foregroundStyle(Theme.dim)
                     .textSelection(.enabled)
                     .tint(Theme.blue)
                     .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // The runner's last word, where the issue's own text is not being
+            // drawn. On a card whose one button cannot be taken back, reading it
+            // is most of deciding whether to press it.
+            if brief, !issue.hasDecision, !issue.lastWord.isEmpty {
+                Text(Markdown.render(issue.lastWord))
+                    .officeFont(size: 12.5)
+                    .foregroundStyle(Theme.dim)
+                    .tint(Theme.blue)
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

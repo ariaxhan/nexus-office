@@ -38,10 +38,10 @@ struct NeedsView: View {
                     // exactly these, and a question cut off by a limit is a
                     // question nobody answers.
                     ForEach(q.decisions) { row in
-                        IssueCard(store: store, repo: row.repo, issue: row.issue)
+                        IssueCard(store: store, repo: row.repo, issue: row.issue, brief: true)
                     }
                     ForEach(q.landed) { row in
-                        IssueCard(store: store, repo: row.repo, issue: row.issue)
+                        IssueCard(store: store, repo: row.repo, issue: row.issue, brief: true)
                     }
 
                     if !q.parks.isEmpty {
