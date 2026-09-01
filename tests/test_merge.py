@@ -36,9 +36,17 @@ class MergeTest(unittest.TestCase):
             "mergeable": "MERGEABLE",
             "state": "OPEN",
             "title": "#7: fix the thing",
+            "headRefOid": "deadbeef",
         }
         self.merge_rc = 0
         self.merge_err = ""
+        # Default: a completed, successful "verify" check run, so every
+        # pre-existing test above keeps its prior meaning unless it opts out.
+        self.check_runs = {
+            "check_runs": [{"name": "verify", "status": "completed", "conclusion": "success"}]
+        }
+        self.check_rc = 0
+        self.check_err = ""
 
         def fake_sh(cmd, timeout=45, env=None, check=False):
             self.calls.append(cmd)
@@ -48,6 +56,10 @@ class MergeTest(unittest.TestCase):
                 return 0, json.dumps(self.pr), ""
             if cmd[:3] == ["gh", "pr", "merge"]:
                 return self.merge_rc, "", self.merge_err
+            if cmd[:2] == ["gh", "api"] and "check-runs" in cmd[2]:
+                if self.check_rc != 0:
+                    return self.check_rc, "", self.check_err
+                return 0, json.dumps(self.check_runs), ""
             raise AssertionError(f"unexpected command {cmd}")
 
         self.mod.sh = fake_sh
@@ -156,6 +168,67 @@ class MergeTest(unittest.TestCase):
         self.pr["mergeable"] = "UNKNOWN"
         ok, _ = self.merge()
         self.assertTrue(ok)
+
+
+class VerifyCheckRunTest(MergeTest):
+    """The fourth refusal: a required 'verify' check run on the head commit.
+
+    FAIL CLOSED is the whole point -- the real incident this fixes was a
+    DELETED workflow, i.e. the check run is simply ABSENT, never red. A check
+    that only distrusts a red X would have missed it; success must be an
+    explicit conclusion the office observed, not the absence of failure.
+    """
+
+    def test_a_successful_verify_check_is_allowed(self):
+        ok, msg = self.merge()
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(self.merged()), 1)
+
+    def test_a_failed_verify_check_is_refused(self):
+        self.check_runs = {
+            "check_runs": [{"name": "verify", "status": "completed", "conclusion": "failure"}]
+        }
+        ok, msg = self.merge()
+        self.assertFalse(ok)
+        self.assertIn("verify", msg)
+        self.assertIn("failure", msg)
+        self.assertEqual(self.merged(), [])
+
+    def test_a_pending_verify_check_is_refused(self):
+        self.check_runs = {
+            "check_runs": [{"name": "verify", "status": "in_progress", "conclusion": None}]
+        }
+        ok, msg = self.merge()
+        self.assertFalse(ok)
+        self.assertIn("verify", msg)
+        self.assertEqual(self.merged(), [])
+
+    def test_an_absent_verify_check_is_refused(self):
+        # This is THE case: a workflow file deleted upstream leaves no check
+        # run at all, which "no failures found" would wrongly read as green.
+        self.check_runs = {"check_runs": []}
+        ok, msg = self.merge()
+        self.assertFalse(ok)
+        self.assertIn("no", msg.lower())
+        self.assertIn("verify", msg)
+        self.assertEqual(self.merged(), [])
+
+    def test_a_verify_check_among_other_unrelated_checks_is_still_found(self):
+        self.check_runs = {
+            "check_runs": [
+                {"name": "lint", "status": "completed", "conclusion": "success"},
+                {"name": "verify", "status": "completed", "conclusion": "success"},
+            ]
+        }
+        ok, msg = self.merge()
+        self.assertTrue(ok, msg)
+
+    def test_unreadable_check_runs_api_response_is_refused_not_assumed(self):
+        self.check_rc = 1
+        self.check_err = "HTTP 404: Not Found"
+        ok, msg = self.merge()
+        self.assertFalse(ok)
+        self.assertEqual(self.merged(), [])
 
 
 class RoutingTest(unittest.TestCase):
