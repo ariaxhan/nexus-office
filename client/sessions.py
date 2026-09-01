@@ -127,7 +127,8 @@ def hcom_bin() -> str | None:
     return shutil.which("hcom")
 
 
-def _run(args: list[str], timeout: float) -> tuple[int, str, str]:
+def _run(args: list[str], timeout: float,
+         env: dict[str, str] | None = None) -> tuple[int, str, str]:
     """A local binary, capped, never through a shell.
 
     Returns (rc, stdout, stderr). A binary that is not there or does not answer
@@ -140,7 +141,7 @@ def _run(args: list[str], timeout: float) -> tuple[int, str, str]:
         # slow answer, not a cure for a process waiting on a terminal nobody is
         # typing at.
         proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
-                              stdin=subprocess.DEVNULL)
+                              stdin=subprocess.DEVNULL, env=env)
     except subprocess.TimeoutExpired:
         return 124, "", f"{args[0]} did not answer in {timeout:g}s"
     except OSError as exc:
@@ -490,13 +491,70 @@ def start(body: dict) -> tuple[int, dict]:
     args = [binary, tool, "--headless", "--dir", directory]
     if prompt:
         args += ["--hcom-prompt", prompt]
-    rc, out, err = _run(args, START_TIMEOUT_S)
+    rc, out, err = _run(args, START_TIMEOUT_S,
+                        env=_launch_env(tool, directory))
     text = ((out or "") + "\n" + (err or "")).strip().replace("\n", " ")[:300]
     # 0 ready, 2 still coming up. Both are a window that opened.
     if rc in (0, 2):
         return 200, {"ok": True, "tool": tool, "directory": directory,
                      "starting": rc == 2, "result": text, "at": now_iso()}
     return 502, {"error": text or f"hcom {tool} exited {rc}"}
+
+
+def _launch_env(tool: str, directory: str) -> dict[str, str] | None:
+    """Select the locally trusted Claude account for an Office launch.
+
+    The normal shell function routes folders under the Thinking Brain School
+    workspace to its separate Claude profile. The Office daemon does not run an
+    interactive zsh, so it cannot see that function. Reproduce the same fixed
+    path rule here. Nothing from the request chooses a profile: the directory
+    has already passed ``resolve_dir`` and the account root comes from the
+    daemon's trusted runtime root.
+
+    Returning None for every other launch preserves the daemon's environment,
+    including Codex and personal Claude sessions.
+    """
+    if tool != "claude":
+        return None
+    paths = _tbs_account_paths()
+    if not paths:
+        return None
+    tbs_root, profile = paths
+    try:
+        pathlib.Path(directory).resolve().relative_to(tbs_root)
+    except (OSError, ValueError):
+        return None
+    if not profile.is_dir():
+        return None
+    env = os.environ.copy()
+    env["CLAUDE_CONFIG_DIR"] = str(profile)
+    return env
+
+
+def _tbs_account_paths() -> tuple[pathlib.Path, pathlib.Path] | None:
+    """Trusted workspace and profile paths, derived only from daemon config."""
+    runtime = os.environ.get("OFFICE_RUNTIME_ROOT", "").strip()
+    if not runtime:
+        return None
+    try:
+        root = (pathlib.Path(runtime).expanduser().resolve() / "CodingVault" /
+                "thinking-brain-school").resolve()
+        return root, (root / ".claude-tbs-account").resolve()
+    except OSError:
+        return None
+
+
+def _is_credential_dir(directory: str) -> bool:
+    """A credential profile is never a desk, including through a symlink."""
+    paths = _tbs_account_paths()
+    if not paths:
+        return False
+    _, profile = paths
+    try:
+        pathlib.Path(directory).resolve().relative_to(profile)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def resolve_dir(body: dict) -> tuple[str, str | None]:
@@ -517,6 +575,8 @@ def resolve_dir(body: dict) -> tuple[str, str | None]:
         found = desk_dir(repo)
         if not found:
             return "", f"the office does not know where {repo} is checked out"
+        if _is_credential_dir(found):
+            return "", "agent credential folders are not desks"
         return found, None
 
     if not directory:
@@ -525,6 +585,8 @@ def resolve_dir(body: dict) -> tuple[str, str | None]:
     if not path.is_dir():
         return "", BAD_DIR
     resolved = str(path.resolve())
+    if _is_credential_dir(resolved):
+        return "", "agent credential folders are not desks"
     if not _allowed_dir(resolved):
         return "", "that directory is not a desk and is not under the vault"
     return resolved, None

@@ -82,7 +82,8 @@ class FakeHcom(unittest.TestCase):
 import json, os, sys, time
 with open({str(self.calls)!r}, "a") as fh:
     fh.write(json.dumps({{"argv": sys.argv[1:], "stdin": (
-        sys.stdin.read() if not sys.stdin.isatty() else "")}}) + "\\n")
+        sys.stdin.read() if not sys.stdin.isatty() else ""),
+        "claude_config_dir": os.environ.get("CLAUDE_CONFIG_DIR", "")}}) + "\\n")
 time.sleep({sleep})
 cmd = sys.argv[1] if len(sys.argv) > 1 else ""
 if cmd == "list":
@@ -333,6 +334,58 @@ class StartTest(FakeHcom):
         self.assertTrue(body["ok"])
         self.assertEqual(self.argv()[-1]["argv"],
                          ["codex", "--headless", "--dir", str(target.resolve())])
+
+    def test_a_tbs_claude_launch_uses_the_tbs_account(self):
+        tbs = self.root / "CodingVault" / "thinking-brain-school"
+        target = tbs / "repos" / "tbs-care"
+        profile = tbs / ".claude-tbs-account"
+        target.mkdir(parents=True)
+        profile.mkdir()
+        code, _ = sessions.start({"tool": "claude", "directory": str(target)})
+        self.assertEqual(code, 200)
+        self.assertEqual(self.argv()[-1]["claude_config_dir"], str(profile.resolve()))
+
+    def test_the_tbs_account_never_leaks_to_codex_or_another_desk(self):
+        tbs = self.root / "CodingVault" / "thinking-brain-school"
+        target = tbs / "repos" / "tbs-care"
+        profile = tbs / ".claude-tbs-account"
+        target.mkdir(parents=True)
+        profile.mkdir()
+        sessions.start({"tool": "codex", "directory": str(target)})
+        sessions.start({"tool": "claude", "directory": str(
+            self.root / "CodingVault" / "thing")})
+        self.assertEqual([row["claude_config_dir"] for row in self.argv()[-2:]], ["", ""])
+
+    def test_a_missing_tbs_profile_falls_back_without_inventing_credentials(self):
+        target = (self.root / "CodingVault" / "thinking-brain-school" /
+                  "repos" / "tbs-care")
+        target.mkdir(parents=True)
+        code, _ = sessions.start({"tool": "claude", "directory": str(target)})
+        self.assertEqual(code, 200)
+        self.assertEqual(self.argv()[-1]["claude_config_dir"], "")
+
+    def test_the_tbs_credential_profile_is_never_a_launch_directory(self):
+        profile = (self.root / "CodingVault" / "thinking-brain-school" /
+                   ".claude-tbs-account")
+        nested = profile / "projects" / "secret"
+        nested.mkdir(parents=True)
+        for target in (profile, nested):
+            code, body = sessions.start({"tool": "claude", "directory": str(target)})
+            self.assertEqual(code, 400)
+            self.assertIn("credential", body["error"])
+        self.assertEqual(self.argv(), [])
+
+    def test_a_symlink_cannot_disguise_the_tbs_credential_profile(self):
+        tbs = self.root / "CodingVault" / "thinking-brain-school"
+        profile = tbs / ".claude-tbs-account"
+        alias = tbs / "repos" / "looks-like-a-desk"
+        profile.mkdir(parents=True)
+        alias.parent.mkdir()
+        alias.symlink_to(profile, target_is_directory=True)
+        code, body = sessions.start({"tool": "codex", "directory": str(alias)})
+        self.assertEqual(code, 400)
+        self.assertIn("credential", body["error"])
+        self.assertEqual(self.argv(), [])
 
     def test_a_folder_an_agent_already_runs_in_is_allowed_wherever_it_is(self):
         """This grants no reach the machine did not already have: something is
