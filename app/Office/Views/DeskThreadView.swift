@@ -179,6 +179,37 @@ struct DeskThreadView: View {
     }
 }
 
+/// A checkout the local door can read but the GitHub snapshot does not list.
+/// Context only: inventing a Station here would also invent Work authority.
+struct LocalContextThreadView: View {
+    @Bindable var store: Store
+    let repo: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                    .officeSymbol(size: 13, weight: .medium)
+                    .foregroundStyle(Theme.blue)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(repo)
+                        .officeFont(size: 13, weight: .medium)
+                        .foregroundStyle(Theme.text)
+                    Text("local checkout")
+                        .officeFont(size: 11)
+                        .foregroundStyle(Theme.faint)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 52)
+            Divider().overlay(Theme.hairline)
+            DeskContextView(store: store, repo: repo)
+        }
+        .background(Theme.ink)
+    }
+}
+
 /// The repo's README, when the desk has nothing else to say.
 ///
 /// Read off this machine by the door rather than off GitHub, and asked for only
@@ -279,6 +310,23 @@ struct DeskContextView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
                 if let context {
+                    HStack {
+                        Text("files")
+                            .officeFont(size: 10, weight: .semibold)
+                            .foregroundStyle(Theme.faint)
+                        Spacer()
+                        Button {
+                            Task { await store.reloadContext(repo: repo) }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .officeSymbol(size: 10, weight: .semibold)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Refresh local files")
+                        .accessibilityLabel("Refresh local files")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 5)
                     let recent = FileTree.recent(of: context.files,
                                                  now: Int(Date().timeIntervalSince1970))
                     if !recent.isEmpty {

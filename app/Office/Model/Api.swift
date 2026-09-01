@@ -192,10 +192,10 @@ public final class Api {
 
     /// What one desk says about itself: its index of Markdown, and one file.
     ///
-    /// `path` empty asks for the index alone. Both come back in one answer, so
-    /// the list and the document on screen can never be about different desks.
-    /// The server decides what is listable and readable; nothing here builds a
-    /// path. The write half below carries the opened text as a conflict guard.
+    /// `path` empty asks for the index; a path asks for that document alone.
+    /// Store joins them by repo. The server decides what is listable and
+    /// readable; nothing here builds a path. The write half below carries the
+    /// opened text as a conflict guard.
     public func context(repo: String, path: String = "") async throws -> DeskContext {
         if let demo { return try demo.context(repo: repo, path: path) }
         let desk = repo.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? repo

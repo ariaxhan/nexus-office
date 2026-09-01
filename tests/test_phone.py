@@ -488,3 +488,9 @@ class MobileDeskTest(unittest.TestCase):
         self.assertIn("encodeURIComponent(path)", js)
         self.assertIn("context.files", js)
         self.assertIn("markdownView(context.text)", js)
+
+    def test_context_can_refresh_and_document_reads_keep_the_existing_index(self):
+        js = self.js()
+        self.assertIn('button("refresh"', js)
+        self.assertIn("existing.files", js)
+        self.assertIn("got.body.files", js)

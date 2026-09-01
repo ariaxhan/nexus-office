@@ -355,15 +355,57 @@ class SymlinkTest(ContextBase):
 
 
 class BodyTest(ContextBase):
-    def test_the_index_rides_along_with_the_file_so_one_read_draws_the_pane(self):
+    def test_a_document_does_not_resend_the_index_the_client_already_has(self):
         self.write("README.md", "# one\n")
         self.write("_meta/two.md", "# two\n")
+        self.assertEqual([f["path"] for f in self.index()["files"]],
+                         ["README.md", "_meta/two.md"])
         code, body = self.context.read(REPO, "_meta/two.md")
         self.assertEqual(code, 200)
-        self.assertEqual([f["path"] for f in body["files"]],
-                         ["README.md", "_meta/two.md"])
+        self.assertEqual(body["files"], [])
         self.assertEqual(body["text"], "# two\n")
         self.assertEqual(body["bytes"], len("# two\n"))
+
+    def test_file_reads_reuse_the_last_verified_index(self):
+        self.write("README.md", "# one\n")
+        self.write("_meta/two.md", "# two\n")
+        with unittest.mock.patch.object(self.context, "index",
+                                        wraps=self.context.index) as scan:
+            self.assertEqual(self.context.read(REPO)[0], 200)
+            self.assertEqual(self.context.read(REPO, "README.md")[0], 200)
+            self.assertEqual(self.context.read(REPO, "_meta/two.md")[0], 200)
+        self.assertEqual(scan.call_count, 1)
+
+    def test_an_index_refresh_finds_a_file_created_after_the_first_read(self):
+        self.write("README.md")
+        self.assertEqual(self.paths(), ["README.md"])
+        self.write("docs/new.md", "# new\n")
+        self.assertEqual(self.paths(), ["README.md", "docs/new.md"])
+
+    def test_direct_open_refreshes_a_stale_index_for_a_new_file(self):
+        self.write("README.md")
+        self.index()
+        self.write("docs/new.md", "# new\n")
+        code, body = self.context.read(REPO, "docs/new.md")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["text"], "# new\n")
+        self.assertEqual(body["files"], [])
+
+    def test_a_cached_file_that_grows_over_the_limit_is_refused(self):
+        document = self.write("docs/growing.md", "# small\n")
+        self.index()
+        document.write_text("#" * (self.context.MAX_BYTES + 1))
+        code, body = self.context.read(REPO, "docs/growing.md")
+        self.assertEqual(code, 404)
+        self.assertNotIn("text", body)
+
+    def test_a_cached_folder_that_becomes_another_checkout_is_refused(self):
+        self.write("docs/nested.md", "# ours\n")
+        self.index()
+        (self.root / "docs" / ".git").mkdir()
+        code, body = self.context.read(REPO, "docs/nested.md")
+        self.assertEqual(code, 404)
+        self.assertNotIn("text", body)
 
     def test_bytes_that_are_not_utf8_are_replaced_rather_than_fatal(self):
         (self.root / "_meta" / "odd.md").write_bytes(b"# fine \xff\xfe then\n")
@@ -396,6 +438,8 @@ class WriteTest(ContextBase):
         self.assertEqual(self.file.read_text(), "# second\n")
         self.assertEqual(body["text"], "# second\n")
         self.assertEqual(body["bytes"], len("# second\n"))
+        self.assertEqual([f["path"] for f in body["files"]], ["docs/plan.md"],
+                         "a save replaces the whole cached DeskContext")
 
     def test_an_external_change_is_a_conflict_not_an_overwrite(self):
         self.file.write_text("# changed elsewhere\n")

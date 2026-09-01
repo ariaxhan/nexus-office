@@ -974,10 +974,9 @@ public struct ContextFile: Decodable, Hashable, Identifiable {
 
 /// A desk's own Markdown: the index, and whichever one of them is open.
 ///
-/// Both in one value because they arrive in one answer. A list and a document
-/// fetched separately can disagree about which desk they belong to, and the
-/// disagreement is invisible: the index says one repo and the text says
-/// another, and both draw perfectly well.
+/// One value on screen. The index arrives on refresh; document-only reads are
+/// merged into that verified index by Store so opening a file never discards
+/// or retransmits the tree.
 public struct DeskContext: Decodable, Hashable {
     public var repo: String
     /// Where the office found this checkout. Shown, because a person reading a

@@ -39,6 +39,30 @@ final class StoreTests: XCTestCase {
         XCTAssertNotNil(store.toast)
     }
 
+    func testOpeningAnAuthorizedFileWithoutAGitHubDeskShowsLocalContext() async throws {
+        let store = try wallFloor()
+        await store.refreshWorld()
+        XCTAssertNil(store.station("acme/local-only"), "GitHub did not put it on the floor")
+
+        await store.open(repo: "acme/local-only", path: "notes/now.md")
+
+        XCTAssertEqual(store.selection, .desk("acme/local-only"))
+        XCTAssertEqual(store.context(at: "acme/local-only")?.text, "# Local now\n")
+        XCTAssertTrue(store.showsLocalContext(at: "acme/local-only"))
+        XCTAssertNil(store.toast)
+    }
+
+    func testARefusedFileWithoutAGitHubDeskDoesNotInventLocalContext() async throws {
+        let store = try wallFloor()
+        await store.refreshWorld()
+
+        await store.open(repo: "acme/local-only", path: "secrets.txt")
+
+        XCTAssertFalse(store.showsLocalContext(at: "acme/local-only"))
+        XCTAssertNil(store.context(at: "acme/local-only"))
+        XCTAssertNotNil(store.toast)
+    }
+
     // MARK: - a draft belongs to the office, not to the view
 
     func testAMessageHalfWrittenSurvivesGoingToLookAtSomethingElse() async throws {
@@ -611,6 +635,12 @@ final class StoreTests: XCTestCase {
           "files": [{"path": "_meta/plans/only.md", "name": "only.md",
                      "group": "_meta/plans", "bytes": 12}],
           "texts": {"_meta/plans/only.md": "# Only\n"}
+        },
+        "acme/local-only": {
+          "root": "/w/local-only",
+          "files": [{"path": "notes/now.md", "name": "now.md",
+                     "group": "notes", "bytes": 12}],
+          "texts": {"notes/now.md": "# Local now\n"}
         }
       },
       "world": {

@@ -24,6 +24,9 @@ which never matches the version.
 ### Fixed
 - Desks show every open pull request. Human and dependency-update branches stay
   read-only; only pipeline branches offer the Office merge control.
+- Context refreshes local Markdown on demand. Opening a file no longer rescans
+  or retransmits the whole checkout, and `nexus open` works even when GitHub did
+  not put the file's repo in the current desk snapshot.
 
 ## [1.0.0] - 2026-08-28
 

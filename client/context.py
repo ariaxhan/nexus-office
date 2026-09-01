@@ -46,6 +46,7 @@ import pathlib
 import re
 import stat
 import tempfile
+import threading
 
 import sessions
 
@@ -73,6 +74,12 @@ README = "readme"
 # Same five keys in every answer, including a refusal-free empty one, so the app
 # never has to ask whether a field is there before drawing it.
 BODY_KEYS = ("repo", "root", "files", "capped", "path", "title", "text", "bytes")
+
+# One verified index per checkout. Asking for the index refreshes it; opening a
+# listed document reuses it. The old path rebuilt and returned the whole tree for
+# every click, which made a local file read proportional to the entire vault.
+_INDEX_CACHE: dict[str, tuple[list[dict], bool]] = {}
+_INDEX_LOCK = threading.Lock()
 
 
 def _refuse(want: str) -> str:
@@ -181,13 +188,44 @@ def index(root: str) -> tuple[list[dict], bool]:
     return files, False
 
 
-def read(repo: str, path: str = "") -> tuple[int, dict]:
-    """(status, body). The index of one desk, and one file out of it.
+def _files(root: str, refresh: bool = False) -> tuple[list[dict], bool]:
+    if not refresh:
+        with _INDEX_LOCK:
+            cached = _INDEX_CACHE.get(root)
+        if cached is not None:
+            return cached
+    scanned = index(root)
+    with _INDEX_LOCK:
+        _INDEX_CACHE[root] = scanned
+    return scanned
 
-    The index rides along with the file so the pane draws from one call: an app
-    that has to ask twice is an app whose list and whose document can disagree
-    about which desk they belong to.
-    """
+
+def _listed(root: str, want: str) -> tuple[dict | None, bool]:
+    """The verified entry, refreshing once when a direct open names a new file."""
+    files, capped = _files(root)
+    hit = next((f for f in files if f["path"] == want), None)
+    if hit is not None:
+        return hit, capped
+    files, capped = _files(root, refresh=True)
+    return next((f for f in files if f["path"] == want), None), capped
+
+
+def _current_entry(root: str, target: pathlib.Path, want: str) -> dict | None:
+    """Recheck mutable filesystem facts a cached index cannot promise."""
+    entry = _entry(root, target, want)
+    if entry is None:
+        return None
+    boundary = pathlib.Path(root)
+    parent = target.parent
+    while parent != boundary:
+        if (parent / ".git").exists():
+            return None
+        parent = parent.parent
+    return entry
+
+
+def read(repo: str, path: str = "") -> tuple[int, dict]:
+    """(status, body). A fresh index, or one document from its cached index."""
     repo = str(repo or "").strip()
     if not NWO_RE.match(repo):
         return 400, {"error": "bad repo"}
@@ -208,13 +246,14 @@ def read(repo: str, path: str = "") -> tuple[int, dict]:
     if not os.path.isdir(root):
         return 404, {"error": f"{repo} is not checked out at {found} any more"}
 
-    files, capped = index(root)
+    files, capped = _files(root, refresh=True) if not want else ([], False)
     body = {"repo": repo, "root": root, "files": files, "capped": capped,
             "path": "", "title": "", "text": "", "bytes": 0}
     if not want:
         return 200, body
 
-    hit = next((f for f in files if f["path"] == want), None)
+    hit, capped = _listed(root, want)
+    body["capped"] = capped
     if hit is None:
         # On disk and not in the index is still not context. Being listed is the
         # whole permission, so this answers the same way as a file that is not
@@ -222,6 +261,11 @@ def read(repo: str, path: str = "") -> tuple[int, dict]:
         return 404, {"error": "that file is not in this desk's context"}
 
     target = pathlib.Path(root) / want
+    current = _current_entry(root, target, want)
+    if current is None:
+        _files(root, refresh=True)
+        return 404, {"error": "that file is not in this desk's context"}
+    hit = current
     real = _inside(root, target)
     if not real:
         return 400, {"error": "that path leaves the checkout"}
@@ -238,7 +282,10 @@ def read(repo: str, path: str = "") -> tuple[int, dict]:
     body["path"] = want
     body["title"] = hit["name"]
     body["text"] = text
-    body["bytes"] = hit["bytes"]
+    try:
+        body["bytes"] = os.stat(real).st_size
+    except OSError:
+        body["bytes"] = hit["bytes"]
     return 200, body
 
 
@@ -296,4 +343,7 @@ def write(body: dict) -> tuple[int, dict]:
         return 403, {"error": "that file is not writable"}
     except OSError as exc:
         return 409, {"error": f"could not save that file: {exc}"[:200]}
-    return read(repo, want)
+    code, saved = read(repo, want)
+    if code == 200:
+        saved["files"], saved["capped"] = _files(saved["root"], refresh=True)
+    return code, saved

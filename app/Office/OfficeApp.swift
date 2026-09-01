@@ -222,6 +222,8 @@ struct RootView: View {
         case .desk(let repo):
             if let station = store.station(repo) {
                 DeskThreadView(store: store, station: station)
+            } else if store.showsLocalContext(at: repo) {
+                LocalContextThreadView(store: store, repo: repo)
             } else {
                 Empty(text: "That desk is not in the snapshot any more.")
             }

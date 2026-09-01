@@ -600,6 +600,13 @@ public final class Store {
 
     public func isLoadingContext(at repo: String) -> Bool { contextLoading.contains(repo) }
 
+    /// A checkout the door accepted even though GitHub did not put it in this
+    /// snapshot. It gets Context only; absence from GitHub must never be turned
+    /// into a synthetic desk with issue, PR, or merge controls.
+    public func showsLocalContext(at repo: String) -> Bool {
+        station(repo) == nil && contexts[repo] != nil
+    }
+
     /// Show the Context half of a desk, and read it if it has not been read.
     ///
     /// Cached per desk on purpose: the index is a walk of a checkout, and
@@ -639,15 +646,11 @@ public final class Store {
     /// to: select the desk, flip it to Context, read that file. The path is
     /// still only a request; the door decides whether it is in the index.
     ///
-    /// A repo with no desk on the floor is said out loud rather than drawn as
-    /// an empty pane: the selection lands on it, so the moment a snapshot
-    /// carries the desk it draws, and the toast says why it has not yet.
+    /// A repo with no GitHub desk still opens in the Context-only shell after
+    /// the door accepts its checkout and path.
     public func open(repo: String, path: String) async {
         select(.desk(repo))
         deskTabs[repo] = .context
-        if station(repo) == nil {
-            toast = "\(repo) is not a desk in the office yet; the next snapshot may bring it"
-        }
         await loadContext(repo: repo, path: path)
         if let said = contextErrors[repo] { toast = said }
     }
@@ -659,15 +662,29 @@ public final class Store {
     /// A failure leaves whatever was last read on screen and puts the reason
     /// beside it. A desk the office cannot place is the ordinary case here, and
     /// it must say so rather than draw as a desk with nothing written in it.
-    public func loadContext(repo: String, path: String = "") async {
+    public func loadContext(repo: String, path: String = "",
+                            refreshIndex: Bool = false) async {
         contextLoading.insert(repo)
         defer { contextLoading.remove(repo) }
         do {
-            var got = try await api.context(repo: repo, path: path)
-            if path.isEmpty, let opening = DeskContext.opening(got.files) {
-                // The index already arrived, so a failure to read the first
-                // file costs the document and not the list.
-                got = (try? await api.context(repo: repo, path: opening.path)) ?? got
+            var listing = contexts[repo]
+            let known = listing?.files.contains { $0.path == path } ?? false
+            if refreshIndex || path.isEmpty || listing == nil || !known {
+                listing = try await api.context(repo: repo)
+            }
+            guard var got = listing else { return }
+            var wanted = path
+            if wanted.isEmpty {
+                wanted = DeskContext.opening(got.files)?.path ?? ""
+            } else if refreshIndex && !got.files.contains(where: { $0.path == wanted }) {
+                wanted = DeskContext.opening(got.files)?.path ?? ""
+            }
+            if !wanted.isEmpty {
+                let document = try await api.context(repo: repo, path: wanted)
+                got.path = document.path
+                got.title = document.title
+                got.text = document.text
+                got.bytes = document.bytes
             }
             contexts[repo] = got
             contextErrors[repo] = nil
@@ -676,6 +693,11 @@ public final class Store {
         } catch {
             contextErrors[repo] = error.localizedDescription
         }
+    }
+
+    /// Re-read the folder and keep the open document when it still exists.
+    public func reloadContext(repo: String) async {
+        await loadContext(repo: repo, path: contexts[repo]?.path ?? "", refreshIndex: true)
     }
 
     /// Persist one editor revision. The server checks the opened text before

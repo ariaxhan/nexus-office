@@ -1254,6 +1254,9 @@ function drawDeskContext(desk, body) {
 
   const files = context.files || [];
   const index = deskSection("Markdown", files.length);
+  index.appendChild(button("refresh", "chipout", function () {
+    loadDeskContext(desk.repo, "");
+  }));
   if (context.capped) index.appendChild(el("p", "notice", "this checkout has more Markdown than the Office index can show"));
   if (!files.length) index.appendChild(el("p", "empty", "no Markdown in this checkout"));
   const groups = Object.create(null);
@@ -1292,6 +1295,12 @@ async function loadDeskContext(repo, path) {
     state.contextErrors[repo] = got.body.error || ("the door said " + got.code);
     drawDesk();
     return;
+  }
+  const existing = state.contexts[repo] || null;
+  if (path && existing && (!got.body.files || !got.body.files.length)) {
+    got.body.files = existing.files || [];
+    got.body.root = got.body.root || existing.root || "";
+    got.body.capped = !!existing.capped;
   }
   state.contexts[repo] = got.body;
   if (!path && got.body.files && got.body.files.length) {
