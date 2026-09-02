@@ -651,6 +651,12 @@ def desk_dir(repo: str) -> str:
         return ""
     name = repo.split("/", 1)[1] if "/" in repo else repo
     base = pathlib.Path(root).expanduser()
+    # The vault itself, before anything under it. `_is_checkout_of` still asks
+    # git for the origin, so this reaches no directory the walk below was not
+    # already allowed to reach; it just stops the one directory that holds the
+    # doctrine from being the one directory the office cannot place.
+    if _is_checkout_of(base, repo):
+        return str(base.resolve())
     for vault in ("CodingVault", "CollabVault", ""):
         candidate = (base / vault / name) if vault else (base / name)
         if _is_checkout_of(candidate, repo):
@@ -695,6 +701,19 @@ def _checkouts(base: pathlib.Path) -> dict[str, str]:
     if cached and (time.time() - cached[0]) < WALK_TTL_S:
         return cached[1]
     found: dict[str, str] = {}
+    # The vault root is itself a checkout, and the walk below only ever looks at
+    # the folders UNDER the directory it was given, so it could never see it.
+    # That is the whole reason "the office does not know where ariaxhan/Vaults
+    # is checked out" kept coming back: every previous fix added another name
+    # guess at a call site, and none of them changed the one function that
+    # decides where a desk is. Asked first, so a nested clone of the same repo
+    # cannot outrank the real one.
+    own = origin_nwo(str(base))
+    if own:
+        try:
+            found[own] = str(base.resolve())
+        except (OSError, RuntimeError):
+            pass
     stack: list[tuple[pathlib.Path, int]] = [(base, 0)]
     while stack:
         folder, depth = stack.pop(0)

@@ -497,6 +497,49 @@ class StartTest(FakeHcom):
             self.assertEqual(sessions.say(bad)[0], 400)
 
 
+class VaultRootIsADeskTest(FakeHcom):
+    """The vault is itself a checkout, and the office must be able to place it.
+
+    "the office does not know where ariaxhan/Vaults is checked out" came back
+    over and over because `_checkouts` walks the folders UNDER the directory it
+    is handed and never asks about the directory itself, and every fix before
+    this one added another name guess at a call site instead of changing the one
+    function that decides where a desk is. The vault root holds the doctrine
+    every other desk inherits, so it is the single most likely thing to be asked
+    for by name.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.root = self.dir / "vault"
+        (self.root / ".git").mkdir(parents=True)
+        sessions._origin_cache[str(self.root)] = "acme/vault"
+        self.was_root = os.environ.get("OFFICE_RUNTIME_ROOT", "")
+        os.environ["OFFICE_RUNTIME_ROOT"] = str(self.root)
+        self.addCleanup(lambda: os.environ.__setitem__("OFFICE_RUNTIME_ROOT",
+                                                       self.was_root))
+        sessions._checkout_cache.clear()
+        self.addCleanup(sessions._checkout_cache.clear)
+
+    def test_the_vault_root_is_a_checkout_the_walk_can_see(self):
+        found = sessions._checkouts(self.root)
+        self.assertEqual(found.get("acme/vault"), str(self.root.resolve()))
+
+    def test_desk_dir_places_the_vault_root(self):
+        self.assertEqual(sessions.desk_dir("acme/vault"), str(self.root.resolve()))
+
+    def test_the_root_still_only_answers_to_its_own_origin(self):
+        """Being the root buys it no exemption: the origin still decides."""
+        self.assertEqual(sessions.desk_dir("acme/something-else"), "")
+
+    def test_a_checkout_under_the_root_still_wins_its_own_name(self):
+        inner = self.root / "CodingVault" / "docs"
+        (inner / ".git").mkdir(parents=True)
+        sessions._origin_cache[str(inner)] = "acme/docs"
+        sessions._checkout_cache.clear()
+        self.assertEqual(sessions.desk_dir("acme/docs"), str(inner.resolve()))
+
+
 class ReadmeTest(FakeHcom):
     """A desk's front page, read off this machine.
 

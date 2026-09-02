@@ -96,20 +96,7 @@ def desks() -> dict[str, str]:
     root = _root()
     if not root:
         return {}
-    base = pathlib.Path(root).expanduser()
-    found = dict(sessions._checkouts(base))
-    # The vault root is itself a checkout, and `_checkouts` only ever looks at
-    # the folders UNDER the directory it is given. Leaving it out means the one
-    # tree holding the doctrine every desk inherits is the one tree this search
-    # cannot see, which is the opposite of what a person expects when they type
-    # the name of a rule.
-    own = sessions.origin_nwo(str(base))
-    if own and own not in found:
-        try:
-            found[own] = str(base.resolve())
-        except (OSError, RuntimeError):
-            pass
-    return found
+    return dict(sessions._checkouts(pathlib.Path(root).expanduser()))
 
 
 def _files(repo: str, root: str) -> list[dict]:
