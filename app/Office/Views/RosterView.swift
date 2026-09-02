@@ -82,12 +82,17 @@ struct RosterView: View {
         }
         // A range rather than one number, because the roster is a column of
         // other people's repo names and the right width for them is not a
-        // decision this file gets to make once. `HSplitView` starts it at the
-        // width it has always had and lets the divider move it from there;
+        // decision this file gets to make once. The divider still moves it;
         // `minimal` has no divider to drag, so it takes the whole window.
+        //
+        // The ceiling is the number that actually decides where it opens.
+        // `HSplitView` hands a flexible child its MAXIMUM and lets the detail
+        // pane take what is left, so `idealWidth` was never what a person saw:
+        // the roster opened at 560 for as long as the ceiling said 560, and
+        // halving the ideal alone changed nothing on screen.
         .frame(minWidth: 140,
                idealWidth: Theme.rosterWidth,
-               maxWidth: store.layout == .minimal ? .infinity : 560,
+               maxWidth: store.layout == .minimal ? .infinity : Theme.rosterWidth,
                maxHeight: .infinity)
         .background(Theme.roster)
     }
