@@ -57,6 +57,7 @@ import chat  # noqa: E402
 import context  # noqa: E402
 import live  # noqa: E402
 import runtime as rt  # noqa: E402
+import search  # noqa: E402
 import sessions  # noqa: E402
 import webhook  # noqa: E402
 
@@ -620,6 +621,13 @@ class Handler(BaseHTTPRequestHandler):
                 name = (urllib.parse.parse_qs(query).get("name") or [""])[0]
                 code, body = sessions.screen(name)
                 return self._json(body, code)
+            if path == "/api/search":
+                # One box over every desk: names, folders, whole paths, and the
+                # words inside. It can see exactly what `/api/context` can see
+                # and nothing else, so it shortens a walk a person could already
+                # have taken rather than opening a new door.
+                q = urllib.parse.parse_qs(query)
+                return self._json(search.run((q.get("q") or [""])[0]))
             if path == "/api/health":
                 return self._json({"ok": True, "snapshot_at": self.world.at,
                                    "server_time": now_iso()})
