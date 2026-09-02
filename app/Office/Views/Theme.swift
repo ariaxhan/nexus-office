@@ -38,11 +38,12 @@ enum Theme {
     static let green = Palette.green.color
     static let blue = Palette.blue.color
 
-    /// How wide the roster opens. Half what it was: the column is a list of
-    /// names, and 296 points of it was mostly whitespace to the right of them
-    /// while the desk beside it did the reading. The divider still moves, and
-    /// `HSplitView` remembers where a person put it.
-    static let rosterWidth: CGFloat = 152
+    /// How wide the roster opens, and, because `HSplitView` hands a flexible
+    /// child its MAXIMUM rather than its ideal, also how wide it stays until
+    /// somebody drags the divider. It opened at 560 for as long as the ceiling
+    /// said 560; 152 was too narrow to read a repo name in. This is the middle,
+    /// measured on screen rather than argued about in a comment.
+    static let rosterWidth: CGFloat = 240
 
     /// A fact's colour, from the tone its source put on it.
     ///
