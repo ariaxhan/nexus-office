@@ -289,6 +289,26 @@ struct DeskContextView: View {
 
     private var context: DeskContext? { store.context(at: repo) }
 
+    /// The one switch between the page and its source. Two words rather than a
+    /// pencil: an icon that toggles an editor is an icon people press to find
+    /// out what it does.
+    private var readOrEdit: some View {
+        let editing = store.isEditingContext(at: repo)
+        return Button {
+            store.setEditingContext(!editing, at: repo)
+        } label: {
+            Text(editing ? "Done" : "Edit")
+                .officeFont(size: 11, weight: .medium)
+                .foregroundStyle(editing ? Theme.text : Theme.faint)
+                .padding(.horizontal, 9)
+                .frame(height: 22)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Theme.raised))
+        }
+        .buttonStyle(.plain)
+        .help(editing ? "Back to the page" : "Edit the Markdown source")
+    }
+
     var body: some View {
         HSplitView {
             index
@@ -485,18 +505,33 @@ struct DeskContextView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let context, !context.path.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(context.title)
-                            .officeFont(size: 13, weight: .medium)
-                            .foregroundStyle(Theme.text)
-                        Text(context.path)
-                            .officeFont(size: 10.5, design: .monospaced)
-                            .foregroundStyle(Theme.faint)
-                            .textSelection(.enabled)
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(context.title)
+                                .officeFont(size: 13, weight: .medium)
+                                .foregroundStyle(Theme.text)
+                            Text(context.path)
+                                .officeFont(size: 10.5, design: .monospaced)
+                                .foregroundStyle(Theme.faint)
+                                .textSelection(.enabled)
+                        }
+                        Spacer(minLength: 12)
+                        readOrEdit
                     }
-                    MarkdownEditor(store: store, repo: repo, path: context.path,
-                                   source: context.text)
-                        .id("\(repo):\(context.path)")
+                    // A document is a page first. The source is a click away
+                    // and never the thing a person lands on: this pane spent
+                    // its whole life showing raw Markdown, which meant every
+                    // heading, table and list in the vault was drawn as its own
+                    // punctuation.
+                    if store.isEditingContext(at: repo) {
+                        MarkdownEditor(store: store, repo: repo, path: context.path,
+                                       source: context.text)
+                            .id("\(repo):\(context.path)")
+                    } else {
+                        MarkdownText(raw: context.text, size: 13)
+                            .frame(maxWidth: 760, alignment: .leading)
+                            .id("read:\(repo):\(context.path)")
+                    }
                 } else if store.isLoadingContext(at: repo) {
                     Text("reading the checkout")
                         .officeFont(size: 12)

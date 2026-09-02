@@ -1578,3 +1578,130 @@ public struct FeedResponse: Decodable {
         }
     }
 }
+
+// MARK: - one search box over every desk
+
+/// One document the search found, and why it is in the answer.
+///
+/// `kind` is the whole ranking a person needs to see. A `goto` is the file they
+/// named outright, a `name` matched the filename or one of its folders, and a
+/// `text` matched the words inside and carries the line it matched on. Drawing
+/// them in one undifferentiated list is what makes a search feel like a guess.
+public struct SearchHit: Decodable, Hashable, Identifiable {
+    public enum Kind: String, Decodable, Hashable {
+        case goto, name, text
+
+        /// The word beside the group of results. Lower case, like every other
+        /// header on this roster.
+        public var header: String {
+            switch self {
+            case .goto: return "that file"
+            case .name: return "files"
+            case .text: return "mentions"
+            }
+        }
+    }
+
+    public var kind: Kind
+    public var repo: String
+    /// Relative to the checkout, and the only thing that may be asked for back.
+    public var path: String
+    public var name: String
+    public var group: String
+    public var mtime: Int
+    /// 1-based, and zero for anything but a text hit.
+    public var line: Int
+    /// The matched line, trimmed around the match. Empty for a name hit.
+    public var snippet: String
+
+    public var id: String { "\(kind.rawValue):\(repo):\(path)" }
+
+    /// Where this file lives, said the way a person would say it: the desk, and
+    /// the folder inside it when it is not at the top.
+    public var place: String {
+        group.isEmpty || group == "root" ? repo : "\(repo) · \(group)"
+    }
+
+    public init(kind: Kind = .name, repo: String = "", path: String = "",
+                name: String = "", group: String = "", mtime: Int = 0,
+                line: Int = 0, snippet: String = "") {
+        self.kind = kind
+        self.repo = repo
+        self.path = path
+        self.name = name
+        self.group = group
+        self.mtime = mtime
+        self.line = line
+        self.snippet = snippet
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind, repo, path, name, group, mtime, line, snippet
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = Kind(rawValue: c.str(.kind) ?? "") ?? .name
+        repo = c.str(.repo) ?? ""
+        path = c.str(.path) ?? ""
+        name = c.str(.name) ?? ""
+        group = c.str(.group) ?? ""
+        mtime = max(0, c.int(.mtime) ?? 0)
+        line = max(0, c.int(.line) ?? 0)
+        snippet = c.str(.snippet) ?? ""
+    }
+}
+
+/// What the search said, including when it said nothing.
+///
+/// `said` carries the door's own sentence: no vault to look in, a query too
+/// short to be a search, or a scan that ran out of time before it had read
+/// everything. A search that stopped early and does not say so is the same
+/// false-green as a desk that blanks instead of admitting a failed fetch.
+public struct SearchAnswer: Decodable, Hashable {
+    public var q: String
+    public var results: [SearchHit]
+    /// How many documents were searchable at all. Shown so an empty answer
+    /// reads as "nothing matched" rather than "nothing was looked at".
+    public var files: Int
+    public var desks: Int
+    public var ms: Int
+    public var truncated: Bool
+    public var said: String
+
+    public init(q: String = "", results: [SearchHit] = [], files: Int = 0,
+                desks: Int = 0, ms: Int = 0, truncated: Bool = false,
+                said: String = "") {
+        self.q = q
+        self.results = results
+        self.files = files
+        self.desks = desks
+        self.ms = ms
+        self.truncated = truncated
+        self.said = said
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case q, results, files, desks, ms, truncated, said
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        q = c.str(.q) ?? ""
+        results = c.list(.results, SearchHit.self)
+        files = max(0, c.int(.files) ?? 0)
+        desks = max(0, c.int(.desks) ?? 0)
+        ms = max(0, c.int(.ms) ?? 0)
+        truncated = c.bool(.truncated) ?? false
+        said = c.str(.said) ?? ""
+    }
+
+    /// The results in the order they are drawn, grouped by why they matched.
+    /// Empty groups never appear, so a header is always followed by a row.
+    public var groups: [(kind: SearchHit.Kind, hits: [SearchHit])] {
+        [SearchHit.Kind.goto, .name, .text].compactMap { kind in
+            let hits = results.filter { $0.kind == kind }
+            return hits.isEmpty ? nil : (kind, hits)
+        }
+    }
+}

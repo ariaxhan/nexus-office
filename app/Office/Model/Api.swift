@@ -207,6 +207,17 @@ public final class Api {
         return try await get(query, as: DeskContext.self)
     }
 
+    /// One search box over every desk: names, folders, whole paths, and the
+    /// words inside every document the Context pane could already have shown.
+    ///
+    /// The door decides what matches and in what order. Nothing here re-ranks
+    /// an answer: two rankings for one search is two searches.
+    public func search(_ q: String) async throws -> SearchAnswer {
+        if let demo { return demo.search(q) }
+        let escaped = q.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        return try await get("/api/search?q=\(escaped)", as: SearchAnswer.self)
+    }
+
     /// Save the exact document the editor opened. `expected` makes an external
     /// change a 409 instead of letting a delayed autosave overwrite it.
     public func saveContext(repo: String, path: String, text: String,
@@ -689,6 +700,51 @@ private final class DemoFloor {
                                   detail: "\(repo) is not checked out on this machine")
             }
             return DeskReadme(repo: repo, state: "ok", name: "README.md", text: text)
+        }
+    }
+
+    /// The same search, over the fixture instead of the disk.
+    ///
+    /// Written here rather than baked into the fixture as a canned answer: a
+    /// canned answer is a picture of a search that cannot be wrong, and the
+    /// point of photographing this pane is to catch it being wrong. Same three
+    /// kinds, same order, same rule that a filename beats a mention.
+    func search(_ q: String) -> SearchAnswer {
+        let query = q.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard query.count >= 2 else { return SearchAnswer(q: query) }
+        let needle = query.lowercased()
+        return lock.withLock {
+            var goto: [SearchHit] = []
+            var named: [SearchHit] = []
+            var text: [SearchHit] = []
+            var total = 0
+            for (repo, desk) in fixture.context.sorted(by: { $0.key < $1.key }) {
+                for file in desk.files {
+                    total += 1
+                    let path = file.path.lowercased()
+                    let hit = SearchHit(kind: .name, repo: repo, path: file.path,
+                                        name: file.name, group: file.group,
+                                        mtime: file.mtime)
+                    if path == needle || "\(repo.lowercased()):\(path)" == needle {
+                        goto.append(SearchHit(kind: .goto, repo: repo, path: file.path,
+                                              name: file.name, group: file.group,
+                                              mtime: file.mtime))
+                    } else if path.contains(needle) || repo.lowercased().contains(needle) {
+                        named.append(hit)
+                    } else if let body = desk.texts[file.path],
+                              let found = body.range(of: query, options: .caseInsensitive) {
+                        let line = body[..<found.lowerBound]
+                            .reduce(into: 1) { count, c in if c == "\n" { count += 1 } }
+                        let whole = body[body.lineRange(for: found)]
+                        text.append(SearchHit(kind: .text, repo: repo, path: file.path,
+                                              name: file.name, group: file.group,
+                                              mtime: file.mtime, line: line,
+                                              snippet: whole.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    }
+                }
+            }
+            return SearchAnswer(q: query, results: goto + named + text,
+                                files: total, desks: fixture.context.count, ms: 1)
         }
     }
 

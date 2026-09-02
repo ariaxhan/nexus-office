@@ -217,8 +217,24 @@ enum ShotHarness {
             store.biggerType()
             await frame(store, window, directory, "bigger", settling: 1.4)
             store.resetType()
+
+            // The same document as its source. The pane spent its whole life
+            // showing only this, so a picture of the page without a picture of
+            // the editor cannot show that both halves survived the switch.
+            store.setEditingContext(true, at: desk)
+            await frame(store, window, directory, "source", settling: 1.2)
+            store.setEditingContext(false, at: desk)
             store.showWork(at: desk)
         }
+
+        // One box over every desk. Its own framing because nothing else in the
+        // app draws a result row, and because the failure this catches is
+        // specific: a search that finds nothing looks exactly like a search
+        // that was never asked, and both look like a roster with the desks
+        // filtered out of it.
+        store.select(.home)
+        await frame(store, window, directory, "search", settling: 1.6,
+                    typing: searchWord(store))
 
         // The two things the other framings cannot show at once: the
         // desks a person put away, which live in a section that is shut by
@@ -352,6 +368,22 @@ enum ShotHarness {
     /// A desk the demo floor has an agent sitting at, preferring one that is
     /// waiting on a person: that is the row with the amber pill and the reason
     /// this framing exists.
+    /// A word the fixture actually contains, so the search framing photographs
+    /// results rather than an empty list.
+    ///
+    /// Taken from the demo's own documents rather than written here: a hard
+    /// coded word is one fixture edit away from photographing "nothing matched"
+    /// forever, and the picture would look exactly like a working search.
+    private static func searchWord(_ store: Store) -> String {
+        for station in store.stations {
+            if let file = store.context(at: station.repo)?.files.first,
+               let stem = file.name.split(separator: ".").first, stem.count >= 3 {
+                return String(stem)
+            }
+        }
+        return "readme"
+    }
+
     private static func deskWithASession(_ store: Store) -> Station? {
         let withSessions = store.stations.filter { !store.sessions(at: $0.repo).sessions.isEmpty }
         return withSessions.first { store.sessions(at: $0.repo).blocked > 0 } ?? withSessions.first
@@ -363,10 +395,15 @@ enum ShotHarness {
     /// to be photographed, and a keystroke meant for another app lands in it: a
     /// stray character in the search box silently filtered four desks out of a
     /// framing once, and the picture looked plausible.
+    /// `typing` is the one exception, and it is set AFTER the clear rather than
+    /// instead of it, so a framing that is about the search box still cannot
+    /// inherit a stray keystroke from the one before it.
     private static func frame(_ store: Store, _ window: NSWindow,
                               _ directory: String, _ name: String,
-                              settling seconds: Double = 1.0) async {
+                              settling seconds: Double = 1.0,
+                              typing: String = "") async {
         store.query = ""
+        if !typing.isEmpty { store.query = typing }
         await settle(seconds)
         await shoot(window, into: directory, named: name)
     }

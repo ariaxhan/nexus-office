@@ -131,7 +131,24 @@ public final class Store {
 
     // what the person did
     public var selection: Selection?
-    public var query: String = ""
+    /// The one search box. It filters the three lists the app already holds AND
+    /// asks the door about every document on this machine, because the thing a
+    /// person is usually looking for is a file and the office knew where
+    /// fifteen thousand of them were and would not say.
+    public var query: String = "" {
+        didSet {
+            guard query != oldValue else { return }
+            scheduleSearch()
+        }
+    }
+    /// What the door said about the current query, and whether it is still
+    /// being asked. Kept apart so a slow answer never blanks the last one: the
+    /// rows on screen stay put and go dim rather than disappearing under the
+    /// cursor.
+    public private(set) var found = SearchAnswer()
+    public private(set) var searching = false
+    public private(set) var searchError = ""
+    private var searchTask: Task<Void, Never>?
     public var needsOnly = false {
         didSet { prefs.set(needsOnly: needsOnly) }
     }
@@ -618,6 +635,23 @@ public final class Store {
         Task { await loadContext(repo: repo) }
     }
 
+    /// Whether the Context pane is showing the source rather than the page.
+    ///
+    /// On the store rather than in the view for the same reason the tab is:
+    /// flipping to another desk and back must not silently drop a person into
+    /// the editor, and the shot harness has to be able to photograph both
+    /// halves. Reading is the default, because a document opened as a wall of
+    /// monospace with its own markup in it is a document nobody reads.
+    public private(set) var contextEditing: Set<String> = []
+
+    public func isEditingContext(at repo: String) -> Bool {
+        contextEditing.contains(repo)
+    }
+
+    public func setEditingContext(_ editing: Bool, at repo: String) {
+        if editing { contextEditing.insert(repo) } else { contextEditing.remove(repo) }
+    }
+
     public func showWork(at repo: String) {
         deskTabs[repo] = .work
     }
@@ -710,6 +744,61 @@ public final class Store {
         if contexts[repo]?.path == path { contexts[repo] = got }
         contextErrors[repo] = nil
         return got
+    }
+
+    // MARK: - searching every desk at once
+
+    /// How long a person has to stop typing before the disk is read.
+    ///
+    /// The text half of a search opens every Markdown file on this machine, so
+    /// firing it on each keystroke is fifteen thousand opens per character. A
+    /// beat and a half of stillness is under what a person notices and over
+    /// what a typist produces.
+    static let searchDebounce = Duration.milliseconds(220)
+
+    /// The shortest thing that is a search rather than a list of everything.
+    /// Matches the door, which refuses below the same length.
+    static let searchFloor = 2
+
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard wanted.count >= Store.searchFloor else {
+            found = SearchAnswer()
+            searchError = ""
+            searching = false
+            return
+        }
+        searching = true
+        searchTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: Store.searchDebounce)
+                try Task.checkCancellation()
+                let answer = try await api.search(wanted)
+                try Task.checkCancellation()
+                // An answer to a query nobody is asking any more is not an
+                // answer. Without this the last request to return wins rather
+                // than the last one sent, and a fast empty result overwrites the
+                // slow real one.
+                guard wanted == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+                found = answer
+                searchError = answer.said
+                searching = false
+            } catch is CancellationError {
+                return
+            } catch let error as ApiError {
+                searchError = error.message
+                searching = false
+            } catch {
+                searchError = error.localizedDescription
+                searching = false
+            }
+        }
+    }
+
+    /// Open what the search found: the desk, its Context half, that file.
+    public func open(_ hit: SearchHit) {
+        Task { await open(repo: hit.repo, path: hit.path) }
     }
 
     public func openSessionThread(_ name: String) {

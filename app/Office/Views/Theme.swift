@@ -38,7 +38,11 @@ enum Theme {
     static let green = Palette.green.color
     static let blue = Palette.blue.color
 
-    static let rosterWidth: CGFloat = 296
+    /// How wide the roster opens. Half what it was: the column is a list of
+    /// names, and 296 points of it was mostly whitespace to the right of them
+    /// while the desk beside it did the reading. The divider still moves, and
+    /// `HSplitView` remembers where a person put it.
+    static let rosterWidth: CGFloat = 152
 
     /// A fact's colour, from the tone its source put on it.
     ///

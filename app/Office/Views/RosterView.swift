@@ -57,6 +57,8 @@ struct RosterView: View {
                         notary(store.needsOnly ? "nothing needs you right now" : "no desks yet")
                     }
 
+                    files
+
                     putAway
                 }
                 .padding(.horizontal, 8)
@@ -83,7 +85,7 @@ struct RosterView: View {
         // decision this file gets to make once. `HSplitView` starts it at the
         // width it has always had and lets the divider move it from there;
         // `minimal` has no divider to drag, so it takes the whole window.
-        .frame(minWidth: 220,
+        .frame(minWidth: 140,
                idealWidth: Theme.rosterWidth,
                maxWidth: store.layout == .minimal ? .infinity : 560,
                maxHeight: .infinity)
@@ -535,6 +537,89 @@ struct RosterView: View {
         }
         .buttonStyle(.plain)
         .help("Show only the desks a person has to touch. A raised hand is never hidden by it.")
+    }
+
+    // MARK: - what the search found on this machine
+
+    /// Every document on this machine that matches what is in the box.
+    ///
+    /// Under the desks rather than over them, because the three lists above are
+    /// already filtered by the same word and a person looking for a repo should
+    /// not have to scroll past forty files to see it. Nothing here can hide a
+    /// desk: this is an addition to the roster, never a replacement for it.
+    @ViewBuilder private var files: some View {
+        if !store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ForEach(store.found.groups, id: \.kind) { group in
+                header(group.kind.header, trailing: nil)
+                    .padding(.top, 14)
+                ForEach(group.hits) { hit in
+                    fileRow(hit)
+                }
+            }
+            searchNote
+        }
+    }
+
+    /// The one line under the results, and the only place the search is allowed
+    /// to be quiet about something. A scan that stopped early, a door with no
+    /// vault, and "nothing matched, out of this many" are three different facts
+    /// and none of them may render as an empty list.
+    @ViewBuilder private var searchNote: some View {
+        let typed = store.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed.count < Store.searchFloor {
+            EmptyView()
+        } else if !store.searchError.isEmpty {
+            notary(store.searchError)
+        } else if store.searching && store.found.results.isEmpty {
+            notary("looking\u{2026}")
+        } else if store.found.results.isEmpty {
+            notary(store.found.files > 0
+                   ? "no file on this machine says that (\(store.found.files) read)"
+                   : "no files to search")
+        } else if store.found.truncated {
+            counter("more matched than are shown")
+        }
+    }
+
+    /// One found document. The name, where it lives, and for a mention the line
+    /// it matched on, quoted. Clicking it opens that desk's Context at that
+    /// file, which is the same door the Context pane uses.
+    private func fileRow(_ hit: SearchHit) -> some View {
+        Button {
+            store.open(hit)
+        } label: {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: hit.kind == .goto ? "arrow.right.circle" : "doc.text")
+                    .officeSymbol(size: 11, weight: .medium)
+                    .foregroundStyle(hit.kind == .goto ? Theme.blue : Theme.faint)
+                    .frame(width: 14)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hit.name)
+                        .officeFont(size: 12.5, weight: .medium)
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(hit.place)
+                        .officeFont(size: 10.5)
+                        .foregroundStyle(Theme.faint)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if !hit.snippet.isEmpty {
+                        Text("\(hit.line)  \(hit.snippet)")
+                            .officeFont(size: 10.5, design: .monospaced)
+                            .foregroundStyle(Theme.dim)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(hit.repo) \u{00b7} \(hit.path)")
     }
 
     private func notary(_ text: String) -> some View {

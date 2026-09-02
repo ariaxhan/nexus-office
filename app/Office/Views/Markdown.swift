@@ -73,10 +73,34 @@ enum Markdown {
             /// row has; a short row is padded rather than dropped.
             case table([[AttributedString]])
             case rule
+            /// The `---` block at the top of a vault document. Not Markdown at
+            /// all: CommonMark reads the fence as a horizontal rule and welds
+            /// the keys under it into one paragraph, so every memory, plan and
+            /// commission in this vault opened with a grey line and the word
+            /// "name: something description: something".
+            case meta([(String, String)])
+
+            static func == (a: Kind, b: Kind) -> Bool {
+                switch (a, b) {
+                case (.paragraph, .paragraph), (.quote, .quote), (.rule, .rule):
+                    return true
+                case let (.heading(x), .heading(y)): return x == y
+                case let (.item(x), .item(y)): return x == y
+                case let (.code(x), .code(y)): return x == y
+                case let (.table(x), .table(y)): return x == y
+                case let (.meta(x), .meta(y)):
+                    return x.count == y.count && zip(x, y).allSatisfy { $0 == $1 }
+                default: return false
+                }
+            }
         }
 
         let id: Int
         let kind: Kind
+        /// How deeply this line is nested inside lists and quotes. Zero for
+        /// everything at the top. A nested bullet drawn flat is a document
+        /// whose structure was thrown away in the parse.
+        var depth: Int = 0
         /// The words, with their inline styling. Empty for a code block, whose
         /// text is deliberately not attributed.
         let text: AttributedString
@@ -94,6 +118,53 @@ enum Markdown {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
+        let (meta, body) = frontmatter(trimmed)
+        let head: [Block] = meta.isEmpty
+            ? []
+            : [Block(id: -9_000, kind: .meta(meta), text: AttributedString(), code: "")]
+        return head + parse(body, from: head.count)
+    }
+
+    /// The `---` block at the top, split off before anything parses it.
+    ///
+    /// Returns the pairs and the document without them. Only a fence on the
+    /// very first line counts, and only up to the next one: a `---` used as a
+    /// horizontal rule halfway down a document is a horizontal rule, and
+    /// treating it as a second frontmatter would eat the page.
+    ///
+    /// Deliberately not a YAML parser. It reads `key: value` and stops at
+    /// anything else, because the alternative is a dependency and a whole class
+    /// of failure for a strip of grey text at the top of a page.
+    static func frontmatter(_ raw: String) -> ([(String, String)], String) {
+        let lines = raw.components(separatedBy: "\n")
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else {
+            return ([], raw)
+        }
+        guard let close = lines.dropFirst().firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "---"
+        }) else { return ([], raw) }
+
+        var pairs: [(String, String)] = []
+        for line in lines[1..<close] {
+            let text = line.trimmingCharacters(in: .whitespaces)
+            if text.isEmpty { continue }
+            guard let colon = text.firstIndex(of: ":") else { continue }
+            let key = String(text[text.startIndex..<colon])
+                .trimmingCharacters(in: .whitespaces)
+            let value = String(text[text.index(after: colon)...])
+                .trimmingCharacters(in: .whitespaces)
+            // A key with nothing after it is a nested block (`metadata:`), and
+            // its children are the lines under it. Shown as the key alone
+            // rather than dropped: a person editing this file needs to see that
+            // it is there.
+            pairs.append((key, value))
+        }
+        let body = lines[(close + 1)...].joined(separator: "\n")
+        return (pairs, body.trimmingCharacters(in: .newlines))
+    }
+
+    private static func parse(_ raw: String, from firstID: Int) -> [Block] {
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         let parsed: AttributedString
         do {
             parsed = try AttributedString(
@@ -103,7 +174,7 @@ enum Markdown {
                     interpretedSyntax: .full,
                     failurePolicy: .returnPartiallyParsedIfPossible))
         } catch {
-            return [Block(id: 0, kind: .paragraph,
+            return [Block(id: firstID, kind: .paragraph,
                           text: AttributedString(raw), code: "")]
         }
 
@@ -148,7 +219,7 @@ enum Markdown {
                     // Identified by the table, not by its position in `out`,
                     // so the next cell finds it again; negative so it can never
                     // collide with a positional id.
-                    out.append(Block(id: -cell.table, kind: .table(rows),
+                    out.append(Block(id: -abs(cell.table) - 1, kind: .table(rows),
                                      text: AttributedString(), code: ""))
                 }
                 openIdentity = nil
@@ -156,19 +227,28 @@ enum Markdown {
             }
 
             openIdentity = identity
-            let kind = kind(of: intent)
-            if case .code = kind {
-                out.append(Block(id: out.count, kind: kind, text: AttributedString(),
-                                 code: String(piece.characters)))
+            let read = kind(of: intent)
+            if case .code = read.kind {
+                out.append(Block(id: firstID + out.count, kind: read.kind, depth: read.depth,
+                                 text: AttributedString(), code: String(piece.characters)))
+            } else if case .item(let marker) = read.kind {
+                // `- [ ] thing` is a checklist, and Foundation hands it over as
+                // a bullet whose words begin with the brackets. Drawn raw it is
+                // a plan whose boxes are punctuation.
+                let (box, rest) = checkbox(marker: marker, text: piece)
+                out.append(Block(id: firstID + out.count, kind: .item(box), depth: read.depth,
+                                 text: rest, code: ""))
             } else {
-                out.append(Block(id: out.count, kind: kind, text: piece, code: ""))
+                out.append(Block(id: firstID + out.count, kind: read.kind, depth: read.depth,
+                                 text: piece, code: ""))
             }
         }
 
         // A parse that produced nothing readable still has to say what the bot
         // said, so the raw text is the floor rather than an empty bubble.
         if out.isEmpty {
-            return [Block(id: 0, kind: .paragraph, text: AttributedString(raw), code: "")]
+            return [Block(id: firstID, kind: .paragraph,
+                          text: AttributedString(raw), code: "")]
         }
         return out
     }
@@ -201,31 +281,69 @@ enum Markdown {
     /// listItem, then unorderedList. A code block and a heading are the whole
     /// stack on their own. Anything unrecognised is a paragraph, because a
     /// table nobody drew is still words somebody wrote.
-    private static func kind(of intent: PresentationIntent?) -> Block.Kind {
-        guard let intent else { return .paragraph }
+    private static func kind(of intent: PresentationIntent?) -> (kind: Block.Kind, depth: Int) {
+        guard let intent else { return (.paragraph, 0) }
         var ordinal: Int?
         var quoted = false
+        // How many lists and quotes this line is inside. The stack runs
+        // innermost first and carries every enclosing list, so counting them is
+        // the indent: without it a three-level plan draws as one flat column of
+        // bullets and stops being a plan.
+        var depth = 0
+        var kind: Block.Kind?
         for component in intent.components {
             switch component.kind {
             case .codeBlock(let hint):
-                return .code(hint)
+                if kind == nil { kind = .code(hint) }
             case .header(let level):
-                return .heading(level)
+                if kind == nil { kind = .heading(level) }
             case .listItem(let n):
                 ordinal = n
             case .orderedList:
-                if let n = ordinal { return .item("\(n).") }
+                if kind == nil, let n = ordinal { kind = .item("\(n).") }
+                depth += 1
             case .unorderedList:
-                return .item("\u{00b7}")
+                if kind == nil { kind = .item(bullet(at: depth)) }
+                depth += 1
             case .blockQuote:
                 quoted = true
+                depth += 1
             case .thematicBreak:
-                return .rule
+                if kind == nil { kind = .rule }
             default:
                 continue
             }
         }
-        return quoted ? .quote : .paragraph
+        let resolved = kind ?? (quoted ? .quote : .paragraph)
+        return (resolved, max(0, depth - 1))
+    }
+
+    /// A different mark at each level, the way a printed list does it, so two
+    /// nested levels are told apart by more than how far in they start.
+    private static func bullet(at depth: Int) -> String {
+        switch depth {
+        case 0: return "\u{00b7}"
+        case 1: return "\u{2013}"
+        default: return "\u{2022}"
+        }
+    }
+
+    /// `- [ ] thing` and `- [x] thing`, split into a box and the words.
+    ///
+    /// Returns the original marker and text untouched for an ordinary bullet,
+    /// so nothing that is not a checklist is changed by this.
+    private static func checkbox(marker: String,
+                                 text: AttributedString) -> (String, AttributedString) {
+        let plain = String(text.characters)
+        let head = plain.prefix(4).lowercased()
+        guard head.hasPrefix("[ ] ") || head.hasPrefix("[x] ") else {
+            return (marker, text)
+        }
+        var rest = text
+        if let cut = rest.index(rest.startIndex, offsetByCharacters: 4) as AttributedString.Index? {
+            rest.removeSubrange(rest.startIndex..<cut)
+        }
+        return (head.hasPrefix("[x] ") ? "\u{2611}" : "\u{2610}", rest)
     }
 }
 
@@ -272,17 +390,21 @@ struct MarkdownText: View {
     @ViewBuilder private func draw(_ block: Markdown.Block) -> some View {
         switch block.kind {
         case .paragraph:
-            Text(block.text)
+            Text(inline(block.text, size: base))
                 .officeFont(size: base)
                 .foregroundStyle(color)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, CGFloat(min(block.depth, 4)) * 16)
 
         case .heading(let level):
-            Text(block.text)
-                .officeFont(size: base + (level <= 1 ? 2 : 1), weight: .semibold)
+            // A real ramp. Six levels all drawn within one point of the body
+            // text is a document with no hierarchy in it, which is the same
+            // document as one with no headings.
+            Text(inline(block.text, size: headingSize(level)))
+                .officeFont(size: headingSize(level), weight: level <= 2 ? .bold : .semibold)
                 .foregroundStyle(color)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 2)
+                .padding(.top, level <= 2 ? 8 : 4)
 
         case .item(let marker):
             HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -293,11 +415,12 @@ struct MarkdownText: View {
                     // sentences line up down one edge rather than each one
                     // starting wherever its bullet happened to end.
                     .frame(minWidth: 12, alignment: .trailing)
-                Text(block.text)
+                Text(inline(block.text, size: base))
                     .officeFont(size: base)
                     .foregroundStyle(color)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(.leading, CGFloat(min(block.depth, 4)) * 16)
 
         case .code:
             // Sideways rather than wrapped. A wrapped line of code is a line
@@ -353,11 +476,63 @@ struct MarkdownText: View {
                 Rectangle()
                     .fill(Theme.hairline)
                     .frame(width: 2)
-                Text(block.text)
+                Text(inline(block.text, size: base))
                     .officeFont(size: base)
                     .foregroundStyle(Theme.dim)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(.leading, CGFloat(min(block.depth, 4)) * 16)
+
+        case .meta(let rows):
+            // The document's own frontmatter, as a strip rather than as prose.
+            // Two columns, keys dim, values readable: it is a label on a file,
+            // not the first paragraph of it.
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(rows.indices, id: \.self) { i in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(rows[i].0)
+                            .officeFont(size: base - 2, weight: .medium, design: .monospaced)
+                            .foregroundStyle(Theme.faint)
+                            .frame(minWidth: 76, alignment: .leading)
+                        Text(rows[i].1)
+                            .officeFont(size: base - 1.5)
+                            .foregroundStyle(Theme.dim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.well)
+            )
         }
+    }
+
+    /// How big a heading of this level is drawn.
+    private func headingSize(_ level: Int) -> Double {
+        switch max(1, level) {
+        case 1: return base + 8
+        case 2: return base + 5
+        case 3: return base + 3
+        case 4: return base + 1.5
+        default: return base
+        }
+    }
+
+    /// The inline styling `Text` will not apply on its own.
+    ///
+    /// A backticked word carries `inlinePresentationIntent .code` and nothing
+    /// else: no font, no colour. `Text` honours bold and italic from the same
+    /// attribute and draws code as ordinary prose, so every command, path and
+    /// symbol in a document read as a sentence. The font is set here rather
+    /// than in the parse because only the view knows what size it is drawing at.
+    private func inline(_ text: AttributedString, size: Double) -> AttributedString {
+        var out = text
+        for run in out.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            out[run.range].font = .system(size: size - 0.5, design: .monospaced)
+            out[run.range].foregroundColor = Theme.amber
+        }
+        return out
     }
 }
