@@ -137,8 +137,13 @@ flight's completion: a dead or hanging radio cannot keep a flight alive, cannot 
 recording its outcome or releasing its leases, and cannot block the next flight. Stopping a flight
 is a tower operation, never a message or a hook. Until tower provides that, every hcom hook is
 capped at 15 seconds and fails open (done 2026-09-03: both Claude silos, both Codex hook files,
-`HCOM_TIMEOUT` 86400 to 15); hcom's stop and lifecycle hooks are removed the moment tower replaces
-them. No watchdog is ever added around hcom.
+`HCOM_TIMEOUT` 86400 to 15, and every registered instance's `wait_timeout` row reset, since the
+toml value never touched existing rows); hcom's stop and lifecycle hooks are removed the moment
+tower replaces them, which is step 5 (interactive Claude and Codex become aircraft with tower
+owning their presence and stop). No watchdog is ever added around hcom. In the engine the seam is
+`nexus/radio.py`: a flight's outbound radio is one bounded, killed-on-timeout call made only after
+`result.json` is on disk; `tests/crash_tower/test_radio_hang.py` proves a radio that never answers
+changes nothing about the flight's lifecycle.
 
 **Radio.** `send(task, to, body)` durable before ack. A message belongs to the task's conversation;
 delivery targets whichever flight currently holds the task, so Codex can die, Claude can replace it,

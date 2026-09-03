@@ -14,6 +14,8 @@ import signal
 import subprocess
 import time
 
+from . import radio
+
 RESULT_NAME = "result.json"
 LOG_NAME = "log"
 
@@ -109,6 +111,9 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None) -
         "cost": {"wall_s": round(time.time() - started, 3)},
     }
     write_result(workspace, result)
+    # The result is on disk before the radio is touched: a hung radio can delay
+    # this process by at most radio.timeout_s(), and cannot change what tower reads.
+    radio.notify("flight.exiting", {"workspace": workspace, "ok": result["ok"]})
     return result
 
 

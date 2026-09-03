@@ -6,10 +6,12 @@ merged (`6ef2991`): ledger schema v1, tower tick, script flights, crash_tower v0
 
 ## Do, in order (risk class in brackets)
 
-0. [cheap, reversible] crash_tower case: radio (a stub that blocks forever on every call) hung
-   while a flight exits; assert the flight terminates, records its result, releases leases, and a
-   second flight runs. Principle: communications may fail; lifecycle must continue. Then, as
-   tower takes over presence and stop, remove the hcom Stop/SubagentStop/SessionEnd hooks.
+0. DONE 2026-09-03: `nexus/radio.py` + `tests/crash_tower/test_radio_hang.py` (bound removed on
+   purpose: the test fails with "runner process outlived its result"; restored: passes).
+   Remaining half: remove the hcom Stop/SubagentStop/SessionEnd hooks. Gated on step 5, because
+   today those hooks are the only thing delivering hcom messages to an idle interactive session;
+   pulling them before tower owns presence for Claude/Codex sessions breaks the real-work lane's
+   radio without giving it lifecycle. Until then: 15 s cap, fail open, no watchdog.
 
 1. [expensive, reversible] Step 3, landing for script flights: hangar clone, spool to branch, push,
    `verified → applying → applied` reconcile against GitHub. Prove on one real airline first: the
