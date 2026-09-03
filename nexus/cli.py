@@ -138,6 +138,25 @@ def cmd_flight_run(args):
     return 0 if result["ok"] else 1
 
 
+def cmd_log(args):
+    """The kept log of a flight, failed or still running."""
+    led = _ledger(args)
+    flight = led.flight(args.flight)
+    if flight is None:
+        print(f"no such flight: {args.flight}", file=sys.stderr)
+        return 1
+    candidates = [os.path.join(tower.logs_root(led), f"{args.flight}.log")]
+    if flight["workspace"]:
+        candidates.insert(0, os.path.join(flight["workspace"], fl.LOG_NAME))
+    for path in candidates:
+        if os.path.exists(path):
+            with open(path) as handle:
+                sys.stdout.write(handle.read())
+            return 0
+    print(f"no log kept for {args.flight}", file=sys.stderr)
+    return 1
+
+
 def cmd_install(args):
     """Write the plist and load it. launchd only keeps tower alive; it decides nothing."""
     target_dir = os.path.expanduser("~/Library/LaunchAgents")
@@ -186,6 +205,10 @@ def build_parser():
     kill_p = subs.add_parser("kill", help="cancel a flight and its process")
     kill_p.add_argument("flight")
     kill_p.set_defaults(func=cmd_kill)
+
+    log_p = subs.add_parser("log", help="a flight's log, kept after failure")
+    log_p.add_argument("flight")
+    log_p.set_defaults(func=cmd_log)
 
     retry_p = subs.add_parser("retry", help="another attempt at the same task")
     retry_p.add_argument("flight")

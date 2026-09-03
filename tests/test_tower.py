@@ -288,3 +288,16 @@ class EscapeHatch(TowerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KeptLogs(TowerCase):
+    def test_a_failed_flight_keeps_its_log_after_the_workspace_goes(self):
+        self.plan(cmd="echo why-it-broke; exit 3", outputs=[], budget={"max_retries": 0})
+        self.settle()
+        failed = self.led.flights(states=("failed",))
+        self.assertTrue(failed)
+        kept = os.path.join(tower.logs_root(self.led), f"{failed[0]['id']}.log")
+        self.assertTrue(os.path.exists(kept), "log not kept")
+        with open(kept) as f:
+            self.assertIn("why-it-broke", f.read())
+        self.assertFalse(os.path.isdir(failed[0]["workspace"]))

@@ -204,12 +204,28 @@ def _reconcile_vanished(ledger, now, root):
 
 
 def _finish_failed(ledger, flight, now):
-    """A failed flight leaves nothing behind: its process, its leases, its workspace."""
+    """A failed flight leaves nothing behind but its log: process, leases, workspace go."""
     fl.kill(flight["pid"])
     ledger.release_leases(flight["id"], now=now)
     workspace = flight["workspace"]
     if workspace and os.path.isdir(workspace):
+        _keep_log(ledger, flight["id"], workspace)
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+def logs_root(ledger):
+    return os.path.join(os.path.dirname(os.path.abspath(ledger.path)), "logs")
+
+
+def _keep_log(ledger, flight_id, workspace):
+    """The log is the only thing a person can read after a failure. Keep it."""
+    src = os.path.join(workspace, fl.LOG_NAME)
+    if not os.path.exists(src):
+        return
+    root = logs_root(ledger)
+    os.makedirs(root, exist_ok=True)
+    with contextlib.suppress(OSError):
+        shutil.copyfile(src, os.path.join(root, f"{flight_id}.log"))
 
 
 def _sweep_workspaces(ledger):
@@ -221,6 +237,8 @@ def _sweep_workspaces(ledger):
     for flight in ledger.flights(states=("failed", "cancelled", "landed"), limit=200):
         workspace = flight["workspace"]
         if workspace and os.path.isdir(workspace):
+            if flight["state"] != "landed":
+                _keep_log(ledger, flight["id"], workspace)
             shutil.rmtree(workspace, ignore_errors=True)
 
 
