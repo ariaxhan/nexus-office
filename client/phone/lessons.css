@@ -19,7 +19,7 @@ button:hover { border-color:var(--dim); } button:focus-visible,a:focus-visible {
 .lesson.newer { border-left-color:var(--amber); }
 .identity { min-width:0; } .identity strong,.identity span { display:block; overflow-wrap:anywhere; } .identity span,.label,.meta { color:var(--dim); }
 .surface { min-width:0; } .surface h2 { font-size:12px; text-transform:uppercase; margin:0 0 8px; color:var(--dim); }
-.surface p { margin:4px 0; overflow-wrap:anywhere; } .problems { color:var(--red); grid-column:2/-1; margin:0; padding-left:18px; }
+.surface p { margin:4px 0; overflow-wrap:anywhere; word-break:break-word; } .problems { color:var(--red); grid-column:2/-1; margin:0; padding-left:18px; }
 .empty { color:var(--dim); padding:48px 0; }
 .coverage-note { margin:0 0 16px; color:var(--dim); } .coverage-note strong { color:var(--text); font-size:18px; }
 .coverage-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:1px; border:1px solid var(--line); background:var(--line); border-radius:10px; overflow:hidden; }
@@ -28,5 +28,5 @@ button:hover { border-color:var(--dim); } button:focus-visible,a:focus-visible {
 #all-lessons { margin-top:20px; }
 [hidden] { display:none !important; }
 @media (max-width:800px) { .coverage-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:700px) { header,header div { flex-wrap:wrap; } header div { gap:4px; } header p { width:100%; margin:0; } .lesson { grid-template-columns:1fr; } .problems { grid-column:1; } .section-heading { align-items:flex-start; } }
-@media (max-width:440px) { .coverage-grid { grid-template-columns:1fr; } .section-heading { display:block; } .section-heading button { width:100%; margin-top:12px; } }
+@media (max-width:700px) { header,header div { flex-wrap:wrap; } header div { gap:4px; } header p { width:100%; margin:0; } .lesson { grid-template-columns:1fr; } .problems { grid-column:1; } .section-heading { display:block; } .section-heading button { width:100%; margin-top:12px; } }
+@media (max-width:440px) { .coverage-grid { grid-template-columns:1fr; } }
