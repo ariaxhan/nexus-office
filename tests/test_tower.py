@@ -134,6 +134,26 @@ class Acceptance(TowerCase):
         tower.accept_tasks(self.led)
         self.assertEqual("rejected_policy", self.led.task(task)["state"])
 
+    def test_a_plan_cannot_widen_its_objective_boundary(self):
+        objective = self.led.add_objective("careful", "nothing without a person",
+                                           autonomy_policy={"may_accept": False})
+        plan = self.led.add_plan("bold", schedule={"every": 60}, inputs={"cmd": "true"},
+                                 objective_id=objective,
+                                 resolution_policy={"may_accept": True})
+        task = self.led.add_task("a", origin="plan", plan_id=plan)
+        tower.accept_tasks(self.led)
+        self.assertEqual("rejected_policy", self.led.task(task)["state"])
+
+    def test_a_plan_may_narrow_its_objective_boundary(self):
+        objective = self.led.add_objective("open", "go ahead",
+                                           autonomy_policy={"may_accept": True,
+                                                            "may_spend_up_to": 10})
+        plan = self.led.add_plan("thrifty", schedule={"every": 60}, inputs={"cmd": "true"},
+                                 objective_id=objective,
+                                 resolution_policy={"may_spend_up_to": 2})
+        policy = tower.effective_policy(self.led, self.led.plan(plan))
+        self.assertEqual({"may_accept": True, "may_spend_up_to": 2}, policy)
+
     def test_an_accepted_task_with_no_flight_gets_one_after_a_crash(self):
         plan = self.plan()
         task = self.led.add_task("a", origin="plan", plan_id=plan, state="accepted")

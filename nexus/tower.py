@@ -52,6 +52,26 @@ def _budget(plan):
     )
 
 
+def effective_policy(ledger, plan):
+    """The objective's boundary, narrowed by the plan. Never widened by it.
+
+    A plan that says `may_accept: true` under an objective that says false stays
+    false: authority comes from above, never from the thing asking for it.
+    """
+    objective = ledger.objective(plan["objective_id"]) if plan["objective_id"] else None
+    policy = dict((loads(objective["autonomy_policy"], {}) if objective else {}) or {})
+    asked = (loads(plan["resolution_policy"], {}) or {})
+    for key, value in asked.items():
+        if key not in policy:
+            policy[key] = value
+        elif isinstance(value, bool) and isinstance(policy[key], bool):
+            policy[key] = policy[key] and value
+        elif isinstance(value, (int, float)) and isinstance(policy[key], (int, float)):
+            policy[key] = min(policy[key], value)
+        # anything else: the objective's word stands
+    return policy
+
+
 def is_paused(ledger: Ledger) -> bool:
     row = ledger.last_event(("tower.paused", "tower.resumed"))
     return bool(row) and row["kind"] == "tower.paused"
@@ -330,7 +350,7 @@ def accept_tasks(ledger, now=None):
     accepted = rejected = 0
     for task in ledger.tasks(states=("candidate", "ranked")):
         plan = ledger.plan(task["plan_id"]) if task["plan_id"] else None
-        policy = (loads(plan["resolution_policy"], {}) if plan else {}) or {}
+        policy = effective_policy(ledger, plan) if plan else {}
         if plan is None or not plan["enabled"] or plan["quarantined_at"] is not None \
                 or policy.get("may_accept", True) is False:
             if ledger.set_task_state(task["id"], "rejected_policy", decided_by="tower policy",

@@ -171,12 +171,12 @@ nexus is doing (flights), nexus fixed (landings), nexus needs you (gates).
 
 Status, step 1: BUILT. `nexus/ledger.py` schema v1 (all eleven tables), WAL, `user_version`
 migrations with a `.bak-<version>` copy, append-only triggers, `integrity_check()`.
-`tests/test_ledger.py`, 31 tests.
+`objectives.autonomy_policy` is inherited and only ever narrowed by a plan. `tests/test_ledger.py`, 31 tests.
 
 Status, step 2: BUILT for script flights. `nexus/tower.py` tick (leases, budgets, quarantine,
 task acceptance, detached launch, narrow reconcile), `nexus/flights.py` runner,
 `python3 -m nexus` escape hatch, `nexus/launchd/com.nexus.tower.plist`. `tests/test_tower.py`
-23 tests, `tests/crash_tower/test_crash_v0.py` green three runs in a row. The resolution ladder
+25 tests, `tests/crash_tower/test_crash_v0.py` green three runs in a row. The resolution ladder
 is a skeleton: retry and quarantine are wired, resolver and reviewer flights are step 5.
 
 Effort in agent wall-clock: 1 to 3 about 14 hours, 4 about 6, 5 about 12, 6 about 10, 7 about 8.

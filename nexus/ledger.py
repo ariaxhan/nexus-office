@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS objectives (
   statement TEXT NOT NULL,
   owner TEXT,
   active INTEGER NOT NULL DEFAULT 1,
+  autonomy_policy TEXT NOT NULL DEFAULT '{}',
   created_at REAL NOT NULL
 );
 
@@ -347,15 +348,23 @@ class Ledger:
 
     # ---- objectives ------------------------------------------------------
 
-    def add_objective(self, name, statement, owner=None, now=None):
+    def add_objective(self, name, statement, owner=None, autonomy_policy=None, now=None):
+        """The boundary lives here. A plan may narrow it and may never widen it."""
         now = now if now is not None else time.time()
         oid = new_id("obj")
         with self.tx():
             self.conn.execute(
-                "INSERT INTO objectives (id,name,statement,owner,active,created_at)"
-                " VALUES (?,?,?,?,1,?)", (oid, name, statement, owner, now))
+                "INSERT INTO objectives (id,name,statement,owner,active,autonomy_policy,"
+                "created_at) VALUES (?,?,?,?,1,?,?)",
+                (oid, name, statement, owner, _j(autonomy_policy or {}), now))
             self._event("objective.added", oid, {"name": name}, "tower", now)
         return oid
+
+    def objective(self, objective_id):
+        if not objective_id:
+            return None
+        return self.conn.execute("SELECT * FROM objectives WHERE id=?",
+                                 (objective_id,)).fetchone()
 
     def objectives(self, active_only=True):
         sql = "SELECT * FROM objectives"
