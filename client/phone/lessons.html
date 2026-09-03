@@ -8,8 +8,18 @@
 <link rel="stylesheet" href="/lessons.css">
 </head>
 <body>
-<header><a href="/">Office</a><h1>Lesson previews</h1><p id="summary">opening</p></header>
-<main id="lessons"></main>
+<header><a href="/">Office</a><div><h1>Lesson previews</h1><p id="summary" aria-live="polite">opening</p></div></header>
+<main>
+  <section class="preview-section" aria-labelledby="preview-heading">
+    <div class="section-heading"><div><p class="eyebrow">Ready to review</p><h2 id="preview-heading">Verified previews</h2></div><p id="preview-count" class="count"></p></div>
+    <div id="previews"></div>
+  </section>
+  <section class="coverage-section" aria-labelledby="coverage-heading">
+    <div class="section-heading"><div><p class="eyebrow">Inventory</p><h2 id="coverage-heading">Preview coverage</h2></div><button id="toggle-all" type="button" aria-expanded="false" hidden>Show all lessons</button></div>
+    <div id="coverage"></div>
+    <div id="all-lessons" hidden></div>
+  </section>
+</main>
 <script src="/lessons.js"></script>
 </body>
 </html>

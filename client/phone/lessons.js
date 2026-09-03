@@ -12,16 +12,43 @@ function surface(title, value, candidate) {
     `<p><span class="label">checked</span> ${esc(value.checked_at || "missing")}</p></section>`;
 }
 
+function card(row) {
+  const cls = row.candidate_newer_than_production ? "lesson newer" : `lesson ${row.status}`;
+  const problems = row.problems.length ? `<ul class="problems">${row.problems.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  return `<article class="${cls}"><div class="identity"><strong>${esc(row.product)}</strong><span>${esc(row.lesson)}</span></div>${surface("candidate", row.candidate, true)}${surface("production", row.production, false)}${problems}</article>`;
+}
+
 function draw(data) {
   const summary = document.getElementById("summary");
-  const out = document.getElementById("lessons");
-  if (data.state !== "ok") { summary.textContent = data.state; out.innerHTML = `<p class="empty">${esc(data.detail)}</p>`; return; }
-  summary.textContent = `${data.counts.total} lessons · ${data.counts.failed} need attention`;
-  out.innerHTML = data.lessons.map(row => {
-    const cls = row.candidate_newer_than_production ? "lesson newer" : `lesson ${row.status}`;
-    const problems = row.problems.length ? `<ul class="problems">${row.problems.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
-    return `<article class="${cls}"><div class="identity"><strong>${esc(row.product)}</strong><span>${esc(row.lesson)}</span></div>${surface("candidate", row.candidate, true)}${surface("production", row.production, false)}${problems}</article>`;
-  }).join("") || `<p class="empty">No canonical preview receipts.</p>`;
+  const previews = document.getElementById("previews");
+  const coverage = document.getElementById("coverage");
+  const all = document.getElementById("all-lessons");
+  const toggle = document.getElementById("toggle-all");
+  if (data.state !== "ok") { summary.textContent = data.state; previews.innerHTML = `<p class="empty">${esc(data.detail)}</p>`; return; }
+
+  const verified = data.lessons.filter(row => row.candidate && row.candidate.url);
+  const missing = data.lessons.length - verified.length;
+  summary.textContent = `${verified.length} verified · ${data.counts.total} lessons tracked`;
+  document.getElementById("preview-count").textContent = `${verified.length} available`;
+  previews.innerHTML = verified.map(card).join("") || `<p class="empty">No verified previews yet.</p>`;
+
+  const products = new Map();
+  data.lessons.forEach(row => {
+    const value = products.get(row.product) || {total: 0, verified: 0};
+    value.total += 1;
+    if (row.candidate && row.candidate.url) value.verified += 1;
+    products.set(row.product, value);
+  });
+  coverage.innerHTML = `<p class="coverage-note"><strong>${missing}</strong> lessons do not yet have verified preview evidence.</p><div class="coverage-grid">${[...products].map(([name, value]) => `<div><strong>${esc(name)}</strong><span>${value.verified} of ${value.total}</span></div>`).join("")}</div>`;
+  toggle.hidden = false;
+  toggle.textContent = `Show all ${data.counts.total} lessons`;
+  toggle.addEventListener("click", () => {
+    const opening = all.hidden;
+    if (opening && !all.innerHTML) all.innerHTML = data.lessons.map(card).join("");
+    all.hidden = !opening;
+    toggle.setAttribute("aria-expanded", String(opening));
+    toggle.textContent = opening ? "Hide lesson inventory" : `Show all ${data.counts.total} lessons`;
+  });
 }
 
 fetch("/api/lesson-previews").then(r => r.json()).then(draw).catch(error => draw({state:"error", detail:error.message}));
