@@ -79,6 +79,21 @@ class FakeProducer:
         missing = next(kind for kind in order if kind not in state["receipts"])
         return [{"action": missing}]
 
+    @staticmethod
+    def actuation_allowed(config, repo, pr):
+        policy = config.get("actuation")
+        if config.get("actions_enabled") not in (True, False) or not isinstance(policy, dict) or set(policy) != {"pull_requests"}:
+            raise FakeProducer.Refusal("malformed actuation policy")
+        rows = policy["pull_requests"]
+        if (not isinstance(rows, list) or any(not isinstance(x, dict) or set(x) != {"repo", "pr"}
+                or not isinstance(x["repo"], str) or not x["repo"]
+                or not isinstance(x["pr"], int) or isinstance(x["pr"], bool) or x["pr"] <= 0 for x in rows)):
+            raise FakeProducer.Refusal("malformed actuation allowlist")
+        owners = [(x["repo"], x["pr"]) for x in rows]
+        if len(owners) != len(set(owners)):
+            raise FakeProducer.Refusal("duplicate actuation ownership")
+        return config["actions_enabled"] is True and (repo, pr) in owners
+
 
 def base_state(**updates):
     value = {"version": 1, "repo": "Thinking-Brain-School/tbs-www", "pr": 10,
@@ -236,6 +251,18 @@ class DeliverySourceTest(unittest.TestCase):
         data = delivery.read()
         self.assertEqual(data["state"], "disabled")
         self.assertFalse(data["rows"][0]["actuation_enabled"])
+
+    def test_malformed_and_duplicate_actuation_policy_is_unreachable(self):
+        state = base_state(); self.write_state(state); self.write_conveyor([self.entry(state)])
+        cases = [
+            {"pull_requests": [None]},
+            {"pull_requests": [{"repo": state["repo"], "pr": state["pr"], "extra": True}]},
+            {"pull_requests": [{"repo": state["repo"], "pr": state["pr"]}] * 2},
+        ]
+        for actuation in cases:
+            with self.subTest(actuation=actuation):
+                self.config["actions_enabled"] = True; self.config["actuation"] = actuation
+                self.assertEqual(delivery.read()["state"], "unreachable")
 
     def test_duplicate_identity_and_bad_event_sequence_are_unreachable(self):
         state = base_state(); self.write_state(state); entry = self.entry(state)

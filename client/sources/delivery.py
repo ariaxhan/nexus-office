@@ -165,12 +165,11 @@ def _terminal_projection(state: dict) -> dict | None:
                      "sha": buzz.get("sha"), "target": buzz.get("target")} if buzz else None}
 
 
-def _actuation_allowed(config: dict, repo: str, pr: int) -> bool:
-    rows = (config.get("actuation") or {}).get("pull_requests")
-    if not isinstance(rows, list):
-        raise ContractError("committed actuation allowlist is unavailable")
-    return config.get("actions_enabled") is True and any(
-        isinstance(row, dict) and row.get("repo") == repo and row.get("pr") == pr for row in rows)
+def _actuation_allowed(config: dict, repo: str, pr: int, producer: ModuleType) -> bool:
+    try:
+        return producer.actuation_allowed(config, repo, pr)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ContractError(f"committed actuation allowlist is invalid: {exc}") from exc
 
 
 def _row(directory: pathlib.Path, path: pathlib.Path, state: dict,
@@ -182,7 +181,7 @@ def _row(directory: pathlib.Path, path: pathlib.Path, state: dict,
         raise ContractError("terminal projection differs from canonical state and Buzz proof")
     updated = entry.get("updated_at")
     _timestamp(updated, "delivery entry timestamp", generated_at)
-    enabled = _actuation_allowed(config, state["repo"], state["pr"])
+    enabled = _actuation_allowed(config, state["repo"], state["pr"], producer)
     return {
         "repo": state["repo"], "pr": state["pr"], "head_sha": state["head_sha"],
         "route": state["route"], "phase": state.get("phase") or "bound",
@@ -388,6 +387,7 @@ def read() -> dict:
                 "running": [], "queued": []}
     try:
         producer, config = _producer(root)
+        _actuation_allowed(config, "__policy_validation__", 1, producer)
         queue = _queue(directory)
     except ContractError as exc:
         return {"state": "unreachable", "detail": str(exc), "rows": [],
