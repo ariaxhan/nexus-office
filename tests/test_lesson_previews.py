@@ -160,3 +160,48 @@ class ReceiptErrorDisclosureTests(unittest.TestCase):
         problem, = row["problems"]
         self.assertIn("JSONDecodeError", problem)
         self.assertNotIn(str(root), problem)
+
+
+class InventoryNumberingTests(unittest.TestCase):
+    """Lessons are numbered per product. `product` comes off the row, so two
+    catalog files may name the same product and neither may erase the other."""
+
+    def _catalog(self, files):
+        root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        for name, rows in files.items():
+            (root / name).write_text(json.dumps(rows), encoding="utf-8")
+        return root
+
+    def test_two_files_naming_one_product_keep_every_lesson(self):
+        root = self._catalog({
+            "wave-one.json": [{"product": "TBS", "slug": "one", "title": "1"},
+                              {"product": "TBS", "slug": "two", "title": "2"}],
+            "wave-two.json": [{"product": "TBS", "slug": "three", "title": "3"}],
+        })
+        inventory = lesson_previews._inventory(root)
+        self.assertEqual(sorted(inventory), [("TBS", "L001"), ("TBS", "L002"),
+                                             ("TBS", "L003")])
+        self.assertEqual([inventory[("TBS", f"L{n:03d}")]["route"]
+                          for n in (1, 2, 3)], ["/one", "/two", "/three"])
+
+    def test_one_file_per_product_numbers_exactly_as_before(self):
+        root = self._catalog({
+            "mommyai.json": [{"product": "MommyAI", "slug": "a", "title": "a"},
+                             {"product": "MommyAI", "slug": "", "title": "no slug"},
+                             {"product": "MommyAI", "slug": "c", "title": "c"}],
+        })
+        inventory = lesson_previews._inventory(root)
+        # The slug-less row still burns its number: L002 stays absent so that
+        # L003 keeps pointing at the third lesson in the catalog.
+        self.assertEqual(sorted(inventory),
+                         [("MommyAI", "L001"), ("MommyAI", "L003")])
+        self.assertEqual(inventory[("MommyAI", "L003")]["route"], "/c")
+
+    def test_distinct_products_are_numbered_independently(self):
+        root = self._catalog({
+            "all.json": [{"product": "MommyAI", "slug": "a", "title": "a"},
+                         {"product": "SuperPower", "slug": "b", "title": "b"}],
+        })
+        self.assertEqual(sorted(lesson_previews._inventory(root)),
+                         [("MommyAI", "L001"), ("SuperPower", "L001")])

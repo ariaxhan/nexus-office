@@ -205,7 +205,8 @@ def _production(receipt: dict | None, candidate: dict) -> tuple[dict, list[str],
 
 
 def _inventory(catalog_root: pathlib.Path | None) -> dict[tuple[str, str], dict]:
-    inventory = {}
+    inventory: dict[tuple[str, str], dict] = {}
+    counts: dict[str, int] = {}
     if catalog_root is None or not catalog_root.is_dir():
         return inventory
     for path in sorted(catalog_root.glob("*.json")):
@@ -215,13 +216,18 @@ def _inventory(catalog_root: pathlib.Path | None) -> dict[tuple[str, str], dict]
             continue
         if not isinstance(rows, list):
             continue
-        for index, item in enumerate(rows, 1):
+        for item in rows:
             if not isinstance(item, dict):
                 continue
             product = str(item.get("product") or path.stem)
+            # Numbered per product, not per file. `product` is read off the row,
+            # so two catalog files can name the same one; a file-positional
+            # counter would then mint the same key twice and the second file
+            # would silently overwrite the first's lessons, route and all.
+            counts[product] = counts.get(product, 0) + 1
             slug = str(item.get("slug") or "")
             route = f"/{slug}" if slug and not slug.startswith("/") else slug
-            lesson = f"L{index:03d}"
+            lesson = f"L{counts[product]:03d}"
             if route and CANONICAL.fullmatch(lesson):
                 inventory[(product, lesson)] = {"product": product, "lesson": lesson,
                                                 "route": route, "title": str(item.get("title") or "")}
