@@ -16,11 +16,11 @@ ticks is read as produced rather than declared vanished.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 
@@ -383,7 +383,14 @@ def _launch(ledger, now, root):
 
 
 def _spawn(ledger, plan, flight_id, workspace, timeout_s):
-    """Detached, in its own session, so tower dying does not take the work with it."""
+    """Double-fork the runner so tower is never its parent.
+
+    A plain `Popen` would leave the runner as tower's child, and a child nobody
+    waits on becomes a zombie whose pid still answers `kill -0`. Reconciliation
+    would then believe a dead flight is alive forever. Orphaning the runner
+    (fork, setsid, fork, exec) makes `pid is alive` mean what it says, and makes
+    the runner survive tower being killed, which is the whole point.
+    """
     inputs = loads(plan["inputs"], {}) or {}
     cmd = inputs.get("cmd")
     if plan["kind"] != "script" or not cmd:
@@ -393,16 +400,49 @@ def _spawn(ledger, plan, flight_id, workspace, timeout_s):
             "--cmd", cmd, "--timeout", str(timeout_s)]
     for name in outputs:
         argv += ["--output", name]
-    env = dict(os.environ)
     package_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ)
     env["PYTHONPATH"] = package_parent + os.pathsep + env.get("PYTHONPATH", "")
+
+    read_fd, write_fd = os.pipe()
     try:
-        with open(os.path.join(workspace, fl.LOG_NAME), "ab") as log:
-            proc = subprocess.Popen(argv, cwd=package_parent, stdin=subprocess.DEVNULL,
-                                    stdout=log, stderr=log, start_new_session=True, env=env)
+        middle = os.fork()
     except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
         return None
-    return proc.pid
+    if middle == 0:  # middle child: gets its own session, then steps aside
+        try:
+            os.close(read_fd)
+            os.setsid()
+            grandchild = os.fork()
+            if grandchild == 0:
+                os.close(write_fd)
+                log = os.open(os.path.join(workspace, fl.LOG_NAME),
+                              os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+                null = os.open(os.devnull, os.O_RDONLY)
+                os.dup2(null, 0)
+                os.dup2(log, 1)
+                os.dup2(log, 2)
+                os.chdir(package_parent)
+                os.execve(argv[0], argv, env)
+            os.write(write_fd, str(grandchild).encode())
+        except BaseException:
+            pass
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    try:
+        data = os.read(read_fd, 32)
+    finally:
+        os.close(read_fd)
+        with contextlib.suppress(ChildProcessError, OSError):
+            os.waitpid(middle, 0)
+    try:
+        return int(data)
+    except ValueError:
+        return None
 
 
 # ---- run loop and views ----------------------------------------------------

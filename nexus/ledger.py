@@ -287,7 +287,9 @@ class Ledger:
             raise LedgerError(
                 f"ledger is version {version}, this nexus knows {SCHEMA_VERSION}"
             )
-        if version > 0 and os.path.exists(self.path):
+        # A file with bytes in it is somebody's history: copy it before moving it.
+        # A brand new file is zero bytes and has nothing to lose.
+        if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
             self.conn.execute("PRAGMA wal_checkpoint(FULL)")
             shutil.copyfile(self.path, f"{self.path}.bak-{version}")
         # executescript commits on its own, so the schema cannot ride inside tx().
@@ -672,6 +674,13 @@ class Ledger:
                 return False
             self.conn.execute("UPDATE landings SET state='applying', expected_sha=? WHERE id=?",
                               (expected_sha, landing_id))
+            flight = self.conn.execute("SELECT * FROM flights WHERE id=?",
+                                       (row["flight_id"],)).fetchone()
+            if flight is not None and flight["state"] == "verified":
+                self.conn.execute("UPDATE flights SET state='landing' WHERE id=?",
+                                  (flight["id"],))
+                self._event("flight.state", flight["id"], {"from": "verified", "to": "landing"},
+                            "tower", now)
             self._event("landing.applying", row["flight_id"],
                         {"landing": landing_id, "expected_sha": expected_sha}, "tower", now)
         return True
@@ -693,6 +702,15 @@ class Ledger:
                 return False
             flight = self.conn.execute("SELECT * FROM flights WHERE id=?",
                                        (row["flight_id"],)).fetchone()
+            if flight["state"] == "verified":
+                # verified -> landing -> landed, written as two events in one
+                # transaction so the history never skips a rung.
+                self.conn.execute("UPDATE flights SET state='landing' WHERE id=?",
+                                  (flight["id"],))
+                self._event("flight.state", flight["id"], {"from": "verified", "to": "landing"},
+                            "tower", now)
+                flight = self.conn.execute("SELECT * FROM flights WHERE id=?",
+                                           (flight["id"],)).fetchone()
             if "landed" not in TRANSITIONS[flight["state"]]:
                 raise LedgerError(
                     f"illegal transition {flight['state']} -> landed ({flight['id']})")
