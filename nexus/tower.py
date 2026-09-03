@@ -86,6 +86,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report["vanished"] = _reconcile_vanished(ledger, now, root)
     report["failed"] += report["timed_out"] + report["vanished"]
     report["retried"] = _retry_exhausted(ledger, now)
+    _sweep_workspaces(ledger)
     report["reconciled_landings"] = _reconcile_landings(ledger, now, landing_probe)
     report["quarantined"] = _quarantine(ledger, now)
 
@@ -183,6 +184,18 @@ def _finish_failed(ledger, flight, now):
     workspace = flight["workspace"]
     if workspace and os.path.isdir(workspace):
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _sweep_workspaces(ledger):
+    """A workspace outliving its failed flight is what a kill mid-cleanup leaves.
+
+    Deleting it here rather than only at failure is why "an out.txt on disk means
+    a produced flight" survives tower being killed between the two writes.
+    """
+    for flight in ledger.flights(states=("failed", "cancelled"), limit=200):
+        workspace = flight["workspace"]
+        if workspace and os.path.isdir(workspace):
+            shutil.rmtree(workspace, ignore_errors=True)
 
 
 def _retry_exhausted(ledger, now):

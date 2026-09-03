@@ -169,5 +169,15 @@ nexus is doing (flights), nexus fixed (landings), nexus needs you (gates).
 | 7 | watcher plans (GitHub, failed flights, tests, stale projects, product health); Office five columns | tasks appear from observations with reasons; a low-risk audit runs without a person |
 | 8 | delete mapped components with a test per deletion; hooks down to the three boundaries | mechanisms deleted minus added is positive; interrupts per 100 flights measured |
 
+Status, step 1: BUILT. `nexus/ledger.py` schema v1 (all eleven tables), WAL, `user_version`
+migrations with a `.bak-<version>` copy, append-only triggers, `integrity_check()`.
+`tests/test_ledger.py`, 31 tests.
+
+Status, step 2: BUILT for script flights. `nexus/tower.py` tick (leases, budgets, quarantine,
+task acceptance, detached launch, narrow reconcile), `nexus/flights.py` runner,
+`python3 -m nexus` escape hatch, `nexus/launchd/com.nexus.tower.plist`. `tests/test_tower.py`
+23 tests, `tests/crash_tower/test_crash_v0.py` green three runs in a row. The resolution ladder
+is a skeleton: retry and quarantine are wired, resolver and reviewer flights are step 5.
+
 Effort in agent wall-clock: 1 to 3 about 14 hours, 4 about 6, 5 about 12, 6 about 10, 7 about 8.
 Two systems overlap only during step 4, one afternoon.
