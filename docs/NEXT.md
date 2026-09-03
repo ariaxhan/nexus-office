@@ -1,55 +1,134 @@
-# Next session, read this first
+# Foundation handoff, 2026-09-03
 
-🔧 ready to build. Start in `/Users/slowember/Developer/Vaults/CodingVault/nexus-office`, one session,
-no swarm. Spec of record: `docs/foundation.md` (Aria's design, not a proposal). Steps 1 and 2 are
-merged (`6ef2991`): ledger schema v1, tower tick, script flights, crash_tower v0, 57 tests.
+Read this first. Start in `CodingVault/nexus-office`. One session, no swarm.
 
-## Where it stands (2026-09-03, after the subtraction pass)
+**Standing rule: do not proactively improve infrastructure that is not demonstrably
+interfering with real work.** Carry real work through tower; delete old machinery as it
+becomes unnecessary. This is not a cleanup campaign.
 
-The vertical slice is the baseline: plan `morning-briefing` (declared outputs
-`_meta/intelligence/morning-briefing-*.md` + `-latest.md`) lands into CollabVault main under the
-launchd tower. Two real landings so far (`60d45cc0`, `c30de3ad`); the second survived `kill -9`
-of tower mid-flight (launchd restarted it, the flight landed with only the declared files). One
-more consecutive landing, then retire the scrape inside `email-runner.sh morning-briefing`.
+## Installed / runtime state
 
-Engine is 2097 lines (was 3395): objectives, observations, messages, gates are gone; a plan that
-lands must declare outputs (paths or globs) and only those are artifacts and only artifacts land.
-Rules now in force: intent over ceremony; do not repair legacy guards; make nexus smaller.
+- Tower: `com.nexus.tower` in launchd, KeepAlive, 5 s tick, `python3 -m nexus tower run`
+  from this repo. Ledger `~/Library/Application Support/nexus/ledger.sqlite` (v1).
+  Flights under `.../nexus/flights/<id>/`, kept failure logs under `.../nexus/logs/`.
+- Live plan `morning-briefing` (`plan_564bb5ad01ee`): runs
+  `intelligence-scrape.sh morning-briefing` in a hangar clone of
+  `Vaults/CollabVault`, lands to `main`, `every 86400` (next ~13:53 daily), timeout 540 s,
+  max_retries 1, lease `repo:CollabVault`. Old plan `morning-briefing-scrape` is disabled.
+- Kernel plugin 9.9.0 installed (`installed_plugins.json`), marketplace clones fast-forwarded
+  (main, codex, codex-cli). The TBS silo clone was last seen at 9.8.2.
+- hcom: all instance `wait_timeout` rows 15 s, toml 15 s, hooks capped 15 s and fail open.
+- `intelligence-scrape.sh`: `INTEL_DIR` overridable, latest symlink relative.
+  `sources.yaml` morning-briefing: Ars Technica and The Verge replaced by MIT Technology
+  Review and Simon Willison (WebFetch cannot reach the former; curl can).
 
-Next real work, in order: (1) third landing, retire the legacy scrape; (2) next airline the same
-way (midday-pulse or research-digest: same script, one plan each, declared outputs); (3) step 4,
-plists to plans one at a time, deleting each plist after its plan has landed real output.
-Not next: more foundation features, more guards, more observability.
+## Tower invariants proven live (not in tests only)
 
-## Facts the next session cannot see
+- A flight's result lands as a commit on the real remote: CollabVault `60d45cc0`, `c30de3ad`,
+  author "nexus tower", `landings.applied_sha` equals the remote tip.
+- Tower `kill -9` mid-flight: launchd restarts it, the flight still lands.
+- Only declared outputs land: second landing carried exactly two files; CollabVault's own hook
+  litter (`.session_id`, `actions.jsonl`, `_meta/.runtime/*`) stayed out.
+- Human tree fast-forwards only when clean and on the branch; otherwise left alone and
+  recorded (`landing.human_tree` outcome `dirty`).
+- A failed flight keeps its evidence: log copied beside the ledger and recorded as an artifact
+  row, structured error carries `exit_code`, and the workspace is not cleared until that
+  persistence succeeded.
+- A released quarantine counts only flights after the release.
+- Radio (`nexus/radio.py`) is bounded and off the lifecycle path; a radio that never answers
+  changes nothing about a flight (`tests/crash_tower/test_radio_hang.py`).
 
-- `tbs-agy-keychain` is SKIPPED by Aria's ruling: the file-token fallback works and the bridge is
-  slated for deletion. Spend nothing more on it unless Antigravity actually fails without it.
-- hcom hooks are capped at 15s and fail open in `~/.claude/settings.json` (13) and
-  `~/.codex/hooks.json` (5; added 2026-09-03 by the new session, the earlier claim was wrong: they
-  had no timeout). `HCOM_TIMEOUT` is 15 in toml, AND every registered instance's `wait_timeout`
-  in `~/.hcom/hcom.db` was reset from 86400 to 15 (`hcom config -i <name> timeout 15`): the toml
-  value never touched existing rows. If hcom re-installs its hooks, re-check both.
+## Deleted this session
 
-- Branch sweep done 2026-09-03: 18 local branches deleted, each only after `gh` showed a merged
-  PR whose head sha equalled the local tip (or `git cherry` showed nothing beyond main). The
-  force-delete guard only consults `gh` for a literal branch name, not a shell variable in a
-  loop, and it also matches the words inside a heredoc. Left alone because the local tip has
-  commits past the merged PR head, which is a human's call, not a sweep's:
-  tbs-www `aria/lesson-event-log` (5), tbs-landing `aria/mommyai-lesson21-memory` (15),
-  tbs-curriculum `aria/l012-native-page` (2), nexus-office `pipeline/auto-issue-35` (1),
-  thinking-brain-school `aria/care-antigravity-runtime` (2 past PR #39), `feature/w` (never a PR).
-- `autobranch.sh` is retired; the Vaults root stays on main. `wip-mirror` post-commit stays.
-- hcom holds ~120 dead registrations. `hcom --go reset` clears them but the real-work lane is on
-  hcom; do it only when `hcom list` shows nothing active but yourself.
-- A crash_tower finding: a `Popen` child nobody waits on is a zombie whose pid still answers
-  `kill -0`; tower double-forks so flights outlive tower. Keep that property.
-- Schema gaps the builder recorded: pause state and `on:` high-water marks are derived from
-  events, no `state` table. Decide in step 3 whether a `state` table is a field or a primitive.
-- Coexistence: a separate lane ships product in these folders. Never revert or sweep its changes.
+- Kernel 9.9.0: `guard-bash.sh`, `autocorrect-bash.py`, `autocorrect-tool-input.py`,
+  `syntax-coach.py`, `route-request.sh`, their generator bindings, 94 tests, gate entries.
+- hcom lifecycle hooks in `~/.claude/settings.json`: Notification, PermissionDenied,
+  PermissionRequest, PostToolUseFailure, SessionEnd, StopFailure, SubagentStart, SubagentStop.
+- Engine: objectives, observations, messages, gates (tables, methods, tests); the
+  objective-narrowing policy; undeclared-output artifact discovery (`changed_paths`).
+- 18 verified squash-merged local branches across five repos.
+- `autobranch.sh` (previous session).
 
-## What not to repeat today
-- Gating a shell step on `| tail -1` (tests tail's status); the house failure is reading the
-  status of the wrong process in a pipeline. Three fixes today were that bug.
-- Reproducing a keychain failure with a write call: it raises a GUI dialog on Aria's screen.
-- Letting a `&&` chain with `git tag` fail silently and continuing to delete the branch.
+## Hook counts now
+
+| surface | count |
+|---|---|
+| kernel plugin hooks | 19 (was 24) |
+| hcom hooks, Claude | 5: pre, post, prompt, session-start, stop-poll (was 13) |
+| hcom hooks, Codex | 5, capped 15 s |
+| `~/.claude/settings.json` total | 23 |
+| `Vaults/.claude/settings.json` | ~40, untouched |
+
+## Engine size and state
+
+`nexus/`: ledger 812, tower ~620, flights 180, landing 125, radio 81, cli ~250 = about 2100
+lines (was 3395). Tables: plans, tasks, flights, artifacts, landings, events, leases.
+Tick: expire leases, budgets, reap, reconcile vanished, retry, sweep, reconcile applying
+landings, land verified, quarantine, schedule, accept, launch. 68 engine tests
+(`tests/test_ledger.py`, `test_tower.py`, `test_landing.py`, `tests/crash_tower/`).
+The other ~936 tests in `npm test` are the Office app's own suite.
+
+## Declared-output contract
+
+A plan that lands (`--repo`) must declare `--output <path or glob>` (relative to the hangar);
+`plans add` refuses otherwise. The runner records only matching files as artifacts; a declared
+output with no match fails the flight (`missing_output`); landing commits exactly the artifact
+paths and nothing else (`nothing_to_land` if none). Plans without a target still record
+whatever they left behind, and end at `produced`.
+
+## Legacy mechanisms intentionally left in place
+
+- hcom messaging hooks (5 Claude, 5 Codex) and hcom itself: the real-work lane is on it.
+  Stop-poll is bounded at 15 s. hcom lifecycle removal waits for step 5 (interactive sessions
+  as aircraft). `hcom --go reset` only when `hcom list` shows nothing active but yourself.
+- `jobctl`, `jobrun`, the 18 `com.nexus.*` plists, `email-runner.sh` (its own morning-briefing
+  scrape included) until each plan has landed real output. Note: `jobrun` currently has a bash
+  syntax error at line 216 (`unexpected EOF`); legacy jobs may be failing. Migrate, do not fix.
+- Every hook in `Vaults/.claude/settings.json` and the non-hcom hooks in
+  `~/.claude/settings.json` (guards for silo commands, patch churn, integration auth, google
+  identity, verify-live, install-guards): none fired falsely this session.
+- `vault-meta-frontmatter-guard` pre-commit in kernel-claude (blocked one release commit over a
+  file another process wrote; worked around by not staging `_meta/`).
+- `tbs-agy-keychain`: skipped by ruling; nothing more unless Antigravity fails without it.
+
+## Pending: third landing, then retire the legacy scrape
+
+Two of three consecutive landings done (`60d45cc0`, `c30de3ad`). After the third
+(`nexus status` shows a third `landed` flight for plan `morning-briefing`, remote tip equals
+its `applied_sha`), remove the morning-briefing scrape step from `email-runner.sh` so the email
+reads `morning-briefing-latest.md` from the landed commit. Then the next airline the same way.
+
+## Known pre-existing failures, do not chase
+
+- kernel-claude `tests/run-tests.sh`: `detect_vaults finds primary`, `retrospective has output
+  format`, `retrospective has cluster analysis`, `retrospective queries current learning
+  schema`, `commands have github layer`. Failing before this session.
+- kernel-claude has 7 Dependabot alerts on main.
+- Six local branches with commits past their merged PR, left for Aria: tbs-www
+  `aria/lesson-event-log`, tbs-landing `aria/mommyai-lesson21-memory`, tbs-curriculum
+  `aria/l012-native-page`, nexus-office `pipeline/auto-issue-35`, thinking-brain-school
+  `aria/care-antigravity-runtime`, `feature/w`.
+- CollabVault human checkout is dirty with its own hook runtime files; landings still apply,
+  the tree just is not fast-forwarded until it is clean.
+
+## Rules in force (Aria, 2026-09-03; also in `~/.claude/CLAUDE.md` and `Vaults/CLAUDE.md`)
+
+- Direct intent outranks ceremony: understand, do, verify, report. No specs, councils,
+  findings files, guards or approval pauses unless the task requires them. Verify the requested
+  outcome, not the machinery. Continue to the next obvious ready task.
+- Never ask Aria to choose routine next steps. "Fix applied" means verified on the runtime path.
+- Legacy guards: do not repair, never improve a text-parsing guard; migrate or remove when
+  tower makes the failure unreachable, else the smallest bypass, recorded for deletion. Count
+  interference in `_meta/state/legacy-interference.jsonl` (11 rows this session, all before the
+  deletions). Airline migration outranks infrastructure fixing.
+- Complexity budget: the successful flight is the baseline; make nexus smaller, not safer
+  against hypothetical failures. Communications may fail; lifecycle must continue. No watchdogs.
+- Do not proactively improve infrastructure that is not demonstrably interfering with real work.
+
+## Next highest-value step
+
+1. Confirm the third landing; retire the scrape inside `email-runner.sh morning-briefing`.
+2. Next airline, same shape, one plan with declared outputs: `midday-pulse` or
+   `research-digest` (same script, same repo). Old job stays until three landings.
+3. Then step 4: one plist to one plan at a time, delete each plist after its plan has landed
+   real output. Nothing else.
