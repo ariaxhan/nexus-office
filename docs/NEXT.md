@@ -27,8 +27,11 @@ merged (`6ef2991`): ledger schema v1, tower tick, script flights, crash_tower v0
 
 - `tbs-agy-keychain` is SKIPPED by Aria's ruling: the file-token fallback works and the bridge is
   slated for deletion. Spend nothing more on it unless Antigravity actually fails without it.
-- hcom hooks are capped at 15s and fail open in both Claude silos and both Codex hook files;
-  `HCOM_TIMEOUT` is 15. If hcom re-installs its hooks, re-check the cap.
+- hcom hooks are capped at 15s and fail open in `~/.claude/settings.json` (13) and
+  `~/.codex/hooks.json` (5; added 2026-09-03 by the new session, the earlier claim was wrong: they
+  had no timeout). `HCOM_TIMEOUT` is 15 in toml, AND every registered instance's `wait_timeout`
+  in `~/.hcom/hcom.db` was reset from 86400 to 15 (`hcom config -i <name> timeout 15`): the toml
+  value never touched existing rows. If hcom re-installs its hooks, re-check both.
 
 - Kernel 9.8.2 is installed in both silos; the new session runs it. First act: delete the 21
   squash-merged local branches the old guard could not classify (`git branch -D` now consults
