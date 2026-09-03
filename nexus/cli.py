@@ -120,6 +120,29 @@ def cmd_plans_add(args):
     return 0
 
 
+def _plan_by_name_or_id(led, ref):
+    plan = led.plan(ref)
+    if plan is None:
+        matches = [p for p in led.plans() if p["name"] == ref]
+        plan = matches[0] if len(matches) == 1 else None
+    return plan
+
+
+def cmd_plans_set(args):
+    """enable | disable | release (lift a quarantine) one plan, by id or name."""
+    led = _ledger(args)
+    plan = _plan_by_name_or_id(led, args.plan)
+    if plan is None:
+        print(f"no such plan: {args.plan}", file=sys.stderr)
+        return 1
+    if args.plans_command == "release":
+        led.unquarantine_plan(plan["id"])
+    else:
+        led.set_plan_enabled(plan["id"], args.plans_command == "enable")
+    print(f"{args.plans_command} {plan['id']} ({plan['name']})")
+    return 0
+
+
 def cmd_plans_list(args):
     led = _ledger(args)
     for plan in led.plans():
@@ -232,6 +255,11 @@ def build_parser():
     add.set_defaults(func=cmd_plans_add)
     listing = plans_subs.add_parser("list")
     listing.set_defaults(func=cmd_plans_list)
+    for name, help_text in (("enable", "schedule it again"), ("disable", "stop scheduling it"),
+                            ("release", "lift a quarantine")):
+        sub = plans_subs.add_parser(name, help=help_text)
+        sub.add_argument("plan", help="plan id or name")
+        sub.set_defaults(func=cmd_plans_set)
 
     run_p = subs.add_parser("flight-run", help=argparse.SUPPRESS)
     run_p.add_argument("--workspace", required=True)
