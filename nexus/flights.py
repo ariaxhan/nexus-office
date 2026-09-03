@@ -103,6 +103,10 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
         for name in outputs:
             if os.path.exists(os.path.join(cwd, name)):
                 artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
+    elif target is not None and os.path.isdir(cwd):
+        # In a hangar the artifact set is what the flight changed, as git sees it.
+        for name in landing.changed_paths(cwd):
+            artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
     elif os.path.isdir(cwd):
         # Nothing declared: whatever the flight left behind IS the artifact set.
         # A plan that declares outputs gets them checked; one that does not still

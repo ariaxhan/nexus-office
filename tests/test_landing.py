@@ -192,3 +192,21 @@ class LandingCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UndeclaredOutputs(LandingCase):
+    def test_hangar_artifacts_are_what_git_sees_changed(self):
+        self.led.add_plan(
+            "brief", schedule={"every": 0.1},
+            inputs={"cmd": "mkdir -p deep; echo a > deep/a.md; echo b >> README",
+                    "target": {"repo": self.human, "branch": "main"}},
+            outputs=[], budget={"timeout_s": 30, "concurrency": 1},
+            resolution_policy={"may_accept": True})
+        self.assertTrue(self.run_until(lambda: self.landed()))
+        flight = self.landed()[0]
+        refs = sorted(os.path.basename(a["ref"]) for a in self.led.artifacts(flight["id"]))
+        self.assertEqual(["README", "a.md"], refs)
+        tip = git(self.dir, "--git-dir", self.remote, "rev-parse", "refs/heads/main")
+        self.assertEqual(tip, self.led.landings(states=("applied",))[0]["applied_sha"])
+        with open(os.path.join(self.human, "deep", "a.md")) as f:
+            self.assertEqual("a\n", f.read())
