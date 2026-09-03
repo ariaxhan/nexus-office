@@ -532,13 +532,15 @@ def accept_tasks(ledger, now=None):
 
 def _launch(ledger, now, root):
     launched = 0
-    running = len(ledger.flights(states=("running",)))
+    running = {}
+    for row in ledger.flights(states=("running",)):
+        running[row["plan_id"]] = running.get(row["plan_id"], 0) + 1
     queued = sorted(ledger.flights(states=("queued",)), key=lambda r: r["created_at"])
     for flight in queued:
         plan = ledger.plan(flight["plan_id"])
         timeout_s, _, concurrency = _budget(plan)
-        if running >= concurrency:
-            break
+        if running.get(plan["id"], 0) >= concurrency:
+            continue  # this plan is at its cap; another plan's flight may still go
         resources = loads(plan["resources"], []) or []
         if resources and not ledger.acquire_leases(
                 flight["id"], resources, now + timeout_s + LEASE_SLACK_S, now=now):
@@ -556,7 +558,7 @@ def _launch(ledger, now, root):
             _finish_failed(ledger, ledger.flight(flight["id"]), now)
             continue
         ledger.set_pid(flight["id"], pid, now=now)
-        running += 1
+        running[plan["id"]] = running.get(plan["id"], 0) + 1
         launched += 1
     return launched
 

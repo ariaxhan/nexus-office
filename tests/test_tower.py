@@ -109,6 +109,15 @@ class Scheduling(TowerCase):
             self.tick(now=now + i * 2)
         self.assertLessEqual(len(self.led.flights(states=("running",))), 2)
 
+    def test_concurrency_is_per_plan_not_global(self):
+        a = self.plan(name="a", cmd="sleep 5", outputs=[], budget={"concurrency": 1})
+        b = self.plan(name="b", cmd="sleep 5", outputs=[], budget={"concurrency": 1})
+        now = time.time()
+        self.tick(now=now)
+        self.tick(now=now + 1)
+        in_air = {f["plan_id"] for f in self.led.flights(states=("running",))}
+        self.assertEqual({a, b}, in_air)
+
 
 class Acceptance(TowerCase):
     def test_a_duplicate_dedupe_key_is_rejected_not_run_twice(self):
