@@ -53,6 +53,13 @@ class TowerCase(unittest.TestCase):
     def tick(self, now=None, **kwargs):
         return tower.tick(self.led, now=now, root=self.root, **kwargs)
 
+    def run_until_quarantined(self, plan, ticks=120, pause=0.2):
+        for _ in range(ticks):
+            self.tick()
+            if self.led.plan(plan)["quarantined_at"] is not None:
+                return
+            time.sleep(pause)
+
     def settle(self, ticks=40, pause=0.1):
         for _ in range(ticks):
             self.tick()
@@ -189,8 +196,8 @@ class Budgets(TowerCase):
         self.assertEqual("abandoned", self.led.tasks()[0]["state"])
 
     def test_a_plan_quarantines_after_consecutive_failures(self):
-        plan = self.plan(cmd="exit 1", outputs=[], budget={"max_retries": 2})
-        self.settle(ticks=25)
+        plan = self.plan(cmd="exit 1", outputs=[], budget={"max_retries": 0})
+        self.run_until_quarantined(plan)
         self.assertIsNotNone(self.led.plan(plan)["quarantined_at"])
 
 
@@ -309,8 +316,8 @@ class KeptLogs(TowerCase):
 
 class Release(TowerCase):
     def test_a_released_plan_is_not_requarantined_for_the_same_failures(self):
-        plan = self.plan(cmd="exit 1", outputs=[], budget={"max_retries": 1})
-        self.settle()
+        plan = self.plan(cmd="exit 1", outputs=[], budget={"max_retries": 0})
+        self.run_until_quarantined(plan)
         self.assertIsNotNone(self.led.plan(plan)["quarantined_at"])
         self.led.unquarantine_plan(plan)
         self.tick()

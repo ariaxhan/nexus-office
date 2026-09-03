@@ -31,6 +31,7 @@ from . import landing as ld
 from .ledger import Ledger, loads
 
 DEFAULT_CONCURRENCY = 4
+QUARANTINE_AFTER = 5  # consecutive failures before a plan stops
 DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_MAX_RETRIES = 2
 #: a flight that is `running` with no pid yet has this long to have one recorded
@@ -414,7 +415,7 @@ def _quarantine(ledger, now):
     count = 0
     for plan in ledger.plans(runnable_only=True):
         _, max_retries, _ = _budget(plan)
-        limit = max(1, max_retries)
+        limit = QUARANTINE_AFTER  # a scheduled plan failing once is Tuesday, not a quarantine
         recent = ledger.flights(plan_id=plan["id"], limit=limit)
         released = ledger.events(kind="plan.unquarantined", subject=plan["id"])
         since = released[-1]["ts"] if released else 0
