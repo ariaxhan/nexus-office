@@ -9,7 +9,7 @@ import pathlib
 import re
 import urllib.parse
 
-SCHEMA = "tbs.lesson-preview/v1"
+SCHEMA = "tbs.lesson-preview/v2"
 PRODUCTION_SCHEMA = "tbs.lesson-production/v1"
 CANONICAL = re.compile(r"L\d{3}\Z")
 WIDTHS = {375, 768, 1440}
@@ -25,6 +25,13 @@ def _receipts_root() -> pathlib.Path | None:
         return None
     return (pathlib.Path(runtime).expanduser() / "CodingVault" /
             "thinking-brain-school" / "_meta" / ".runtime" / "lesson-previews")
+
+
+def _catalog_root() -> pathlib.Path | None:
+    runtime = os.environ.get("OFFICE_RUNTIME_ROOT", "").strip()
+    if not runtime:
+        return None
+    return pathlib.Path(runtime).expanduser() / "CodingVault" / "tbs-curriculum" / "catalog"
 
 
 def _json(path: pathlib.Path) -> tuple[dict | None, str]:
@@ -57,17 +64,29 @@ def _candidate(receipt: dict) -> tuple[list[str], list[str]]:
         bad.append("unsupported receipt")
     if receipt.get("outcome") != "PASS":
         bad.append("QA failed")
-    if str(receipt.get("git_dirty", "")).lower() not in {"0", "false"}:
-        bad.append("dirty source")
-    if receipt.get("deployment_state") != "READY" or not _https_origin(receipt.get("origin")):
+    source_clean = receipt.get("source_git_clean") is True
+    deployed_clean = str(receipt.get("deployment_source_git_clean", "")) == "1"
+    if not source_clean or not deployed_clean:
+        bad.append("source cleanliness unproven")
+    dirty = str(receipt.get("git_dirty", ""))
+    transform = str(receipt.get("transform_sha") or "")
+    deployed_transform = str(receipt.get("deployment_transform_sha") or "")
+    if dirty == "0":
+        if transform or deployed_transform:
+            bad.append("unexpected transform")
+    elif dirty == "1":
+        if not re.fullmatch(r"[0-9a-f]{64}", transform) or transform != deployed_transform:
+            bad.append("transform conflict")
+    else:
+        bad.append("invalid transformed-worktree state")
+    route = str(receipt.get("route") or "")
+    if (receipt.get("deployment_state") != "READY" or
+            not _https_origin(receipt.get("origin")) or not route.startswith("/")):
         bad.append("candidate unreachable")
     if not receipt.get("deployment_id") or not receipt.get("source_sha"):
         bad.append("missing deployment evidence")
     if receipt.get("deployment_sha") != receipt.get("source_sha"):
         bad.append("source/deployment conflict")
-    transform = receipt.get("transform_sha")
-    if transform and transform != receipt.get("deployment_transform_sha"):
-        bad.append("transform conflict")
     source_at = _millis(receipt.get("source_committed_at"))
     deployed_at = _millis(receipt.get("deployment_created_at"))
     if source_at and (not deployed_at or deployed_at < source_at):
@@ -107,13 +126,39 @@ def _production(receipt: dict | None, candidate: dict) -> tuple[dict, list[str],
             "checked_at": str(receipt.get("verified_at") or "")}, bad, newer
 
 
-def build(root: pathlib.Path | None = None) -> dict:
+def _inventory(catalog_root: pathlib.Path | None) -> dict[tuple[str, str], dict]:
+    inventory = {}
+    if catalog_root is None or not catalog_root.is_dir():
+        return inventory
+    for path in sorted(catalog_root.glob("*.json")):
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(rows, list):
+            continue
+        for index, item in enumerate(rows, 1):
+            if not isinstance(item, dict):
+                continue
+            product = str(item.get("product") or path.stem)
+            slug = str(item.get("slug") or "")
+            route = f"/{slug}" if slug and not slug.startswith("/") else slug
+            lesson = f"L{index:03d}"
+            if route and CANONICAL.fullmatch(lesson):
+                inventory[(product, lesson)] = {"product": product, "lesson": lesson,
+                                                "route": route, "title": str(item.get("title") or "")}
+    return inventory
+
+
+def build(root: pathlib.Path | None = None, catalog_root: pathlib.Path | None = None) -> dict:
     root = root or _receipts_root()
     if root is None:
         return {"state": "unconfigured", "detail": "lesson receipt root is not configured", "lessons": []}
     if not root.is_dir():
         return {"state": "missing", "detail": f"lesson receipt root is missing: {root}", "lessons": []}
     lessons = []
+    inventory = _inventory(catalog_root if catalog_root is not None else _catalog_root())
+    seen = set()
     for path in sorted(root.glob("*/L[0-9][0-9][0-9]/preview.json")):
         lesson = path.parent.name
         if not CANONICAL.fullmatch(lesson):
@@ -124,6 +169,7 @@ def build(root: pathlib.Path | None = None) -> dict:
                             "status": "failed", "problems": [error], "candidate": {}, "production": {}})
             continue
         product = str(receipt.get("product") or path.parent.parent.name)
+        seen.add((product, lesson))
         conflicts = []
         if product != path.parent.parent.name:
             conflicts.append("product/path conflict")
@@ -150,6 +196,18 @@ def build(root: pathlib.Path | None = None) -> dict:
                           "checked_at": str(receipt.get("verified_at") or "")},
             "production": production,
         })
+    for key, item in inventory.items():
+        if key in seen:
+            continue
+        production, production_bad, _ = _production(None, item)
+        lessons.append({"product": item["product"], "lesson": item["lesson"],
+                        "title": item["title"], "status": "failed",
+                        "problems": ["missing candidate receipt"] + production_bad,
+                        "candidate_newer_than_production": False,
+                        "candidate": {"url": "", "source_sha": "", "deployment_id": "",
+                                      "qa": "MISSING", "checked_at": ""},
+                        "production": production})
+    lessons.sort(key=lambda row: (row["product"], row["lesson"]))
     return {"schema_version": "nexus.lesson-preview-hub/v1", "state": "ok",
             "root": str(root), "lessons": lessons,
             "counts": {"total": len(lessons), "failed": sum(x["status"] == "failed" for x in lessons)}}
