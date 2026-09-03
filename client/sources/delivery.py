@@ -218,14 +218,14 @@ def _entries(queue: dict) -> list[dict]:
     return entries
 
 
-def _event(event: dict, generated_at: dt.datetime) -> int:
+def _event(event: dict, generated_at: dt.datetime) -> tuple[int, dt.datetime]:
     number = event.get("sequence")
     if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
         raise ContractError("delivery queue event sequence is invalid")
     if not isinstance(event.get("type"), str) or not event["type"]:
         raise ContractError("delivery queue event type is invalid")
-    _timestamp(event.get("at"), "delivery queue event timestamp", generated_at)
-    return number
+    at = _timestamp(event.get("at"), "delivery queue event timestamp", generated_at)
+    return number, at
 
 
 def _events(queue: dict, generated_at: dt.datetime) -> None:
@@ -234,9 +234,13 @@ def _events(queue: dict, generated_at: dt.datetime) -> None:
         raise ContractError("delivery queue sequence is invalid")
     if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
         raise ContractError("delivery queue events are malformed")
-    numbers = [_event(event, generated_at) for event in events]
+    parsed = [_event(event, generated_at) for event in events]
+    numbers = [number for number, _ in parsed]
     if numbers != sorted(set(numbers)) or (numbers and numbers[-1] > sequence):
         raise ContractError("delivery queue event sequence is inconsistent")
+    times = [at for _, at in parsed]
+    if times != sorted(times):
+        raise ContractError("delivery queue event timestamps reverse sequence order")
 
 
 def _active(queue: dict, generated_at: dt.datetime) -> tuple[dict | None, bool]:
@@ -265,7 +269,9 @@ def _last_finished(queue: dict, generated_at: dt.datetime) -> str | None:
     if not isinstance(last, dict):
         raise ContractError("delivery queue last run is malformed")
     finished = last.get("finished_at")
-    _timestamp(finished, "delivery run finish", generated_at)
+    finished_at = _timestamp(finished, "delivery run finish", generated_at)
+    heartbeat = _timestamp(last.get("heartbeat_at"), "last delivery heartbeat", finished_at)
+    _timestamp(last.get("started_at"), "last delivery run start", heartbeat)
     return finished
 
 

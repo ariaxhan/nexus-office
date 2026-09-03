@@ -135,7 +135,9 @@ class DeliverySourceTest(unittest.TestCase):
         generated_at = generated_at or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         value = {"schema": delivery.CONVEYOR_SCHEMA, "sequence": 1,
                  "generated_at": generated_at, "active_run": active,
-                 "last_run": {"finished_at": generated_at, "status": "PASS"},
+                 "last_run": {"started_at": "2026-09-03T09:00:00Z",
+                              "heartbeat_at": generated_at, "finished_at": generated_at,
+                              "status": "PASS"},
                  "entries": entries or [], "events": []}
         if active is not None and heartbeat is not None:
             active["heartbeat_at"] = heartbeat
@@ -256,6 +258,34 @@ class DeliverySourceTest(unittest.TestCase):
         queue["events"] = [{"sequence": 1, "at": "2026-09-03", "type": "heartbeat"}]
         (self.directory / "conveyor.json").write_text(json.dumps(queue))
         self.assertIn("canonical UTC seconds", delivery.read()["detail"])
+
+    def test_event_and_completed_run_chronology_cannot_reverse(self):
+        self.write_conveyor()
+        path = self.directory / "conveyor.json"
+        queue = json.loads(path.read_text())
+        queue["sequence"] = 2
+        queue["events"] = [
+            {"sequence": 1, "at": "2026-09-03T09:00:01Z", "type": "run_started"},
+            {"sequence": 2, "at": "2026-09-03T09:00:00Z", "type": "heartbeat"},
+        ]
+        path.write_text(json.dumps(queue))
+        self.assertIn("reverse sequence order", delivery.read()["detail"])
+
+        self.write_conveyor()
+        queue = json.loads(path.read_text())
+        queue["last_run"].update(started_at="2026-09-03T09:00:01Z",
+                                 heartbeat_at="2026-09-03T09:00:00Z",
+                                 finished_at="2026-09-03T09:00:00Z")
+        path.write_text(json.dumps(queue))
+        self.assertIn("producer boundary", delivery.read()["detail"])
+
+        self.write_conveyor()
+        queue = json.loads(path.read_text())
+        queue["last_run"].update(started_at="2026-09-03T09:00:00Z",
+                                 heartbeat_at="2026-09-03T09:00:02Z",
+                                 finished_at="2026-09-03T09:00:01Z")
+        path.write_text(json.dumps(queue))
+        self.assertIn("producer boundary", delivery.read()["detail"])
 
     def test_queue_must_preserve_canonical_producer_order(self):
         first = base_state(); self.write_state(first)
