@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd keeps tower alive and decides nothing else. Every schedule lives in
+     the ledger, so this file never changes when the work does. `nexus install`
+     rewrites ProgramArguments and WorkingDirectory for this machine. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nexus.tower</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>-m</string>
+    <string>nexus</string>
+    <string>tower</string>
+    <string>run</string>
+    <string>--interval</string>
+    <string>5</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/tmp/com.nexus.tower.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/com.nexus.tower.err</string>
+</dict>
+</plist>
