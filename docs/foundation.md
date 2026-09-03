@@ -204,7 +204,7 @@ complexity. Infrastructure is a cost center, not an objective.
 |---|---|---|
 | 1 ✅ merged 6ef2991 | `nexus/ledger.py`, schema v1 (objectives, plans, observations, tasks, flights, artifacts, landings, messages, gates, events, leases), migrations, integrity check, event log | unit tests; crash-tower asserts on a synthetic run |
 | 2 ✅ merged 6ef2991 | `nexus/tower.py`: tick, resource leases, budgets, quarantine, resolution ladder skeleton, task acceptance by policy, script flights, one plist `com.nexus.tower` | a script plan runs on schedule; `kill -9` mid-flight, restart, flight failed with a structured error and rescheduled |
-| 3 ✅ built, 1 of 3 real landings (`60d45cc0` in CollabVault) | landing for script flights (hangar clone to commit to push), human trees fast-forward | CollabVault and Vaults scheduled output lands as commits without anyone touching the checkout |
+| 3 ✅ built, 2 of 3 real landings (`60d45cc0`, `c30de3ad`; second through a tower `kill -9`) | landing for script flights (hangar clone to commit to push), human trees fast-forward | CollabVault and Vaults scheduled output lands as commits without anyone touching the checkout |
 | 4 | migrate the 43 plists into plans; delete `jobrun`, `jobctl`, `registry.jsonl`, plists | `launchctl list` shows one nexus job; every former job has a plan and a green or quarantined state |
 | 5 | claude, codex, antigravity flights with isolated clones; resolver and reviewer flights; gates as the last rung | a lane flight produces a branch, a verifier flight verifies, landing applies |
 | 6 | radio; Office reads the ledger for roster, desks, flows, gates; hcom removed | Office shows the same screens from one source |

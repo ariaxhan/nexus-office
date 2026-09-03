@@ -4,38 +4,22 @@
 no swarm. Spec of record: `docs/foundation.md` (Aria's design, not a proposal). Steps 1 and 2 are
 merged (`6ef2991`): ledger schema v1, tower tick, script flights, crash_tower v0, 57 tests.
 
-## Do, in order (risk class in brackets)
+## Where it stands (2026-09-03, after the subtraction pass)
 
-0. DONE 2026-09-03: `nexus/radio.py` + `tests/crash_tower/test_radio_hang.py` (bound removed on
-   purpose: the test fails with "runner process outlived its result"; restored: passes).
-   Remaining half: remove the hcom Stop/SubagentStop/SessionEnd hooks. Gated on step 5, because
-   today those hooks are the only thing delivering hcom messages to an idle interactive session;
-   pulling them before tower owns presence for Claude/Codex sessions breaks the real-work lane's
-   radio without giving it lifecycle. Until then: 15 s cap, fail open, no watchdog.
+The vertical slice is the baseline: plan `morning-briefing` (declared outputs
+`_meta/intelligence/morning-briefing-*.md` + `-latest.md`) lands into CollabVault main under the
+launchd tower. Two real landings so far (`60d45cc0`, `c30de3ad`); the second survived `kill -9`
+of tower mid-flight (launchd restarted it, the flight landed with only the declared files). One
+more consecutive landing, then retire the scrape inside `email-runner.sh morning-briefing`.
 
-1. Step 3 BUILT and FLOWN 2026-09-03: `nexus/landing.py` (hangar clone, commit, push,
-   reconcile, human-tree fast-forward), `tests/test_landing.py` (15 real-git cases). Real
-   airline: plan `morning-briefing-scrape` in the live ledger lands
-   `intelligence-scrape.sh morning-briefing` into CollabVault main. First landed flight
-   `flt_e68ac40da2b9` -> CollabVault `60d45cc0`, human tree fast-forwarded. Tower is installed
-   (`com.nexus.tower`, launchd, 5 s). Remaining for step 3: two more consecutive landed flights
-   (schedule `every 86400`, next ~13:29 daily), then retire the legacy scrape inside
-   `email-runner.sh morning-briefing`. Known wart: undeclared outputs are "everything git sees
-   changed", so CollabVault's own session hooks (`_meta/.runtime/*`, `.session_id`,
-   `actions.jsonl`) rode along in the landed commit; declare outputs or teach the hangar to
-   ignore hook litter before migrating a second airline.
-   Two engine bugs the live flight found and fixed: failure cleanup deleted the log (evidence
-   is now an artifact row + kept file before any rmtree; a workspace whose evidence cannot be
-   kept stays), and a released quarantine re-fired on the same old failures.
-   The exit-1 cause was the airline, not the engine: Ars Technica and The Verge block WebFetch
-   (curl 200, Claude cannot fetch), tripping the 3-source floor on 6 of 7 runs; swapped in
-   `sources.yaml` for MIT Technology Review and Simon Willison, both verified fetchable.
-2. [expensive, reversible] Step 4, migrate plists one airline at a time; `jobctl` and the 43
-   plists remain until each plan has landed real output. Never delete a mechanism the real-work
-   lane is using (see Coexistence in foundation.md).
-3. [architectural, already reviewed] Step 5, aircraft for claude, codex, antigravity in hangars;
-   resolver and reviewer flights; gates as the last rung.
-4. Step 6 radio, step 7 watchers and the Office's five columns, step 8 deletions with a test each.
+Engine is 2097 lines (was 3395): objectives, observations, messages, gates are gone; a plan that
+lands must declare outputs (paths or globs) and only those are artifacts and only artifacts land.
+Rules now in force: intent over ceremony; do not repair legacy guards; make nexus smaller.
+
+Next real work, in order: (1) third landing, retire the legacy scrape; (2) next airline the same
+way (midday-pulse or research-digest: same script, one plan each, declared outputs); (3) step 4,
+plists to plans one at a time, deleting each plist after its plan has landed real output.
+Not next: more foundation features, more guards, more observability.
 
 ## Facts the next session cannot see
 
