@@ -1,0 +1,15 @@
+:root { color-scheme: dark; --bg:#000; --card:#1b1b1b; --line:#303030; --text:#f0f0f0; --dim:#9a9a9a; --red:#ff5d5d; --green:#39d98a; --amber:#ffb020; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+header,main { width:min(1180px,100%); margin:auto; padding:20px; }
+header { display:flex; align-items:baseline; gap:16px; border-bottom:1px solid var(--line); }
+h1 { margin:0; font-size:20px; } header p { margin-left:auto; color:var(--dim); }
+a { color:inherit; }
+.lesson { display:grid; grid-template-columns:110px 1fr 1fr; gap:16px; background:var(--card); border:1px solid var(--line); border-left:4px solid var(--green); border-radius:10px; padding:16px; margin:12px 0; }
+.lesson.failed { border-left-color:var(--red); }
+.lesson.newer { border-left-color:var(--amber); }
+.identity strong,.identity span { display:block; } .identity span,.label,.meta { color:var(--dim); }
+.surface { min-width:0; } .surface h2 { font-size:12px; text-transform:uppercase; margin:0 0 8px; color:var(--dim); }
+.surface p { margin:4px 0; overflow-wrap:anywhere; } .problems { color:var(--red); grid-column:2/-1; margin:0; padding-left:18px; }
+.empty { color:var(--dim); padding:48px 0; }
+@media (max-width:700px) { header { align-items:flex-start; flex-wrap:wrap; } header p { width:100%; margin:0; } .lesson { grid-template-columns:1fr; } .problems { grid-column:1; } }
