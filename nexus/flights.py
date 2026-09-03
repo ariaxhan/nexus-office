@@ -14,7 +14,7 @@ import signal
 import subprocess
 import time
 
-from . import radio
+from . import landing, radio
 
 RESULT_NAME = "result.json"
 LOG_NAME = "log"
@@ -59,23 +59,35 @@ def read_result(workspace: str):
     return data, None
 
 
-def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None) -> dict:
+def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
+               target=None) -> dict:
     """Run one script flight to completion here, and write its result.
 
     Called in the detached child (`python3 -m nexus flight-run`), never in tower.
+    With a `target` (repo, branch) the script runs inside a hangar clone under
+    the workspace and its outputs are paths in that clone; landing commits them.
     """
     outputs = list(outputs or [])
     os.makedirs(workspace, exist_ok=True)
     started = time.time()
     code = None
     error = None
+    cwd = workspace
+    if target is not None:
+        try:
+            cwd = landing.clone_hangar(target[0], target[1], workspace)
+        except (landing.LandingError, subprocess.TimeoutExpired, OSError) as exc:
+            error = {"code": "hangar_failed", "detail": str(exc)[:400]}
     with open(os.path.join(workspace, LOG_NAME), "ab") as log:
         try:
+            if error is not None:
+                raise OSError(error["detail"])
             proc = subprocess.Popen(
-                ["/bin/sh", "-c", cmd], cwd=workspace, stdin=subprocess.DEVNULL,
+                ["/bin/sh", "-c", cmd], cwd=cwd, stdin=subprocess.DEVNULL,
                 stdout=log, stderr=log, start_new_session=True)
         except OSError as exc:
-            error = {"code": "spawn_failed", "detail": str(exc)}
+            if error is None:
+                error = {"code": "spawn_failed", "detail": str(exc)}
             proc = None
         if proc is not None:
             try:
@@ -86,22 +98,23 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None) -
                 error = {"code": "timeout", "detail": f"over {timeout_s}s"}
 
     artifacts = []
+    rel = os.path.relpath(cwd, workspace) if cwd != workspace else ""
     if outputs:
         for name in outputs:
-            if os.path.exists(os.path.join(workspace, name)):
-                artifacts.append({"kind": "file", "ref": name})
-    else:
+            if os.path.exists(os.path.join(cwd, name)):
+                artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
+    elif os.path.isdir(cwd):
         # Nothing declared: whatever the flight left behind IS the artifact set.
         # A plan that declares outputs gets them checked; one that does not still
         # gets what it made recorded, because an unrecorded artifact is a lie.
-        for name in sorted(os.listdir(workspace)):
-            if name in (LOG_NAME, RESULT_NAME) or name.endswith(".tmp"):
+        for name in sorted(os.listdir(cwd)):
+            if name in (LOG_NAME, RESULT_NAME, ".git") or name.endswith(".tmp"):
                 continue
-            artifacts.append({"kind": "file", "ref": name})
+            artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
     if error is None and code != 0:
         error = {"code": "exit_nonzero", "detail": f"exit {code}"}
     if error is None and outputs and len(artifacts) != len(outputs):
-        missing = [n for n in outputs if not os.path.exists(os.path.join(workspace, n))]
+        missing = [n for n in outputs if not os.path.exists(os.path.join(cwd, n))]
         error = {"code": "missing_output", "detail": ",".join(missing)}
 
     result = {
@@ -110,6 +123,8 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None) -
         "error": error,
         "cost": {"wall_s": round(time.time() - started, 3)},
     }
+    if target is not None:
+        result["hangar"] = rel
     write_result(workspace, result)
     # The result is on disk before the radio is touched: a hung radio can delay
     # this process by at most radio.timeout_s(), and cannot change what tower reads.

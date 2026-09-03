@@ -105,9 +105,13 @@ def cmd_plans_add(args):
         schedule["at"] = args.at
     if args.on:
         schedule["on"] = args.on
+    inputs = {"cmd": args.cmd}
+    if args.repo:
+        inputs["target"] = {"repo": os.path.abspath(os.path.expanduser(args.repo)),
+                            "branch": args.branch}
     plan = led.add_plan(
         name=args.name, kind="script", schedule=schedule,
-        inputs={"cmd": args.cmd}, outputs=args.output or [],
+        inputs=inputs, outputs=args.output or [],
         budget={"timeout_s": args.timeout, "max_retries": args.max_retries,
                 "concurrency": args.concurrency},
         resources=args.resource or [],
@@ -126,8 +130,11 @@ def cmd_plans_list(args):
 
 def cmd_flight_run(args):
     """The detached runner. Writes result.json; never talks to the ledger."""
+    target = (args.repo, args.branch) if args.repo else None
+    if target and not args.branch:
+        target = fl.landing.target_of({"target": {"repo": args.repo}})
     result = fl.run_script(args.workspace, args.cmd, timeout_s=args.timeout,
-                           outputs=args.output or [])
+                           outputs=args.output or [], target=target)
     return 0 if result["ok"] else 1
 
 
@@ -197,6 +204,8 @@ def build_parser():
     add.add_argument("--concurrency", type=int, default=tower.DEFAULT_CONCURRENCY)
     add.add_argument("--output", action="append", help="a file the flight must produce")
     add.add_argument("--resource", action="append", help="integration target to lease")
+    add.add_argument("--repo", help="human checkout to land into (hangar clone, push to its origin)")
+    add.add_argument("--branch", help="target branch (default: the checkout's current branch)")
     add.set_defaults(func=cmd_plans_add)
     listing = plans_subs.add_parser("list")
     listing.set_defaults(func=cmd_plans_list)
@@ -206,6 +215,8 @@ def build_parser():
     run_p.add_argument("--cmd", required=True)
     run_p.add_argument("--timeout", type=float, default=600.0)
     run_p.add_argument("--output", action="append")
+    run_p.add_argument("--repo")
+    run_p.add_argument("--branch")
     run_p.set_defaults(func=cmd_flight_run)
 
     install = subs.add_parser("install", help="write and load the launchd plist")

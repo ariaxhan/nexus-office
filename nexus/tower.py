@@ -8,7 +8,8 @@ comes from the ledger; nothing it learns lives anywhere else. That is what makes
 Tick order is load bearing:
 
     expire leases -> budgets -> reap finished -> reconcile vanished ->
-    reconcile applying landings -> quarantine -> accept tasks -> schedule -> launch
+    reconcile applying landings -> land verified -> quarantine -> accept tasks ->
+    schedule -> launch
 
 Reaping before reconciling is why a flight that finished and exited between two
 ticks is read as produced rather than declared vanished.
@@ -21,10 +22,12 @@ import datetime
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 
 from . import flights as fl
+from . import landing as ld
 from .ledger import Ledger, loads
 
 DEFAULT_CONCURRENCY = 4
@@ -95,7 +98,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report = {
         "expired": 0, "timed_out": 0, "produced": 0, "failed": 0, "vanished": 0,
         "launched": 0, "scheduled": 0, "accepted": 0, "rejected": 0,
-        "quarantined": 0, "retried": 0, "reconciled_landings": 0,
+        "quarantined": 0, "retried": 0, "reconciled_landings": 0, "landed": 0,
     }
 
     report["expired"] = len(ledger.expire_leases(now))
@@ -108,6 +111,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report["retried"] = _retry_exhausted(ledger, now)
     _sweep_workspaces(ledger)
     report["reconciled_landings"] = _reconcile_landings(ledger, now, landing_probe)
+    report["landed"] = _land(ledger, now)
     report["quarantined"] = _quarantine(ledger, now)
 
     if is_paused(ledger):
@@ -164,10 +168,12 @@ def _reap(ledger, now, root):
                     ledger.add_artifact(flight["id"], artifact.get("kind", "file"),
                                         os.path.join(workspace, artifact.get("ref", "")),
                                         artifact.get("sha"), now=now)
-                ledger.release_leases(flight["id"], now=now)
-                if flight["task_id"]:
-                    ledger.set_task_state(flight["task_id"], "done", decided_by="tower policy",
-                                          expect="running", now=now)
+                if _target(ledger, flight) is None:
+                    ledger.release_leases(flight["id"], now=now)
+                    if flight["task_id"]:
+                        ledger.set_task_state(flight["task_id"], "done",
+                                              decided_by="tower policy", expect="running",
+                                              now=now)
                 out["produced"] += 1
             continue
         err = result.get("error") or {}
@@ -212,7 +218,7 @@ def _sweep_workspaces(ledger):
     Deleting it here rather than only at failure is why "an out.txt on disk means
     a produced flight" survives tower being killed between the two writes.
     """
-    for flight in ledger.flights(states=("failed", "cancelled"), limit=200):
+    for flight in ledger.flights(states=("failed", "cancelled", "landed"), limit=200):
         workspace = flight["workspace"]
         if workspace and os.path.isdir(workspace):
             shutil.rmtree(workspace, ignore_errors=True)
@@ -242,27 +248,140 @@ def _retry_exhausted(ledger, now):
     return made
 
 
+def _target(ledger, flight):
+    plan = ledger.plan(flight["plan_id"])
+    try:
+        return ld.target_of(loads(plan["inputs"], {}) or {})
+    except ld.LandingError:
+        return None
+
+
+def _land(ledger, now):
+    """produced -> verified -> applying -> applied, for flights that have a target.
+
+    A script flight's verification IS the runner's declared-output check, so
+    `verified` follows `produced` directly. Landing then commits the outputs in
+    the hangar, records `applying` with the sha, pushes, records `applied`.
+    """
+    landed = 0
+    for flight in ledger.flights(states=("produced",)):
+        target = _target(ledger, flight)
+        if target is None:
+            continue
+        if not ledger.set_state(flight["id"], "verified", expect="produced", now=now):
+            continue
+        flight = ledger.flight(flight["id"])
+        landed += _land_one(ledger, flight, target, now)
+    return landed
+
+
+def _land_one(ledger, flight, target, now):
+    repo, branch = target
+    plan = ledger.plan(flight["plan_id"])
+    hangar = ld.hangar_path(flight["workspace"] or "")
+    if not os.path.isdir(hangar):
+        _fail_landing(ledger, flight, None, "hangar_missing", hangar, now)
+        return 0
+    try:
+        key = ld.target_key(repo, branch)
+        sha, changed = ld.commit_outputs(hangar, loads(plan["outputs"], []) or [],
+                                         f"nexus: {plan['name']} ({flight['id']})")
+        landing_id = ledger.create_landing(flight["id"], key, expected_sha=sha,
+                                           state="verified", now=now)
+        ledger.start_applying(landing_id, sha, now=now)
+        if changed:
+            ld.push(hangar, branch)
+        return _applied(ledger, landing_id, sha, repo, branch, now)
+    except (ld.LandingError, OSError) as exc:
+        code = getattr(exc, "code", "landing_failed")
+        rows = [r for r in ledger.landings(states=("applying", "verified"))
+                if r["flight_id"] == flight["id"]]
+        _fail_landing(ledger, ledger.flight(flight["id"]), rows[0]["id"] if rows else None,
+                      code, getattr(exc, "detail", str(exc)), now)
+        return 0
+    except subprocess.TimeoutExpired as exc:
+        _fail_landing(ledger, ledger.flight(flight["id"]), None, "git_timeout", str(exc), now)
+        return 0
+
+
+def _applied(ledger, landing_id, sha, repo, branch, now):
+    if not ledger.apply_landing(landing_id, sha, now=now):
+        return 0
+    row = ledger.landing(landing_id)
+    flight = ledger.flight(row["flight_id"])
+    if flight["task_id"]:
+        ledger.set_task_state(flight["task_id"], "done", decided_by="tower policy",
+                              expect="running", now=now)
+    try:
+        moved = ld.fast_forward(repo, branch, sha)
+    except (ld.LandingError, OSError, subprocess.TimeoutExpired) as exc:
+        moved = f"error: {str(exc)[:200]}"
+    ledger.event("landing.human_tree", flight["id"], {"repo": repo, "branch": branch,
+                                                       "sha": sha, "outcome": moved}, "tower", now)
+    return 1
+
+
+def _fail_landing(ledger, flight, landing_id, code, detail, now):
+    if landing_id:
+        ledger.refuse_landing(landing_id, f"{code}: {detail}", now=now)
+    if ledger.fail(flight["id"], code, str(detail)[:400], expect=flight["state"], now=now):
+        _finish_failed(ledger, flight, now)
+
+
 def _reconcile_landings(ledger, now, probe=None):
     """`applying` is the one landing state that outlives a crash mid-push.
 
-    Without a probe (step 3 supplies the GitHub one) tower only records that the
-    row needs reconciling. It never guesses that a push happened.
+    Ask the remote for the branch tip. Equal to `expected_sha`: record applied.
+    Otherwise push again from the hangar if it still exists; if the hangar is
+    gone, refuse, because nothing can be re-pushed and nothing may be guessed.
     """
     rows = ledger.landings(states=("applying",))
     if not rows:
         return 0
+    probe = probe or ld.remote_tip
     done = 0
     for row in rows:
-        if probe is None:
-            ledger.event("landing.needs_reconcile", row["flight_id"],
-                         {"landing": row["id"], "expected_sha": row["expected_sha"]},
-                         "tower", now)
-            continue
-        tip = probe(row["target"])
-        if tip and tip == row["expected_sha"]:
-            ledger.apply_landing(row["id"], tip, now=now)
-            done += 1
+        flight = ledger.flight(row["flight_id"])
+        target = _target(ledger, flight)
+        try:
+            tip = probe(row["target"])
+            if tip == row["expected_sha"] or (target and _contains(target, row["expected_sha"])):
+                repo, branch = target if target else (None, None)
+                if repo:
+                    done += _applied(ledger, row["id"], row["expected_sha"], repo, branch, now)
+                else:
+                    ledger.apply_landing(row["id"], row["expected_sha"], now=now)
+                    done += 1
+                continue
+            hangar = ld.hangar_path(flight["workspace"] or "")
+            if target is None or not os.path.isdir(hangar):
+                _fail_landing(ledger, flight, row["id"], "landing_lost",
+                              "hangar gone before the push was confirmed", now)
+                continue
+            ld.push(hangar, target[1])
+            done += _applied(ledger, row["id"], row["expected_sha"], target[0], target[1], now)
+        except (ld.LandingError, OSError, subprocess.TimeoutExpired) as exc:
+            code = getattr(exc, "code", "landing_failed")
+            if code == "remote_unreachable":
+                ledger.event("landing.needs_reconcile", flight["id"],
+                             {"landing": row["id"], "expected_sha": row["expected_sha"],
+                              "reason": code}, "tower", now)
+                continue  # try again next tick; the remote will come back
+            _fail_landing(ledger, flight, row["id"], code, getattr(exc, "detail", str(exc)), now)
     return done
+
+
+def _contains(target, sha):
+    """Is `sha` already an ancestor of the remote branch? Then the push happened."""
+    repo, branch = target
+    try:
+        subprocess.run(["git", "fetch", "--quiet", "origin", branch], cwd=repo,
+                       capture_output=True, timeout=ld.GIT_TIMEOUT_S, check=False)
+        proc = subprocess.run(["git", "merge-base", "--is-ancestor", sha, f"origin/{branch}"],
+                              cwd=repo, capture_output=True, timeout=ld.GIT_TIMEOUT_S)
+        return proc.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def _quarantine(ledger, now):
@@ -433,6 +552,11 @@ def _spawn(ledger, plan, flight_id, workspace, timeout_s):
             "--cmd", cmd, "--timeout", str(timeout_s)]
     for name in outputs:
         argv += ["--output", name]
+    target = inputs.get("target") or {}
+    if target.get("repo"):
+        argv += ["--repo", target["repo"]]
+        if target.get("branch"):
+            argv += ["--branch", target["branch"]]
     package_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = dict(os.environ)
     env["PYTHONPATH"] = package_parent + os.pathsep + env.get("PYTHONPATH", "")
