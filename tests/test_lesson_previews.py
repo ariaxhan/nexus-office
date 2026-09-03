@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
 import sys
 import tempfile
 import unittest
@@ -130,3 +131,32 @@ class HubTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReceiptErrorDisclosureTests(unittest.TestCase):
+    """The rows are published as a public static file, so a problem string may
+    say what went wrong and never where on the builder's disk it went wrong."""
+
+    def test_unreadable_receipt_does_not_publish_the_local_path(self):
+        root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        lesson = root / "MommyAI" / "L001"
+        lesson.mkdir(parents=True)
+        (lesson / "preview.json").symlink_to(root / "nowhere" / "gone.json")
+        row, = lesson_previews.build(root, None)["lessons"]
+        self.assertEqual(row["status"], "failed")
+        problem, = row["problems"]
+        self.assertNotIn(str(root), problem)
+        self.assertNotIn("preview.json", problem)
+        self.assertIn("FileNotFoundError", problem)
+
+    def test_malformed_receipt_still_names_the_parse_failure(self):
+        root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        lesson = root / "MommyAI" / "L001"
+        lesson.mkdir(parents=True)
+        (lesson / "preview.json").write_text("{not json", encoding="utf-8")
+        row, = lesson_previews.build(root, None)["lessons"]
+        problem, = row["problems"]
+        self.assertIn("JSONDecodeError", problem)
+        self.assertNotIn(str(root), problem)

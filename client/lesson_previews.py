@@ -35,10 +35,16 @@ def _catalog_root() -> pathlib.Path | None:
 
 
 def _json(path: pathlib.Path) -> tuple[dict | None, str]:
+    """Read one receipt. The problem string is published verbatim in the static
+    export, which is why `build` drops `root`; an OSError stringifies with the
+    filename it failed on, so it would put the builder's absolute local path
+    back into the same public file. Say what went wrong, never where."""
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return None, f"{type(exc).__name__}: {exc}"[:180]
+    except OSError as exc:
+        return None, f"{type(exc).__name__}: {exc.strerror or 'unreadable'}"[:180]
+    except json.JSONDecodeError as exc:
+        return None, f"{type(exc).__name__}: {exc.msg} (line {exc.lineno})"[:180]
     return (value, "") if isinstance(value, dict) else (None, "receipt is not an object")
 
 
