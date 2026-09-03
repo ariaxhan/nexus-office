@@ -44,7 +44,7 @@ function draw(data) {
   toggle.textContent = `Show all ${data.counts.total} lessons`;
   toggle.addEventListener("click", () => {
     const opening = all.hidden;
-    if (opening && !all.innerHTML) all.innerHTML = data.lessons.map(card).join("");
+    if (opening && !all.innerHTML) all.innerHTML = data.lessons.map(row => card(row)).join("");
     all.hidden = !opening;
     toggle.setAttribute("aria-expanded", String(opening));
     toggle.textContent = opening ? "Hide lesson inventory" : `Show all ${data.counts.total} lessons`;

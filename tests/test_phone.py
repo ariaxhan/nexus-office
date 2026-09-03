@@ -16,6 +16,8 @@ import http.client
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import unittest
@@ -513,3 +515,67 @@ class MobileDeskTest(unittest.TestCase):
         self.assertIn('button("refresh"', js)
         self.assertIn("existing.files", js)
         self.assertIn("got.body.files", js)
+
+
+class LessonInventoryTest(unittest.TestCase):
+    """The inventory list draws every lesson with the card that the verified
+    list draws two of. A card handed to `map` directly is handed the index too,
+    so every row but the first would claim to be a ready candidate: a green
+    stripe on a lesson with no preview evidence at all. The page exists to say
+    which lessons are ready, so that is the whole page lying.
+
+    The shim runs the real `draw` and the real toggle handler, because a test
+    that rebuilds the call site cannot see the call site being wrong.
+    """
+
+    SHIM = """
+const rows = JSON.parse(process.argv[1]);
+const nodes = {};
+const make = () => ({textContent: "", innerHTML: "", hidden: true,
+                     setAttribute() {}, addEventListener(_, fn) { this.click = fn; }});
+for (const id of ["summary", "previews", "coverage", "all-lessons",
+                  "toggle-all", "preview-count"]) nodes[id] = make();
+globalThis.document = {getElementById: id => nodes[id]};
+globalThis.fetch = () => { throw new Error("the page must not fetch under test"); };
+%s
+draw({state: "ok", lessons: rows, counts: {total: rows.length}});
+nodes["toggle-all"].click();
+console.log(JSON.stringify({inventory: nodes["all-lessons"].innerHTML,
+                            previews: nodes["previews"].innerHTML}));
+"""
+
+    def render(self, rows):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is required to run the viewer script")
+        source = (ROOT / "client" / "phone" / "lessons.js").read_text(encoding="utf-8")
+        source = source[:source.index('fetch("/api/lesson-previews")')]
+        done = subprocess.run([node, "-e", self.SHIM % source, json.dumps(rows)],
+                              capture_output=True, text=True, check=True)
+        return json.loads(done.stdout)
+
+    @staticmethod
+    def row(lesson, url=""):
+        return {"product": "MommyAI", "lesson": lesson,
+                "status": "current" if url else "failed",
+                "problems": [] if url else ["missing candidate receipt"],
+                "candidate_newer_than_production": False,
+                "candidate": {"url": url, "source_sha": "", "deployment_id": "",
+                              "qa": "PASS" if url else "MISSING", "checked_at": ""},
+                "production": {"url": "", "source_sha": "", "deployment_id": "",
+                               "checked_at": ""}}
+
+    def test_the_inventory_never_draws_an_unverified_lesson_as_ready(self):
+        """Three lessons with no candidate URL. Every one of them, not only the
+        first, must draw as failed."""
+        got = self.render([self.row("L001"), self.row("L002"), self.row("L003")])
+        self.assertEqual(got["inventory"].count("candidate-ready"), 0, got["inventory"])
+        self.assertEqual(got["inventory"].count('class="lesson failed"'), 3,
+                         got["inventory"])
+
+    def test_the_verified_list_still_marks_its_own_rows_ready(self):
+        """The fix must not take the green stripe off the rows that earned it."""
+        got = self.render([self.row("L001"),
+                           self.row("L002", url="https://candidate.example/l2")])
+        self.assertEqual(got["previews"].count("candidate-ready"), 1, got["previews"])
+        self.assertEqual(got["inventory"].count("candidate-ready"), 0, got["inventory"])
