@@ -86,6 +86,7 @@ class PageTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
         self.assertIn("<title>The office</title>", body)
+        self.assertIn('href="/lessons"', body)
 
     def test_the_page_carries_the_policy_that_makes_three_files_worth_it(self):
         code, headers, _ = self.fetch("/")
@@ -113,6 +114,24 @@ class PageTest(unittest.TestCase):
             self.assertEqual(headers["content-type"], ctype, path)
             self.assertIn(needle, body, path)
             self.assertIn("content-security-policy", headers, path)
+
+    def test_lesson_hub_files_arrive_through_the_same_door(self):
+        for path, ctype, needle in (
+            ("/lessons", "text/html; charset=utf-8", "<title>Lesson previews</title>"),
+            ("/lessons.css", "text/css; charset=utf-8", "--red:#ff5d5d"),
+            ("/lessons.js", "text/javascript; charset=utf-8", "/api/lesson-previews"),
+        ):
+            code, headers, body = self.fetch(path)
+            self.assertEqual((code, headers["content-type"]), (200, ctype), path)
+            self.assertIn(needle, body, path)
+
+    def test_lesson_hub_api_is_generated_from_receipts(self):
+        was = self.serve.lesson_previews.build
+        self.serve.lesson_previews.build = lambda: {"state": "ok", "lessons": []}
+        self.addCleanup(setattr, self.serve.lesson_previews, "build", was)
+        code, _, body = self.fetch("/api/lesson-previews")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body), {"state": "ok", "lessons": []})
 
     def test_anything_else_is_still_nothing(self):
         """The page is an exact map of names. A file that is not on it, a

@@ -56,6 +56,7 @@ import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import context  # noqa: E402
 import live  # noqa: E402
+import lesson_previews  # noqa: E402
 import runtime as rt  # noqa: E402
 import search  # noqa: E402
 import sessions  # noqa: E402
@@ -150,7 +151,9 @@ NO_PAGE = "the office is at /; there is nothing else here"
 # traversal question never has to be answered correctly under pressure.
 PHONE = HERE / "phone"
 PAGE = {"/": "index.html", "/index.html": "index.html",
-        "/phone.css": "phone.css", "/phone.js": "phone.js"}
+        "/phone.css": "phone.css", "/phone.js": "phone.js",
+        "/lessons": "lessons.html", "/lessons.html": "lessons.html",
+        "/lessons.css": "lessons.css", "/lessons.js": "lessons.js"}
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8"}
 
@@ -535,6 +538,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"at": self.world.at, "world": self.world.snapshot,
                                    "decisions": self.world.recent(),
                                    "fresh": fresh, "server_time": now_iso()})
+            if path == "/api/lesson-previews":
+                return self._json(lesson_previews.build())
             if path == "/api/desks":
                 return self._json({"hidden": office_sync.read_hidden()})
             if path == "/api/pins":
