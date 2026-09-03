@@ -524,6 +524,37 @@ class Handler(BaseHTTPRequestHandler):
         return out
 
     # ── routes ──────────────────────────────────────────────────────────────
+    # A route that is a name and an answer: no query string to read, no status
+    # code of its own, nothing to decide. These live in a table rather than in
+    # `do_GET`'s ladder of `if`s so that adding one costs a line instead of a
+    # branch, and so the ladder that remains is only the routes that genuinely
+    # have to think about what they were asked. Everything here is a read; the
+    # host, identity and 404 rules are `do_GET`'s and are unchanged by moving
+    # the answer out of it.
+    SIMPLE_GET = {
+        "/api/lesson-previews": lambda self: lesson_previews.build(),
+        "/api/desks": lambda self: {"hidden": office_sync.read_hidden()},
+        "/api/pins": lambda self: {"pins": office_sync.read_pins()},
+        "/api/gate": lambda self: rt.read_gate(),
+        "/api/gates": lambda self: self._gates(),
+        "/api/bots": lambda self: self.chatroom.roster(),
+        "/api/webhook": lambda self: self._webhook_status(),
+        # Straight off the snapshot, never a rebuild: every number on this page
+        # was measured when the room was built, and a page that re-measures on
+        # open would disagree with the card that sent you to it.
+        "/api/automation": lambda self: {"at": self.world.at,
+                                         "automation": self.world.snapshot.get("automation") or {}},
+        # The other half of `/api/sessions`, and deliberately not folded into
+        # it: that one is the list of sessions that joined the harness, which is
+        # what can be ANSWERED, and this one is the process table, which is what
+        # is RUNNING. One route answering both would have to pick which of the
+        # two counts to be wrong about. Nothing here writes, and there is no
+        # POST beside it.
+        "/api/live": lambda self: live.read(),
+        "/api/health": lambda self: {"ok": True, "snapshot_at": self.world.at,
+                                     "server_time": now_iso()},
+    }
+
     def do_GET(self):  # noqa: N802 (http.server's name)
         path, _, query = self.path.partition("?")
         if not self._host_ok():
@@ -538,16 +569,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"at": self.world.at, "world": self.world.snapshot,
                                    "decisions": self.world.recent(),
                                    "fresh": fresh, "server_time": now_iso()})
-            if path == "/api/lesson-previews":
-                return self._json(lesson_previews.build())
-            if path == "/api/desks":
-                return self._json({"hidden": office_sync.read_hidden()})
-            if path == "/api/pins":
-                return self._json({"pins": office_sync.read_pins()})
-            if path == "/api/gate":
-                return self._json(rt.read_gate())
-            if path == "/api/gates":
-                return self._json(self._gates())
+            answer = self.SIMPLE_GET.get(path)
+            if answer is not None:
+                return self._json(answer(self))
             if path == "/api/board":
                 # The feed. Every account is a repo. No `repo` is the global timeline;
                 # `?repo=owner-name` is one account's. `/api/gates` next door is what is
@@ -562,21 +586,10 @@ class Handler(BaseHTTPRequestHandler):
                     kind=(q.get("kind") or [""])[0],
                     q=(q.get("q") or [""])[0],
                     limit=limit))
-            if path == "/api/bots":
-                return self._json(self.chatroom.roster())
             if path == "/api/chat":
                 bot = (urllib.parse.parse_qs(query).get("bot") or [""])[0]
                 code, body = self.chatroom.history(bot)
                 return self._json(body, code)
-            if path == "/api/webhook":
-                return self._json(self._webhook_status())
-            if path == "/api/automation":
-                # Straight off the snapshot, never a rebuild: every number on
-                # this page was measured when the room was built, and a page
-                # that re-measures on open would disagree with the card that
-                # sent you to it.
-                return self._json({"at": self.world.at,
-                                   "automation": self.world.snapshot.get("automation") or {}})
             if path == "/api/context":
                 # Two names off the query string and nothing else. Every rule
                 # about where this may look and what it may open lives in
@@ -587,14 +600,6 @@ class Handler(BaseHTTPRequestHandler):
                 code, body = context.read((q.get("repo") or [""])[0],
                                           (q.get("path") or [""])[0])
                 return self._json(body, code)
-            if path == "/api/live":
-                # The other half of `/api/sessions`, and deliberately not folded
-                # into it: that one is the list of sessions that joined the
-                # harness, which is what can be ANSWERED, and this one is the
-                # process table, which is what is RUNNING. One route answering
-                # both would have to pick which of the two counts to be wrong
-                # about. Nothing here writes, and there is no POST beside it.
-                return self._json(live.read())
             if path == "/api/live/transcript":
                 # The key is the whole of what a caller controls: `engine-pid`,
                 # refused before it is looked up. The file that gets opened is
@@ -633,9 +638,6 @@ class Handler(BaseHTTPRequestHandler):
                 # have taken rather than opening a new door.
                 q = urllib.parse.parse_qs(query)
                 return self._json(search.run((q.get("q") or [""])[0]))
-            if path == "/api/health":
-                return self._json({"ok": True, "snapshot_at": self.world.at,
-                                   "server_time": now_iso()})
             if path.startswith("/api/"):
                 return self._json({"error": "not found"}, 404)
             return self._page(path)
