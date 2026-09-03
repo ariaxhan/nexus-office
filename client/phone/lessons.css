@@ -16,6 +16,7 @@ button { min-height:44px; border:1px solid var(--line); border-radius:8px; paddi
 button:hover { border-color:var(--dim); } button:focus-visible,a:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
 .lesson { display:grid; grid-template-columns:minmax(130px,.55fr) minmax(0,1fr) minmax(0,1fr); gap:20px; background:var(--card); border:1px solid var(--line); border-left:4px solid var(--green); border-radius:10px; padding:16px; margin:12px 0; }
 .lesson.failed { border-left-color:var(--red); }
+.lesson.candidate-ready { border-left-color:var(--green); }
 .lesson.newer { border-left-color:var(--amber); }
 .identity { min-width:0; } .identity strong,.identity span { display:block; overflow-wrap:anywhere; } .identity span,.label,.meta { color:var(--dim); }
 .surface { min-width:0; } .surface h2 { font-size:12px; text-transform:uppercase; margin:0 0 8px; color:var(--dim); }
