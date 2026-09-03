@@ -617,12 +617,17 @@ class Ledger:
             self._event("flight.pid", flight_id, {"pid": pid}, "tower", now)
         return True
 
-    def fail(self, flight_id, code, detail="", expect=None, now=None, cost=None):
-        """Every failure carries a code. Free text is never the result."""
+    def fail(self, flight_id, code, detail="", expect=None, now=None, cost=None, error=None):
+        """Every failure carries a code. Free text is never the result.
+
+        `error` may carry the runner's whole structured error (exit code and
+        the like); code and detail always win over it.
+        """
+        err = dict(error or {})
+        err.update({"code": code, "detail": detail})
         return self.set_state(
             flight_id, "failed", expect=expect, now=now,
-            result={"ok": False, "artifacts": [], "error": {"code": code, "detail": detail},
-                    "cost": cost or {}})
+            result={"ok": False, "artifacts": [], "error": err, "cost": cost or {}})
 
     # ---- artifacts -------------------------------------------------------
 

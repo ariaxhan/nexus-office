@@ -116,7 +116,7 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
                 continue
             artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
     if error is None and code != 0:
-        error = {"code": "exit_nonzero", "detail": f"exit {code}"}
+        error = {"code": "exit_nonzero", "detail": f"exit {code}", "exit_code": code}
     if error is None and outputs and len(artifacts) != len(outputs):
         missing = [n for n in outputs if not os.path.exists(os.path.join(cwd, n))]
         error = {"code": "missing_output", "detail": ",".join(missing)}

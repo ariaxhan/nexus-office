@@ -168,7 +168,7 @@ def cmd_log(args):
     if flight is None:
         print(f"no such flight: {args.flight}", file=sys.stderr)
         return 1
-    candidates = [os.path.join(tower.logs_root(led), f"{args.flight}.log")]
+    candidates = [a["ref"] for a in led.artifacts(args.flight) if a["kind"] == "log"]
     if flight["workspace"]:
         candidates.insert(0, os.path.join(flight["workspace"], fl.LOG_NAME))
     for path in candidates:

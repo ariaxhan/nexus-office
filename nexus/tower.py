@@ -179,7 +179,7 @@ def _reap(ledger, now, root):
         err = result.get("error") or {}
         code = err.get("code") or "unknown"
         if ledger.fail(flight["id"], code, str(err.get("detail", "")), expect="running",
-                       now=now, cost=result.get("cost")):
+                       now=now, cost=result.get("cost"), error=err):
             _finish_failed(ledger, flight, now)
             out["failed"] += 1
     return out
@@ -209,8 +209,8 @@ def _finish_failed(ledger, flight, now):
     ledger.release_leases(flight["id"], now=now)
     workspace = flight["workspace"]
     if workspace and os.path.isdir(workspace):
-        _keep_log(ledger, flight["id"], workspace)
-        shutil.rmtree(workspace, ignore_errors=True)
+        if _keep_log(ledger, flight["id"], workspace):
+            shutil.rmtree(workspace, ignore_errors=True)
 
 
 def logs_root(ledger):
@@ -218,14 +218,31 @@ def logs_root(ledger):
 
 
 def _keep_log(ledger, flight_id, workspace):
-    """The log is the only thing a person can read after a failure. Keep it."""
+    """Persist the failure evidence, then say whether the workspace may go.
+
+    The structured error and exit code are already in the flight's `result`;
+    the log is the rest of what a diagnosis needs. It is copied next to the
+    ledger and recorded as an artifact of the flight, and only when both
+    succeeded is the workspace cleared. A workspace whose evidence could not
+    be kept stays on disk: the evidence outranks the tidiness.
+    """
     src = os.path.join(workspace, fl.LOG_NAME)
     if not os.path.exists(src):
-        return
+        return True
+    if any(a["kind"] == "log" for a in ledger.artifacts(flight_id)):
+        return True
     root = logs_root(ledger)
-    os.makedirs(root, exist_ok=True)
-    with contextlib.suppress(OSError):
-        shutil.copyfile(src, os.path.join(root, f"{flight_id}.log"))
+    dst = os.path.join(root, f"{flight_id}.log")
+    try:
+        os.makedirs(root, exist_ok=True)
+        tmp = dst + ".tmp"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dst)
+        ledger.add_artifact(flight_id, "log", dst)
+    except OSError as exc:
+        ledger.event("flight.evidence_not_kept", flight_id, {"error": str(exc)[:200]}, "tower")
+        return False
+    return True
 
 
 def _sweep_workspaces(ledger):
@@ -237,8 +254,8 @@ def _sweep_workspaces(ledger):
     for flight in ledger.flights(states=("failed", "cancelled", "landed"), limit=200):
         workspace = flight["workspace"]
         if workspace and os.path.isdir(workspace):
-            if flight["state"] != "landed":
-                _keep_log(ledger, flight["id"], workspace)
+            if flight["state"] != "landed" and not _keep_log(ledger, flight["id"], workspace):
+                continue
             shutil.rmtree(workspace, ignore_errors=True)
 
 
