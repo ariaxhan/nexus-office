@@ -270,14 +270,14 @@ if __name__ == "__main__":
 
 
 class WatchTest(unittest.TestCase):
-    def test_merge_is_quiet_and_only_proven_notified_terminal_announces(self):
+    def test_merge_and_terminal_are_quiet_because_delivery_owns_its_buzz_send(self):
         with unittest.mock.patch.object(buzz, "notify", return_value=True) as notify:
             self.assertFalse(buzz.announce_receipt({"outcome": "merged", "repo": "a/b", "issue": "1"}))
             self.assertFalse(buzz.announce_receipt({"outcome": "terminal", "repo": "a/b", "issue": "1",
                                                    "live_outcome": "PASS", "notification_accepted": False}))
-            self.assertTrue(buzz.announce_receipt({"outcome": "terminal", "repo": "a/b", "issue": "1",
-                                                  "live_outcome": "PASS", "notification_accepted": True}))
-            notify.assert_called_once()
+            self.assertFalse(buzz.announce_receipt({"outcome": "terminal", "repo": "a/b", "issue": "1",
+                                                   "live_outcome": "PASS", "notification_accepted": True}))
+            notify.assert_not_called()
 
     def test_only_a_hand_that_was_not_there_before_is_new(self):
         gates = [{"id": "a"}, {"id": "b"}, {"id": ""}]

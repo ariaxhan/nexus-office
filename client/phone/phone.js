@@ -1439,7 +1439,7 @@ function automationDelivery(delivery) {
   const wrap = el("div", "card sub");
   const bar = el("div", "head");
   bar.appendChild(el("span", "title", "delivery conveyor"));
-  bar.appendChild(el("span", "pill" + (delivery.pipeline_health === "blocked" ? " wants" : ""),
+  bar.appendChild(el("span", "pill" + (delivery.pipeline_health !== "ok" ? " wants" : ""),
                           delivery.pipeline_health || "unknown"));
   wrap.appendChild(bar);
   [["running now", delivery.running_now], ["next up", delivery.next_up],
@@ -1458,6 +1458,7 @@ function automationNeedsSomebody(page) {
   const now = page.now || {};
   return Boolean(sched.overdue || sched.deferring || now.stale_pid
                  || (page.trigger && page.trigger.blocked_by)
+                 || (page.delivery && page.delivery.pipeline_health !== "ok")
                  || (page.delivery && page.delivery.blocked && page.delivery.blocked.length)
                  || page.state === "unreadable");
 }

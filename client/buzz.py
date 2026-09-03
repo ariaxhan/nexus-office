@@ -191,10 +191,10 @@ def lane_refused(repo, issue, detail) -> str:
 
 
 # ── the watcher ──────────────────────────────────────────────────────────────
-# Three things are worth a ping on the board: a hand raised, a PR landed, a
-# lane refused. Gates come from the runtime floor; the other two come from the
-# pipeline's own receipts, tailed by byte offset so a restart never re-announces
-# the past (the first read only takes a position).
+# Two things are worth a ping from Office: a hand raised and a lane refused.
+# Delivery itself owns its exact Buzz notification and durable acceptance
+# receipt. Re-announcing a terminal delivery here would duplicate that message
+# and, worse, would make Office a second delivery authority.
 
 def new_gate_ids(seen: set, gates: list) -> list:
     """The ids on the floor now that were not there before, oldest first."""
@@ -229,9 +229,6 @@ def new_receipts(path, offset: int):
 def announce_receipt(row: dict) -> bool:
     outcome = str(row.get("outcome") or "")
     repo = str(row.get("repo") or "")
-    if outcome == "terminal" and row.get("live_outcome") == "PASS" and row.get("notification_accepted") is True:
-        return notify("delivery_terminal", pr_landed(repo, row.get("issue") or "", row.get("detail") or ""),
-                      subject=f"{repo}#{row.get('issue') or ''}")
     if outcome == "refused":
         return notify("lane_refused", lane_refused(repo, row.get("issue") or "", row.get("detail") or ""),
                       subject=f"{repo}#{row.get('issue') or ''}")

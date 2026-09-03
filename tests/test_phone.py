@@ -466,6 +466,18 @@ class AutomationAndSessionsTest(unittest.TestCase):
 
 
 class DriftAndNoiseTest(unittest.TestCase):
+    def test_delivery_health_other_than_ok_is_a_visible_alarm(self):
+        js = (PHONE / "phone.js").read_text()
+        self.assertIn('delivery.pipeline_health !== "ok" ? " wants"', js)
+        self.assertIn('page.delivery.pipeline_health !== "ok"', js)
+
+    def test_delivery_groups_use_the_producer_s_explicit_views(self):
+        js = (PHONE / "phone.js").read_text()
+        at = js.index("function automationDelivery")
+        window = js[at:at + 1000]
+        for field in ("running_now", "next_up", "blocked", "completed_recently"):
+            self.assertIn(field, window)
+
     def test_a_swapped_question_disarms_the_buttons_for_a_beat(self):
         js = (PHONE / "phone.js").read_text()
         # The guard is real only if the redraw on an id change arms a timer the

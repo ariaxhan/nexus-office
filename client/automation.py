@@ -260,13 +260,16 @@ def build(by_repo: dict, stations: list, sections: dict, counts: dict,
 
 def _delivery_view(delivery: dict) -> dict:
     rows = delivery.get("rows") or []
-    active = [row for row in rows if not row.get("terminal") and not row.get("blocked")]
     blocked = [row for row in rows if row.get("blocked")]
+    for item in delivery.get("quarantined") or []:
+        blocked.append({"repo": "quarantine", "pr": 0, "phase": "refused",
+                        "next": "repair producer proof",
+                        "problems": [str(item.get("problem") or "unreadable delivery proof")]})
     completed = [row for row in rows if row.get("terminal")]
     return {
         "pipeline_health": str(delivery.get("state") or "unknown"),
-        "running_now": active[:1],
-        "next_up": active[1:6],
+        "running_now": list(delivery.get("running") or [])[:5],
+        "next_up": list(delivery.get("queued") or [])[:6],
         "blocked": blocked[:10],
         "completed_recently": completed[:10],
     }

@@ -1,71 +1,40 @@
-"""Exact delivery progress from the PR pipeline's durable state files."""
+"""Delivery progress, validated by the source-owned PR pipeline contract.
+
+Office is a projection, never a second delivery authority. It loads the
+producer's committed policy and validator, replays canonical receipts through
+that validator, and only then presents a terminal claim.
+"""
 
 from __future__ import annotations
 
 import datetime as dt
+import importlib.util
 import json
 import os
 import pathlib
-import re
-import urllib.parse
+import subprocess
+from types import ModuleType
 
 from sources import _card
 
 KEY = "delivery"
 TITLE = "Delivery conveyor"
-RELATIVE = "_meta/services/pr-pipeline/.runtime/delivery"
-ROUTES = {"source", "release", "proposal"}
-RECEIPTS = {
-    "proposal": {"proposal"},
-    "source": {"merged", "composite"},
-    "release": {"preview", "merged", "staged", "release", "buzz"},
+SERVICE = pathlib.Path("_meta/services/pr-pipeline")
+RELATIVE = SERVICE / ".runtime/delivery"
+POLICY = SERVICE / "delivery-policies.json"
+VALIDATOR = SERVICE / "delivery.py"
+CONVEYOR_SCHEMA = "tbs.delivery-conveyor/v1"
+RECEIPT_ORDER = {
+    "proposal": ("proposal",),
+    "integration": ("integrated",),
+    "source": ("merged", "composite"),
+    "release": ("preview", "merged", "staged", "release", "buzz"),
 }
+HEARTBEAT_MAX_AGE_SECONDS = 15 * 60
 
 
-def _text(value) -> bool:
-    return isinstance(value, str) and bool(value.strip())
-
-
-def _sha(value, size: int) -> bool:
-    return _text(value) and len(value) == size and re.fullmatch(r"[0-9a-fA-F]+", value) is not None
-
-
-def _url(value) -> bool:
-    if not _text(value):
-        return False
-    parsed = urllib.parse.urlparse(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
-
-
-def _bindings(receipt: dict, state: dict) -> bool:
-    return all((
-        receipt.get("repo") == state.get("repo"),
-        receipt.get("pr") == state.get("pr"),
-        receipt.get("head_sha") == state.get("head_sha"),
-        receipt.get("policy_hash") == state.get("policy_hash"),
-    ))
-
-
-def _receipt_shape(kind: str, receipt: dict) -> bool:
-    if receipt.get("outcome") != "PASS":
-        return False
-    if kind == "proposal":
-        return _url(receipt.get("artifact_url")) and _text(receipt.get("proof_bundle"))
-    if kind == "preview":
-        return _text(receipt.get("deployment_id")) and _text(receipt.get("proof_bundle"))
-    if kind == "merged":
-        return _sha(receipt.get("merged_sha"), 40)
-    if kind == "staged":
-        return _sha(receipt.get("sha"), 40)
-    if kind == "release":
-        return _sha(receipt.get("sha"), 40) and _text(receipt.get("live_receipt"))
-    if kind == "buzz":
-        return receipt.get("accepted") is True
-    if kind == "composite":
-        proofs = receipt.get("proofs")
-        return (isinstance(proofs, list) and bool(proofs)
-                and all(isinstance(proof, dict) and bool(proof) for proof in proofs))
-    return False
+class ContractError(ValueError):
+    """The producer contract or one of its durable projections is unusable."""
 
 
 def _root() -> pathlib.Path | None:
@@ -73,140 +42,261 @@ def _root() -> pathlib.Path | None:
     return pathlib.Path(value).expanduser() if value else None
 
 
+def _json(path: pathlib.Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ContractError(f"unreadable {path.name}") from exc
+    if not isinstance(value, dict):
+        raise ContractError(f"{path.name} is not an object")
+    return value
+
+
+def _producer(root: pathlib.Path) -> tuple[ModuleType, dict]:
+    validator, policy = root / VALIDATOR, root / POLICY
+    if not validator.is_file() or not policy.is_file():
+        raise ContractError("delivery producer contract is unavailable")
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--error-unmatch", str(VALIDATOR), str(POLICY)],
+            capture_output=True, timeout=10)
+        clean = subprocess.run(
+            ["git", "-C", str(root), "diff", "--quiet", "HEAD", "--", str(VALIDATOR), str(POLICY)],
+            capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ContractError("cannot verify committed delivery producer contract") from exc
+    if tracked.returncode or clean.returncode:
+        raise ContractError("delivery producer contract is not committed and clean")
+    try:
+        spec = importlib.util.spec_from_file_location("nexus_delivery_contract", validator)
+        if spec is None or spec.loader is None:
+            raise ImportError("no loader")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise ContractError("delivery producer validator is unreadable") from exc
+    return module, _json(policy)
+
+
+def _iso(value) -> dt.datetime | None:
+    try:
+        parsed = dt.datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
 def _at(path: pathlib.Path) -> str:
     return dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _canonical_state_path(directory: pathlib.Path, path: pathlib.Path, state: dict) -> None:
+    repo, pr = state.get("repo"), state.get("pr")
+    if not isinstance(repo, str) or "/" not in repo or not isinstance(pr, int) or isinstance(pr, bool) or pr <= 0:
+        raise ContractError("invalid delivery identity")
+    head = state.get("head_sha")
+    if not isinstance(head, str) or len(head) != 40:
+        raise ContractError("invalid delivery head")
+    expected = directory / "states" / repo.replace("/", "__") / str(pr) / f"{head}.json"
+    try:
+        if path.resolve(strict=True) != expected.resolve(strict=False):
+            raise ContractError("state is outside its canonical path")
+    except OSError as exc:
+        raise ContractError("state path is unreadable") from exc
+
+
+def _validated_state(directory: pathlib.Path, path: pathlib.Path, state: dict,
+                     producer: ModuleType, config: dict) -> dict:
+    _canonical_state_path(directory, path, state)
+    try:
+        policy, policy_hash = producer.policy_for(config, state["pr"], state["repo"])
+        if state.get("policy_hash") != policy_hash or state.get("route") != policy.get("route"):
+            raise producer.Refusal("state does not match committed delivery policy")
+        return producer.validate_persisted_state(state, policy)
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise ContractError(str(exc) or "delivery proof refused") from exc
+
+
 def _history(state: dict) -> list[str]:
-    receipts = state.get("receipts") if isinstance(state.get("receipts"), dict) else {}
-    history = ["review"]
+    receipts = state.get("receipts") or {}
+    names = ["review"]
     if "preview" in receipts or state.get("route") == "proposal" and "proposal" in receipts:
-        history.append("preview")
+        names.append("preview")
     if "merged" in receipts:
-        history.append("merged")
+        names.append("merged")
+    if "integrated" in receipts:
+        names.append("integrated")
     if "staged" in receipts:
-        history.append("staged")
+        names.append("staged")
     if "release" in receipts:
-        history.extend(["promoted", "live_verified"])
+        names.extend(("promoted", "live_verified"))
     if "buzz" in receipts:
-        history.append("notified")
+        names.append("notified")
     if state.get("terminal"):
-        history.append("terminal")
-    return history
+        names.append("terminal")
+    return names
 
 
-def _terminal_proven(state: dict) -> bool:
-    receipts, route = state.get("receipts"), state.get("route")
-    if not state.get("terminal"):
-        return False
-    if not isinstance(receipts, dict) or route not in RECEIPTS or set(receipts) != RECEIPTS[route]:
-        return False
-    for kind, receipt in receipts.items():
-        if not isinstance(receipt, dict) or not _bindings(receipt, state) or not _receipt_shape(kind, receipt):
-            return False
-    if route == "proposal":
-        return True
-    merged = receipts.get("merged") or {}
-    if merged.get("outcome") != "PASS" or not merged.get("merged_sha"):
-        return False
-    if route == "source":
-        return True
-    if route != "release":
-        return False
-    preview, staged = receipts.get("preview") or {}, receipts.get("staged") or {}
-    release, buzz = receipts.get("release") or {}, receipts.get("buzz") or {}
-    return (
-        staged.get("sha") == merged.get("merged_sha")
-        and release.get("sha") == merged.get("merged_sha")
-    )
+def _next(state: dict, producer: ModuleType, config: dict) -> str:
+    try:
+        policy, _ = producer.policy_for(config, state["pr"], state["repo"])
+        actions = producer.next_actions(state, policy)
+    except (KeyError, TypeError, ValueError):
+        return "blocked"
+    return str((actions[0] if actions else {}).get("action") or "complete").replace("_", " ")
 
 
-def _next(state: dict) -> str:
-    have = state.get("receipts") if isinstance(state.get("receipts"), dict) else {}
-    route = state.get("route")
-    if route == "proposal":
-        return "complete" if state.get("terminal") else "verify proposal"
-    if "merged" not in have:
-        return "preview" if route == "release" and "preview" not in have else "merge"
-    if route == "source":
-        return "verify downstream proof"
-    if "staged" not in have:
-        return "stage"
-    if "release" not in have:
-        return "promote"
-    if "buzz" not in have:
-        return "notify Buzz"
-    return "close linked issue"
-
-
-def _row(path: pathlib.Path, state: dict) -> dict:
-    required = ("repo", "pr", "head_sha", "policy_hash", "route", "receipts", "terminal")
-    missing = [key for key in required if key not in state]
-    if not isinstance(state.get("receipts"), dict):
-        raise TypeError("receipts is not an object")
-    if not isinstance(state.get("terminal"), bool):
-        raise TypeError("terminal is not boolean")
-    problems = []
-    if missing:
-        problems.append("missing " + ", ".join(missing))
-    if state.get("route") not in ROUTES:
-        problems.append("unknown route")
-    receipts = state.get("receipts") if isinstance(state.get("receipts"), dict) else {}
-    if not isinstance(state.get("pr"), int) or isinstance(state.get("pr"), bool) or state.get("pr", 0) <= 0:
-        problems.append("invalid PR number")
-    if not _text(state.get("repo")) or "/" not in state.get("repo", ""):
-        problems.append("invalid repo")
-    if not _sha(state.get("head_sha"), 40) or not _sha(state.get("policy_hash"), 64):
-        problems.append("invalid exact binding")
-    allowed = RECEIPTS.get(state.get("route"), set())
-    if any(kind not in allowed for kind in receipts):
-        problems.append("receipt belongs to another route")
-    if any(not isinstance(receipt, dict) or not _bindings(receipt, state)
-           or not _receipt_shape(kind, receipt) for kind, receipt in receipts.items()):
-        problems.append("malformed or mismatched receipt")
-    if any((row or {}).get("outcome") == "ROLLED_BACK" for row in receipts.values() if isinstance(row, dict)):
-        problems.append("release rolled back")
-    if state.get("terminal") and not _terminal_proven(state):
-        problems.append("terminal claim lacks exact route proof")
+def _row(directory: pathlib.Path, path: pathlib.Path, state: dict,
+         producer: ModuleType, config: dict, entry: dict) -> dict:
+    validated = _validated_state(directory, path, state, producer, config)
+    if any(entry.get(key) != state.get(key) for key in ("repo", "pr", "head_sha", "phase", "terminal")):
+        raise ContractError("conveyor entry differs from canonical state")
     return {
-        "repo": str(state.get("repo") or ""), "pr": state.get("pr"),
-        "head_sha": str(state.get("head_sha") or ""), "route": str(state.get("route") or ""),
-        "phase": str(state.get("phase") or "review"), "history": _history(state),
-        "next": _next(state), "terminal": bool(state.get("terminal")) and not problems,
-        "blocked": bool(problems), "problems": problems, "at": _at(path),
+        "repo": state["repo"], "pr": state["pr"], "head_sha": state["head_sha"],
+        "route": state["route"], "phase": state.get("phase") or "bound",
+        "history": _history(state), "next": _next(state, producer, config),
+        "terminal": bool(validated.get("terminal")), "blocked": False,
+        "problems": [], "at": str(entry.get("updated_at") or _at(path)),
     }
+
+
+def _entries(queue: dict) -> list[dict]:
+    entries = queue.get("entries")
+    if not isinstance(entries, list) or any(not isinstance(row, dict) for row in entries):
+        raise ContractError("delivery queue entries are malformed")
+    required = ("repo", "pr", "head_sha", "phase", "terminal", "linked_issues", "next",
+                "actuated", "running", "state_path", "updated_at", "terminal_proof",
+                "proof_refusal", "action_proof")
+    if any(any(key not in row for key in required) for row in entries):
+        raise ContractError("delivery queue entry is incomplete")
+    if any(not isinstance(row["pr"], int) or isinstance(row["pr"], bool)
+           or not isinstance(row["terminal"], bool) or not isinstance(row["running"], bool)
+           or not isinstance(row["next"], list) for row in entries):
+        raise ContractError("delivery queue entry has invalid types")
+    return entries
+
+
+def _active(queue: dict) -> tuple[dict | None, bool]:
+    active = queue.get("active_run")
+    if active is not None and not isinstance(active, dict):
+        raise ContractError("delivery queue active state is malformed")
+    if active and (active.get("status") != "running" or not active.get("id")):
+        raise ContractError("delivery queue active identity is malformed")
+    heartbeat = _iso((active or {}).get("heartbeat_at"))
+    now = dt.datetime.now(dt.timezone.utc)
+    fresh = bool(heartbeat and 0 <= (now - heartbeat).total_seconds() <= HEARTBEAT_MAX_AGE_SECONDS)
+    if active and not fresh:
+        raise ContractError("delivery runner heartbeat is stale")
+    return active if fresh else None, fresh
+
+
+def _running(entries: list[dict], active: dict | None) -> None:
+    rows = [row for row in entries if row.get("running")]
+    active_id = ((active or {}).get("current_repo"), (active or {}).get("current_pr"),
+                 (active or {}).get("current_head_sha"))
+    if len(rows) > 1 or any(_identity(row) != active_id for row in rows):
+        raise ContractError("delivery running entry disagrees with active run")
+    if all(active_id) and not rows:
+        raise ContractError("delivery active run has no exact running entry")
+
+
+def _queue(directory: pathlib.Path) -> dict:
+    path = directory / "conveyor.json"
+    if not path.is_file():
+        raise ContractError("delivery producer queue is missing")
+    queue = _json(path)
+    if queue.get("schema") != CONVEYOR_SCHEMA:
+        raise ContractError("unsupported delivery conveyor")
+    entries = _entries(queue)
+    active, fresh = _active(queue)
+    _running(entries, active)
+    return {"entries": entries, "active": active if fresh else None,
+            "heartbeat_at": (active or {}).get("heartbeat_at") or
+                            (queue.get("last_run") or {}).get("finished_at"),
+            "fresh": fresh}
+
+
+def _identity(row: dict) -> tuple:
+    return row.get("repo"), row.get("pr"), row.get("head_sha")
+
+
+def _state_path(directory: pathlib.Path, entry: dict) -> pathlib.Path:
+    raw = entry.get("state_path")
+    if not isinstance(raw, str) or not raw:
+        raise ContractError("conveyor entry has no canonical state path")
+    candidate = pathlib.Path(raw)
+    if not candidate.is_absolute():
+        candidate = directory / candidate
+    try:
+        states = (directory / "states").resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        relative = resolved.relative_to(states)
+        cursor = states
+        for part in relative.parts:
+            cursor /= part
+            if cursor.is_symlink():
+                raise ValueError("symlinked state path")
+    except (OSError, ValueError) as exc:
+        raise ContractError("conveyor state path is outside its trusted root") from exc
+    if not resolved.is_file():
+        raise ContractError("conveyor state path is not a file")
+    return resolved
+
+
+def _conveyor(rows: list[dict], queue: dict) -> tuple[list[dict], list[dict]]:
+    by_id = {_identity(row): row for row in rows if not row.get("terminal")}
+    active_run = queue.get("active") or {}
+    active = by_id.get((active_run.get("current_repo"), active_run.get("current_pr"),
+                        active_run.get("current_head_sha")))
+    running = [active] if active else []
+    ordered = []
+    for entry in queue.get("entries") or []:
+        row = by_id.get(_identity(entry))
+        if row and row is not active and not entry.get("running") and row not in ordered:
+            ordered.append(row)
+    return running, ordered
 
 
 def read() -> dict:
     root = _root()
     if root is None:
-        return {"state": "unconfigured", "detail": "OFFICE_RUNTIME_ROOT is not set", "rows": []}
+        return {"state": "unconfigured", "detail": "OFFICE_RUNTIME_ROOT is not set", "rows": [],
+                "running": [], "queued": []}
     directory = root / RELATIVE
-    if not directory.exists():
-        return {"state": "never", "detail": f"no {RELATIVE}", "rows": []}
-    rows, torn = [], []
-    for path in sorted(directory.rglob("*.json")):
+    if not directory.is_dir():
+        return {"state": "never", "detail": f"no {RELATIVE}", "rows": [],
+                "running": [], "queued": []}
+    try:
+        producer, config = _producer(root)
+        queue = _queue(directory)
+    except ContractError as exc:
+        return {"state": "unreachable", "detail": str(exc), "rows": [],
+                "running": [], "queued": []}
+    rows, quarantined = [], []
+    for entry in queue.get("entries") or []:
         try:
-            value = json.loads(path.read_text())
-            if not isinstance(value, dict):
-                raise TypeError("not an object")
-            rows.append(_row(path, value))
-        except (OSError, ValueError, TypeError):
-            torn.append(path.name)
-    rows.sort(key=lambda row: row["at"], reverse=True)
-    return {"state": "blocked" if torn or any(r["blocked"] for r in rows) else "ok",
-            "rows": rows, "torn": torn, "as_of": rows[0]["at"] if rows else ""}
+            path = _state_path(directory, entry)
+            rows.append(_row(directory, path, _json(path), producer, config, entry))
+        except ContractError as exc:
+            quarantined.append({"file": pathlib.Path(str(entry.get("state_path") or "missing")).name,
+                                "problem": str(exc)[:180]})
+    running, queued = _conveyor(rows, queue)
+    return {"state": "blocked" if quarantined else "ok", "rows": rows,
+            "running": running, "queued": queued, "quarantined": quarantined,
+            "heartbeat_at": queue.get("heartbeat_at"),
+            "as_of": rows[0]["at"] if rows else str(queue.get("heartbeat_at") or "")}
 
 
 def card(data: dict) -> dict:
     rows = data.get("rows") or []
-    blocked = [r for r in rows if r.get("blocked")]
-    active = [r for r in rows if not r.get("terminal") and not r.get("blocked")]
-    done = [r for r in rows if r.get("terminal")]
-    headline = (f"{len(blocked)} blocked; {len(active)} moving; {len(done)} completed"
+    unhealthy = data.get("state") != "ok"
+    done = [row for row in rows if row.get("terminal")]
+    headline = (f"{len(data.get('running') or [])} running; {len(data.get('queued') or [])} next; "
+                f"{len(data.get('quarantined') or [])} blocked; {len(done)} completed"
                 if rows else data.get("detail") or "No delivery state yet")
-    facts = [_card.fact("pipeline health", "blocked" if blocked else data.get("state", "unknown"),
-                        "bad" if blocked else "ok"),
-             _card.fact("next up", active[0]["next"] if active else "none", "dim"),
+    facts = [_card.fact("pipeline health", str(data.get("state") or "unknown"),
+                        "bad" if unhealthy else "ok"),
+             _card.fact("next up", str(len(data.get("queued") or [])), "dim"),
              _card.fact("completed recently", str(len(done)), "ok" if done else "dim")]
-    return _card.build(TITLE, headline, len(blocked), data.get("as_of") or "", facts, [])
+    return _card.build(TITLE, headline, 1 if unhealthy else 0,
+                       str(data.get("as_of") or ""), facts, [])

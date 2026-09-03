@@ -37,7 +37,8 @@ public struct Automation: Decodable, Equatable {
     /// somebody switched it off, which is a decision and not a fault.
     public var needsSomebody: Bool {
         schedule.overdue || schedule.deferring || now.stalePid != nil
-            || !trigger.blockedBy.isEmpty || !delivery.blocked.isEmpty || state == "unreadable"
+            || !trigger.blockedBy.isEmpty || delivery.pipelineHealth != "ok"
+            || !delivery.blocked.isEmpty || state == "unreadable"
     }
 
     enum CodingKeys: String, CodingKey {

@@ -56,7 +56,7 @@ struct AutomationView: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack { Text("delivery conveyor").officeFont(size: 11, weight: .semibold).foregroundStyle(Theme.faint)
                 Pill(text: page.delivery.pipelineHealth,
-                     color: page.delivery.blocked.isEmpty ? Theme.green : Theme.red) }
+                     color: page.delivery.pipelineHealth == "ok" ? Theme.green : Theme.red) }
             deliveryGroup("running now", page.delivery.runningNow, Theme.green)
             deliveryGroup("next up", page.delivery.nextUp, Theme.blue)
             deliveryGroup("blocked", page.delivery.blocked, Theme.red)
