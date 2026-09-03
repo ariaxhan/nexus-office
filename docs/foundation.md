@@ -19,6 +19,21 @@ flowchart LR
   LA --> L
 ```
 
+## Vocabulary, and it is a constraint
+
+airport = nexus · tower = control · airline = a repo or product · task = flight plan · flight =
+one execution attempt · aircraft = the executor (claude, codex, antigravity, script) · crew = the
+agents on a flight · radio = communication · ledger = the flight recorder · hangar = isolated
+workspace · landing = integration · office = the departure board.
+
+No synonyms: unit, run, session, job, commission and lane all meant roughly "flight" and are
+retired in code, docs and UI. No new primitive without deleting one or proving these cannot
+express it; a new concept is a field or a state. **Tower stays domain-blind.** Airlines own their
+objectives, rules, verifiers, workflows and context; if tower ever knows what a lesson, an issue, a
+care reply or a deployment is, that is airline logic in the wrong place. A component that cannot
+be explained in this model is questioned, not kept. The permanent question: does this help an
+airline fly, or are we building more airport?
+
 ## The primitives
 
 | primitive | owns | never does |
@@ -148,6 +163,16 @@ more than every guard it replaces.
 The Office reads these as five columns: nexus noticed (observations), nexus decided (tasks),
 nexus is doing (flights), nexus fixed (landings), nexus needs you (gates).
 
+## Ceremony budget
+
+Every piece of work is `decide → do → verify → done`; everything between must earn its place.
+Risk class picks the process: cheap and reversible: do it, test. Expensive and reversible: brief
+plan, do, test. Irreversible or external: verify, gate only where policy requires. Architectural:
+spec, adversarial review, vertical slice. Most work is not the last class. Tower penalises
+infrastructure, architecture, observability and refactoring tasks when ranking; they outrank
+product work only when they unblock it, prevent a demonstrated serious failure, or delete net
+complexity. Infrastructure is a cost center, not an objective.
+
 ## Success metrics, measured from the ledger
 
 | metric | direction |
@@ -157,11 +182,12 @@ nexus is doing (flights), nexus fixed (landings), nexus needs you (gates).
 | successful automatic recoveries | up |
 | median recovery time | down |
 | permanent mechanisms deleted minus added | positive every month |
+| share of flight effort on airline objectives vs nexus itself, shown in the Office as product · infrastructure · recovery | product dominant; infrastructure under 10 |
 
 | step | delivers | accepted when |
 |---|---|---|
-| 1 | `nexus/ledger.py`, schema v1 (objectives, plans, observations, tasks, flights, artifacts, landings, messages, gates, events, leases), migrations, integrity check, event log | unit tests; crash-tower asserts on a synthetic run |
-| 2 | `nexus/tower.py`: tick, resource leases, budgets, quarantine, resolution ladder skeleton, task acceptance by policy, script flights, one plist `com.nexus.tower` | a script plan runs on schedule; `kill -9` mid-flight, restart, flight failed with a structured error and rescheduled |
+| 1 ✅ merged 6ef2991 | `nexus/ledger.py`, schema v1 (objectives, plans, observations, tasks, flights, artifacts, landings, messages, gates, events, leases), migrations, integrity check, event log | unit tests; crash-tower asserts on a synthetic run |
+| 2 ✅ merged 6ef2991 | `nexus/tower.py`: tick, resource leases, budgets, quarantine, resolution ladder skeleton, task acceptance by policy, script flights, one plist `com.nexus.tower` | a script plan runs on schedule; `kill -9` mid-flight, restart, flight failed with a structured error and rescheduled |
 | 3 | landing for script flights (spool to branch to push), human trees fast-forward | CollabVault and Vaults scheduled output lands as commits without anyone touching the checkout |
 | 4 | migrate the 43 plists into plans; delete `jobrun`, `jobctl`, `registry.jsonl`, plists | `launchctl list` shows one nexus job; every former job has a plan and a green or quarantined state |
 | 5 | claude, codex, antigravity flights with isolated clones; resolver and reviewer flights; gates as the last rung | a lane flight produces a branch, a verifier flight verifies, landing applies |
@@ -181,3 +207,12 @@ is a skeleton: retry and quarantine are wired, resolver and reviewer flights are
 
 Effort in agent wall-clock: 1 to 3 about 14 hours, 4 about 6, 5 about 12, 6 about 10, 7 about 8.
 Two systems overlap only during step 4, one afternoon.
+
+## Coexistence while the engine is built
+
+A real-work lane ships product in these same folders. Nothing it depends on is migrated or
+deleted until the replacement is proven end-to-end on real traffic; its activity is the evidence
+that sets migration order. Observed dependencies on 2026-09-03: hcom (messaging and presence),
+jobctl and launchd plists, wip-mirror post-commit, the tbs-www and tbs-landing release
+controllers, the care scripts under `scripts/microsoft-mail`, `bin/tbs-active.py`. Steps 3 to 8
+run beside them, never through them, until each has a landed replacement.
