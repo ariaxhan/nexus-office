@@ -8,6 +8,7 @@ and exits 0 succeeded, and a script that prints nothing and exits 1 failed.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import signal
@@ -100,12 +101,10 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
     artifacts = []
     rel = os.path.relpath(cwd, workspace) if cwd != workspace else ""
     if outputs:
-        for name in outputs:
-            if os.path.exists(os.path.join(cwd, name)):
-                artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
-    elif target is not None and os.path.isdir(cwd):
-        # In a hangar the artifact set is what the flight changed, as git sees it.
-        for name in landing.changed_paths(cwd):
+        # A declared output is a path or a glob, relative to where the flight ran.
+        # Only declared outputs are artifacts and only artifacts land; anything
+        # else the flight (or a hook inside the hangar) leaves behind is ignored.
+        for name in declared_outputs(cwd, outputs):
             artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
     elif os.path.isdir(cwd):
         # Nothing declared: whatever the flight left behind IS the artifact set.
@@ -117,9 +116,10 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
             artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
     if error is None and code != 0:
         error = {"code": "exit_nonzero", "detail": f"exit {code}", "exit_code": code}
-    if error is None and outputs and len(artifacts) != len(outputs):
-        missing = [n for n in outputs if not os.path.exists(os.path.join(cwd, n))]
-        error = {"code": "missing_output", "detail": ",".join(missing)}
+    if error is None and outputs:
+        missing = [n for n in outputs if not declared_outputs(cwd, [n])]
+        if missing:
+            error = {"code": "missing_output", "detail": ",".join(missing)}
 
     result = {
         "ok": error is None,
@@ -134,6 +134,19 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
     # this process by at most radio.timeout_s(), and cannot change what tower reads.
     radio.notify("flight.exiting", {"workspace": workspace, "ok": result["ok"]})
     return result
+
+
+def declared_outputs(cwd: str, outputs):
+    """Expand declared outputs (paths or globs) to the files that exist, in order."""
+    found = []
+    for pattern in outputs:
+        matches = sorted(glob.glob(os.path.join(cwd, pattern)))
+        for match in matches:
+            if os.path.exists(match):
+                name = os.path.relpath(match, cwd)
+                if name not in found:
+                    found.append(name)
+    return found
 
 
 def _kill_group(pid: int, sig=signal.SIGKILL) -> None:

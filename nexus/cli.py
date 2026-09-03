@@ -106,6 +106,10 @@ def cmd_plans_add(args):
     if args.on:
         schedule["on"] = args.on
     inputs = {"cmd": args.cmd}
+    if args.repo and not args.output:
+        print("a plan that lands must declare what it may produce: --output <path or glob>",
+              file=sys.stderr)
+        return 2
     if args.repo:
         inputs["target"] = {"repo": os.path.abspath(os.path.expanduser(args.repo)),
                             "branch": args.branch}
@@ -120,18 +124,10 @@ def cmd_plans_add(args):
     return 0
 
 
-def _plan_by_name_or_id(led, ref):
-    plan = led.plan(ref)
-    if plan is None:
-        matches = [p for p in led.plans() if p["name"] == ref]
-        plan = matches[0] if len(matches) == 1 else None
-    return plan
-
-
 def cmd_plans_set(args):
     """enable | disable | release (lift a quarantine) one plan, by id or name."""
     led = _ledger(args)
-    plan = _plan_by_name_or_id(led, args.plan)
+    plan = led.plan(args.plan) or led.plan_by_name(args.plan)
     if plan is None:
         print(f"no such plan: {args.plan}", file=sys.stderr)
         return 1

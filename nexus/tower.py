@@ -56,23 +56,8 @@ def _budget(plan):
 
 
 def effective_policy(ledger, plan):
-    """The objective's boundary, narrowed by the plan. Never widened by it.
-
-    A plan that says `may_accept: true` under an objective that says false stays
-    false: authority comes from above, never from the thing asking for it.
-    """
-    objective = ledger.objective(plan["objective_id"]) if plan["objective_id"] else None
-    policy = dict((loads(objective["autonomy_policy"], {}) if objective else {}) or {})
-    asked = (loads(plan["resolution_policy"], {}) or {})
-    for key, value in asked.items():
-        if key not in policy:
-            policy[key] = value
-        elif isinstance(value, bool) and isinstance(policy[key], bool):
-            policy[key] = policy[key] and value
-        elif isinstance(value, (int, float)) and isinstance(policy[key], (int, float)):
-            policy[key] = min(policy[key], value)
-        # anything else: the objective's word stands
-    return policy
+    """What the plan allows. Authority never comes from the thing asking for it."""
+    return dict(loads(plan["resolution_policy"], {}) or {})
 
 
 def is_paused(ledger: Ledger) -> bool:
@@ -319,7 +304,12 @@ def _land_one(ledger, flight, target, now):
         return 0
     try:
         key = ld.target_key(repo, branch)
-        sha, changed = ld.commit_outputs(hangar, loads(plan["outputs"], []) or [],
+        # exactly the artifacts the runner recorded from the declared outputs
+        paths = [os.path.relpath(a["ref"], hangar) for a in ledger.artifacts(flight["id"])
+                 if a["kind"] == "file"]
+        if not paths:
+            raise ld.LandingError("nothing_to_land", "no declared output was produced")
+        sha, changed = ld.commit_outputs(hangar, paths,
                                          f"nexus: {plan['name']} ({flight['id']})")
         landing_id = ledger.create_landing(flight["id"], key, expected_sha=sha,
                                            state="verified", now=now)
@@ -490,7 +480,7 @@ def _schedule(ledger, now):
             continue
         ledger.add_task(
             title=f"run {plan['name']}", origin="plan", plan_id=plan["id"],
-            objective_id=plan["objective_id"], reason="schedule due",
+            reason="schedule due",
             risk="low", dedupe_key=key, now=now)
         if trigger is not None:
             ledger.event("plan.triggered", plan["id"], {"trigger_event_id": trigger},
@@ -559,8 +549,6 @@ def _launch(ledger, now, root):
                                 workspace=workspace, started_at=now):
             ledger.release_leases(flight["id"], now=now)
             continue
-        if flight["task_id"]:
-            ledger.deliver_messages(flight["task_id"], flight["id"], now=now)
         pid = _spawn(ledger, plan, flight["id"], workspace, timeout_s)
         if pid is None:
             ledger.fail(flight["id"], "spawn_failed", "could not start the runner",
@@ -684,10 +672,4 @@ def status(ledger, limit=15):
         lines.append(f"{flight['id'][:20]:20} {plan['name'][:18]:18} "
                      f"{flight['state']:10} {flight['attempt']:<3} {error}")
 
-    open_gates = ledger.open_gates()
-    if open_gates:
-        lines.append("")
-        lines.append("NEEDS YOU")
-        for gate in open_gates:
-            lines.append(f"  {gate['id']}  {gate['question']}")
     return "\n".join(lines)

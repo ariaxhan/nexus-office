@@ -5,8 +5,8 @@ two readings. Every mutating call is a single transaction that also appends the
 `events` row explaining it, state transitions are checked against a fixed table,
 and history is made immutable by triggers rather than by good manners.
 
-Schema v1 is `docs/foundation.md`: objectives, plans, observations, tasks,
-flights, artifacts, landings, messages, gates, events, leases. Leases are on
+Schema v1 is `docs/foundation.md`, cut to what the seven verbs need: plans, tasks,
+flights, artifacts, landings, events, leases. Leases are on
 RESOURCES (a repo+branch, a mailbox, a deploy slot, a paid budget), never on
 filesystem paths: isolated workspaces already solve execution collisions.
 """
@@ -51,19 +51,8 @@ TASK_STATES = (
 TASK_LIVE = ("candidate", "ranked", "accepted", "running")
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS objectives (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  statement TEXT NOT NULL,
-  owner TEXT,
-  active INTEGER NOT NULL DEFAULT 1,
-  autonomy_policy TEXT NOT NULL DEFAULT '{}',
-  created_at REAL NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS plans (
   id TEXT PRIMARY KEY,
-  objective_id TEXT REFERENCES objectives(id),
   name TEXT NOT NULL UNIQUE,
   kind TEXT NOT NULL,
   schedule TEXT NOT NULL DEFAULT '{}',
@@ -77,18 +66,8 @@ CREATE TABLE IF NOT EXISTS plans (
   created_at REAL NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS observations (
-  id TEXT PRIMARY KEY,
-  ts REAL NOT NULL,
-  source TEXT NOT NULL,
-  subject TEXT,
-  payload TEXT NOT NULL DEFAULT '{}',
-  handled_by_task TEXT REFERENCES tasks(id)
-);
-
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
-  objective_id TEXT REFERENCES objectives(id),
   plan_id TEXT REFERENCES plans(id),
   origin TEXT NOT NULL,
   title TEXT NOT NULL,
@@ -145,33 +124,6 @@ CREATE TABLE IF NOT EXISTS landings (
 );
 CREATE INDEX IF NOT EXISTS landings_state ON landings(state);
 
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  task_id TEXT REFERENCES tasks(id),
-  from_flight TEXT,
-  to_kind TEXT NOT NULL,
-  to_ref TEXT,
-  body TEXT NOT NULL,
-  created_at REAL NOT NULL,
-  delivered_to_flight TEXT,
-  delivered_at REAL
-);
-CREATE INDEX IF NOT EXISTS messages_task ON messages(task_id, delivered_at);
-
-CREATE TABLE IF NOT EXISTS gates (
-  id TEXT PRIMARY KEY,
-  task_id TEXT REFERENCES tasks(id),
-  flight_id TEXT REFERENCES flights(id),
-  question TEXT NOT NULL,
-  options TEXT NOT NULL DEFAULT '[]',
-  policy_reason TEXT,
-  answer TEXT,
-  answered_by TEXT,
-  answered_at REAL,
-  timeout_at REAL,
-  created_at REAL NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts REAL NOT NULL,
@@ -217,10 +169,6 @@ END;
 CREATE TRIGGER IF NOT EXISTS landings_applied_no_update
 BEFORE UPDATE ON landings WHEN old.state = 'applied' BEGIN
   SELECT RAISE(ABORT, 'an applied landing is history');
-END;
-CREATE TRIGGER IF NOT EXISTS observations_no_delete
-BEFORE DELETE ON observations BEGIN
-  SELECT RAISE(ABORT, 'observations are append-only');
 END;
 CREATE TRIGGER IF NOT EXISTS tasks_decided_no_redecide
 BEFORE UPDATE ON tasks
@@ -346,44 +294,18 @@ class Ledger:
             f"SELECT * FROM events WHERE kind IN ({marks}) ORDER BY id DESC LIMIT 1", list(kinds)
         ).fetchone()
 
-    # ---- objectives ------------------------------------------------------
-
-    def add_objective(self, name, statement, owner=None, autonomy_policy=None, now=None):
-        """The boundary lives here. A plan may narrow it and may never widen it."""
-        now = now if now is not None else time.time()
-        oid = new_id("obj")
-        with self.tx():
-            self.conn.execute(
-                "INSERT INTO objectives (id,name,statement,owner,active,autonomy_policy,"
-                "created_at) VALUES (?,?,?,?,1,?,?)",
-                (oid, name, statement, owner, _j(autonomy_policy or {}), now))
-            self._event("objective.added", oid, {"name": name}, "tower", now)
-        return oid
-
-    def objective(self, objective_id):
-        if not objective_id:
-            return None
-        return self.conn.execute("SELECT * FROM objectives WHERE id=?",
-                                 (objective_id,)).fetchone()
-
-    def objectives(self, active_only=True):
-        sql = "SELECT * FROM objectives"
-        if active_only:
-            sql += " WHERE active=1"
-        return self.conn.execute(sql + " ORDER BY created_at").fetchall()
-
     # ---- plans -----------------------------------------------------------
 
-    def add_plan(self, name, kind="script", schedule=None, objective_id=None,
+    def add_plan(self, name, kind="script", schedule=None,
                  inputs=None, outputs=None, budget=None, resolution_policy=None,
                  resources=None, now=None):
         now = now if now is not None else time.time()
         pid = new_id("plan")
         with self.tx():
             self.conn.execute(
-                "INSERT INTO plans (id,objective_id,name,kind,schedule,inputs,outputs,budget,"
-                "resolution_policy,resources,enabled,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?)",
-                (pid, objective_id, name, kind, _j(schedule or {}), _j(inputs or {}),
+                "INSERT INTO plans (id,name,kind,schedule,inputs,outputs,budget,"
+                "resolution_policy,resources,enabled,created_at) VALUES (?,?,?,?,?,?,?,?,?,1,?)",
+                (pid, name, kind, _j(schedule or {}), _j(inputs or {}),
                  _j(outputs or []), _j(budget or {}), _j(resolution_policy or {}),
                  _j(resources or []), now),
             )
@@ -423,43 +345,21 @@ class Ledger:
             self.conn.execute("UPDATE plans SET quarantined_at=NULL WHERE id=?", (plan_id,))
             self._event("plan.unquarantined", plan_id, {}, "tower", now)
 
-    # ---- observations ----------------------------------------------------
-
-    def observe(self, source, subject=None, payload=None, now=None):
-        now = now if now is not None else time.time()
-        oid = new_id("obs")
-        with self.tx():
-            self.conn.execute(
-                "INSERT INTO observations (id,ts,source,subject,payload) VALUES (?,?,?,?,?)",
-                (oid, now, source, subject, _j(payload or {})))
-            self._event("observation.recorded", oid, {"source": source, "subject": subject},
-                        source if source in ("webhook", "click", "flight") else "tower", now)
-        return oid
-
-    def observations(self, unhandled_only=False):
-        sql = "SELECT * FROM observations"
-        if unhandled_only:
-            sql += " WHERE handled_by_task IS NULL"
-        return self.conn.execute(sql + " ORDER BY ts").fetchall()
-
     # ---- tasks -----------------------------------------------------------
 
-    def add_task(self, title, origin, plan_id=None, objective_id=None, reason=None,
+    def add_task(self, title, origin, plan_id=None, reason=None,
                  impact=None, risk=None, cost_estimate=None, dedupe_key=None,
-                 state="candidate", observation_id=None, now=None):
+                 state="candidate", now=None):
         now = now if now is not None else time.time()
         tid = new_id("task")
         if state not in TASK_STATES:
             raise LedgerError(f"unknown task state: {state}")
         with self.tx():
             self.conn.execute(
-                "INSERT INTO tasks (id,objective_id,plan_id,origin,title,reason,impact,risk,"
-                "cost_estimate,state,dedupe_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (tid, objective_id, plan_id, origin, title, reason, impact, risk,
+                "INSERT INTO tasks (id,plan_id,origin,title,reason,impact,risk,"
+                "cost_estimate,state,dedupe_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (tid, plan_id, origin, title, reason, impact, risk,
                  cost_estimate, state, dedupe_key, now))
-            if observation_id:
-                self.conn.execute("UPDATE observations SET handled_by_task=? WHERE id=?",
-                                  (tid, observation_id))
             self._event("task.state", tid,
                         {"to": state, "origin": origin, "plan_id": plan_id,
                          "dedupe_key": dedupe_key}, "tower", now)
@@ -803,91 +703,6 @@ class Ledger:
 
     def leases(self):
         return self.conn.execute("SELECT * FROM leases ORDER BY resource").fetchall()
-
-    # ---- radio: messages belong to the task, not the flight --------------
-
-    def send_message(self, body, task_id=None, from_flight=None, to_kind="task",
-                     to_ref=None, now=None):
-        now = now if now is not None else time.time()
-        mid = new_id("msg")
-        if to_kind not in ("task", "flight", "operator"):
-            raise LedgerError(f"unknown message target: {to_kind}")
-        with self.tx():
-            self.conn.execute(
-                "INSERT INTO messages (id,task_id,from_flight,to_kind,to_ref,body,created_at)"
-                " VALUES (?,?,?,?,?,?,?)",
-                (mid, task_id, from_flight, to_kind, to_ref, body, now))
-            self._event("message.sent", task_id or to_ref or "operator",
-                        {"id": mid, "to_kind": to_kind}, "flight" if from_flight else "click", now)
-        return mid
-
-    def undelivered(self, task_id=None):
-        sql = "SELECT * FROM messages WHERE delivered_at IS NULL"
-        args = []
-        if task_id:
-            sql += " AND task_id = ?"
-            args.append(task_id)
-        return self.conn.execute(sql + " ORDER BY created_at", args).fetchall()
-
-    def deliver_messages(self, task_id, flight_id, now=None):
-        """A task's mail goes to whoever holds the task now, not to who sent for it."""
-        now = now if now is not None else time.time()
-        with self.tx():
-            rows = self.conn.execute(
-                "SELECT * FROM messages WHERE task_id=? AND delivered_at IS NULL"
-                " AND to_kind != 'operator' ORDER BY created_at", (task_id,)).fetchall()
-            if not rows:
-                return []
-            self.conn.execute(
-                "UPDATE messages SET delivered_to_flight=?, delivered_at=? WHERE task_id=?"
-                " AND delivered_at IS NULL AND to_kind != 'operator'",
-                (flight_id, now, task_id))
-            self._event("message.delivered", task_id,
-                        {"flight": flight_id, "count": len(rows)}, "tower", now)
-            return [dict(r) for r in rows]
-
-    # ---- gates: the last rung of the ladder, never the first -------------
-
-    def open_gate(self, question, options, task_id=None, flight_id=None, policy_reason=None,
-                  timeout_at=None, now=None):
-        now = now if now is not None else time.time()
-        gid = new_id("gate")
-        with self.tx():
-            self.conn.execute(
-                "INSERT INTO gates (id,task_id,flight_id,question,options,policy_reason,"
-                "timeout_at,created_at) VALUES (?,?,?,?,?,?,?,?)",
-                (gid, task_id, flight_id, question, _j(options), policy_reason, timeout_at, now))
-            self._event("gate.opened", gid,
-                        {"task": task_id, "flight": flight_id, "question": question,
-                         "policy_reason": policy_reason}, "tower", now)
-        return gid
-
-    def gate(self, gate_id):
-        return self.conn.execute("SELECT * FROM gates WHERE id=?", (gate_id,)).fetchone()
-
-    def open_gates(self):
-        return self.conn.execute(
-            "SELECT * FROM gates WHERE answer IS NULL ORDER BY created_at").fetchall()
-
-    def answer_gate(self, gate_id, answer, answered_by, now=None):
-        """Answering by id, and only once: a stale answer is refused, not applied."""
-        now = now if now is not None else time.time()
-        with self.tx():
-            row = self.conn.execute("SELECT * FROM gates WHERE id=?", (gate_id,)).fetchone()
-            if row is None:
-                raise LedgerError(f"no such gate: {gate_id}")
-            if row["answer"] is not None:
-                self._abort()
-                return False
-            if row["timeout_at"] is not None and row["timeout_at"] <= now:
-                self._event("gate.stale_answer_refused", gate_id, {"answer": answer}, "click", now)
-                return False
-            self.conn.execute(
-                "UPDATE gates SET answer=?, answered_by=?, answered_at=? WHERE id=?",
-                (answer, answered_by, now, gate_id))
-            self._event("gate.answered", gate_id, {"answer": answer, "by": answered_by},
-                        "click", now)
-        return True
 
     # ---- integrity -------------------------------------------------------
 

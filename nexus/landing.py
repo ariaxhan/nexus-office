@@ -70,26 +70,9 @@ def clone_hangar(repo: str, branch: str, workspace: str) -> str:
     return dst
 
 
-def changed_paths(hangar: str):
-    """Every path git would commit: modified, added, deleted, untracked."""
-    out = _git(hangar, "status", "--porcelain", "--untracked-files=all", check=False).stdout
-    paths = []
-    for line in out.splitlines():
-        if len(line) < 4:
-            continue
-        path = line[3:]
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        paths.append(path.strip('"'))
-    return sorted(paths)
-
-
 def commit_outputs(hangar: str, outputs, message: str):
     """Commit the declared outputs. Returns the new sha, or HEAD when nothing changed."""
-    if outputs:
-        _git(hangar, "add", "--", *outputs)
-    else:
-        _git(hangar, "add", "-A")
+    _git(hangar, "add", "--", *outputs)
     staged = _git(hangar, "diff", "--cached", "--quiet", check=False).returncode
     if staged == 0:
         return _git(hangar, "rev-parse", "HEAD").stdout.strip(), False

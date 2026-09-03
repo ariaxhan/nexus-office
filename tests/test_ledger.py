@@ -39,8 +39,7 @@ class Schema(LedgerCase):
     def test_schema_v1_tables_all_present(self):
         names = {r[0] for r in self.led.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
-        for table in ("objectives", "plans", "observations", "tasks", "flights",
-                      "artifacts", "landings", "messages", "gates", "events", "leases"):
+        for table in ("plans", "tasks", "flights", "artifacts", "landings", "events", "leases"):
             self.assertIn(table, names)
 
     def test_migration_copies_a_backup_before_touching_the_file(self):
@@ -205,31 +204,6 @@ class TasksAndRadio(LedgerCase):
         with self.assertRaises(sqlite3.IntegrityError):
             self.led.conn.execute("UPDATE tasks SET state='candidate' WHERE id=?", (task,))
 
-    def test_a_message_outlives_the_flight_and_goes_to_whoever_holds_the_task(self):
-        task = self.led.add_task("run it", origin="plan", plan_id=self.plan)
-        dead = self.led.create_flight(self.plan, task_id=task)
-        self.led.send_message("keep going", task_id=task, from_flight=dead)
-        self.led.fail(dead, "vanished")
-        heir = self.led.create_flight(self.plan, task_id=task, attempt=2)
-        delivered = self.led.deliver_messages(task, heir)
-        self.assertEqual(["keep going"], [m["body"] for m in delivered])
-        self.assertEqual([], list(self.led.undelivered(task)))
-
-    def test_a_gate_answer_is_by_id_and_only_once(self):
-        gate = self.led.open_gate("merge?", ["yes", "no"], policy_reason="client default branch")
-        self.assertTrue(self.led.answer_gate(gate, "yes", "aria"))
-        self.assertFalse(self.led.answer_gate(gate, "no", "aria"))
-
-    def test_a_stale_gate_answer_is_refused(self):
-        gate = self.led.open_gate("merge?", ["yes"], timeout_at=100)
-        self.assertFalse(self.led.answer_gate(gate, "yes", "aria", now=101))
-        self.assertIsNone(self.led.gate(gate)["answer"])
-
-    def test_an_observation_can_be_claimed_by_a_task(self):
-        obs = self.led.observe("webhook", subject="repo/1", payload={"action": "opened"})
-        task = self.led.add_task("look at it", origin="observation", plan_id=self.plan,
-                                 observation_id=obs)
-        self.assertEqual(task, self.led.observations()[0]["handled_by_task"])
 
 
 class Integrity(LedgerCase):

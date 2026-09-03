@@ -194,19 +194,22 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class UndeclaredOutputs(LandingCase):
-    def test_hangar_artifacts_are_what_git_sees_changed(self):
+class DeclaredOutputs(LandingCase):
+    def test_only_declared_outputs_land_and_globs_are_declarations(self):
         self.led.add_plan(
             "brief", schedule={"every": 0.1},
-            inputs={"cmd": "mkdir -p deep; echo a > deep/a.md; echo b >> README",
+            inputs={"cmd": "mkdir -p deep; echo a > deep/a-1.md; echo b > deep/b.md;"
+                           " echo litter > .session_id; echo x >> README",
                     "target": {"repo": self.human, "branch": "main"}},
-            outputs=[], budget={"timeout_s": 30, "concurrency": 1},
+            outputs=["deep/a-*.md"], budget={"timeout_s": 30, "concurrency": 1},
             resolution_policy={"may_accept": True})
         self.assertTrue(self.run_until(lambda: self.landed()))
         flight = self.landed()[0]
-        refs = sorted(os.path.basename(a["ref"]) for a in self.led.artifacts(flight["id"]))
-        self.assertEqual(["README", "a.md"], refs)
-        tip = git(self.dir, "--git-dir", self.remote, "rev-parse", "refs/heads/main")
-        self.assertEqual(tip, self.led.landings(states=("applied",))[0]["applied_sha"])
-        with open(os.path.join(self.human, "deep", "a.md")) as f:
-            self.assertEqual("a\n", f.read())
+        self.assertEqual(["a-1.md"], [os.path.basename(a["ref"]) for a in
+                                     self.led.artifacts(flight["id"])])
+        listed = git(self.dir, "--git-dir", self.remote, "ls-tree", "-r", "--name-only", "main")
+        self.assertIn("deep/a-1.md", listed)
+        self.assertNotIn("deep/b.md", listed)
+        self.assertNotIn(".session_id", listed)
+        with open(os.path.join(self.human, "README")) as f:
+            self.assertEqual("hi\n", f.read())
