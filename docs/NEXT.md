@@ -35,10 +35,14 @@ merged (`6ef2991`): ledger schema v1, tower tick, script flights, crash_tower v0
   in `~/.hcom/hcom.db` was reset from 86400 to 15 (`hcom config -i <name> timeout 15`): the toml
   value never touched existing rows. If hcom re-installs its hooks, re-check both.
 
-- Kernel 9.8.2 is installed in both silos; the new session runs it. First act: delete the 21
-  squash-merged local branches the old guard could not classify (`git branch -D` now consults
-  `gh`): tbs-www 8, tbs-landing 3, tbs-curriculum 4, nexus-office 6, thinking-brain-school 3
-  (`aria/care-antigravity-runtime`, `aria/pipeline-issue-11`, `feature/w`).
+- Branch sweep done 2026-09-03: 18 local branches deleted, each only after `gh` showed a merged
+  PR whose head sha equalled the local tip (or `git cherry` showed nothing beyond main). The
+  force-delete guard only consults `gh` for a literal branch name, not a shell variable in a
+  loop, and it also matches the words inside a heredoc. Left alone because the local tip has
+  commits past the merged PR head, which is a human's call, not a sweep's:
+  tbs-www `aria/lesson-event-log` (5), tbs-landing `aria/mommyai-lesson21-memory` (15),
+  tbs-curriculum `aria/l012-native-page` (2), nexus-office `pipeline/auto-issue-35` (1),
+  thinking-brain-school `aria/care-antigravity-runtime` (2 past PR #39), `feature/w` (never a PR).
 - `autobranch.sh` is retired; the Vaults root stays on main. `wip-mirror` post-commit stays.
 - hcom holds ~120 dead registrations. `hcom --go reset` clears them but the real-work lane is on
   hcom; do it only when `hcom list` shows nothing active but yourself.
