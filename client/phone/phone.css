@@ -933,6 +933,39 @@ details.away > summary .wants { color: var(--amber); }
   text-decoration: none;
 }
 
+/* ── every agent, above every desk ──────────────────────────────────────── */
+
+/* Rows, not cards, for the same reason the band below is: fourteen of these are
+   scanned and one of them is opened. The repo is a subhead rather than a column
+   so that the name, which is what a person is looking for, starts at the same
+   place on every row. */
+.agentrepo {
+  font-size: 11px;
+  color: var(--faint);
+  padding: 10px 2px 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentrepo:first-of-type { padding-top: 2px; }
+
+.agentnotice {
+  font-size: 12.5px;
+  color: var(--amber);
+  padding: 0 2px 4px;
+}
+
+.agentrow { cursor: pointer; min-height: 50px; }
+.agentrow .head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* The name shrinks with an ellipsis rather than pushing the age off the right
+   edge: `sari_general_purpose_1` is wider than a phone, and an age that is not
+   on screen is an age nobody has. */
+.agentrow .name { min-width: 0; flex: 0 1 auto; }
+.agentrow .pill { flex: none; }
+.agentrow .under { margin-top: 2px; }
+.agentrow .asof { flex: none; font-size: 11.5px; color: var(--faint); }
+
 /* ── what is running on this machine ────────────────────────────────────── */
 
 /* The band is a list of rows, not of cards: it is scanned, and only the one you

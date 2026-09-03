@@ -135,6 +135,11 @@ const state = {
    * own poll, because it is measured by asking hcom rather than by building a
    * snapshot: it moves on the scale of a tool call, not of a GitHub budget. */
   sessions: null,
+  /* When the roster last came back, and why it did not. The band keeps the last
+   * one it had and says how old it is: an empty list is a claim that nothing is
+   * running, and this page may only make that claim when the door said so. */
+  sessionsAt: "",
+  sessionsError: "",
   openSession: "",
   /* Every agent process on this machine, and the transcript of the one being
    * read. Its own poll and its own state, because it is a different question
@@ -1532,6 +1537,120 @@ function fact(label, value, tone) {
  * The office cannot see a session that never joined hcom, and says so. `canSee`
  * false means "we do not know", which draws as its own sentence rather than as
  * an empty list, because an empty list is a claim that nothing is running. */
+/* ── the roster, above every desk ────────────────────────────────────────── */
+
+/* The same roster the desks draw from, drawn once for the whole machine.
+ *
+ * A session belongs to a desk; the question "what is running right now" does
+ * not, and answering it only inside one desk's Work tab means it is never
+ * answered at all. So this band is the top-level list: every agent, grouped by
+ * the repo it sits in, with its tool, its status and how long it has been up.
+ *
+ * READ ONLY: tapping a row opens that repo's desk, where the composer already
+ * lives. Nothing is sent from here, so nothing here can send to the wrong
+ * session.
+ *
+ * The band never empties itself on a failed poll. The last roster stays and the
+ * head says it is not answering and how old the picture is. */
+
+const AGENT_ORDER = { blocked: 0, active: 1, listening: 2 };
+
+function agentRank(session) {
+  const known = AGENT_ORDER[session.status];
+  return known === undefined ? 3 : known;
+}
+
+/* Grouped by repo, repos in the order their first agent appears sorted by name,
+ * so fourteen rows read as three short lists rather than one long one. */
+function agentGroups(rows) {
+  const byRepo = Object.create(null);
+  const order = [];
+  rows.slice().sort(function (a, b) {
+    return agentRank(a) - agentRank(b)
+      || String(a.name).localeCompare(String(b.name));
+  }).forEach(function (session) {
+    const key = session.repo || session.directory || "no repo";
+    if (!byRepo[key]) {
+      byRepo[key] = [];
+      order.push(key);
+    }
+    byRepo[key].push(session);
+  });
+  return order.map(function (key) { return { repo: key, rows: byRepo[key] }; });
+}
+
+function drawAgents() {
+  const band = document.getElementById("agents");
+  const roster = state.sessions;
+  clear(band);
+  if (!roster) {
+    band.hidden = true;
+    return;
+  }
+  band.hidden = false;
+  const rows = roster.sessions || [];
+  const wants = rows.filter(function (s) { return s.status === "blocked"; }).length;
+  band.appendChild(head("agents", String(rows.length), false));
+  if (wants) {
+    band.appendChild(el("p", "agentnotice", wants + " waiting on you"));
+  }
+  /* Two different failures, both of which must show as a state rather than as
+   * an empty list: the door answered badly, or this page could not reach it. */
+  if (roster.state !== "ok" && roster.state !== "empty") {
+    band.appendChild(el("p", "empty",
+      roster.detail || "the office cannot see the sessions on this machine right now"));
+  } else if (state.sessionsError) {
+    band.appendChild(el("p", "empty",
+      state.sessionsError + " · showing the last roster, read "
+      + (since(state.sessionsAt) || "a while") + " ago"));
+  }
+  if (!rows.length) {
+    if (roster.state === "ok" || roster.state === "empty") {
+      band.appendChild(el("p", "empty", "no agents running on this machine"));
+    }
+    return;
+  }
+  agentGroups(rows).forEach(function (group) {
+    band.appendChild(el("p", "agentrepo", group.repo));
+    group.rows.forEach(function (session) {
+      band.appendChild(agentRow(session));
+    });
+  });
+}
+
+function agentRow(session) {
+  const row = el("div", "row agentrow");
+  row.appendChild(el("span", "dot m-" + sessionMood(session)));
+  const body = el("div", "body");
+
+  const top = el("div", "head");
+  top.appendChild(el("span", "name", session.name));
+  if (session.tool) top.appendChild(el("span", "pill", session.tool));
+  if (session.status === "blocked") top.appendChild(el("span", "pill wants", "waiting on you"));
+  /* Not reachable is not the same as not running, and the row says which. */
+  if (!session.reachable) top.appendChild(el("span", "pill", "cannot be answered"));
+  if (session.unread > 0) top.appendChild(el("span", "pill", session.unread + " unread"));
+  body.appendChild(top);
+  body.appendChild(el("p", "under", session.doing || session.status));
+  row.appendChild(body);
+
+  /* How long it has been up, from its own start time. Never a guess: a session
+   * the door gave no start time for gets no age rather than a made-up one. */
+  const up = since(session.started_at);
+  if (up) row.appendChild(el("span", "asof", up === "now" ? "just started" : "up " + up));
+
+  row.addEventListener("click", function () {
+    if (!deskByRepo(session.repo)) {
+      say(session.name + " is at " + (session.repo || session.directory)
+          + ", which has no desk here");
+      return;
+    }
+    openDesk(session.repo);
+    openSessionThread(session.name);
+  });
+  return row;
+}
+
 function sessionsForDesk(repo) {
   const roster = state.sessions;
   if (!roster) return [];
@@ -1671,12 +1790,19 @@ async function pollSessions() {
     const got = await read("/api/sessions");
     if (got.code === 200) {
       state.sessions = got.body;
+      state.sessionsAt = new Date().toISOString();
+      state.sessionsError = "";
       if (state.openDesk && state.deskTab === "work") drawDesk();
+    } else {
+      state.sessionsError = "the door said " + got.code;
     }
   } catch (err) {
     /* The last roster stays. The office not being able to ask is not the same
-     * as nothing running, and it must not empty a list a person is reading. */
+     * as nothing running, and it must not empty a list a person is reading. So
+     * the failure is written into the band as a state instead. */
+    state.sessionsError = "the office could not reach the door";
   }
+  drawAgents();
 }
 
 /* ── a picture, made small enough to send ────────────────────────────────── */
