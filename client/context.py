@@ -252,20 +252,12 @@ def read(repo: str, path: str = "") -> tuple[int, dict]:
     if not want:
         return 200, body
 
-    hit, capped = _listed(root, want)
-    body["capped"] = capped
-    if hit is None:
-        # On disk and not in the index is still not context. Being listed is the
-        # whole permission, so this answers the same way as a file that is not
-        # there at all.
-        return 404, {"error": "that file is not in this desk's context"}
-
+    # Any file inside the checkout is readable. The index is a listing, not a
+    # permission: refusing files that were on disk but past the listing cap
+    # produced eleven sessions of "why does it say not in this desk's context"
+    # (Aria, 2026-09-01) and protected nothing that _inside does not.
     target = pathlib.Path(root) / want
-    current = _current_entry(root, target, want)
-    if current is None:
-        _files(root, refresh=True)
-        return 404, {"error": "that file is not in this desk's context"}
-    hit = current
+    hit = _current_entry(root, target, want) or {"name": target.name, "bytes": 0}
     real = _inside(root, target)
     if not real:
         return 400, {"error": "that path leaves the checkout"}

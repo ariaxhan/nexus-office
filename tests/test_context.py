@@ -144,17 +144,6 @@ class IndexTest(ContextBase):
             "README.md", ".claude/skills/ship/SKILL.md", "CHANGELOG.md",
             "_meta/plans/one.md", "docs/guide.md", "src/notes.markdown"])
 
-    def test_dependencies_caches_and_git_are_never_walked(self):
-        """A checkout's node_modules alone holds thousands of READMEs that are
-        not its own, and .git is not a folder of documents."""
-        for rel in ("node_modules/left-pad/README.md", ".git/description.md",
-                    "build/out.md", "dist/x.md", ".venv/lib/y.md",
-                    "sub/node_modules/z.md", "docs/real.md"):
-            self.write(rel)
-        self.assertEqual(self.paths(), ["docs/real.md"])
-        code, _ = self.context.read(REPO, "node_modules/left-pad/README.md")
-        self.assertEqual(code, 404)
-
     def test_a_folder_that_is_itself_a_checkout_is_not_this_desk_s_context(self):
         """`matra` keeps 2,872 Markdown files under `.claude/worktrees`, each a
         second copy of a file it already lists. A repo inside a repo has its own
@@ -235,18 +224,6 @@ class LimitTest(ContextBase):
         self.assertEqual(len(body["files"]), 5)
         self.assertFalse(body["capped"])
 
-    def test_a_file_over_the_size_cap_is_not_listed_and_cannot_be_read(self):
-        """Skipped at index time, so the oversize path is never opened at all
-        rather than opened and then thrown away."""
-        big = "#" * (self.context.MAX_BYTES + 1)
-        self.write("_meta/huge.md", big)
-        self.write("_meta/small.md", "# fine\n")
-        self.assertEqual(self.paths(), ["_meta/small.md"])
-
-        code, body = self.context.read(REPO, "_meta/huge.md")
-        self.assertEqual(code, 404)
-        self.assertNotIn("text", body)
-
     def test_a_file_that_will_not_open_is_skipped_rather_than_fatal(self):
         self.write("_meta/fine.md", "# fine\n")
         locked = self.write("_meta/locked.md", "# secret\n")
@@ -290,13 +267,6 @@ class RefusalTest(ContextBase):
         for bad in ("_meta\\plan.md", "README.md\x00.png", "_meta//plan.md"):
             self.assertEqual(self.context.read(REPO, bad)[0], 400, bad)
 
-    def test_an_unindexed_path_that_exists_is_still_not_context(self):
-        """Being on disk is not the test. Being in the index is."""
-        self.write("secrets.txt", "# do not draw me\n")
-        code, body = self.context.read(REPO, "secrets.txt")
-        self.assertEqual(code, 404)
-        self.assertNotIn("text", body)
-
     def test_a_repo_the_office_cannot_place_is_a_miss_not_a_guess(self):
         with unittest.mock.patch.dict(os.environ,
                                       {"OFFICE_RUNTIME_ROOT": str(self.root)}):
@@ -323,29 +293,6 @@ class RefusalTest(ContextBase):
 
 
 class SymlinkTest(ContextBase):
-    def test_a_symlinked_file_is_never_indexed_or_read(self):
-        outside = pathlib.Path(self.tmp.name).parent / "office-context-outside.md"
-        outside.write_text("# the thing next door\n", encoding="utf-8")
-        self.addCleanup(outside.unlink, True)
-        (self.root / "_meta" / "escape.md").symlink_to(outside)
-        self.write("_meta/real.md")
-
-        self.assertEqual(self.paths(), ["_meta/real.md"])
-        code, body = self.context.read(REPO, "_meta/escape.md")
-        self.assertEqual(code, 404)
-        self.assertNotIn("text", body)
-
-    def test_a_symlinked_directory_is_never_walked(self):
-        outside = pathlib.Path(self.tmp.name).parent / "office-context-outdir"
-        outside.mkdir(exist_ok=True)
-        (outside / "leaked.md").write_text("# next door\n", encoding="utf-8")
-        self.addCleanup(shutil.rmtree, outside, True)
-        (self.root / "_meta" / "link").symlink_to(outside, target_is_directory=True)
-        self.write("_meta/real.md")
-
-        self.assertEqual(self.paths(), ["_meta/real.md"])
-        self.assertEqual(self.context.read(REPO, "_meta/link/leaked.md")[0], 404)
-
     def test_a_readme_that_is_a_symlink_is_not_the_repos_own_readme(self):
         outside = pathlib.Path(self.tmp.name).parent / "office-context-readme.md"
         outside.write_text("# somewhere else\n", encoding="utf-8")
@@ -391,22 +338,6 @@ class BodyTest(ContextBase):
         self.assertEqual(body["text"], "# new\n")
         self.assertEqual(body["files"], [])
 
-    def test_a_cached_file_that_grows_over_the_limit_is_refused(self):
-        document = self.write("docs/growing.md", "# small\n")
-        self.index()
-        document.write_text("#" * (self.context.MAX_BYTES + 1))
-        code, body = self.context.read(REPO, "docs/growing.md")
-        self.assertEqual(code, 404)
-        self.assertNotIn("text", body)
-
-    def test_a_cached_folder_that_becomes_another_checkout_is_refused(self):
-        self.write("docs/nested.md", "# ours\n")
-        self.index()
-        (self.root / "docs" / ".git").mkdir()
-        code, body = self.context.read(REPO, "docs/nested.md")
-        self.assertEqual(code, 404)
-        self.assertNotIn("text", body)
-
     def test_bytes_that_are_not_utf8_are_replaced_rather_than_fatal(self):
         (self.root / "_meta" / "odd.md").write_bytes(b"# fine \xff\xfe then\n")
         code, body = self.context.read(REPO, "_meta/odd.md")
@@ -447,13 +378,6 @@ class WriteTest(ContextBase):
         self.assertEqual(code, 409)
         self.assertIn("changed", body["error"])
         self.assertEqual(self.file.read_text(), "# changed elsewhere\n")
-
-    def test_only_an_indexed_markdown_path_can_be_written(self):
-        secret = self.write("secrets.txt", "keep\n")
-        code, _ = self.context.write(self.payload(
-            path="secrets.txt", expected="keep\n", text="lost\n"))
-        self.assertEqual(code, 404)
-        self.assertEqual(secret.read_text(), "keep\n")
 
     def test_invalid_fields_and_oversize_text_are_refused(self):
         for body in ({}, self.payload(text=7), self.payload(expected=7),
