@@ -106,7 +106,8 @@ class DeliverySourceTest(unittest.TestCase):
         self.states = self.directory / "states"
         self.receipts = self.root / "trusted-receipts"
         self.directory.mkdir(parents=True)
-        self.config = {"actions_enabled": False, "repositories": {"Thinking-Brain-School/tbs-www": {
+        self.config = {"actions_enabled": False, "actuation": {"pull_requests": []},
+                       "repositories": {"Thinking-Brain-School/tbs-www": {
             "default": {"route": "release", "receipt_root": str(self.receipts)},
             "pull_requests": {"85": {"route": "proposal"}}}}}
         self.env = mock.patch.dict(os.environ, {"OFFICE_RUNTIME_ROOT": str(self.root)})
@@ -225,8 +226,16 @@ class DeliverySourceTest(unittest.TestCase):
     def test_enabled_actuator_allows_valid_queue_health(self):
         self.config["actions_enabled"] = True
         state = base_state(); self.write_state(state)
+        self.config["actuation"]["pull_requests"] = [{"repo": state["repo"], "pr": state["pr"]}]
         self.write_conveyor([self.entry(state)])
         self.assertEqual(delivery.read()["state"], "ok")
+
+    def test_global_master_without_exact_opt_in_remains_disabled(self):
+        self.config["actions_enabled"] = True
+        state = base_state(); self.write_state(state); self.write_conveyor([self.entry(state)])
+        data = delivery.read()
+        self.assertEqual(data["state"], "disabled")
+        self.assertFalse(data["rows"][0]["actuation_enabled"])
 
     def test_duplicate_identity_and_bad_event_sequence_are_unreachable(self):
         state = base_state(); self.write_state(state); entry = self.entry(state)

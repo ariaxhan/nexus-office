@@ -165,6 +165,14 @@ def _terminal_projection(state: dict) -> dict | None:
                      "sha": buzz.get("sha"), "target": buzz.get("target")} if buzz else None}
 
 
+def _actuation_allowed(config: dict, repo: str, pr: int) -> bool:
+    rows = (config.get("actuation") or {}).get("pull_requests")
+    if not isinstance(rows, list):
+        raise ContractError("committed actuation allowlist is unavailable")
+    return config.get("actions_enabled") is True and any(
+        isinstance(row, dict) and row.get("repo") == repo and row.get("pr") == pr for row in rows)
+
+
 def _row(directory: pathlib.Path, path: pathlib.Path, state: dict,
          producer: ModuleType, config: dict, entry: dict, generated_at: dt.datetime) -> dict:
     validated = _validated_state(directory, path, state, producer, config)
@@ -174,12 +182,14 @@ def _row(directory: pathlib.Path, path: pathlib.Path, state: dict,
         raise ContractError("terminal projection differs from canonical state and Buzz proof")
     updated = entry.get("updated_at")
     _timestamp(updated, "delivery entry timestamp", generated_at)
+    enabled = _actuation_allowed(config, state["repo"], state["pr"])
     return {
         "repo": state["repo"], "pr": state["pr"], "head_sha": state["head_sha"],
         "route": state["route"], "phase": state.get("phase") or "bound",
         "history": _history(state), "next": _next(state, producer, config),
         "terminal": bool(validated.get("terminal")), "blocked": False,
-        "problems": [], "at": str(updated),
+        "problems": [], "at": str(updated), "actuation_enabled": enabled,
+        "actuation_reason": "exact committed opt-in" if enabled else "exact PR is not opted in",
     }
 
 
@@ -360,7 +370,7 @@ def _read_rows(directory: pathlib.Path, entries: list[dict], producer: ModuleTyp
 
 
 def _health(rows: list[dict], quarantined: list[dict], config: dict) -> tuple[str, str, bool]:
-    enabled = config.get("actions_enabled") is True
+    enabled = any(row.get("actuation_enabled") for row in rows if not row.get("terminal"))
     unfinished = any(not row.get("terminal") for row in rows)
     state = "blocked" if quarantined else "disabled" if unfinished and not enabled else "ok"
     detail = "delivery actuator is disabled while work is queued" if state == "disabled" else ""
