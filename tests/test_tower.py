@@ -296,8 +296,33 @@ class KeptLogs(TowerCase):
         self.settle()
         failed = self.led.flights(states=("failed",))
         self.assertTrue(failed)
-        kept = os.path.join(tower.logs_root(self.led), f"{failed[0]['id']}.log")
-        self.assertTrue(os.path.exists(kept), "log not kept")
-        with open(kept) as f:
+        logs = [a for a in self.led.artifacts(failed[0]["id"]) if a["kind"] == "log"]
+        self.assertEqual(1, len(logs), "log not recorded in the ledger")
+        with open(logs[0]["ref"]) as f:
             self.assertIn("why-it-broke", f.read())
+        self.assertIn('"exit_code": 3', failed[0]["result"])
         self.assertFalse(os.path.isdir(failed[0]["workspace"]))
+
+    def test_workspace_survives_when_evidence_cannot_be_kept(self):
+        self.plan(cmd="echo evidence; exit 3", outputs=[], budget={"max_retries": 0})
+        root = tower.logs_root(self.led)
+        with open(root, "w") as f:  # a file where the logs dir must go: persistence fails
+            f.write("in the way")
+        self.settle()
+        failed = self.led.flights(states=("failed",))[0]
+        self.assertTrue(os.path.isdir(failed["workspace"]), "workspace deleted without evidence")
+        self.assertTrue(self.led.events(kind="flight.evidence_not_kept"))
+        os.remove(root)
+        self.tick()  # the sweep keeps the log now that it can, then clears the workspace
+        self.assertTrue([a for a in self.led.artifacts(failed["id"]) if a["kind"] == "log"])
+        self.assertFalse(os.path.isdir(failed["workspace"]))
+
+
+class Release(TowerCase):
+    def test_a_released_plan_is_not_requarantined_for_the_same_failures(self):
+        plan = self.plan(cmd="exit 1", outputs=[], budget={"max_retries": 1})
+        self.settle()
+        self.assertIsNotNone(self.led.plan(plan)["quarantined_at"])
+        self.led.unquarantine_plan(plan)
+        self.tick()
+        self.assertIsNone(self.led.plan(plan)["quarantined_at"], "re-quarantined on old failures")

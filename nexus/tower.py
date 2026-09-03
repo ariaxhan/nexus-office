@@ -426,7 +426,11 @@ def _quarantine(ledger, now):
         _, max_retries, _ = _budget(plan)
         limit = max(1, max_retries)
         recent = ledger.flights(plan_id=plan["id"], limit=limit)
-        terminal = [f for f in recent if f["state"] in ("failed", "produced", "landed")]
+        released = ledger.events(kind="plan.unquarantined", subject=plan["id"])
+        since = released[-1]["ts"] if released else 0
+        # a release means "count from here", or it would re-fire on the same failures
+        terminal = [f for f in recent if f["state"] in ("failed", "produced", "landed")
+                    and f["created_at"] > since]
         if len(terminal) < limit:
             continue
         if all(f["state"] == "failed" for f in terminal[:limit]):
