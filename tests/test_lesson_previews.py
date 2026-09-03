@@ -49,6 +49,17 @@ class HubTest(unittest.TestCase):
         if prod is not None:
             (folder / "production.json").write_text(json.dumps(prod))
 
+    def test_canonical_head_state_rejects_ancestor_preview(self):
+        path = self.root / "heads.json"
+        path.write_text(json.dumps({"schema_version": "tbs.lesson-preview-head-state/v1", "lessons": [{
+            "product": "superpowerai", "lesson": "L012", "status": "current",
+            "head_sha": "ce09473" + "0" * 33, "deployed_sha": "870f8fd" + "0" * 33,
+            "preview_url": "https://old.example", "pr_url": "https://github.example/pr", "checked_at": "now"
+        }]}))
+        result = lesson_previews._from_head_state(path)
+        self.assertEqual(result["counts"]["failed"], 1)
+        self.assertEqual(result["lessons"][0]["candidate"]["url"], "")
+
     def test_stale_candidate_is_red_and_its_url_is_not_exposed(self):
         self.write(preview(source_committed_at=4000))
         row = lesson_previews.build(self.root)["lessons"][0]

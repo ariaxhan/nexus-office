@@ -14,6 +14,8 @@ PRODUCTION_SCHEMA = "tbs.lesson-production/v1"
 CANONICAL = re.compile(r"L\d{3}\Z")
 WIDTHS = {375, 768, 1440}
 PRODUCTION_ORIGIN = "https://thinkingbrainschool.com"
+HEAD_STATE_SCHEMA = "tbs.lesson-preview-head-state/v1"
+DEFAULT_HEAD_STATE = pathlib.Path.home() / "Library/Application Support/ThinkingBrainSchool/lesson-preview-heads/state.json"
 
 
 def _receipts_root() -> pathlib.Path | None:
@@ -33,6 +35,36 @@ def _json(path: pathlib.Path) -> tuple[dict | None, str]:
     except (OSError, json.JSONDecodeError) as exc:
         return None, f"{type(exc).__name__}: {exc}"[:180]
     return (value, "") if isinstance(value, dict) else (None, "receipt is not an object")
+
+
+def _head_state() -> pathlib.Path:
+    explicit = os.environ.get("OFFICE_LESSON_HEAD_STATE", "").strip()
+    return pathlib.Path(explicit).expanduser() if explicit else DEFAULT_HEAD_STATE
+
+
+def _from_head_state(path: pathlib.Path) -> dict | None:
+    if not path.exists():
+        return None
+    payload, error = _json(path)
+    if payload is None or payload.get("schema_version") != HEAD_STATE_SCHEMA:
+        return {"state": "error", "detail": error or "canonical lesson head state is invalid", "lessons": []}
+    lessons = []
+    for row in payload.get("lessons", []):
+        current = row.get("status") == "current" and row.get("head_sha") == row.get("deployed_sha")
+        lessons.append({
+            "product": row.get("product", ""), "lesson": row.get("lesson", ""),
+            "status": "current" if current else "failed",
+            "problems": [] if current else [row.get("detail") or "preview is stale"],
+            "candidate_newer_than_production": False,
+            "candidate": {"url": row.get("preview_url", "") if current else "",
+                          "source_sha": row.get("head_sha", ""), "deployment_id": row.get("deployed_sha", ""),
+                          "qa": "PASS" if current else "STALE", "checked_at": row.get("checked_at", "")},
+            "production": {"url": row.get("pr_url", ""), "source_sha": row.get("head_sha", ""),
+                           "deployment_id": "PR head", "checked_at": row.get("checked_at", "")},
+        })
+    return {"schema_version": "nexus.lesson-preview-hub/v1", "state": "ok", "root": str(path),
+            "lessons": lessons,
+            "counts": {"total": len(lessons), "failed": sum(x["status"] == "failed" for x in lessons)}}
 
 
 def _millis(value) -> int | None:
@@ -108,6 +140,10 @@ def _production(receipt: dict | None, candidate: dict) -> tuple[dict, list[str],
 
 
 def build(root: pathlib.Path | None = None) -> dict:
+    if root is None:
+        canonical = _from_head_state(_head_state())
+        if canonical is not None:
+            return canonical
     root = root or _receipts_root()
     if root is None:
         return {"state": "unconfigured", "detail": "lesson receipt root is not configured", "lessons": []}
