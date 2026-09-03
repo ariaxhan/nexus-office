@@ -131,10 +131,11 @@ class DeliverySourceTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def write_conveyor(self, entries=None, active=None, heartbeat=None):
+    def write_conveyor(self, entries=None, active=None, heartbeat=None, generated_at=None):
+        generated_at = generated_at or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         value = {"schema": delivery.CONVEYOR_SCHEMA, "sequence": 1,
-                 "generated_at": "2026-09-03T09:00:00Z", "active_run": active,
-                 "last_run": {"finished_at": "2026-09-03T09:00:00Z", "status": "PASS"},
+                 "generated_at": generated_at, "active_run": active,
+                 "last_run": {"finished_at": generated_at, "status": "PASS"},
                  "entries": entries or [], "events": []}
         if active is not None and heartbeat is not None:
             active["heartbeat_at"] = heartbeat
@@ -229,12 +230,41 @@ class DeliverySourceTest(unittest.TestCase):
         state = base_state(); self.write_state(state); entry = self.entry(state)
         self.write_conveyor([entry, dict(entry)])
         self.assertEqual(delivery.read()["state"], "unreachable")
+        other_head = dict(entry, head_sha="b" * 40,
+                          state_path=str(self.state_path(dict(state, head_sha="b" * 40))))
+        self.write_conveyor([entry, other_head])
+        self.assertIn("duplicate PR ownership", delivery.read()["detail"])
         self.write_conveyor([entry])
         queue = json.loads((self.directory / "conveyor.json").read_text())
         queue["events"] = [{"sequence": 2, "at": "2026-09-03T09:00:00Z", "type": "later"},
                            {"sequence": 1, "at": "2026-09-03T09:00:01Z", "type": "earlier"}]
         (self.directory / "conveyor.json").write_text(json.dumps(queue))
         self.assertEqual(delivery.read()["state"], "unreachable")
+
+    def test_noncanonical_or_future_timestamps_are_rejected(self):
+        state = base_state(); self.write_state(state)
+        self.write_conveyor([self.entry(state, updated_at="9999-01-01")])
+        data = delivery.read()
+        self.assertEqual(data["state"], "blocked")
+        self.assertIn("canonical UTC seconds", data["quarantined"][0]["problem"])
+
+        self.write_conveyor([self.entry(state)], generated_at="9999-01-01T00:00:00Z")
+        self.assertIn("producer boundary", delivery.read()["detail"])
+
+        self.write_conveyor([self.entry(state)])
+        queue = json.loads((self.directory / "conveyor.json").read_text())
+        queue["events"] = [{"sequence": 1, "at": "2026-09-03", "type": "heartbeat"}]
+        (self.directory / "conveyor.json").write_text(json.dumps(queue))
+        self.assertIn("canonical UTC seconds", delivery.read()["detail"])
+
+    def test_queue_must_preserve_canonical_producer_order(self):
+        first = base_state(); self.write_state(first)
+        second = base_state(pr=11, head_sha="b" * 40)
+        entries = [self.entry(second), self.entry(first)]
+        self.write_conveyor(entries)
+        data = delivery.read()
+        self.assertEqual(data["state"], "unreachable")
+        self.assertIn("canonical producer order", data["detail"])
 
     def test_missing_producer_is_unreachable_and_unhealthy(self):
         self.producer.stop()
@@ -270,7 +300,7 @@ class DeliverySourceTest(unittest.TestCase):
         active = {"id": "run-1", "status": "running", "started_at": "2026-09-03T09:00:00Z",
                   "current_repo": state["repo"], "current_pr": state["pr"],
                   "current_head_sha": state["head_sha"]}
-        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.write_conveyor([self.entry(state, running=True)], active, now)
         data = delivery.read()
         self.assertEqual([row["pr"] for row in data["running"]], [10])
