@@ -62,7 +62,8 @@ OUTCOMES = {
     "started": ("dim", "started an execution lane for this issue"),
     "commissioned": ("dim", "bound this issue version to repo-owned authority"),
     "superseded": ("dim", "discarded stale work after the issue changed or closed"),
-    "landed": ("ok", "opened a PR that closes the issue"),
+    "landed": ("dim", "opened a PR; delivery proof is still pending"),
+    "merged": ("dim", "merged a PR; release and real-surface proof are still pending"),
     "parked": ("dim", "left alone on purpose: this repo is configured to park"),
     "refused": ("warn", "would not touch it, and said why"),
     "deferred": ("dim", "ran out of run, will pick it up next sweep"),
@@ -173,6 +174,7 @@ def build(by_repo: dict, stations: list, sections: dict, counts: dict,
     """
     pipeline = (sections or {}).get("pipeline") or {}
     webhook = (sections or {}).get("webhook") or {}
+    delivery = (sections or {}).get("delivery") or {}
     issues = _issue_index(stations)
 
     rows = []
@@ -252,6 +254,21 @@ def build(by_repo: dict, stations: list, sections: dict, counts: dict,
         # Never a silent truncation: a list capped without saying so reads as
         # "that is everything that happened".
         "activity_dropped": dropped,
+        "delivery": _delivery_view(delivery),
+    }
+
+
+def _delivery_view(delivery: dict) -> dict:
+    rows = delivery.get("rows") or []
+    active = [row for row in rows if not row.get("terminal") and not row.get("blocked")]
+    blocked = [row for row in rows if row.get("blocked")]
+    completed = [row for row in rows if row.get("terminal")]
+    return {
+        "pipeline_health": str(delivery.get("state") or "unknown"),
+        "running_now": active[:1],
+        "next_up": active[1:6],
+        "blocked": blocked[:10],
+        "completed_recently": completed[:10],
     }
 
 

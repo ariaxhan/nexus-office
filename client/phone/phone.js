@@ -1414,6 +1414,7 @@ function drawAutomation() {
                         now.running ? "ok" : "dim"));
   if (sched.deferring) rows.appendChild(fact("power", "on battery, deferring every run", "warn"));
   card.appendChild(rows);
+  card.appendChild(automationDelivery(page.delivery || {}));
 
   /* The webhook path, and above all WHY nothing is arriving when nothing is.
    * "Quiet" and "nothing can reach us" read identically from inside a quiet
@@ -1434,11 +1435,30 @@ function drawAutomation() {
   band.appendChild(automationActivity(page));
 }
 
+function automationDelivery(delivery) {
+  const wrap = el("div", "card sub");
+  const bar = el("div", "head");
+  bar.appendChild(el("span", "title", "delivery conveyor"));
+  bar.appendChild(el("span", "pill" + (delivery.pipeline_health === "blocked" ? " wants" : ""),
+                          delivery.pipeline_health || "unknown"));
+  wrap.appendChild(bar);
+  [["running now", delivery.running_now], ["next up", delivery.next_up],
+   ["blocked", delivery.blocked], ["completed recently", delivery.completed_recently]]
+    .forEach(function (group) {
+      (group[1] || []).forEach(function (row) {
+        const detail = ((row.problems || [])[0]) || row.next || row.phase || "review";
+        wrap.appendChild(el("p", "detail", group[0] + ": " + row.repo + "#" + row.pr + " · " + detail));
+      });
+    });
+  return wrap;
+}
+
 function automationNeedsSomebody(page) {
   const sched = page.schedule || {};
   const now = page.now || {};
   return Boolean(sched.overdue || sched.deferring || now.stale_pid
                  || (page.trigger && page.trigger.blocked_by)
+                 || (page.delivery && page.delivery.blocked && page.delivery.blocked.length)
                  || page.state === "unreadable");
 }
 

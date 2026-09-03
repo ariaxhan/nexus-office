@@ -229,8 +229,8 @@ def new_receipts(path, offset: int):
 def announce_receipt(row: dict) -> bool:
     outcome = str(row.get("outcome") or "")
     repo = str(row.get("repo") or "")
-    if outcome == "landed":
-        return notify("pr_landed", pr_landed(repo, row.get("issue") or "", row.get("detail") or ""),
+    if outcome == "terminal" and row.get("live_outcome") == "PASS" and row.get("notification_accepted") is True:
+        return notify("delivery_terminal", pr_landed(repo, row.get("issue") or "", row.get("detail") or ""),
                       subject=f"{repo}#{row.get('issue') or ''}")
     if outcome == "refused":
         return notify("lane_refused", lane_refused(repo, row.get("issue") or "", row.get("detail") or ""),

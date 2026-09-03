@@ -953,15 +953,16 @@ class Trigger:
 
     # -- the receipt -------------------------------------------------------
     def write_receipt(self, ev) -> bool:
-        """A merged PR, written where the office already reads landings.
+        """A merged PR, recorded as an intermediate delivery fact.
 
         The office builds a desk's headline out of the receipts file. A merge
         that only exists on GitHub leaves the desk saying "in pr" until the next
         poll, so the merge writes its own line the moment it is delivered.
 
-        The issue number is the one the PR body names, because that is the work
-        that is finished. Falling back to the PR's own number keeps the receipt
-        shaped right when a PR closes nothing.
+        The issue number is the one the PR body names, but the merge does not
+        claim that work is finished. The delivery state machine owns terminal
+        proof and issue closure. Falling back to the PR number keeps the
+        intermediate receipt shaped consistently when a PR links no issue.
         """
         path = self.receipts
         if path is None:
@@ -970,8 +971,8 @@ class Trigger:
         row = {
             "at": ev.at, "repo": ev.repo,
             "issue": str(issue) if issue else "",
-            "outcome": "landed",
-            "detail": f"PR #{ev.number} merged (webhook)",
+            "outcome": "merged",
+            "detail": f"PR #{ev.number} merged (webhook); delivery proof pending",
             "trigger": "webhook",
         }
         try:

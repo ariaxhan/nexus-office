@@ -25,6 +25,7 @@ public struct Automation: Decodable, Equatable {
     public var now: Current = Current()
     public var trigger: Trigger = Trigger()
     public var reached: Reached = Reached()
+    public var delivery: Delivery = Delivery()
     public var activity: [Activity] = []
     /// How many rows the server left off the end. Drawn, always: a list capped
     /// in silence reads as "that is everything that happened".
@@ -36,11 +37,11 @@ public struct Automation: Decodable, Equatable {
     /// somebody switched it off, which is a decision and not a fault.
     public var needsSomebody: Bool {
         schedule.overdue || schedule.deferring || now.stalePid != nil
-            || !trigger.blockedBy.isEmpty || state == "unreadable"
+            || !trigger.blockedBy.isEmpty || !delivery.blocked.isEmpty || state == "unreadable"
     }
 
     enum CodingKeys: String, CodingKey {
-        case state, headline, how, schedule, now, trigger, reached, activity
+        case state, headline, how, schedule, now, trigger, reached, delivery, activity
         case activityDropped = "activity_dropped"
     }
 
@@ -55,10 +56,47 @@ public struct Automation: Decodable, Equatable {
         now = ((try? c.decodeIfPresent(Current.self, forKey: .now)) ?? nil) ?? Current()
         trigger = ((try? c.decodeIfPresent(Trigger.self, forKey: .trigger)) ?? nil) ?? Trigger()
         reached = ((try? c.decodeIfPresent(Reached.self, forKey: .reached)) ?? nil) ?? Reached()
+        delivery = ((try? c.decodeIfPresent(Delivery.self, forKey: .delivery)) ?? nil) ?? Delivery()
         // One row at a time: a receipt that will not decode loses its own row,
         // never the whole history.
         activity = c.list(.activity, Lenient<Activity>.self).compactMap(\.value)
         activityDropped = c.int(.activityDropped) ?? 0
+    }
+
+    public struct Delivery: Decodable, Equatable {
+        public var pipelineHealth: String = "unknown"
+        public var runningNow: [DeliveryRow] = []
+        public var nextUp: [DeliveryRow] = []
+        public var blocked: [DeliveryRow] = []
+        public var completedRecently: [DeliveryRow] = []
+
+        enum CodingKeys: String, CodingKey {
+            case pipelineHealth = "pipeline_health", runningNow = "running_now"
+            case nextUp = "next_up", blocked, completedRecently = "completed_recently"
+        }
+        public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            pipelineHealth = c.str(.pipelineHealth) ?? "unknown"
+            runningNow = c.list(.runningNow, Lenient<DeliveryRow>.self).compactMap(\.value)
+            nextUp = c.list(.nextUp, Lenient<DeliveryRow>.self).compactMap(\.value)
+            blocked = c.list(.blocked, Lenient<DeliveryRow>.self).compactMap(\.value)
+            completedRecently = c.list(.completedRecently, Lenient<DeliveryRow>.self).compactMap(\.value)
+        }
+    }
+
+    public struct DeliveryRow: Decodable, Equatable, Identifiable {
+        public var repo = ""; public var pr = 0; public var phase = "review"
+        public var next = ""; public var route = ""; public var problems: [String] = []
+        public var id: String { "\(repo)#\(pr)" }
+        enum CodingKeys: String, CodingKey { case repo, pr, phase, next, route, problems }
+        public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            repo = c.str(.repo) ?? ""; pr = c.int(.pr) ?? 0
+            phase = c.str(.phase) ?? "review"; next = c.str(.next) ?? ""
+            route = c.str(.route) ?? ""; problems = c.list(.problems, String.self)
+        }
     }
 
     // MARK: - when it looks

@@ -38,6 +38,7 @@ struct AutomationView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     headline
                     strip
+                    conveyor
                     trigger
                     activity
                     how
@@ -49,6 +50,27 @@ struct AutomationView: View {
             .scrollContentBackground(.hidden)
         }
         .background(Theme.ink)
+    }
+
+    private var conveyor: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack { Text("delivery conveyor").officeFont(size: 11, weight: .semibold).foregroundStyle(Theme.faint)
+                Pill(text: page.delivery.pipelineHealth,
+                     color: page.delivery.blocked.isEmpty ? Theme.green : Theme.red) }
+            deliveryGroup("running now", page.delivery.runningNow, Theme.green)
+            deliveryGroup("next up", page.delivery.nextUp, Theme.blue)
+            deliveryGroup("blocked", page.delivery.blocked, Theme.red)
+            deliveryGroup("completed recently", page.delivery.completedRecently, Theme.faint)
+        }
+        .padding(12).frame(maxWidth: 720, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.raised))
+    }
+
+    @ViewBuilder private func deliveryGroup(_ label: String, _ rows: [Automation.DeliveryRow], _ tone: Color) -> some View {
+        if !rows.isEmpty {
+            Text("\(label): " + rows.map { "\($0.repo)#\($0.pr) \($0.problems.first ?? ($0.next.isEmpty ? $0.phase : $0.next))" }.joined(separator: " · "))
+                .officeFont(size: 12).foregroundStyle(tone).fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: - head
