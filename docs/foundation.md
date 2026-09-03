@@ -52,6 +52,10 @@ click in the Office becomes a ledger row that tower acts on.
 
 A sixth primitive needs a written justification in this file. Nothing has one yet.
 
+The loop, in one line: nexus observes, decides, works, talks, self-resolves, verifies, lands,
+learns what to do next. Aria is responsible for objectives and boundaries; never task generation,
+troubleshooting, or routine decisions.
+
 ## Ledger schema v1
 
 One file: `~/Library/Application Support/nexus/ledger.sqlite`, WAL mode, `PRAGMA user_version`
@@ -59,7 +63,7 @@ for migrations, copied to `ledger.sqlite.bak-<version>` before any migration.
 
 | table | columns (key ones) | note |
 |---|---|---|
-| `objectives` | id, name, statement (one sentence), owner, active | why any work exists; every task cites one |
+| `objectives` | id, name, statement (one sentence), owner, active, autonomy_policy json (the boundary: what nexus may do without a person under this objective; plans inherit and may only narrow it) | why any work exists; every task cites one. Aria owns objectives and boundaries, nothing downstream |
 | `plans` | id, objective_id, name, kind (script, claude, codex, antigravity, lane, watcher), schedule (every, at, on event), inputs json, outputs json, budget json (timeout_s, max_turns, max_cost, max_retries), resolution_policy json (may_retry, may_repair, may_revert, may_delegate, may_spend_up_to, may_install, may_merge_to, gate_when), resources json (integration targets it lands on), enabled, quarantined_at | standing responsibilities; replaces registry.jsonl and pipeline scope |
 | `observations` | id, ts, source (watcher flight, webhook, flight result, office), subject, payload json, handled_by_task | what nexus noticed |
 | `tasks` | id, objective_id, origin (plan, observation, flight, operator), title, reason, impact, risk, cost_estimate, state (candidate, ranked, accepted, rejected_duplicate, rejected_policy, running, done, abandoned), dedupe_key, decided_by (tower policy or operator), decided_at | concrete work nexus decided should happen |
@@ -93,11 +97,15 @@ checkout a person uses.
 
 **Resolution ladder, inside tower.** A failure or an uncertainty walks this ladder, and each rung
 is allowed only if the plan's `resolution_policy` permits it:
-`deterministic recovery → retry → resolver flight → peer or reviewer flight over radio → bounded
-repair → verify → rollback or quarantine → gate`. A gate is the last state, created only when
+`deterministic recovery → retry → diagnose → resolver flight → peer or reviewer flight over radio →
+bounded repair → verify → alternate approach → rollback or quarantine → gate`. A gate is the last state, created only when
 `gate_when` says the policy requires a person (client default-branch merge, money, a listed
 irreversible act). The Office shows the rung a task is on. Target: nexus resolves, verifies the
 resolution, and tells Aria afterwards; not asks first.
+
+**Roles.** Plan = how and when nexus watches or routinely acts. Task = something nexus decided
+needs doing. Flight = one attempt to do it. A schedule never creates a flight directly; it creates
+an observation or a task, and tower decides.
 
 **Where work comes from.** `objective → plan watches → observation → candidate task → policy and
 ranking → task → flight(s) → result → new observations`. Watcher plans read GitHub issues and PRs,
