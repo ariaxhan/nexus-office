@@ -131,6 +131,15 @@ or rejects; low-risk reversible work (audits, research, verification) is accepte
 and a flight may propose tasks but never dispatch them. Agents discover work; tower decides whether
 discovered work deserves resources.
 
+**Communications may fail; lifecycle must continue.** Tower owns lifecycle, presence, leases,
+stop, kill and completion. Radio owns messaging only and is never on the critical path of a
+flight's completion: a dead or hanging radio cannot keep a flight alive, cannot stop a flight from
+recording its outcome or releasing its leases, and cannot block the next flight. Stopping a flight
+is a tower operation, never a message or a hook. Until tower provides that, every hcom hook is
+capped at 15 seconds and fails open (done 2026-09-03: both Claude silos, both Codex hook files,
+`HCOM_TIMEOUT` 86400 to 15); hcom's stop and lifecycle hooks are removed the moment tower replaces
+them. No watchdog is ever added around hcom.
+
 **Radio.** `send(task, to, body)` durable before ack. A message belongs to the task's conversation;
 delivery targets whichever flight currently holds the task, so Codex can die, Claude can replace it,
 and the reasoning survives. Broadcast does not exist. Undelivered messages are visible in the Office.
@@ -154,7 +163,9 @@ structured errors · escape hatch without ssh archaeology.
 `tests/crash_tower/`: real end-to-end flights with random faults injected: `kill -9` tower,
 `kill -9` a flight, network off, push rejected, verifier hangs, disk full, malformed flight output,
 duplicate tick, conflicting leases, kill during landing, kill during message delivery, machine
-restart simulated by killing every process. After every run assert: ledger integrity check passes,
+restart simulated by killing every process, and **radio hung indefinitely while a flight exits**
+(the flight must still terminate, record its outcome, release its leases, and the next flight must
+run). After every run assert: ledger integrity check passes,
 every artifact recorded exists, no flight is in a state with two valid readings. This suite is worth
 more than every guard it replaces.
 

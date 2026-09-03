@@ -6,6 +6,11 @@ merged (`6ef2991`): ledger schema v1, tower tick, script flights, crash_tower v0
 
 ## Do, in order (risk class in brackets)
 
+0. [cheap, reversible] crash_tower case: radio (a stub that blocks forever on every call) hung
+   while a flight exits; assert the flight terminates, records its result, releases leases, and a
+   second flight runs. Principle: communications may fail; lifecycle must continue. Then, as
+   tower takes over presence and stop, remove the hcom Stop/SubagentStop/SessionEnd hooks.
+
 1. [expensive, reversible] Step 3, landing for script flights: hangar clone, spool to branch, push,
    `verified → applying → applied` reconcile against GitHub. Prove on one real airline first: the
    CollabVault intelligence jobs (`_meta/services/intelligence-scrape.sh` via `email-runner.sh`)
@@ -19,6 +24,11 @@ merged (`6ef2991`): ledger schema v1, tower tick, script flights, crash_tower v0
 4. Step 6 radio, step 7 watchers and the Office's five columns, step 8 deletions with a test each.
 
 ## Facts the next session cannot see
+
+- `tbs-agy-keychain` is SKIPPED by Aria's ruling: the file-token fallback works and the bridge is
+  slated for deletion. Spend nothing more on it unless Antigravity actually fails without it.
+- hcom hooks are capped at 15s and fail open in both Claude silos and both Codex hook files;
+  `HCOM_TIMEOUT` is 15. If hcom re-installs its hooks, re-check the cap.
 
 - Kernel 9.8.2 is installed in both silos; the new session runs it. First act: delete the 21
   squash-merged local branches the old guard could not classify (`git branch -D` now consults
