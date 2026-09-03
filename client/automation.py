@@ -265,7 +265,13 @@ def _delivery_view(delivery: dict) -> dict:
         blocked.append({"repo": "quarantine", "pr": 0, "phase": "refused",
                         "next": "repair producer proof",
                         "problems": [str(item.get("problem") or "unreadable delivery proof")]})
-    completed = [row for row in rows if row.get("terminal")]
+    if delivery.get("state") == "disabled":
+        blocked.append({"repo": "delivery-actuator", "pr": 0, "phase": "disabled",
+                        "next": "enable only after trusted action gates are installed",
+                        "problems": [str(delivery.get("actuation_reason") or
+                                         "committed policy disables actions")]})
+    completed = sorted((row for row in rows if row.get("terminal")),
+                       key=lambda row: str(row.get("at") or ""), reverse=True)
     return {
         "pipeline_health": str(delivery.get("state") or "unknown"),
         "running_now": list(delivery.get("running") or [])[:5],

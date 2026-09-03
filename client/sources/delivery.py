@@ -146,17 +146,34 @@ def _next(state: dict, producer: ModuleType, config: dict) -> str:
     return str((actions[0] if actions else {}).get("action") or "complete").replace("_", " ")
 
 
+def _terminal_projection(state: dict) -> dict | None:
+    if state.get("terminal") is not True:
+        return None
+    receipts = state.get("receipts") or {}
+    merged, release, buzz = (receipts.get("merged") or {}, receipts.get("release") or {},
+                             receipts.get("buzz") or {})
+    return {"route": state["route"], "phase": state["phase"], "head_sha": state["head_sha"],
+            "merged_sha": merged.get("merged_sha"), "target": release.get("target"),
+            "buzz": {"event_id": buzz.get("event_id"), "message_sha256": buzz.get("message_sha256"),
+                     "sha": buzz.get("sha"), "target": buzz.get("target")} if buzz else None}
+
+
 def _row(directory: pathlib.Path, path: pathlib.Path, state: dict,
          producer: ModuleType, config: dict, entry: dict) -> dict:
     validated = _validated_state(directory, path, state, producer, config)
     if any(entry.get(key) != state.get(key) for key in ("repo", "pr", "head_sha", "phase", "terminal")):
         raise ContractError("conveyor entry differs from canonical state")
+    if entry.get("terminal_proof") != _terminal_projection(validated):
+        raise ContractError("terminal projection differs from canonical state and Buzz proof")
+    updated = entry.get("updated_at")
+    if _iso(updated) is None:
+        raise ContractError("delivery entry timestamp is invalid")
     return {
         "repo": state["repo"], "pr": state["pr"], "head_sha": state["head_sha"],
         "route": state["route"], "phase": state.get("phase") or "bound",
         "history": _history(state), "next": _next(state, producer, config),
         "terminal": bool(validated.get("terminal")), "blocked": False,
-        "problems": [], "at": str(entry.get("updated_at") or _at(path)),
+        "problems": [], "at": str(updated),
     }
 
 
@@ -173,7 +190,28 @@ def _entries(queue: dict) -> list[dict]:
            or not isinstance(row["terminal"], bool) or not isinstance(row["running"], bool)
            or not isinstance(row["next"], list) for row in entries):
         raise ContractError("delivery queue entry has invalid types")
+    identities = [_identity(row) for row in entries]
+    if len(identities) != len(set(identities)):
+        raise ContractError("delivery queue contains duplicate identities")
     return entries
+
+
+def _events(queue: dict) -> None:
+    sequence, events = queue.get("sequence"), queue.get("events")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        raise ContractError("delivery queue sequence is invalid")
+    if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+        raise ContractError("delivery queue events are malformed")
+    numbers = []
+    for event in events:
+        number = event.get("sequence")
+        if (not isinstance(number, int) or isinstance(number, bool) or number <= 0
+                or not isinstance(event.get("type"), str) or not event["type"]
+                or _iso(event.get("at")) is None):
+            raise ContractError("delivery queue event is invalid")
+        numbers.append(number)
+    if numbers != sorted(set(numbers)) or (numbers and numbers[-1] > sequence):
+        raise ContractError("delivery queue event sequence is inconsistent")
 
 
 def _active(queue: dict) -> tuple[dict | None, bool]:
@@ -207,7 +245,10 @@ def _queue(directory: pathlib.Path) -> dict:
     queue = _json(path)
     if queue.get("schema") != CONVEYOR_SCHEMA:
         raise ContractError("unsupported delivery conveyor")
+    if _iso(queue.get("generated_at")) is None:
+        raise ContractError("delivery queue generation timestamp is invalid")
     entries = _entries(queue)
+    _events(queue)
     active, fresh = _active(queue)
     _running(entries, active)
     return {"entries": entries, "active": active if fresh else None,
@@ -281,7 +322,14 @@ def read() -> dict:
             quarantined.append({"file": pathlib.Path(str(entry.get("state_path") or "missing")).name,
                                 "problem": str(exc)[:180]})
     running, queued = _conveyor(rows, queue)
-    return {"state": "blocked" if quarantined else "ok", "rows": rows,
+    unfinished = [row for row in rows if not row.get("terminal")]
+    actuation_enabled = config.get("actions_enabled") is True
+    state = "blocked" if quarantined else "disabled" if unfinished and not actuation_enabled else "ok"
+    detail = ("delivery actuator is disabled while work is queued"
+              if state == "disabled" else "")
+    return {"state": state, "detail": detail, "actuation_enabled": actuation_enabled,
+            "actuation_reason": "enabled" if actuation_enabled else "committed policy disables actions",
+            "rows": rows,
             "running": running, "queued": queued, "quarantined": quarantined,
             "heartbeat_at": queue.get("heartbeat_at"),
             "as_of": rows[0]["at"] if rows else str(queue.get("heartbeat_at") or "")}

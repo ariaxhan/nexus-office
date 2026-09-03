@@ -106,7 +106,7 @@ class DeliverySourceTest(unittest.TestCase):
         self.states = self.directory / "states"
         self.receipts = self.root / "trusted-receipts"
         self.directory.mkdir(parents=True)
-        self.config = {"repositories": {"Thinking-Brain-School/tbs-www": {
+        self.config = {"actions_enabled": False, "repositories": {"Thinking-Brain-School/tbs-www": {
             "default": {"route": "release", "receipt_root": str(self.receipts)},
             "pull_requests": {"85": {"route": "proposal"}}}}}
         self.env = mock.patch.dict(os.environ, {"OFFICE_RUNTIME_ROOT": str(self.root)})
@@ -152,7 +152,12 @@ class DeliverySourceTest(unittest.TestCase):
 
     def terminal(self, state):
         for kind in delivery.RECEIPT_ORDER[state["route"]]:
-            row = proof(state, kind)
+            fields = ({"merged_sha": "b" * 40} if kind == "merged" else
+                      {"sha": "b" * 40} if kind == "staged" else
+                      {"sha": "b" * 40, "target": "https://live.invalid"} if kind == "release" else
+                      {"event_id": "event-1", "message_sha256": "d" * 64,
+                       "sha": "b" * 40, "target": "https://live.invalid"} if kind == "buzz" else {})
+            row = proof(state, kind, **fields)
             state["receipts"][kind] = row
             self.write_proof(state, kind, row)
         state["phase"] = "released"
@@ -187,10 +192,49 @@ class DeliverySourceTest(unittest.TestCase):
 
     def test_terminal_replays_real_canonical_proofs(self):
         state = base_state(); self.terminal(state)
-        self.write_state(state); self.write_conveyor([self.entry(state)])
+        self.write_state(state); self.write_conveyor([
+            self.entry(state, terminal_proof=delivery._terminal_projection(state))])
         row = delivery.read()["rows"][0]
         self.assertTrue(row["terminal"])
         self.assertEqual(row["history"][-3:], ["live_verified", "notified", "terminal"])
+
+    def test_missing_or_cross_head_terminal_and_buzz_projection_is_quarantined(self):
+        state = base_state(); self.terminal(state); self.write_state(state)
+        self.write_conveyor([self.entry(state, terminal_proof=None)])
+        self.assertIn("terminal projection", delivery.read()["quarantined"][0]["problem"])
+        forged = delivery._terminal_projection(state)
+        forged["head_sha"] = "f" * 40
+        forged["buzz"]["message_sha256"] = "0" * 64
+        self.write_conveyor([self.entry(state, terminal_proof=forged)])
+        self.assertIn("terminal projection", delivery.read()["quarantined"][0]["problem"])
+
+    def test_disabled_actuator_with_queued_work_is_unhealthy(self):
+        state = base_state(); self.write_state(state)
+        self.write_conveyor([self.entry(state)])
+        data = delivery.read()
+        self.assertEqual(data["state"], "disabled")
+        self.assertFalse(data["actuation_enabled"])
+        self.assertEqual(delivery.card(data)["needs"], 1)
+        view = automation._delivery_view(data)
+        self.assertEqual(view["blocked"][0]["repo"], "delivery-actuator")
+        self.assertIn("disables actions", view["blocked"][0]["problems"][0])
+
+    def test_enabled_actuator_allows_valid_queue_health(self):
+        self.config["actions_enabled"] = True
+        state = base_state(); self.write_state(state)
+        self.write_conveyor([self.entry(state)])
+        self.assertEqual(delivery.read()["state"], "ok")
+
+    def test_duplicate_identity_and_bad_event_sequence_are_unreachable(self):
+        state = base_state(); self.write_state(state); entry = self.entry(state)
+        self.write_conveyor([entry, dict(entry)])
+        self.assertEqual(delivery.read()["state"], "unreachable")
+        self.write_conveyor([entry])
+        queue = json.loads((self.directory / "conveyor.json").read_text())
+        queue["events"] = [{"sequence": 2, "at": "2026-09-03T09:00:00Z", "type": "later"},
+                           {"sequence": 1, "at": "2026-09-03T09:00:01Z", "type": "earlier"}]
+        (self.directory / "conveyor.json").write_text(json.dumps(queue))
+        self.assertEqual(delivery.read()["state"], "unreachable")
 
     def test_missing_producer_is_unreachable_and_unhealthy(self):
         self.producer.stop()
@@ -241,7 +285,10 @@ class DeliverySourceTest(unittest.TestCase):
         self.assertEqual(delivery.read()["state"], "unreachable")
 
     def test_automation_exposes_producer_order_and_bad_health(self):
-        rows = [{"repo": "a/done", "pr": 4, "terminal": True, "blocked": False}]
+        rows = [{"repo": "a/old", "pr": 4, "terminal": True, "blocked": False,
+                 "at": "2026-09-01T00:00:00Z"},
+                {"repo": "a/new", "pr": 5, "terminal": True, "blocked": False,
+                 "at": "2026-09-03T00:00:00Z"}]
         running = [{"repo": "a/run", "pr": 1, "terminal": False, "blocked": False}]
         queued = [{"repo": "a/next", "pr": 9, "terminal": False, "blocked": False}]
         page = automation.build({}, [], {"pipeline": {"state": "ok"}, "webhook": {},
@@ -251,7 +298,7 @@ class DeliverySourceTest(unittest.TestCase):
         self.assertEqual(conveyor["running_now"][0]["pr"], 1)
         self.assertEqual(conveyor["next_up"][0]["pr"], 9)
         self.assertEqual(conveyor["blocked"][0]["problems"], ["forged"])
-        self.assertEqual(conveyor["completed_recently"][0]["pr"], 4)
+        self.assertEqual([row["pr"] for row in conveyor["completed_recently"]], [5, 4])
         self.assertEqual(conveyor["pipeline_health"], "blocked")
 
 
