@@ -206,6 +206,11 @@ Its hidden `nexus-repair-check:<check_id>` issue marker survives changing eviden
 failure creates `ready+p0`; recurrence replaces the evidence, reopens the issue, and restores both
 labels; an identical rerun makes no write.
 
+`nexus.repairs.reconcile_probe_output` consumes the complete versioned handoff only after the
+canonical live run. A passing check closes its numbered repair; a failed check reopens that same
+issue and restores `ready+p0`. Passing proof removes those repair labels. Identical proof makes no
+write, and the whole handoff is validated before its first GitHub request.
+
 ```mermaid
 flowchart TD
   A[#87 route Nexus failures] --> D[#91 independent heartbeat]
