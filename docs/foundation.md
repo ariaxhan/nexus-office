@@ -187,6 +187,15 @@ The independent heartbeat survives tower failure. The core probe never charges, 
 messages, or mutates customer data. Slower sandbox probes cover checkout, care lifecycle,
 Kakao/SMS receipts, PWA playback/install, and complete KR/EN/ES journeys.
 
+Sandbox probes close the same loop. `nexus.probes.sandbox_failures` turns one sandbox flight
+report into repair rows, one per failed probe under the stable id `sandbox.<probe>` (`sandbox.run`
+when the runner itself broke), carrying the run id and the redacted error rows as evidence. Those
+rows go through `reconcile_repairs` like any core check, so a failing checkout, care, journey,
+messaging, or PWA probe becomes one `ready+p0` issue that recurrence refreshes rather than
+duplicates. Modules: `checkout_probe`, `care_probe`, `journeys`, `messaging` (#98), the
+`sandbox-probes` plan (#95), and `scripts/pwa-probe.mjs`, which prints the same `ok` and `error`
+shape and feeds the bridge as the `pwa` probe.
+
 Delivery recovery is idempotent: each review flight compares `main...staging`, promotes the exact
 staging SHA through the repository release controller, and retries until both branches agree.
 

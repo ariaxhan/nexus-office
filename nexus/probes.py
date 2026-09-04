@@ -48,3 +48,35 @@ def _text(value, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a non-empty string")
     return value.strip()
+
+
+SANDBOX_PREFIX = "sandbox."
+
+
+def sandbox_failures(report: Mapping) -> list[dict]:
+    """Repair rows for a sandbox probe report, one per failed probe.
+
+    The report is the JSON a sandbox flight prints: `run_id`, `ok`, `probes`
+    (name to redacted evidence rows) and, when the runner itself broke, `error`.
+    A probe failed when any of its rows carries an `error`; its check id is
+    `sandbox.<name>`, stable across runs, so repairs reconcile by id. The rows
+    feed `nexus.repairs.reconcile_repairs` unchanged.
+    """
+    if report.get("ok"):
+        return []
+    run_id = str(report.get("run_id") or "")
+    failures = []
+    if report.get("error"):
+        failures.append(_sandbox_failure("run", run_id, [{"error": report["error"]}]))
+    for name, rows in sorted((report.get("probes") or {}).items()):
+        errors = [row for row in rows if isinstance(row, Mapping) and row.get("error")]
+        if errors:
+            failures.append(_sandbox_failure(name, run_id, errors))
+    return failures
+
+
+def _sandbox_failure(name: str, run_id: str, rows: list) -> dict:
+    evidence = json.dumps(rows, sort_keys=True, indent=2, ensure_ascii=False, default=str)
+    return {"check_id": SANDBOX_PREFIX + name,
+            "title": f"Repair failed sandbox probe: {name}",
+            "evidence": f"run `{run_id}`\n\n```json\n{evidence}\n```"}
