@@ -18,48 +18,19 @@ import SwiftUI
 struct NeedsView: View {
     @Bindable var store: Store
 
-    private var queue: StateRules.NeedsQueue { StateRules.needsQueue(store.stations) }
-
-    /// The wall's own answer to the same question. A source that says something
-    /// needs a person is a thing waiting on you exactly like an issue is.
-    private var wanted: [Section] { store.sections.filter { $0.needs > 0 } }
-
     var body: some View {
-        let q = queue
-        let wall = wanted
+        let gates = store.gates
         return VStack(spacing: 0) {
-            head(waiting: q.count + wall.count)
+            head(waiting: gates.count)
             Divider().overlay(Theme.hairline)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    CatchUpCard(store: store, waiting: q.count + wall.count)
-
-                    // Every stated question, uncapped. This screen exists for
-                    // exactly these, and a question cut off by a limit is a
-                    // question nobody answers.
-                    ForEach(q.decisions) { row in
-                        IssueCard(store: store, repo: row.repo, issue: row.issue, brief: true)
+                    CatchUpCard(store: store, waiting: gates.count)
+                    ForEach(gates, id: \.id) { gate in
+                        GateNeed(gate: gate)
                     }
-                    ForEach(q.landed) { row in
-                        IssueCard(store: store, repo: row.repo, issue: row.issue, brief: true)
-                    }
-
-                    if !q.parks.isEmpty {
-                        group("waiting for the pipeline to state the question")
-                        ForEach(q.parksByDesk, id: \.repo) { park in
-                            ParkCount(store: store, repo: park.repo, count: park.count)
-                        }
-                    }
-
-                    if !wall.isEmpty {
-                        group("on the wall")
-                        ForEach(wall) { section in
-                            WallNeed(store: store, section: section)
-                        }
-                    }
-
-                    if q.count == 0 && wall.isEmpty {
-                        Text("Nothing needs you. Every desk had the last word.")
+                    if gates.isEmpty {
+                        Text("Nothing needs you. Agents keep working around ordinary failures.")
                             .officeFont(size: 12.5)
                             .foregroundStyle(Theme.faint)
                             .padding(.top, 24)
@@ -87,12 +58,19 @@ struct NeedsView: View {
         .background(Theme.roster)
     }
 
-    private func group(_ title: String) -> some View {
-        Text(title)
-            .officeFont(size: 11, weight: .medium)
-            .foregroundStyle(Theme.faint)
-            .textCase(.lowercase)
-            .padding(.top, 6)
+}
+
+private struct GateNeed: View {
+    let gate: Gate
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(gate.permission.isEmpty ? "agent permission" : gate.permission)
+                .officeFont(size: 12.5, weight: .medium).foregroundStyle(Theme.text)
+            Text(gate.target).officeFont(size: 11.5, design: .monospaced)
+                .foregroundStyle(Theme.dim).lineLimit(3)
+        }
+        .padding(13).frame(maxWidth: 720, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
     }
 }
 

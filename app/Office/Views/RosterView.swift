@@ -340,10 +340,10 @@ struct RosterView: View {
                           : (page.now.running ? Theme.green : Theme.faint))
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("automation")
+                    Text("work board")
                         .officeFont(size: 12.5, weight: .medium)
                         .foregroundStyle(Theme.text)
-                    Text(page.headline.isEmpty ? "not read yet" : page.headline)
+                    Text(workBoardLine(page.runs))
                         .officeFont(size: 11)
                         .foregroundStyle(page.needsSomebody ? Theme.amber.opacity(0.85) : Theme.dim)
                         .lineLimit(2)
@@ -361,6 +361,14 @@ struct RosterView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func workBoardLine(_ board: RunBoard) -> String {
+        if board.state != "ok" { return board.detail.isEmpty ? "not read yet" : board.detail }
+        var parts = ["\(board.done) done", "\(board.open) open"]
+        if board.active > 0 { parts.append("\(board.active) running") }
+        if board.needs > 0 { parts.append("\(board.needs) needs you") }
+        return parts.joined(separator: " · ")
     }
 
     private var wallCount: AnyView? {

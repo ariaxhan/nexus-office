@@ -53,6 +53,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import runtime as rt  # noqa: E402  (needs the path above)
 import automation  # noqa: E402  (needs the path above)
+import run_board  # noqa: E402  (needs the path above)
 import sections as sections_mod  # noqa: E402  (needs the path above)
 
 def _env_path(name):
@@ -1102,7 +1103,8 @@ def build_snapshot(access: Access):
         # link to the comment it left), and the two fixtures that know whether
         # anything is scheduled and whether anything can reach the door. No
         # second measurement of any of it.
-        "automation": automation.build(by_repo, stations, fixtures, counts, stamp),
+        "automation": automation.build(by_repo, stations, fixtures, counts, stamp,
+                                       board=run_board.read()),
         "github": {
             "limit": BUDGET["limit"],
             "remaining": BUDGET["remaining"],

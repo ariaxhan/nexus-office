@@ -26,6 +26,7 @@ public struct Automation: Decodable, Equatable {
     public var trigger: Trigger = Trigger()
     public var reached: Reached = Reached()
     public var activity: [Activity] = []
+    public var runs: RunBoard = RunBoard()
     /// How many rows the server left off the end. Drawn, always: a list capped
     /// in silence reads as "that is everything that happened".
     public var activityDropped: Int = 0
@@ -40,7 +41,7 @@ public struct Automation: Decodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case state, headline, how, schedule, now, trigger, reached, activity
+        case state, headline, how, schedule, now, trigger, reached, activity, runs
         case activityDropped = "activity_dropped"
     }
 
@@ -59,6 +60,7 @@ public struct Automation: Decodable, Equatable {
         // never the whole history.
         activity = c.list(.activity, Lenient<Activity>.self).compactMap(\.value)
         activityDropped = c.int(.activityDropped) ?? 0
+        runs = ((try? c.decodeIfPresent(RunBoard.self, forKey: .runs)) ?? nil) ?? RunBoard()
     }
 
     // MARK: - when it looks
@@ -267,5 +269,60 @@ public struct Automation: Decodable, Equatable {
             commentURL = c.str(.commentURL) ?? ""
             commentAt = c.str(.commentAt) ?? ""
         }
+    }
+}
+
+public struct RunBoard: Decodable, Equatable {
+    public var state = "missing"
+    public var detail = ""
+    public var done = 0
+    public var active = 0
+    public var open = 0
+    public var needs = 0
+    public var families: [Family] = []
+
+    public init() {}
+
+    public struct Family: Decodable, Equatable, Identifiable {
+        public var id = ""
+        public var name = ""
+        public var state = ""
+        public var enabled = false
+        public var lastAt = ""
+        public var summary = ""
+        public var count = 0
+        public var done = 0
+        public var failed = 0
+        public var active = 0
+        public var open = 0
+        public var needs = false
+        public var runs: [Run] = []
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, state, enabled, summary, count, done, failed, active, open, needs, runs
+            case lastAt = "last_at"
+        }
+    }
+
+    public struct Run: Decodable, Equatable, Identifiable {
+        public var id = ""
+        public var state = ""
+        public var title = ""
+        public var startedAt = ""
+        public var endedAt = ""
+        public var duration = 0
+        public var summary = ""
+        public var transcript: [Block] = []
+
+        enum CodingKeys: String, CodingKey {
+            case id, state, title, summary, transcript
+            case startedAt = "started_at", endedAt = "ended_at", duration = "duration_s"
+        }
+    }
+
+    public struct Block: Decodable, Equatable, Identifiable {
+        public var speaker = ""
+        public var text = ""
+        public var id: String { "\(speaker)@\(text.hashValue)" }
     }
 }
