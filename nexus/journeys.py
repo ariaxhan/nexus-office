@@ -76,6 +76,8 @@ def _run_locale(journey: Journey, locale: Locale, browser: Browser,
     run_id = f"journey-{locale.code}-{uuid.uuid4().hex}"
     started = time.monotonic()
     step = "entry"
+    evidence = None
+    cause = None
     try:
         browser.set_timeout(timeout_s)
         browser.open(locale.route + journey.entry)
@@ -87,14 +89,33 @@ def _run_locale(journey: Journey, locale: Locale, browser: Browser,
         step = "completion"
         browser.assert_completion(journey.completion)
     except Exception as exc:
-        if isinstance(exc, JourneyFailure):
-            raise
-        raise JourneyFailure(_evidence(browser, locale.code, step, evidence_dir, exc)) from exc
-    finally:
+        cause = exc
+        evidence = _evidence(browser, locale.code, step, run_id, evidence_dir, exc)
+    evidence, cause = _finish_browser(
+        browser, locale.code, run_id, evidence_dir, evidence, cause
+    )
+    if evidence:
+        raise JourneyFailure(evidence) from cause
+
+
+def _finish_browser(browser: Browser, locale: str, run_id: str,
+                    evidence_dir: Path, evidence: FailureEvidence | None,
+                    cause: Exception | None
+                    ) -> tuple[FailureEvidence | None, Exception | None]:
+    operations = (
+        ("cleanup", lambda: browser.cleanup(run_id)),
+        ("close", browser.close),
+    )
+    for step, operation in operations:
         try:
-            browser.cleanup(run_id)
-        finally:
-            browser.close()
+            operation()
+        except Exception as exc:
+            if evidence is None:
+                cause = exc
+                evidence = _evidence(
+                    browser, locale, step, run_id, evidence_dir, exc
+                )
+    return evidence, cause
 
 
 def _assert_locale(browser: Browser, locale: Locale) -> None:
@@ -111,12 +132,12 @@ def _check_timeout(started: float, timeout_s: float) -> None:
         raise TimeoutError(f"journey exceeded {timeout_s:g}s")
 
 
-def _evidence(browser: Browser, locale: str, step: str, root: Path,
-              exc: Exception) -> FailureEvidence:
-    root.mkdir(parents=True, exist_ok=True)
-    shot = root / f"{locale}-{step}.png"
+def _evidence(browser: Browser, locale: str, step: str, run_id: str,
+              root: Path, exc: Exception) -> FailureEvidence:
+    shot = root / f"{run_id}-{step}.png"
     screenshot = ""
     try:
+        root.mkdir(parents=True, exist_ok=True)
         browser.screenshot(shot)
         screenshot = str(shot)
     except Exception:
@@ -125,5 +146,13 @@ def _evidence(browser: Browser, locale: str, step: str, root: Path,
         console_errors = browser.console_errors()
     except Exception as evidence_error:
         console_errors = (f"console capture failed: {evidence_error}",)
-    return FailureEvidence(locale, step, browser.route, screenshot,
-                           console_errors, str(exc))
+    return FailureEvidence(
+        locale, step, _route(browser), screenshot, console_errors, str(exc)
+    )
+
+
+def _route(browser: Browser) -> str:
+    try:
+        return browser.route
+    except Exception as exc:
+        return f"route capture failed: {exc}"

@@ -105,6 +105,22 @@ class JourneyProbeTest(unittest.TestCase):
             self.assertEqual(("localized control missing",), evidence.console_errors)
         self.assertTrue(all(browser.cleaned and browser.closed for browser in browsers))
 
+    def test_cleanup_failure_has_evidence_and_still_closes(self):
+        class CleanupFailureBrowser(Browser):
+            def cleanup(self, run_id):
+                super().cleanup(run_id)
+                raise RuntimeError("cleanup failed")
+
+        browser = CleanupFailureBrowser()
+        journey = Journey("/lesson", "complete", ("finish",), (LOCALES[0],))
+
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(JourneyFailure) as raised:
+                run_journeys(journey, lambda: browser, pathlib.Path(root))
+            self.assertEqual("cleanup", raised.exception.evidence.step)
+            self.assertTrue(pathlib.Path(raised.exception.evidence.screenshot).exists())
+        self.assertTrue(browser.closed)
+
 
 if __name__ == "__main__":
     unittest.main()
