@@ -156,6 +156,26 @@ Ready now: #86, then #68, #71, and manual decomposition #73. Migration, schema, 
 coordination are file-disjoint; integration remains serial.
 Every further airline migration gets its own child issue before work begins.
 
+### Self-healing closure
+
+The five-minute core runs the serving repo's canonical browser, authentication, asset, redirect,
+paid-gate, entitlement, progress, health, TLS, and delivery-loop checks. It does not guess URLs
+from the source tree. Failures use stable check IDs, become `ready+p0` issues in the repo that owns
+the repair, and close only after the same live check passes.
+
+```mermaid
+flowchart TD
+  A[#87 route Nexus failures] --> D[#91 independent heartbeat]
+  A --> E[#92 stable checks and owning repos]
+  B[#88 executor failover] --> F[#93 live repair closure]
+  C[#89 one bounded issue per flight] --> F
+  E --> F --> G[#94 transactional product probes]
+```
+
+The independent heartbeat survives tower failure. The core probe never charges, sends customer
+messages, or mutates customer data. Slower sandbox probes cover checkout, care lifecycle,
+Kakao/SMS receipts, PWA playback/install, and complete KR/EN/ES journeys.
+
 ## Ledger model
 
 One file: `~/Library/Application Support/nexus/ledger.sqlite`, WAL mode, `PRAGMA user_version`
