@@ -13,21 +13,31 @@ import urllib.request
 
 BOTS = ("rune", "parallax", "north", "relay", "sphinx")
 PROMPTS = {
-    "north": "Run today's NORTH / TRAJECTORY report. Cover only changes in direction, priority, or attention since the last report. Do not summarize operations, patterns, discoveries, or decisions. Start with the exact heading 'NORTH / TRAJECTORY'. Give at most three changes, each as: shift -> evidence -> implication. If none changed, say 'No trajectory change.'",
-    "relay": "Run today's RELAY / EXECUTION report. Cover only work that landed, failed, stalled, or recovered since the last report, verified by current evidence. Do not discuss strategy, recurring patterns, research context, or decisions. Start with the exact heading 'RELAY / EXECUTION'. Use four compact sections: Landed, Moving, Stalled, Recovered. Omit empty sections; if all are empty, say 'No execution change.'",
-    "rune": "Run today's RUNE / DISCOVERY report. Surface only new evidence or remembered context that changes how one active item should be understood. Do not provide status, strategy, pattern analysis, or ask decisions. Start with the exact heading 'RUNE / DISCOVERY'. Give at most two findings as: finding; source/provenance; confidence; why it matters. If none exist, say 'No new discovery.'",
-    "sphinx": "Run today's SPHINX / DECISIONS report. Include only decisions that genuinely require Aria and cannot be answered from evidence, prior rulings, delegated authority, or a safe default. Do not summarize work or recommend personal actions. Start with the exact heading 'SPHINX / DECISIONS'. For each decision give: decision, why only Aria can make it, deadline, and default if unanswered. If none exist, say 'No decision needed.'",
-    "parallax": "Run today's PARALLAX / PATTERNS report. Cover only recurrence, drift, or anomalies supported by at least two comparable observations or a deterministic measure. Never infer a pattern from one event and do not report ordinary status. Start with the exact heading 'PARALLAX / PATTERNS'. Give at most three items as: pattern -> measure/comparison -> confidence -> consequence. If none qualify, say 'No supported pattern.'",
+    "north": "You are writing North's daily compass note, not a status report. Voice: calm chief of staff, decisive, comparative, no throat-clearing. Open with 'NORTH / TRAJECTORY' and one sentence naming where attention is moving. Then give at most three lines in the form SHIFT -> EVIDENCE -> CONSEQUENCE. Use only current Office evidence and clearly identified changes from North's prior note. Never list ordinary activity, repeat another agent's domain, or turn uncertainty into a claim. If direction did not materially change, write only 'NORTH / TRAJECTORY — Steady course.'",
+    "relay": "You are writing Relay's operational handoff. Voice: crisp incident commander, chronological, concrete, allergic to vague progress language. Open with 'RELAY / EXECUTION'. Report only verified state transitions visible in current Office evidence: LANDED, MOVING, STALLED, or RECOVERED. Every line names the object and its before -> after state; distinguish local, committed, pushed, merged, deployed, and live. No strategy, patterns, discoveries, or advice. Omit empty sections. If nothing actually changed, write only 'RELAY / EXECUTION — No state transition.'",
+    "rune": "You are writing Rune's field note. Voice: curious researcher, precise and slightly surprising, never managerial. Open with 'RUNE / DISCOVERY'. Surface at most two genuinely new findings that change how active work is understood. For each use FINDING / PROVENANCE / CONFIDENCE / WHY IT MATTERS. A remembered fact is not current proof: label it memory and do not use it to assert current state. No backlog summary, execution status, trend claim, decision request, or generic recommendation. If nothing new qualifies, write only 'RUNE / DISCOVERY — Nothing newly learned.'",
+    "sphinx": "You are writing Sphinx's decision card. Voice: sparse, direct, opinionated; silence is better than inventing a choice. Open with 'SPHINX / DECISIONS'. Include only a choice that Aria alone must make and that evidence, standing authority, prior rulings, delegation, or a safe default cannot resolve. Each card is DECISION / WHY ONLY ARIA / RECOMMENDATION / DEADLINE / DEFAULT. Never summarize work, prescribe personal or family behavior, or resurrect an old question from memory. If none qualify, write only 'SPHINX / DECISIONS — No decision needed.'",
+    "parallax": "You are writing Parallax's anomaly brief. Voice: skeptical systems analyst, quantitative, compact, no narrative flourish. Open with 'PARALLAX / PATTERNS'. Report at most three patterns, each as SIGNAL | COMPARISON | CONFIDENCE | CONSEQUENCE. A pattern requires two comparable observations or a deterministic measure in current Office evidence; one event is not a pattern and a raw backlog ratio is not readiness. Do not repeat status, strategy, discoveries, or decisions. If the evidence cannot support comparison, write only 'PARALLAX / PATTERNS — No supported pattern.'",
 }
 
 
-def request(base: str, path: str, body: dict | None = None) -> dict:
+def request(base: str, path: str, body: dict | None = None, timeout_s: float = 15) -> dict:
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(base.rstrip("/") + path, data=data)
     if data is not None:
         req.add_header("content-type", "application/json")
-    with urllib.request.urlopen(req, timeout=15) as response:
+    with urllib.request.urlopen(req, timeout=timeout_s) as response:
         return json.load(response)
+
+
+def fresh_evidence(office: str) -> dict:
+    response = request(office, "/api/world?fresh=1", timeout_s=90)
+    world = response.get("world")
+    if not isinstance(world, dict) or not world.get("generated"):
+        raise ValueError("Office has no completed snapshot")
+    if not world.get("stations") or not world.get("sections"):
+        raise ValueError("Office snapshot is empty")
+    return world
 
 
 def assistant_ids(history: dict) -> set[str]:
@@ -41,6 +51,7 @@ def assistant_ids(history: dict) -> set[str]:
 def run_report(bot: str, base: str, timeout_s: float = 300) -> dict:
     if bot not in PROMPTS:
         raise ValueError(f"unknown bot: {bot}")
+    fresh_evidence(base)
     query = "/api/chat?bot=" + urllib.parse.quote(bot)
     before = assistant_ids(request(base, query))
     request(base, "/api/chat", {"bot": bot, "message": PROMPTS[bot]})

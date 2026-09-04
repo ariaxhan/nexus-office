@@ -13,8 +13,15 @@ import bot_reports  # noqa: E402
 
 class Door(BaseHTTPRequestHandler):
     turns = {bot: [] for bot in bot_reports.BOTS}
+    world = {
+        "generated": "2026-09-04T08:00:00Z",
+        "stations": [{"repo": "owner/repo"}],
+        "sections": {"clock": {"state": "ok"}},
+    }
 
     def do_GET(self):
+        if self.path.startswith("/api/world"):
+            return self.reply(200, {"world": self.world})
         bot = self.path.split("bot=", 1)[-1]
         self.reply(200, {"turns": self.turns[bot]})
 
@@ -40,6 +47,11 @@ class Door(BaseHTTPRequestHandler):
 class BotReportsTest(unittest.TestCase):
     def setUp(self):
         Door.turns = {bot: [] for bot in bot_reports.BOTS}
+        Door.world = {
+            "generated": "2026-09-04T08:00:00Z",
+            "stations": [{"repo": "owner/repo"}],
+            "sections": {"clock": {"state": "ok"}},
+        }
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Door)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -57,15 +69,21 @@ class BotReportsTest(unittest.TestCase):
         self.assertEqual(turn["id"], "reply-north")
         self.assertFalse(Door.turns["relay"])
 
+    def test_empty_evidence_and_unverified_results_fail_closed(self):
+        Door.world = {}
+        with self.assertRaisesRegex(ValueError, "no completed snapshot"):
+            bot_reports.run_report("north", self.base, timeout_s=1)
+
     def test_each_role_has_a_visibly_distinct_report_contract(self):
         headings = {
-            prompt.split("'", 2)[1]
+            prompt.split("Open with '", 1)[1].split("'", 1)[0]
             for prompt in bot_reports.PROMPTS.values()
         }
         self.assertEqual(len(headings), len(bot_reports.BOTS))
         for bot, prompt in bot_reports.PROMPTS.items():
             self.assertIn(bot.upper(), prompt)
-            self.assertIn("Start with the exact heading", prompt)
+            self.assertIn("Voice:", prompt)
+            self.assertIn("Open with '", prompt)
 
 
 if __name__ == "__main__":
