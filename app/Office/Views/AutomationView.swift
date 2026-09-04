@@ -232,14 +232,19 @@ private struct ChangeRow: View {
             ForEach(change.issues) { issue in
                 if let url = URL(string: issue.url) { Link(issue.label + " ↗", destination: url) }
             }
+            if change.issues.isEmpty {
+                Text("no issue linked").foregroundStyle(Theme.faint)
+            }
         }
         .officeFont(size: 11).foregroundStyle(Theme.blue)
     }
 
     @ViewBuilder private func artifactGroup(_ label: String, _ artifacts: [WorkBoard.Artifact]) -> some View {
-        if !artifacts.isEmpty {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(label).officeFont(size: 10.5, weight: .semibold).foregroundStyle(Theme.faint)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label).officeFont(size: 10.5, weight: .semibold).foregroundStyle(Theme.faint)
+            if artifacts.isEmpty {
+                Text("none generated").officeFont(size: 11.5).foregroundStyle(Theme.faint)
+            } else {
                 ForEach(artifacts) { artifact in
                     Button {
                         Task { await store.open(repo: artifact.repo, path: artifact.path) }
