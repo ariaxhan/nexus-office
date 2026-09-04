@@ -14,6 +14,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nexus.ledger import Ledger, LedgerError, TRANSITIONS  # noqa: E402
+from tests.ledger_fixture import build  # noqa: E402
 
 
 class LedgerCase(unittest.TestCase):
@@ -34,7 +35,7 @@ class Schema(LedgerCase):
     def test_wal_and_version(self):
         mode = self.led.conn.execute("PRAGMA journal_mode").fetchone()[0]
         self.assertEqual(mode.lower(), "wal")
-        self.assertEqual(self.led.user_version(), 2)
+        self.assertEqual(self.led.user_version(), 3)
 
     def test_schema_v1_tables_all_present(self):
         names = {r[0] for r in self.led.conn.execute(
@@ -51,7 +52,7 @@ class Schema(LedgerCase):
         led = Ledger(self.path)
         self.addCleanup(led.close)
         self.assertTrue(os.path.exists(self.path + ".bak-0"))
-        self.assertEqual(2, led.user_version())
+        self.assertEqual(3, led.user_version())
         # the copy is the old file, not a fresh one
         self.assertGreater(os.path.getsize(self.path + ".bak-0"), 0)
 
@@ -218,6 +219,145 @@ class Integrity(LedgerCase):
         flight = self.led.create_flight(self.plan)
         self.led.conn.execute("UPDATE flights SET state='floating' WHERE id=?", (flight,))
         self.assertTrue(any("floating" in p for p in self.led.integrity_check()))
+
+
+class Parity(unittest.TestCase):
+    """Legacy paths converge on the same current ledger without losing meaning."""
+
+    def schema(self, path):
+        """Every table, index and trigger by name, and every table's column names."""
+        conn = sqlite3.connect(path)
+        objects = conn.execute(
+            "SELECT type, name, tbl_name FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").fetchall()
+        columns = {name: {r[1] for r in conn.execute(f"PRAGMA table_info({name})")}
+                   for kind, name, _ in objects if kind == "table"}
+        conn.close()
+        return objects, columns
+
+    def test_upgraded_v1_equals_fresh_v2(self):
+        d = tempfile.mkdtemp(prefix="nexus-parity-")
+        self.addCleanup(shutil.rmtree, d, True)
+        old = build(os.path.join(d, "old.sqlite"))
+        fresh = os.path.join(d, "fresh.sqlite")
+        Ledger(fresh).close()
+        led = Ledger(old)
+        self.addCleanup(led.close)
+
+        self.assertEqual(3, led.user_version())
+        self.assertEqual(self.schema(fresh), self.schema(old))
+        self.assertEqual([], led.integrity_check())
+
+        counts = dict(led.conn.execute(
+            "SELECT kind, count(*) FROM events WHERE kind IN "
+            "('objective','observation','radio.message','gate','radio.delivered')"
+            " GROUP BY kind").fetchall())
+        self.assertEqual({"objective": 1, "observation": 1, "radio.message": 2,
+                          "gate": 1, "radio.delivered": 1}, counts)
+
+        expected = ("keep main green", '{"gate": "risky"}')
+        self.assertEqual(expected, tuple(led.conn.execute(
+            "SELECT objective, autonomy FROM plans WHERE id='plan_1'"
+        ).fetchone()))
+        self.assertEqual(expected, tuple(led.conn.execute(
+            "SELECT objective, autonomy FROM tasks WHERE id='task_1'"
+        ).fetchone()))
+
+        bak = sqlite3.connect(old + ".bak-1")
+        self.assertEqual(1, bak.execute("PRAGMA user_version").fetchone()[0])
+        bak.close()
+
+    def test_missing_objective_reference_rolls_back_v2(self):
+        d = tempfile.mkdtemp(prefix="nexus-parity-")
+        self.addCleanup(shutil.rmtree, d, True)
+        old = build(os.path.join(d, "old.sqlite"))
+        conn = sqlite3.connect(old)
+        conn.execute("UPDATE tasks SET objective_id='missing'")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaisesRegex(LedgerError, "references missing objective"):
+            Ledger(old)
+
+        conn = sqlite3.connect(old)
+        self.addCleanup(conn.close)
+        self.assertEqual(1, conn.execute("PRAGMA user_version").fetchone()[0])
+        self.assertIsNotNone(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='objectives'"
+        ).fetchone())
+        self.assertNotIn("objective", {
+            row[1] for row in conn.execute("PRAGMA table_info(tasks)")
+        })
+        self.assertEqual("obj_1", conn.execute(
+            "SELECT objective_id FROM plans WHERE id='plan_1'"
+        ).fetchone()[0])
+        self.assertEqual("missing", conn.execute(
+            "SELECT objective_id FROM tasks WHERE id='task_1'"
+        ).fetchone()[0])
+
+    def partial_v2(self, path, clear_references=True):
+        """The early-v2 shape: legacy tables gone, stale objective_id columns kept."""
+        build(path)
+        conn = sqlite3.connect(path)
+        for table, columns in {
+            "plans": ("objective", "autonomy"),
+            "tasks": ("objective", "autonomy", "parent_id", "output", "check"),
+        }.items():
+            for column in columns:
+                conn.execute(f'ALTER TABLE {table} ADD COLUMN "{column}" TEXT')
+        if clear_references:
+            conn.execute("UPDATE plans SET objective_id=NULL")
+            conn.execute("UPDATE tasks SET objective_id=NULL")
+        for table in ("objectives", "observations", "messages", "gates"):
+            conn.execute(f"DROP TABLE {table}")
+        conn.execute(
+            "INSERT INTO events (ts,kind,subject,payload,source) "
+            "VALUES (1,'migration.marker',NULL,'{}','test')"
+        )
+        conn.execute("PRAGMA user_version=2")
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_partial_v2_equals_fresh_v3(self):
+        d = tempfile.mkdtemp(prefix="nexus-parity-")
+        self.addCleanup(shutil.rmtree, d, True)
+        old = self.partial_v2(os.path.join(d, "old.sqlite"))
+        fresh = os.path.join(d, "fresh.sqlite")
+        Ledger(fresh).close()
+        led = Ledger(old)
+        self.addCleanup(led.close)
+
+        self.assertEqual(3, led.user_version())
+        self.assertEqual(self.schema(fresh), self.schema(old))
+        self.assertEqual([], led.integrity_check())
+        self.assertEqual(1, led.conn.execute(
+            "SELECT count(*) FROM events WHERE kind='migration.marker'"
+        ).fetchone()[0])
+        self.assertEqual((None, None), tuple(led.conn.execute(
+            "SELECT objective, autonomy FROM plans WHERE id='plan_1'"
+        ).fetchone()))
+        self.assertEqual((None, None), tuple(led.conn.execute(
+            "SELECT objective, autonomy FROM tasks WHERE id='task_1'"
+        ).fetchone()))
+        bak = sqlite3.connect(old + ".bak-2")
+        self.assertEqual(2, bak.execute("PRAGMA user_version").fetchone()[0])
+        bak.close()
+
+    def test_partial_v2_with_relationships_is_refused(self):
+        d = tempfile.mkdtemp(prefix="nexus-parity-")
+        self.addCleanup(shutil.rmtree, d, True)
+        old = self.partial_v2(os.path.join(d, "old.sqlite"), clear_references=False)
+
+        with self.assertRaisesRegex(LedgerError, "references cannot be repaired"):
+            Ledger(old)
+
+        conn = sqlite3.connect(old)
+        self.addCleanup(conn.close)
+        self.assertEqual(2, conn.execute("PRAGMA user_version").fetchone()[0])
+        self.assertIn("objective_id", {
+            row[1] for row in conn.execute("PRAGMA table_info(plans)")
+        })
 
 
 if __name__ == "__main__":
