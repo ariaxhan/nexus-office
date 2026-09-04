@@ -160,8 +160,9 @@ Every further airline migration gets its own child issue before work begins.
 
 The five-minute core runs the serving repo's canonical browser, authentication, asset, redirect,
 paid-gate, entitlement, progress, health, TLS, and delivery-loop checks. It does not guess URLs
-from the source tree. Failures use stable check IDs, become `ready+p0` issues in the repo that owns
-the repair, and close only after the same live check passes.
+from the source tree. Today its exact failure picture becomes a `ready+p0` issue in the serving
+repo. #92 splits that picture by stable check ID and repair owner; #93 closes each only after the
+same live check passes.
 
 ```mermaid
 flowchart TD
