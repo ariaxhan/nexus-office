@@ -34,7 +34,9 @@ def _text(value, field: str) -> str:
 
 def _owner(value) -> str:
     owner = _text(value, "owner")
-    if owner.count("/") != 1 or not all(owner.split("/")):
+    parts = owner.split("/")
+    if (len(parts) != 2 or not all(parts)
+            or any(any(char.isspace() for char in part) for part in parts)):
         raise ValueError("owner must be a GitHub owner/repository")
     return owner
 
