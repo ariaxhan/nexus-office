@@ -42,6 +42,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -78,6 +79,19 @@ POLL_S = float(os.environ.get("OFFICE_POLL_S", "") or 300)
 # second one inside this window gets the cache and is told so.
 FRESH_MIN_S = 60.0
 FRESH_WAIT_S = 45
+
+
+def source_revision() -> str:
+    try:
+        return subprocess.check_output(
+            ("git", "-C", str(HERE.parent), "rev-parse", "HEAD"),
+            text=True, timeout=3,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+SERVER_REVISION = source_revision()
 BUILD_WAIT_S = 300
 
 GITHUB_KINDS = {"comment", "unblock", "close", "reopen", "label", "nudge", "merge",
@@ -635,7 +649,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(search.run((q.get("q") or [""])[0]))
             if path == "/api/health":
                 return self._json({"ok": True, "snapshot_at": self.world.at,
-                                   "server_time": now_iso()})
+                                   "server_time": now_iso(), "revision": SERVER_REVISION})
             if path.startswith("/api/"):
                 return self._json({"error": "not found"}, 404)
             return self._page(path)

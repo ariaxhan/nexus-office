@@ -128,6 +128,7 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertTrue(body["ok"])
         self.assertEqual(body["snapshot_at"], SNAP["generated"])
+        self.assertRegex(body["revision"], r"^[0-9a-f]{40}$")
 
     def test_gate_reports_its_own_state_rather_than_nothing(self):
         code, body = self.get("/api/gate")
