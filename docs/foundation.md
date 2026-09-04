@@ -8,6 +8,10 @@ Aria, 2026-09-03: "kill anything. restart nexus. no corruption, no lost durable 
 ambiguous state." And: "reliability code gets a complexity budget too. nexus should become
 smaller as its invariants improve."
 
+The newer operating rule is stronger: **a clear request or issue is already a decision. Decompose,
+delegate, do, verify the visible result, continue.** Tower must not turn execution into another
+planning, question, review, or gate factory.
+
 ```mermaid
 flowchart LR
   O[Office: what Aria sees] --> T[tower: who controls]
@@ -39,8 +43,8 @@ airline fly, or are we building more airport?
 
 | capability | owns | implementation |
 |---|---|---|
-| **tower** | scheduling, leases, lifecycle, budgets, cancellation, retries, gates, health | one process; launchd only keeps it alive |
-| **ledger** | plans, tasks, flights, artifacts, messages, events, gates, leases | one versioned SQLite file |
+| **tower** | scheduling, leases, lifecycle, budgets, cancellation, retries, health | one process; launchd only keeps it alive |
+| **ledger** | plans, tasks, flights, artifacts, messages, events, leases | one versioned SQLite file |
 | **flights** | Claude, Codex, Antigravity, scripts, scheduled work | one runner contract; executor selected by plan data |
 | **radio** | durable task conversation and delivery | ledger events plus a small send/read API; no daemon |
 | **landing** | verify, integrate, record, recover | tower state transitions plus Git; no service |
@@ -63,38 +67,100 @@ click in the Office becomes a ledger row that tower acts on.
 | board files, office bots, board-responder | ledger events; the feed is a view |
 | webhook queue (loses dispatch after a 2xx on restart) | durable **events** in the ledger, acknowledged after commit |
 | issue pipeline, care pipeline, lesson pipeline, release controller | flight plans plus product-specific verifiers |
-| gates (`_meta/state/gates`, id-addressed, fail-closed) | tower interventions with the same ids and the same fail-closed rule |
+| gates (`_meta/state/gates`) | deleted; bounded work is decomposed, forbidden actions are structurally refused, and unrelated work continues |
 | 76 hooks | only last-line safety boundaries: client default-branch push, secrets in tree, money. Everything else deleted with a test proving the class is unreachable |
 
 A new process, database, protocol, or framework needs proof that this model cannot deliver the
 required behavior. A new concept should first be a field, event kind, or state.
 
-The loop, in one line: nexus observes, decides, works, talks, self-resolves, verifies, lands,
-learns what to do next. Aria is responsible for objectives and boundaries; never task generation,
-troubleshooting, or routine decisions.
+The loop: `request or issue → do → verify the real surface → land → probe → next ready item`.
+Watchers add work to the same loop. Aria owns goals and hard boundaries; never routine task
+generation, troubleshooting, sequencing, or approval.
 
 ## Functionality invariant
 
-Simplification may merge storage, code paths, or delivery phases. It may not remove any outcome:
+Simplification may merge storage, code paths, or delivery phases. It may not remove any outcome.
+The sole explicit scope change is the later instruction replacing human gates with decomposition
+and structural refusal:
 
 - objectives with inherited autonomy boundaries;
 - scheduled, event-driven, and directly requested work;
 - observations, ranking, deduplication, policy decisions, and task generation;
-- Claude, Codex, Antigravity, script, watcher, resolver, and reviewer flights;
+- Claude, Codex, Antigravity, script, watcher, coordinator, resolver, and reviewer flights;
 - durable task conversations, executor replacement, and Office replies;
-- deterministic recovery, retry, diagnosis, repair, alternate approach, rollback, quarantine, and
-  last-rung human gates;
+- deterministic recovery, retry, diagnosis, repair, alternate approach, rollback, and quarantine;
 - plan-specific verification, recoverable landing, and untouched human checkouts;
-- Office visibility for noticed, decided, doing, fixed, and needs-you;
+- Office visibility for noticed, decomposed, delegated, doing, failed, and fixed;
 - degraded operation when GitHub, radio, verifier, or Office is unavailable;
 - migration and deletion of every mapped legacy mechanism.
+
+## Operating constraints from the September 3 transcripts
+
+- Explicit request or filed issue: enqueue immediately. No candidate/ranking ceremony first.
+- Large work starts with one bounded coordinator flight that writes child tasks with one
+  unambiguous output, owned paths, and check. Tower schedules that data; it does not reason.
+- Each child goes to one appropriate subagent flight. File-disjoint children may run in parallel;
+  shared surfaces and integration remain serial. No agent receives an issue-sized one-shot prompt.
+- Verification is its own bounded flight only when consequence requires independence; no councils
+  or reviewer fan-out.
+- Issue work ends in a pushed PR; review, merge, and post-merge proof follow automatically.
+- Non-issue work uses the airline's landing rule; no feature branch merely because an agent ran.
+- Disposable clones provide isolation. No worktrees and no writes to human checkouts.
+- Verification targets the requested surface: deployed page, staging route, running process,
+  database row, screenshot, or receipt. Internal tests are supporting evidence only.
+- Run only tests protecting money, data, permissions, or a demonstrated regression; run once at
+  the landing boundary. Delete tests that only preserve implementation ceremony.
+- After each result, take the highest-priority ready item. Money, client default-branch push,
+  speaking as Aria, and unrecoverable deletion are refused unless already authorized; they do not
+  create a waiting gate. For ambiguity, use the most reasonable reversible interpretation, record
+  the assumption, and continue.
+- Deterministic live probes file breakage immediately and place it ahead of routine work.
+- Infrastructure work must fix a current failure or immediately delete a replaced mechanism.
+
+## Manual first, then automate
+
+Decomposition is authored by hand before any decomposition process or skill exists. Freeze the
+destination, draw dependencies, create bounded child issues, execute them, and observe where
+coordination fails. Only then encode the repeated minimum. This applies to every new Nexus
+workflow: **do it manually once; automate the proven path, not the imagined one.**
+
+Canonical tracker: [#85](https://github.com/ariaxhan/nexus-office/issues/85). Every node is an
+actual subissue with its own output and acceptance check.
+
+```mermaid
+flowchart TD
+  A[#68 Vaults landing] --> B[#69 retire morning scrape] --> C[#70 midday pulse]
+  F[#73 manual coordinator] --> E[#72 parent/child tasks]
+  D[#71 ledger v2] --> E
+  F --> G[#74 Claude]
+  F --> H[#75 Codex]
+  F --> I[#76 Antigravity]
+  D --> J[#77 radio]
+  D --> K[#78 structural refusal]
+  G --> L[#79 issue to PR]
+  H --> L
+  I --> L
+  J --> L
+  K --> L
+  L --> M[#80 verifier] --> N[#81 live probes]
+  D --> O[#82 Office API]
+  E --> O
+  J --> O
+  O --> P[#83 Office UI]
+  N --> P
+  P --> Q[#84 delete hcom and duplicate stores]
+```
+
+Ready now: #68, #71, and manual decomposition #73. Migration, schema, and manual coordination are
+file-disjoint; integration remains serial.
+Every further airline migration gets its own child issue before work begins.
 
 ## Ledger model
 
 One file: `~/Library/Application Support/nexus/ledger.sqlite`, WAL mode, `PRAGMA user_version`
 for migrations, copied to `ledger.sqlite.bak-<version>` before any migration.
 
-Target: seven tables hold all functionality. Objectives, observations, messages, and gates are
+Target: seven tables hold all functionality. Objectives, observations, and messages are
 typed data inside them until measured query or integrity needs justify normalization. The current
 live v1 ledger still has the four removed tables while a fresh v1 creates seven; migration v2 must
 copy their remaining data into the target fields/events, verify parity, then drop them. The same
@@ -103,14 +169,14 @@ schema version may never describe both layouts.
 | table | owns |
 |---|---|---|
 | `plans` | standing responsibility, objective and autonomy boundary, schedule or event trigger, executor, inputs, outputs, verifier, budget, recovery policy, resources, enabled/quarantined state |
-| `tasks` | accepted work, source observation, reason, impact, risk, dedupe key, decision, gate request/answer when required |
+| `tasks` | accepted work, one-sentence objective and autonomy boundary, parent task, source, reason, priority, dedupe key, state, declared output and check |
 | `flights` | attempt state, task/plan, lease, workspace, process, structured result, attempt, resolution step |
 | `artifacts` | files, branches, receipts, screenshots, failure evidence |
 | `landings` | target, expected SHA, verifier flight, recoverable apply state |
 | `events` | append-only state history, observations, and radio messages with delivery metadata |
 | `leases` | shared mutable targets: repo+branch, mailbox, deploy slot, paid budget |
 
-The current fresh schema does not yet carry objective/autonomy, gate, or delivery metadata. Those
+The current fresh schema does not yet carry objective/autonomy or delivery metadata. Those
 fields arrive through the v2 migration before the corresponding capability moves onto this model.
 
 Rules enforced in the ledger layer, not by callers: every write is a transaction that also
@@ -126,33 +192,33 @@ parsed from logs. Budget enforced by tower: timeout, turns, cost, retries. Works
 landing or failure; artifacts survive in the ledger and on GitHub.
 
 **Landing.** Verify flight runs the plan's verifier against the artifact (tests, parity, screenshot,
-product gate). GitHub and sqlite cannot share a transaction, so landing is a recoverable state
+product check). GitHub and sqlite cannot share a transaction, so landing is a recoverable state
 machine: `verified → applying → applied`. Tower records `applying` with `expected_sha`, pushes,
 then records `applied`. After any restart, every `applying` row is reconciled by asking GitHub for
 the branch tip: equal to `expected_sha` means record `applied`; absent means push again. Idempotency
 replaces the atomicity that does not exist. Human trees fast-forward only; tower never writes into a
 checkout a person uses.
 
-**Resolution policy, inside tower.** One data-driven transition table implements this sequence;
-there is no resolver framework. Each move is allowed only if the plan permits it:
-`deterministic recovery → retry → diagnose → resolver flight → peer or reviewer flight over radio →
-bounded repair → verify → alternate approach → rollback or quarantine → gate`. A gate is the last state, created only when
-`gate_when` says the policy requires a person (client default-branch merge, money, a listed
-irreversible act). The Office shows the rung a task is on. Target: nexus resolves, verifies the
-resolution, and tells Aria afterwards; not asks first.
+**Resolution.** The working flight diagnoses, repairs, changes approach, and verifies within its
+budget. Tower only performs deterministic recovery, retry, rollback, quarantine, and structural
+policy refusal.
+A separate resolver or reviewer is another ordinary flight, created only when independence or a
+real failure requires it; there is no role framework or resolution state machine. Every original
+resolution outcome remains available. Office shows what is happening; Nexus resolves routine
+uncertainty and reports afterwards.
 
 **Roles.** Plan = how and when nexus watches or routinely acts. Task = something nexus decided
 needs doing. Flight = one attempt to do it. A schedule never creates a flight directly; it creates
 an observation or a task, and tower decides.
 
-**Where work comes from.** `objective → plan watches → observation → candidate task → policy and
-ranking → task → flight(s) → result → new observations`. Watcher plans read GitHub issues and PRs,
-failed flights, test failures, stale projects, TODOs, Office conversations, repo changes, product
-health, and prior flight discoveries. A candidate task carries a reason tied to one objective, an
-impact, a risk, a cost estimate, and a dedupe key. Tower ranks, dedupes, checks policy, and accepts
-or rejects; low-risk reversible work (audits, research, verification) is accepted automatically,
-and a flight may propose tasks but never dispatch them. Agents discover work; tower decides whether
-discovered work deserves resources.
+**Where work comes from.** Explicit requests and issues become tasks immediately. Watchers append
+observations for GitHub, failed flights, staging and production probes, stale projects, TODOs,
+Office conversations, repo changes, product health, and flight discoveries. Tower deduplicates,
+checks the autonomy boundary, sorts by explicit priority, and launches. It does not estimate,
+deliberate, or build a generic ranking engine. Every task cites its one-sentence objective and
+boundary. A direct request supplies the objective; its trusted arrival surface and standing policy
+supply authority. Caller-controlled content never grants authority. The flight does the
+judgment-heavy work.
 
 **Communications may fail; lifecycle must continue.** Tower owns lifecycle, presence, leases,
 stop, kill and completion. Radio owns messaging only and is never on the critical path of a
@@ -170,17 +236,14 @@ changes nothing about the flight's lifecycle.
 
 **Radio.** `send(task, to, body)` appends an event before ack. A message belongs to the task's conversation;
 delivery targets whichever flight currently holds the task, so Codex can die, Claude can replace it,
-and the reasoning survives. Broadcast does not exist. Undelivered messages are visible in the Office.
-
-**Gate.** Every intervention has a unique, never-reused id and timeout. Office answers the exact id
-it displayed; tower re-reads the pending gate and refuses an expired, answered, or mismatched id.
-No answer fails closed.
+and the reasoning survives. The active receiver gets undelivered task messages at its next turn.
+Broadcast does not exist. Undelivered messages are visible in the Office.
 
 **Tower loop.** Every tick: expire leases, fail flights past budget, quarantine plans with N
 consecutive failures, schedule due plans within a concurrency cap, launch queued flights detached,
 reconcile narrowly (pid exists? branch exists? workspace exists?) and repair only that row. Killed
 at any instruction, restart rebuilds from the ledger. Escape hatch: `nexus pause`, `nexus kill
-<flight>`, `nexus hold-landing`, `nexus retry <flight>`, `nexus approve <gate>`.
+<flight>`, `nexus hold-landing`, `nexus retry <flight>`.
 
 ## The laws
 
@@ -198,20 +261,19 @@ rejection, interrupted landing, interrupted message delivery, and hung radio. Ca
 harness but every fault remains covered. Each asserts ledger integrity, artifact existence, and
 one unambiguous flight state.
 
-## Delivery order: vertical slices, not subsystem projects
+## Delivery order: working loops, one small landing at a time
 
-The Office reads these as five columns: nexus noticed (observations), nexus decided (tasks),
-nexus is doing (flights), nexus fixed (landings), nexus needs you (gates).
+The Office reads these as six columns: noticed, decomposed, delegated, doing, failed, fixed.
 
 ## Ceremony budget
 
 Every piece of work is `decide → do → verify → done`; everything between must earn its place.
 Risk class picks the process: cheap and reversible: do it, test. Expensive and reversible: brief
-plan, do, test. Irreversible or external: verify, gate only where policy requires. Architectural:
-spec, adversarial review, vertical slice. Most work is not the last class. Tower penalises
-infrastructure, architecture, observability and refactoring tasks when ranking; they outrank
-product work only when they unblock it, prevent a demonstrated serious failure, or delete net
-complexity. Infrastructure is a cost center, not an objective.
+plan, do, test. Irreversible or external: verify and refuse unless already authorized. Architectural:
+freeze the destination, manually decompose, build one vertical slice. Plans supply priority.
+Product work wins by default; infrastructure rises only when it unblocks product work, fixes a
+demonstrated serious failure, or immediately deletes net complexity. Tower sorts; it does not
+deliberate. Infrastructure is a cost center.
 
 ## Success metrics, measured from the ledger
 
@@ -227,11 +289,11 @@ complexity. Infrastructure is a cost center, not an objective.
 | step | delivers | accepted when |
 |---|---|---|
 | 1 script flight: core built, target proof partial | schedule → isolated run → structured result → declared artifact → landing → recovery | three CollabVault outputs and one Vaults output land; tower survives `kill -9`; each remote SHA equals the ledger |
-| 2 now: migrate airlines | move one real job through the complete script-flight path, then delete only what it replaces | each migrated job lands three times before its plist and wrapper disappear; finish with one launchd job |
-| 3 agent flight | migrate the ledger to v2; add executor selection, durable radio, independent verification when policy requires it, resolution, and last-rung gates through the same runner | Claude, Codex, and Antigravity each complete a real flight; required verifier flights land; conversation survives executor death; stale gate answers are refused |
-| 4 Office projection | read objectives, observations, decisions, flights, landings, conversations, and gates from the ledger while preserving roster, desks, flows, and existing controls | the same screens plus the five live columns match ledger state; old roster, board, presence, and gate stores are removed |
-| 5 autonomous airline | add one product-owned watcher and ranking policy, using the same task and flight path | one real low-risk task is observed, deduped, selected, completed, verified, landed, and shown without intervention |
-| 6 finish migration | repeat slices 2 and 5; delete each predecessor immediately after proof | all airline behavior remains; hcom and mapped legacy machinery are gone; only three safety-boundary hooks remain |
+| 2 now: finish script proof | land one Vaults output, then move one scheduled job at a time through the proven path | each job lands three times before its plist and wrapper disappear; finish with one launchd job |
+| 3 issue loop | migrate ledger v2; add parent/child decomposition, executor selection, radio, structural policy refusal, and landing policy through the shared runner | a large issue splits into bounded flights; Claude, Codex, and Antigravity each complete real work; issue → PR → review → required staging → merge/promote → post-merge proof runs without routine questions; conversation survives executor death and reaches its replacement next turn |
+| 4 live safety loop | add airline-owned deterministic staging, production, health, and low-risk discovery watchers | one low-risk observation is deduped, selected, completed, verified, and landed without intervention; failures file priority tasks immediately; TBS production probe runs every five minutes and proves PR → review → staging → staging probe → main → recurring production probe |
+| 5 Office projection | read objectives, observations, decomposition, delegation, flights, landings, and conversations from the ledger while preserving roster, desks, flows, and non-gate controls | the same screens plus the six live columns match ledger state; failures link to their issue, PR, review, landing, and live proof |
+| 6 finish migration | repeat the proven loops; delete each predecessor immediately after proof | all scheduled, agent, delegation, radio, watcher, Office, refusal, and recovery behavior remains; hcom and mapped legacy machinery are gone; only three safety-boundary hooks remain |
 
 Status, step 1: core BUILT; target proof PARTIAL. The live ledger has eleven tables; fresh v1 has
 seven. Both have WAL, backup, append-only events, and integrity checks. Step 3 owns the clean v2
