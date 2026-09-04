@@ -136,6 +136,10 @@ cd app && xcodegen generate && open Office.xcodeproj   # then Run
 You need Xcode, Python 3, and the GitHub CLI logged in. Office itself has no
 account or hosted backend.
 
+`./scripts/install.sh` installs both `/Applications/Office.app` and the standalone `nexus` CLI.
+The CLI resolves this checkout itself, so it works outside a Vaults tree. `nexus --help` is its
+complete command surface; Vaults and TBS CLIs are separate programs.
+
 ```sh
 export OFFICE_OWNERS=your-github-username,your-org
 export OFFICE_POLL_S=300         # how often the door asks GitHub (default 300)

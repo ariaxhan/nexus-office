@@ -18,6 +18,14 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 DEST="/Applications/Office.app"
+CLI="$HOME/.local/bin/nexus"
+
+mkdir -p "$(dirname "$CLI")"
+if [ -e "$CLI" ] && [ ! -L "$CLI" ]; then
+  echo "install: $CLI exists and is not a symlink" >&2
+  exit 1
+fi
+ln -sfn "$ROOT/scripts/nexus" "$CLI"
 
 command -v xcodegen >/dev/null 2>&1 || {
   echo "install: xcodegen is not installed (brew install xcodegen)" >&2
@@ -80,6 +88,7 @@ rm -rf "$ROOT/app/build/Build/Products/Release/Office.app"
 rm -rf "$ROOT/app/build/Build/Products/Debug/Office.app"
 
 echo "install: $DEST"
+echo "install: $CLI"
 LEFT="$("$LSREG" -dump 2>/dev/null | grep -o '/[^ ]*Office\.app' | sort -u | grep -v "^$DEST\$" || true)"
 if [ -n "$LEFT" ]; then
   echo "install: still registered, and should not be:"
