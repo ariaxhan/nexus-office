@@ -129,7 +129,9 @@ public final class Preferences {
            let order = StateRules.DeskSort(rawValue: raw) {
             deskSort = order
         }
-        needsOnly = defaults.bool(forKey: Self.needsOnlyKey)
+        // This filter used to persist across launches and could make a healthy
+        // floor look empty. It no longer has a UI; discard the stale choice.
+        defaults.removeObject(forKey: Self.needsOnlyKey)
         // Same honest read as the order above: a preset from a newer version is
         // a word this one cannot draw, and picking one of the three at random
         // rearranges the window into a shape nobody chose.
@@ -166,7 +168,6 @@ public final class Preferences {
 
     public func set(needsOnly: Bool) {
         self.needsOnly = needsOnly
-        defaults?.set(needsOnly, forKey: Self.needsOnlyKey)
     }
 
     public func set(layout: LayoutPreset) {

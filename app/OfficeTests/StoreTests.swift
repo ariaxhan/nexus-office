@@ -14,6 +14,31 @@ import XCTest
 @MainActor
 final class StoreTests: XCTestCase {
 
+    func testHidingBotsMovesABotSelectionToAVisibleDesk() async throws {
+        let store = try floor()
+        await store.refreshBots()
+        await store.refreshWorld()
+        store.select(.bot("chief"))
+
+        store.showBots = false
+
+        guard case .desk(let repo)? = store.selection else {
+            return XCTFail("a hidden bot must not remain the active navigation row")
+        }
+        XCTAssertTrue(store.visibleDesks.contains { $0.repo == repo })
+    }
+
+    func testEveryDeskOrderKeepsTheWholeVisibleFloor() async throws {
+        let store = try floor()
+        await store.refreshWorld()
+        let expected = Set(store.visibleDesks.map(\.repo))
+
+        for order in StateRules.DeskSort.allCases {
+            store.deskSort = order
+            XCTAssertEqual(Set(store.roster.flatMap(\.desks).map(\.repo)), expected, "\(order)")
+        }
+    }
+
     // MARK: - nexus open lands on the file
 
     func testOpeningAFileSelectsTheDeskFlipsItToContextAndReadsThatFile() async throws {

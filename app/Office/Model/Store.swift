@@ -172,7 +172,7 @@ public final class Store {
     public var fontPreset: FontPreset = .system { didSet { prefs.set(fontPreset: fontPreset) } }
     /// Which groups the roster draws.
     public var showBots = true {
-        didSet { prefs.set(showBots: showBots) }
+        didSet { applyBotVisibility() }
     }
     public var showWall = true {
         didSet { prefs.set(showWall: showWall) }
@@ -185,6 +185,22 @@ public final class Store {
     public func biggerType() { prefs.stepTypeScale(+1); typeScale = prefs.typeScale }
     public func smallerType() { prefs.stepTypeScale(-1); typeScale = prefs.typeScale }
     public func resetType() { typeScale = 1 }
+
+    private func applyBotVisibility() {
+        prefs.set(showBots: showBots)
+        guard !showBots, case .bot = selection else { return }
+        selectVisibleFloor()
+    }
+
+    private func selectVisibleFloor() {
+        if let desk = visibleDesks.first {
+            select(.desk(desk.repo))
+        } else if let section = visibleSections.first {
+            select(.section(section.id))
+        } else {
+            select(.home)
+        }
+    }
 
     /// What is open in the second detail pane, in `compare` only.
     ///

@@ -33,11 +33,10 @@ final class PreferencesTests: XCTestCase {
     func test_a_choice_survives_the_process_that_made_it() {
         let made = Preferences(defaults: defaults)
         made.set(deskSort: .issues)
-        made.set(needsOnly: true)
 
         let relaunched = Preferences(defaults: defaults)
         XCTAssertEqual(relaunched.deskSort, .issues)
-        XCTAssertTrue(relaunched.needsOnly)
+        XCTAssertFalse(relaunched.needsOnly)
     }
 
     func test_nothing_chosen_is_the_order_the_roster_has_always_had() {
@@ -63,17 +62,23 @@ final class PreferencesTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: "settings.deskSort.v1"))
     }
 
-    /// The store is what the views bind to, so the load has to land there and
-    /// a change made through it has to reach the disk.
-    func test_the_store_opens_on_what_was_chosen_and_saves_what_changes() {
+    /// The store is what the views bind to, so the load has to land there.
+    func test_the_store_opens_on_what_was_chosen() {
         Preferences(defaults: defaults).set(deskSort: .name)
 
         let store = Store(api: Api(source: .live(URL(string: "http://127.0.0.1:8765")!)),
                           prefs: Preferences(defaults: defaults))
         XCTAssertEqual(store.deskSort, .name)
 
-        store.needsOnly = true
-        XCTAssertTrue(Preferences(defaults: defaults).needsOnly)
+    }
+
+    func test_the_removed_needs_filter_cannot_reopen_on_an_empty_floor() {
+        defaults.set(true, forKey: "settings.needsOnly.v1")
+
+        let preferences = Preferences(defaults: defaults)
+
+        XCTAssertFalse(preferences.needsOnly)
+        XCTAssertNil(defaults.object(forKey: "settings.needsOnly.v1"))
     }
 
     // MARK: - the type scale

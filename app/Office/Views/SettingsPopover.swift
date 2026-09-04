@@ -86,14 +86,6 @@ struct SettingsPopover: View {
                 .fixedSize()
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                label("filter")
-                Toggle("Only desks that need a person", isOn: $store.needsOnly)
-                    .toggleStyle(.checkbox)
-                    .officeFont(size: 12)
-                    .foregroundStyle(Theme.text)
-            }
-
             Text("Kept between launches. A raised hand is never hidden by any of it.")
                 .officeFont(size: 10.5)
                 .foregroundStyle(Theme.faint)

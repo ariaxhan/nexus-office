@@ -54,7 +54,7 @@ struct RosterView: View {
                         }
                     }
                     if store.visibleDesks.isEmpty && store.worldNotice == nil {
-                        notary(store.needsOnly ? "nothing needs you right now" : "no desks yet")
+                        notary("no desks yet")
                     }
 
                     files
@@ -220,7 +220,7 @@ struct RosterView: View {
                     .id(rowID(section: section.id))
             }
             if store.visibleSections.isEmpty {
-                notary(store.needsOnly ? "nothing on the wall needs you" : "nothing matches")
+                notary("nothing matches")
             }
         }
     }
@@ -445,16 +445,10 @@ struct RosterView: View {
         .padding(.bottom, 4)
     }
 
-    /// The two things a person can do to the desks list: narrow it, and order
-    /// it. Both live in the header because both are answers to "show me a
-    /// different view of the same floor".
+    /// The desk list's ordering lives in its header because it is a view of the
+    /// same floor, never a filter that can make the floor disappear.
     private var deskControls: AnyView? {
-        AnyView(
-            HStack(spacing: 10) {
-                sortMenu
-                needsToggle
-            }
-        )
+        AnyView(sortMenu)
     }
 
     /// How the desks are ordered. Reordering hides nothing, so there is no
@@ -487,18 +481,6 @@ struct RosterView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Order the desks. No order hides a desk.")
-    }
-
-    private var needsToggle: some View {
-        Button {
-                store.needsOnly.toggle()
-            } label: {
-                Text("needs me")
-                    .officeFont(size: 11, weight: store.needsOnly ? .semibold : .regular)
-                    .foregroundStyle(store.needsOnly ? Theme.amber : Theme.faint)
-        }
-        .buttonStyle(.plain)
-        .help("Show only the desks a person has to touch. A raised hand is never hidden by it.")
     }
 
     // MARK: - what the search found on this machine
