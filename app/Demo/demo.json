@@ -1461,6 +1461,7 @@
       "activity_dropped": 12,
       "work": {
         "state": "ok",
+        "detail": "",
         "products": [
           {"id":"mommyai","name":"MommyAI","status":"22/24 built","ready":22,"total":24,"remaining":2,"changed":"MommyAI L023 canonical page landed","blocked":"lesson021 DRAFT, lesson022 DRAFT","next":"lesson021 DRAFT","proof":[{"label":"catalog","url":"https://github.com/Thinking-Brain-School/tbs-curriculum"},{"label":"live","url":"https://thinkingbrainschool.com/mommyai/paid/lesson020"}],"updated_at":"2026-09-04T17:14:30Z"},
           {"id":"superpowerai","name":"Superpower","status":"11/12 built","ready":11,"total":12,"remaining":1,"changed":"L013 artwork landed","blocked":"lesson012 DRAFT","next":"lesson012 DRAFT","proof":[{"label":"catalog","url":"https://github.com/Thinking-Brain-School/tbs-curriculum"},{"label":"live","url":"https://thinkingbrainschool.com/superpowerai/paid/lesson011"}],"updated_at":"2026-09-04T17:17:33Z"}
