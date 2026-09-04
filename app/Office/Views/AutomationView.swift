@@ -62,7 +62,9 @@ struct AutomationView: View {
                     .officeFont(size: 12).foregroundStyle(Theme.faint)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(work.changes) { change in ChangeRow(store: store, change: change) }
+                    ForEach(Array(work.changes.enumerated()), id: \.element.id) { index, change in
+                        ChangeRow(store: store, change: change, initiallyOpen: index == 0)
+                    }
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
             }
@@ -180,7 +182,13 @@ private struct ProductRow: View {
 private struct ChangeRow: View {
     @Bindable var store: Store
     let change: WorkBoard.Change
-    @State private var open = false
+    @State private var open: Bool
+
+    init(store: Store, change: WorkBoard.Change, initiallyOpen: Bool = false) {
+        self.store = store
+        self.change = change
+        _open = State(initialValue: initiallyOpen)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { open.toggle() } label: {
