@@ -278,7 +278,6 @@ public struct WorkBoard: Decodable, Equatable {
     public var state = "missing"
     public var detail = ""
     public var products: [Product] = []
-    public var changes: [Change] = []
     public init() {}
 
     public struct Product: Decodable, Equatable, Identifiable {
@@ -305,53 +304,6 @@ public struct WorkBoard: Decodable, Equatable {
         public var id: String { "\(label)@\(url)" }
     }
 
-    public struct Change: Decodable, Equatable, Identifiable {
-        public var id = ""
-        public var project = ""
-        public var summary = ""
-        public var at = ""
-        public var url = ""
-        public var repo = ""
-        public var pr: Reference = Reference()
-        public var issues: [Reference] = []
-        public var chronicles: [Artifact] = []
-        public var documents: [Artifact] = []
-        public var files: [Artifact] = []
-        enum CodingKeys: String, CodingKey {
-            case id, project, summary, at, url, repo, pr, issues, chronicles, documents, files
-        }
-        public init() {}
-        public init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            id = c.str(.id) ?? ""
-            project = c.str(.project) ?? ""
-            summary = c.str(.summary) ?? ""
-            at = c.str(.at) ?? ""
-            url = c.str(.url) ?? ""
-            repo = c.str(.repo) ?? ""
-            pr = (try? c.decode(Reference.self, forKey: .pr)) ?? Reference()
-            issues = c.list(.issues, Reference.self)
-            chronicles = c.list(.chronicles, Artifact.self)
-            documents = c.list(.documents, Artifact.self)
-            files = c.list(.files, Artifact.self)
-        }
-    }
-
-    public struct Reference: Decodable, Equatable, Identifiable {
-        public var label = ""
-        public var url = ""
-        public var id: String { "\(label)@\(url)" }
-        public init() {}
-    }
-
-    public struct Artifact: Decodable, Equatable, Identifiable {
-        public var id = ""
-        public var name = ""
-        public var path = ""
-        public var repo = ""
-        public var url = ""
-        public init() {}
-    }
 }
 
 public struct RunBoard: Decodable, Equatable {
@@ -362,6 +314,17 @@ public struct RunBoard: Decodable, Equatable {
     public var open = 0
     public var needs = 0
     public var families: [Family] = []
+
+    /// Every run in one newest-first history. Families remain in the payload
+    /// because they own the aggregate counts; the screen should not make a
+    /// person open a schedule before it will show what just happened.
+    public var recentRuns: [Run] {
+        families.flatMap(\.runs).sorted { left, right in
+            let leftAt = left.endedAt.isEmpty ? left.startedAt : left.endedAt
+            let rightAt = right.endedAt.isEmpty ? right.startedAt : right.endedAt
+            return leftAt > rightAt
+        }
+    }
 
     public init() {}
 

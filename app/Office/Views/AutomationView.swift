@@ -16,7 +16,6 @@ struct AutomationView: View {
                                color: Theme.amber)
                     } else {
                         products
-                        recentChanges
                     }
                     automationHistory
                 }
@@ -54,29 +53,12 @@ struct AutomationView: View {
         }
     }
 
-    private var recentChanges: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Recent changes").officeFont(size: 11, weight: .semibold).foregroundStyle(Theme.text)
-            if work.changes.isEmpty {
-                Text("No product change landed in the last 24 hours.")
-                    .officeFont(size: 12).foregroundStyle(Theme.faint)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(work.changes.enumerated()), id: \.element.id) { index, change in
-                        ChangeRow(store: store, change: change, initiallyOpen: index == 0)
-                    }
-                }
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
-            }
-        }
-    }
-
     private var automationHistory: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider().overlay(Theme.hairline).padding(.vertical, 4)
             HStack {
-                Text("Automation history").officeFont(size: 11, weight: .semibold)
-                    .foregroundStyle(Theme.faint)
+                Text("Recent runs").officeFont(size: 11, weight: .semibold)
+                    .foregroundStyle(Theme.text)
                 Spacer()
                 Text("\(board.active) running · \(board.done) active workflows completed")
                     .officeFont(size: 10.5).foregroundStyle(Theme.faint)
@@ -85,25 +67,13 @@ struct AutomationView: View {
                 notice(board.detail.isEmpty ? "the run ledger is not available" : board.detail,
                        color: Theme.amber)
             } else {
-                group("", families: board.families, color: Theme.faint)
-            }
-        }
-    }
-
-    @ViewBuilder private func group(_ title: String, families: [RunBoard.Family],
-                                    color: Color, empty: String? = nil) -> some View {
-        if !families.isEmpty || empty != nil {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title).officeFont(size: 11, weight: .semibold).foregroundStyle(color)
-                if families.isEmpty, let empty {
-                    Text(empty).officeFont(size: 12).foregroundStyle(Theme.faint).padding(.vertical, 4)
+                if board.recentRuns.isEmpty {
+                    Text("No automation run in the last 24 hours.")
+                        .officeFont(size: 12).foregroundStyle(Theme.faint)
                 } else {
                     VStack(spacing: 0) {
-                        ForEach(families) { family in
-                            RunFamilyRow(family: family, color: color)
-                            if family.id != families.last?.id {
-                                Rectangle().fill(Theme.hairline).frame(height: 0.5)
-                            }
+                        ForEach(Array(board.recentRuns.enumerated()), id: \.element.id) { index, run in
+                            RunRow(run: run, initiallyOpen: index == 0)
                         }
                     }
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
@@ -179,151 +149,14 @@ private struct ProductRow: View {
     }
 }
 
-private struct ChangeRow: View {
-    @Bindable var store: Store
-    let change: WorkBoard.Change
-    @State private var open: Bool
-
-    init(store: Store, change: WorkBoard.Change, initiallyOpen: Bool = false) {
-        self.store = store
-        self.change = change
-        _open = State(initialValue: initiallyOpen)
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button { open.toggle() } label: {
-                HStack(spacing: 9) {
-                    Text("✓").officeFont(size: 12, weight: .semibold).foregroundStyle(Theme.green)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(change.summary).officeFont(size: 12).foregroundStyle(Theme.text).lineLimit(2)
-                        Text(change.project).officeFont(size: 10.5).foregroundStyle(Theme.faint)
-                    }
-                    Spacer()
-                    Text(StateRules.moment(change.at)).officeFont(size: 10.5).foregroundStyle(Theme.faint)
-                    Text(open ? "hide" : "receipts").officeFont(size: 10.5).foregroundStyle(Theme.blue)
-                }
-                .padding(.horizontal, 12).padding(.vertical, 9).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if open {
-                VStack(alignment: .leading, spacing: 9) {
-                    references
-                    artifactGroup("chronicle", change.chronicles)
-                    artifactGroup("documents", change.documents.filter { document in
-                        !change.chronicles.contains(where: { $0.id == document.id })
-                    })
-                    fileGroup(change.files.filter { file in
-                        !change.documents.contains(where: { $0.id == file.id })
-                    })
-                }
-                .padding(.horizontal, 30).padding(.bottom, 12)
-            }
-        }
-    }
-
-    private var references: some View {
-        HStack(spacing: 10) {
-            if let url = URL(string: change.url) {
-                Link("commit ↗", destination: url)
-            }
-            if let url = URL(string: change.pr.url), !change.pr.label.isEmpty {
-                Link(change.pr.label + " ↗", destination: url)
-            }
-            ForEach(change.issues) { issue in
-                if let url = URL(string: issue.url) { Link(issue.label + " ↗", destination: url) }
-            }
-            if change.issues.isEmpty {
-                Text("no issue linked").foregroundStyle(Theme.faint)
-            }
-        }
-        .officeFont(size: 11).foregroundStyle(Theme.blue)
-    }
-
-    @ViewBuilder private func artifactGroup(_ label: String, _ artifacts: [WorkBoard.Artifact]) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(label).officeFont(size: 10.5, weight: .semibold).foregroundStyle(Theme.faint)
-            if artifacts.isEmpty {
-                Text("none generated").officeFont(size: 11.5).foregroundStyle(Theme.faint)
-            } else {
-                ForEach(artifacts) { artifact in
-                    Button {
-                        Task { await store.open(repo: artifact.repo, path: artifact.path) }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(artifact.name).lineLimit(1)
-                            Text("open in desk ↗").foregroundStyle(Theme.blue)
-                        }
-                        .officeFont(size: 11.5).foregroundStyle(Theme.text)
-                    }
-                    .buttonStyle(.plain).help(artifact.path)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private func fileGroup(_ files: [WorkBoard.Artifact]) -> some View {
-        if !files.isEmpty {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("files").officeFont(size: 10.5, weight: .semibold).foregroundStyle(Theme.faint)
-                ForEach(files) { file in
-                    if let url = URL(string: file.url) {
-                        Link(file.name + " ↗", destination: url)
-                            .officeFont(size: 11.5).foregroundStyle(Theme.blue).help(file.path)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct RunFamilyRow: View {
-    let family: RunBoard.Family
-    let color: Color
-    @State private var open = false
-    @State private var openRun: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button { open.toggle() } label: {
-                HStack(alignment: .top, spacing: 10) {
-                    Circle().fill(color).frame(width: 7, height: 7).padding(.top, 5)
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 7) {
-                            Text(family.name).officeFont(size: 12.5, weight: .medium)
-                                .foregroundStyle(Theme.text)
-                            if family.count > 1 {
-                                Text("\(family.count) runs").officeFont(size: 10.5)
-                                    .foregroundStyle(Theme.faint)
-                            }
-                        }
-                        Text(family.summary.isEmpty ? family.state : family.summary)
-                            .officeFont(size: 11.5).foregroundStyle(Theme.dim).lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                    }
-                    Spacer(minLength: 10)
-                    Text(open ? "hide" : "open").officeFont(size: 11).foregroundStyle(Theme.faint)
-                }
-                .padding(12).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if open {
-                VStack(spacing: 0) {
-                    ForEach(family.runs) { run in
-                        RunRow(run: run, open: openRun == run.id) {
-                            openRun = openRun == run.id ? nil : run.id
-                        }
-                    }
-                }
-                .padding(.horizontal, 12).padding(.bottom, 10)
-            }
-        }
-    }
-}
-
 private struct RunRow: View {
     let run: RunBoard.Run
-    let open: Bool
-    let toggle: () -> Void
+    @State private var open: Bool
+
+    init(run: RunBoard.Run, initiallyOpen: Bool = false) {
+        self.run = run
+        _open = State(initialValue: initiallyOpen)
+    }
     private var color: Color {
         switch run.state {
         case "landed", "produced": return Theme.green
@@ -333,18 +166,28 @@ private struct RunRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Button(action: toggle) {
-                HStack(spacing: 8) {
-                    Pill(text: run.state, color: color)
+        VStack(alignment: .leading, spacing: 0) {
+            Button { open.toggle() } label: {
+                HStack(alignment: .top, spacing: 9) {
+                    Circle().fill(color).frame(width: 7, height: 7).padding(.top, 5)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(run.summary.isEmpty ? run.title : run.summary)
+                            .officeFont(size: 12).foregroundStyle(Theme.text).lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        HStack(spacing: 7) {
+                            Text(run.title).foregroundStyle(Theme.faint)
+                            Pill(text: run.state, color: color)
+                            Text(StateRules.gap(run.duration)).foregroundStyle(Theme.faint)
+                        }
+                        .officeFont(size: 10.5)
+                    }
+                    Spacer(minLength: 10)
                     Text(StateRules.moment(run.endedAt.isEmpty ? run.startedAt : run.endedAt))
-                        .officeFont(size: 11).foregroundStyle(Theme.faint)
-                    Text(StateRules.gap(run.duration)).officeFont(size: 11).foregroundStyle(Theme.faint)
-                    Spacer()
-                    Text(open ? "close transcript" : "open transcript")
-                        .officeFont(size: 11).foregroundStyle(Theme.blue)
+                        .officeFont(size: 10.5).foregroundStyle(Theme.faint)
+                    Text(open ? "hide" : "receipts")
+                        .officeFont(size: 10.5).foregroundStyle(Theme.blue)
                 }
-                .padding(.vertical, 8).contentShape(Rectangle())
+                .padding(.horizontal, 12).padding(.vertical, 9).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if open {
@@ -366,6 +209,7 @@ private struct RunRow: View {
                     .padding(11)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.well))
                 }
+                Divider().overlay(Theme.hairline).padding(.top, 10)
             }
         }
     }

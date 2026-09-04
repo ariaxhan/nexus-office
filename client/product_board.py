@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import re
 import subprocess
 from datetime import datetime, timezone
 
@@ -16,9 +15,6 @@ READY = {"BUILT", "STAGED", "SHIPPED", "LIVE"}
 PRODUCT_NAMES = {"mommyai": "MommyAI", "superpowerai": "Superpower",
                  "littlehello": "Little Hello", "homeclass": "Homeclass",
                  "homeworship": "Home Worship"}
-DOCUMENT_SUFFIXES = {".md"}
-PR_NUMBER = re.compile(r"(?:pull request #|\(#)(\d+)", re.IGNORECASE)
-_PR_CACHE: dict[tuple[str, str], tuple[dict, list[dict], list[str]]] = {}
 
 
 def _git(repo: pathlib.Path, *args: str) -> str:
@@ -85,87 +81,12 @@ def _catalog_change(path: pathlib.Path) -> tuple[str, str]:
     return tuple((newest.split("\t", 1) + [""])[:2]) if newest else ("", "")
 
 
-def _recent_changes() -> list[dict]:
-    changes = []
-    for name in ("tbs-curriculum", "tbs-www", "tbs-landing"):
-        repo = TBS / "repos" / name
-        remote = _remote(repo)
-        if not remote:
-            continue
-        raw = _git(repo, "log", "--since=24 hours ago", "--format=%H%x09%cI%x09%s", "-8")
-        for line in raw.splitlines():
-            parts = line.split("\t", 2)
-            if len(parts) != 3:
-                continue
-            sha, at, subject = parts
-            repo_name = _repo_name(remote)
-            paths = _changed_paths(repo, sha)
-            pr, issues, pr_paths = _pr_receipt(repo_name, subject)
-            if pr_paths:
-                paths = pr_paths
-            files = [_artifact(repo_name, remote, sha, path) for path in paths]
-            documents = [row for row in files if pathlib.Path(row["path"]).suffix.lower()
-                         in DOCUMENT_SUFFIXES]
-            changes.append({"id": sha, "project": name, "summary": subject,
-                            "at": at, "url": f"{remote}/commit/{sha}",
-                            "repo": repo_name, "pr": pr, "issues": issues,
-                            "chronicles": [row for row in documents
-                                           if "/chronicles/" in "/" + row["path"]],
-                            "documents": documents, "files": files})
-    changes.sort(key=lambda row: row["at"], reverse=True)
-    return changes[:8]
-
-
-def _repo_name(remote: str) -> str:
-    return remote.removeprefix("https://github.com/")
-
-
-def _changed_paths(repo: pathlib.Path, sha: str) -> list[str]:
-    parents = _git(repo, "rev-list", "--parents", "-1", sha).split()
-    if len(parents) < 2:
-        return []
-    raw = _git(repo, "diff", "--name-only", parents[1], sha)
-    return [path for path in raw.splitlines() if path]
-
-
-def _pr_receipt(repo: str, subject: str) -> tuple[dict, list[dict], list[str]]:
-    match = PR_NUMBER.search(subject)
-    if not match or not repo:
-        return {}, [], []
-    number = match.group(1)
-    key = (repo, number)
-    if key in _PR_CACHE:
-        return _PR_CACHE[key]
-    try:
-        raw = subprocess.run(
-            ["gh", "pr", "view", number, "-R", repo, "--json",
-             "url,closingIssuesReferences,files"], capture_output=True, text=True, timeout=5,
-        )
-        data = json.loads(raw.stdout) if raw.returncode == 0 else {}
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        data = {}
-    pr = {"label": f"PR #{number}", "url": data.get("url") or
-          f"https://github.com/{repo}/pull/{number}"}
-    issues = [{"label": f"issue #{row['number']}", "url": row["url"]}
-              for row in data.get("closingIssuesReferences", [])
-              if row.get("number") and row.get("url")]
-    paths = [row["path"] for row in data.get("files", []) if row.get("path")]
-    receipt = (pr, issues, paths)
-    _PR_CACHE[key] = receipt
-    return receipt
-
-
-def _artifact(repo: str, remote: str, sha: str, path: str) -> dict:
-    return {"id": f"{repo}:{path}", "name": pathlib.Path(path).name, "path": path,
-            "repo": repo, "url": f"{remote}/blob/{sha}/{path}"}
-
-
 def read() -> dict:
     if not CATALOG.is_dir():
         return {"state": "missing", "detail": "product catalogs are not available",
-                "products": [], "changes": []}
+                "products": []}
     products = [_catalog_item(path) for path in sorted(CATALOG.glob("*.json"))]
     products = [row for row in products if row and row["remaining"] > 0]
     products.sort(key=lambda row: (-row["remaining"], row["name"]))
-    return {"state": "ok", "detail": "", "products": products, "changes": _recent_changes(),
+    return {"state": "ok", "detail": "", "products": products,
             "updated_at": datetime.now(timezone.utc).isoformat()}
