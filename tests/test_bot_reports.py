@@ -13,6 +13,7 @@ import bot_reports  # noqa: E402
 
 class Door(BaseHTTPRequestHandler):
     turns = {bot: [] for bot in bot_reports.BOTS}
+    messages = []
     world = {
         "generated": "2026-09-04T08:00:00Z",
         "stations": [{"repo": "owner/repo"}],
@@ -29,6 +30,7 @@ class Door(BaseHTTPRequestHandler):
         size = int(self.headers.get("content-length", "0"))
         body = json.loads(self.rfile.read(size))
         bot = body["bot"]
+        self.messages.append(body["message"])
         self.turns[bot].append({"id": f"reply-{bot}", "role": "assistant", "content": "done"})
         self.reply(202, {"ok": True})
 
@@ -47,6 +49,7 @@ class Door(BaseHTTPRequestHandler):
 class BotReportsTest(unittest.TestCase):
     def setUp(self):
         Door.turns = {bot: [] for bot in bot_reports.BOTS}
+        Door.messages = []
         Door.world = {
             "generated": "2026-09-04T08:00:00Z",
             "stations": [{"repo": "owner/repo"}],
@@ -74,16 +77,9 @@ class BotReportsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no completed snapshot"):
             bot_reports.run_report("north", self.base, timeout_s=1)
 
-    def test_each_role_has_a_visibly_distinct_report_contract(self):
-        headings = {
-            prompt.split("Open with '", 1)[1].split("'", 1)[0]
-            for prompt in bot_reports.PROMPTS.values()
-        }
-        self.assertEqual(len(headings), len(bot_reports.BOTS))
-        for bot, prompt in bot_reports.PROMPTS.items():
-            self.assertIn(bot.upper(), prompt)
-            self.assertIn("Voice:", prompt)
-            self.assertIn("Open with '", prompt)
+    def test_the_scheduler_triggers_identity_instead_of_puppeteering_the_voice(self):
+        bot_reports.run_report("north", self.base, timeout_s=1)
+        self.assertEqual(Door.messages, [bot_reports.REPORT_TRIGGER])
 
 
 if __name__ == "__main__":
