@@ -196,6 +196,11 @@ The closure handoff is `nexus.live-probe-repairs/v1`. Its `checks` array is sort
 `fail`). `nexus.probes.encode_probe_output` validates and canonically serializes that handoff, so
 closure selects a repair by number rather than mutable title or evidence text.
 
+`nexus.probes.CHECK_OWNERS` is the canonical repair registry. Core TBS checks use stable
+`tbs.core.*` IDs and resolve to `Thinking-Brain-School/tbs-www`; the delivery-loop check resolves
+to `ariaxhan/nexus-office`. `assign_repair_owners` rejects missing, unknown, or duplicate IDs and
+derives owners from that registry, leaving result text and evidence outside check identity.
+
 `nexus.repairs.reconcile_repairs` resolves each failed `check_id` through the canonical registry.
 Its hidden `nexus-repair-check:<check_id>` issue marker survives changing evidence: the first
 failure creates `ready+p0`; recurrence replaces the evidence, reopens the issue, and restores both
