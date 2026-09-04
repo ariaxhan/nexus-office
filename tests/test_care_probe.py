@@ -85,7 +85,7 @@ class CareProbeTest(unittest.TestCase):
                 run_care_probe(timed, request_threshold=2, timeout_s=1)
         self.assertEqual("cleanup", timed.calls[-1])
         self.assertEqual(["create", "cleanup"], timed.calls)
-        self.assertIn("exceeded", raised.exception.evidence[-2].error)
+        self.assertIn("timed out", raised.exception.evidence[-2].error)
 
     def test_errors_redact_created_identifiers(self):
         class LeakingClient(Client):
