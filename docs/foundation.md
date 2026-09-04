@@ -133,9 +133,9 @@ flowchart TD
   A[#68 Vaults landing] --> B[#69 retire morning scrape] --> C[#70 midday pulse]
   F[#73 manual coordinator] --> E[#72 parent/child tasks]
   D[#71 ledger v2] --> E
-  F --> G[#74 Claude]
-  F --> H[#75 Codex]
-  F --> I[#76 Antigravity]
+  E --> G[#74 Claude]
+  E --> H[#75 Codex]
+  E --> I[#76 Antigravity]
   D --> J[#77 radio]
   D --> K[#78 structural refusal]
   G --> L[#79 issue to PR]
@@ -152,7 +152,7 @@ flowchart TD
   P --> Q[#84 delete hcom and duplicate stores]
 ```
 
-Ready now: #86, then #68, #71, and manual decomposition #73. Migration, schema, and manual
+Completed: #86. Ready now: #68, #71, and manual decomposition #73. Migration, schema, and manual
 coordination are file-disjoint; integration remains serial.
 Every further airline migration gets its own child issue before work begins.
 
