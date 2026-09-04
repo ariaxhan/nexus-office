@@ -9,7 +9,8 @@ becomes unnecessary. This is not a cleanup campaign.
 ## Installed / runtime state
 
 - Tower: `com.nexus.tower` in launchd, KeepAlive, 5 s tick, `python3 -m nexus tower run`
-  from this repo. Ledger `~/Library/Application Support/nexus/ledger.sqlite` (v1).
+  from this repo. Ledger `~/Library/Application Support/nexus/ledger.sqlite` (schema v3,
+  see "Ledger v3 live migration" below).
   Flights under `.../nexus/flights/<id>/`, kept failure logs under `.../nexus/logs/`.
 - Live plan `morning-briefing` (`plan_564bb5ad01ee`): runs
   `intelligence-scrape.sh morning-briefing` in a hangar clone of
@@ -21,6 +22,52 @@ becomes unnecessary. This is not a cleanup campaign.
 - `intelligence-scrape.sh`: `INTEL_DIR` overridable, latest symlink relative.
   `sources.yaml` morning-briefing: Ars Technica and The Verge replaced by MIT Technology
   Review and Simon Willison (WebFetch cannot reach the former; curl can).
+
+## Ledger v3 live migration, 2026-09-04 (#126, closes #71)
+
+Controlled repair of the live ledger against reviewed merge
+`4a22bbe24293c30249160b0ffc621a0f0fed0276` (#132), run from the installed checkout with the
+tower stopped. Do not rerun it and do not restore a backup over it: `bak-2` predates flights
+that have since landed.
+
+Background: cancelled flight `flt_88142dd1ded2` moved the live ledger from v1 to a PR #129
+style v2 at 2026-09-04T08:28:45Z, leaving a foreign key on the dropped `objectives` table.
+Read-only audit found zero legacy objective rows and zero non-null objective links, so no
+relationship values were lost.
+
+| | pre (v2, after WAL checkpoint) | post (v3) |
+|---|---|---|
+| `user_version` | 2 | 3 |
+| plans | 10 | 10 |
+| tasks | 223 | 223 |
+| flights | 230 | 230 |
+| landings | 3 | 3 |
+| artifacts | 225 | 225 |
+| events | 2153 | 2154 |
+
+Event delta by kind: `ledger.migrated` +1 (2 to 3, at 2026-09-04T08:52:46Z). No backfills.
+
+Shape after: seven application tables (plans, tasks, flights, artifacts, landings, events,
+leases). Plans and tasks carry a plain `objective` TEXT field; no `objective_id` column and no
+foreign key targets `objectives` anywhere in `sqlite_master`.
+
+Backups, all under `~/Library/Application Support/nexus/`:
+
+| file | SHA-256 | is |
+|---|---|---|
+| `ledger.sqlite.bak-1` | `16f9e2847c25cb2efb7df729773930c8b5f57d5a22cabd999f047fe76ff64568` | v1, untouched |
+| `ledger.sqlite.bak-2` | `e396d0e599320951d637fd79330e299ae4e452d2c5c7b84e1bd8950944669d24` | pre-repair v2, created by the first controlled open |
+
+The pre-repair database hashed to the `bak-2` value above, so the backup is byte-exact.
+
+Integrity: `PRAGMA integrity_check` ok, `PRAGMA foreign_key_check` empty,
+`Ledger.integrity_check()` clean, `python3 -m nexus status` works from the installed checkout.
+A disposable copy of the v3 ledger admitted `task_e6efb915583e` with foreign keys enabled and
+stayed integrity-clean.
+
+Tower: resumed 2026-09-04T08:53:24Z from installed checkout `4a22bbe2` (job wrapper PID 10775,
+Python PID 10786, installed PYTHONPATH). Post-resume probe flight `flt_85b691a0bc66` (plan
+`plan_d16f26a88b90`) ended `produced`, ok, 42.6 s wall.
 
 ## Tower invariants proven live (not in tests only)
 
