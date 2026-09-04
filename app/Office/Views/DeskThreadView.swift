@@ -528,9 +528,12 @@ struct DeskContextView: View {
                                        source: context.text)
                             .id("\(repo):\(context.path)")
                     } else {
-                        MarkdownText(raw: context.text, size: 13)
-                            .frame(maxWidth: 760, alignment: .leading)
-                            .id("read:\(repo):\(context.path)")
+                        ScrollView {
+                            MarkdownText(raw: context.text, size: 13)
+                                .frame(maxWidth: 760, alignment: .leading)
+                                .id("read:\(repo):\(context.path)")
+                        }
+                        .scrollContentBackground(.hidden)
                     }
                 } else if store.isLoadingContext(at: repo) {
                     Text("reading the checkout")
