@@ -146,6 +146,9 @@ class SectionsTest(unittest.TestCase):
         for key, section in out.items():
             self.assertIn("card", section, key)
 
+    def test_retired_dispatcher_is_not_published_as_current_pipeline_truth(self):
+        self.assertNotIn("pipeline", self.by_key())
+
     def test_every_card_holds_the_shape_both_renderers_code_against(self):
         for key, section in self.sections.read_all().items():
             assert_card(self, section["card"], key)
@@ -175,7 +178,7 @@ class SectionsTest(unittest.TestCase):
         self.assertEqual(set(out["clock"]) - {"card"}, set(self.by_key()["clock"].read()))
         self.assertEqual(out["clock"]["state"], "unconfigured")
         # One bad card, not a bad snapshot.
-        for other in ("cost", "library", "mail", "pipeline"):
+        for other in ("cost", "library", "mail"):
             self.assertNotIn("card failed", out[other]["card"]["headline"], other)
 
     def test_a_source_that_raises_is_an_error_section_that_still_has_a_card(self):
