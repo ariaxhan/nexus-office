@@ -42,28 +42,32 @@ def _failure(failure: Mapping, registry: Mapping[str, str]) -> dict:
 
 def _reconcile(failure: dict, call: Callable[[list[str]], object]) -> dict:
     marker = _marker(failure["check_id"])
-    matches = [issue for issue in _issues(failure["repository"], call)
-               if marker in (issue.get("body") or "")]
-    if len(matches) > 1:
-        numbers = ", ".join(str(issue["number"]) for issue in matches)
-        raise RepairError(f"multiple repair issues for {failure['check_id']}: {numbers}")
+    issue = _repair_issue(failure, marker, call)
     body = f"{marker}\n\n## Current failure evidence\n\n{failure['evidence']}\n"
-    if not matches:
+    if issue is None:
         issue = call(["POST", f"repos/{failure['repository']}/issues",
                       "title=" + failure["title"], "body=" + body,
-                      "labels[]=" + "ready", "labels[]=" + "p0"])
+                      "labels[]=ready", "labels[]=p0"])
         return _result(failure, issue, "created")
-    issue = matches[0]
     current_labels = {label["name"] for label in issue.get("labels", [])}
-    labels = current_labels | REPAIR_LABELS
     unchanged = (issue.get("state") == "open" and issue.get("body") == body
                  and REPAIR_LABELS <= current_labels)
     if unchanged:
         return _result(failure, issue, "unchanged")
     args = ["PATCH", f"repos/{failure['repository']}/issues/{issue['number']}",
             "state=open", "body=" + body]
-    args.extend("labels[]=" + label for label in sorted(labels))
+    args.extend("labels[]=" + label for label in sorted(current_labels | REPAIR_LABELS))
     return _result(failure, call(args), "updated")
+
+
+def _repair_issue(failure: dict, marker: str,
+                  call: Callable[[list[str]], object]) -> dict | None:
+    matches = [issue for issue in _issues(failure["repository"], call)
+               if marker in (issue.get("body") or "")]
+    if len(matches) > 1:
+        numbers = ", ".join(str(issue["number"]) for issue in matches)
+        raise RepairError(f"multiple repair issues for {failure['check_id']}: {numbers}")
+    return matches[0] if matches else None
 
 
 def _issues(repository: str, call: Callable[[list[str]], object]) -> list[dict]:
