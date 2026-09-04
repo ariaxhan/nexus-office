@@ -295,7 +295,18 @@ class Ledger:
         Every legacy row becomes one event (a delivered message becomes two), the
         copies are counted against the sources, and only a full match drops the
         tables. Anything short rolls the whole step back and leaves the file at v1.
+
+        Foreign keys are off for the step: plans and tasks still reference
+        objectives, and DROP TABLE with them on is an implicit DELETE that
+        the live rows refuse.
         """
+        self.conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            self._fold_v2()
+        finally:
+            self.conn.execute("PRAGMA foreign_keys=ON")
+
+    def _fold_v2(self):
         with self.tx() as c:
             for table, columns in V2_COLUMNS.items():
                 have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
@@ -322,7 +333,23 @@ class Ledger:
                         f"{table}: copied {copied} of {want} rows, keeping v1"
                     )
                 c.execute(f"DROP TABLE {table}")
+            for table in V2_COLUMNS:
+                if "objective_id" in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+                    c.execute(f"ALTER TABLE {table} DROP COLUMN objective_id")
+            self._backfill_state_events(c)
             c.execute("PRAGMA user_version=2")
+
+    def _backfill_state_events(self, c):
+        """A v1 row whose state has no event gets one, from nothing: v2 reads
+        state from events, so the file must have exactly one reading."""
+        for table in ("flights", "tasks"):
+            kind = f"{table[:-1]}.state"
+            rows = c.execute(
+                f"SELECT id, state FROM {table} t WHERE NOT EXISTS (SELECT 1 FROM events"
+                f" WHERE kind=? AND subject=t.id AND json_extract(payload,'$.to')=t.state)",
+                (kind,)).fetchall()
+            for row in rows:
+                self._event(kind, row["id"], {"from": None, "to": row["state"]}, "migration")
 
     @contextlib.contextmanager
     def tx(self):

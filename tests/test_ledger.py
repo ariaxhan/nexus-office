@@ -14,6 +14,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nexus.ledger import Ledger, LedgerError, TRANSITIONS  # noqa: E402
+from tests.ledger_fixture import build  # noqa: E402
 
 
 class LedgerCase(unittest.TestCase):
@@ -218,6 +219,45 @@ class Integrity(LedgerCase):
         flight = self.led.create_flight(self.plan)
         self.led.conn.execute("UPDATE flights SET state='floating' WHERE id=?", (flight,))
         self.assertTrue(any("floating" in p for p in self.led.integrity_check()))
+
+
+class Parity(unittest.TestCase):
+    """A live v1 file upgraded through Ledger() is the same ledger as a fresh v2."""
+
+    def schema(self, path):
+        """Every table, index and trigger by name, and every table's column names."""
+        conn = sqlite3.connect(path)
+        objects = conn.execute(
+            "SELECT type, name, tbl_name FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").fetchall()
+        columns = {name: {r[1] for r in conn.execute(f"PRAGMA table_info({name})")}
+                   for kind, name, _ in objects if kind == "table"}
+        conn.close()
+        return objects, columns
+
+    def test_upgraded_v1_equals_fresh_v2(self):
+        d = tempfile.mkdtemp(prefix="nexus-parity-")
+        self.addCleanup(shutil.rmtree, d, True)
+        old = build(os.path.join(d, "old.sqlite"))
+        fresh = os.path.join(d, "fresh.sqlite")
+        Ledger(fresh).close()
+        led = Ledger(old)
+        self.addCleanup(led.close)
+
+        self.assertEqual(2, led.user_version())
+        self.assertEqual(self.schema(fresh), self.schema(old))
+        self.assertEqual([], led.integrity_check())
+
+        counts = dict(led.conn.execute(
+            "SELECT kind, count(*) FROM events WHERE kind IN "
+            "('objective','observation','radio.message','gate','radio.delivered')"
+            " GROUP BY kind").fetchall())
+        self.assertEqual({"objective": 1, "observation": 1, "radio.message": 2,
+                          "gate": 1, "radio.delivered": 1}, counts)
+
+        bak = sqlite3.connect(old + ".bak-1")
+        self.assertEqual(1, bak.execute("PRAGMA user_version").fetchone()[0])
+        bak.close()
 
 
 if __name__ == "__main__":
