@@ -15,7 +15,7 @@ struct RosterView: View {
             ScrollViewReader { scroll in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
-                    homeRow
+                    workBoardRow
 
                     feedRow
 
@@ -212,10 +212,6 @@ struct RosterView: View {
         if store.showWall, !store.sections.isEmpty {
             header("wall", trailing: wallCount)
                 .padding(.top, 14)
-            // The automation, as one page, above the cards it is assembled from.
-            // It is not a section: a section is one source's card, and this is
-            // the join across three of them plus every desk's receipts.
-            automationRow
             ForEach(store.visibleSections) { section in
                 SectionRow(section: section,
                            selected: store.selection == .section(section.id))
@@ -227,54 +223,6 @@ struct RosterView: View {
                 notary(store.needsOnly ? "nothing on the wall needs you" : "nothing matches")
             }
         }
-    }
-
-    /// The way in to the home: everything waiting on a person, in one place.
-    ///
-    /// Above the feed, which is above everything else, because the feed answers
-    /// "what has this machine been doing" and this answers "what is it waiting
-    /// on me for", and only one of those two is a thing nobody else can do.
-    private var homeRow: some View {
-        // Things to open, not things to do: one card per issue and one row per
-        // source that wants somebody. The same arithmetic the home's own header
-        // does, because two counts of the same list that disagree on screen are
-        // two counts nobody trusts.
-        let waiting = StateRules.needsQueue(store.stations).count
-                    + store.sections.filter { $0.needs > 0 }.count
-        return Button {
-            store.select(.home)
-        } label: {
-            HStack(spacing: 9) {
-                Circle()
-                    .fill(waiting > 0 ? Theme.red : Theme.faint)
-                    .frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("needs you")
-                        .officeFont(size: 12.5, weight: .medium)
-                        .foregroundStyle(Theme.text)
-                    Text(waiting > 0
-                         ? "\(waiting) waiting on you, across every desk"
-                         : "nothing is waiting on you")
-                        .officeFont(size: 11)
-                        .foregroundStyle(waiting > 0 ? Theme.red.opacity(0.85) : Theme.dim)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                }
-                Spacer(minLength: 6)
-                if waiting > 0 {
-                    Pill(text: "\(waiting)", color: Theme.red)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(store.selection == .home ? Theme.selected : Color.clear)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     /// The way in to the global feed: every repo talking at once.
@@ -329,7 +277,7 @@ struct RosterView: View {
     /// a question a person asks out loud ("what is the cron doing"), and a
     /// question with no visible place to click is a question that gets asked in
     /// a terminal instead.
-    private var automationRow: some View {
+    private var workBoardRow: some View {
         let page = store.automation
         return Button {
             store.automationOpen.toggle()
