@@ -84,7 +84,18 @@ class CareProbeTest(unittest.TestCase):
             with self.assertRaises(ProbeFailure) as raised:
                 run_care_probe(timed, request_threshold=2, timeout_s=1)
         self.assertEqual("cleanup", timed.calls[-1])
+        self.assertEqual(["create", "cleanup"], timed.calls)
         self.assertIn("exceeded", raised.exception.evidence[-2].error)
+
+    def test_errors_redact_created_identifiers(self):
+        class LeakingClient(Client):
+            def record_consent(self, account_id):
+                raise RuntimeError(f"consent failed for {account_id}")
+
+        with self.assertRaises(ProbeFailure) as raised:
+            run_care_probe(LeakingClient(), request_threshold=2)
+        self.assertNotIn("account-private-1234", repr(raised.exception.evidence))
+        self.assertIn("***1234", raised.exception.evidence[-2].error)
 
     def test_unexpected_rate_status_or_metadata_fails_after_cleanup(self):
         client = Client()

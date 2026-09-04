@@ -55,11 +55,13 @@ def run_care_probe(client: CareClient, request_threshold: int,
     evidence: list[Evidence] = []
     identifiers = ["", ""]
     try:
-        _run_lifecycle(client, run_id, request_threshold, evidence, identifiers)
-        _check_timeout(started, timeout_s)
+        _run_lifecycle(client, run_id, request_threshold, timeout_s, started,
+                       evidence, identifiers)
     except Exception as exc:
         if not evidence or not evidence[-1].error:
-            evidence.append(_event("probe", None, *identifiers, error=str(exc)))
+            evidence.append(_event(
+                "probe", None, *identifiers, error=_safe_error(exc, identifiers)
+            ))
     finally:
         _cleanup(client, run_id, evidence, identifiers)
     if any(row.error for row in evidence):
@@ -68,22 +70,33 @@ def run_care_probe(client: CareClient, request_threshold: int,
 
 
 def _run_lifecycle(client: CareClient, run_id: str, threshold: int,
+                   timeout_s: float, started: float,
                    evidence: list[Evidence], identifiers: list[str]) -> None:
+    def check_timeout() -> None:
+        _check_timeout(started, timeout_s)
+
     identifiers[0] = _expect(evidence, "create", client.create_account(run_id),
                              {201}).identifier
+    check_timeout()
     account_id = identifiers[0]
     _expect(evidence, "consent", client.record_consent(account_id),
             {200, 201, 204}, account_id)
+    check_timeout()
     identifiers[1] = _expect(evidence, "session", client.start_session(account_id),
                              {201}, account_id).identifier
+    check_timeout()
     session_id = identifiers[1]
     _expect(evidence, "verify", client.verify_session(account_id, session_id),
             {200}, account_id, session_id)
+    check_timeout()
     _check_rate_limit(client, account_id, session_id, threshold, evidence)
+    check_timeout()
     _expect(evidence, "delete", client.delete_account(account_id),
             {200, 202, 204}, account_id, session_id)
+    check_timeout()
     _expect(evidence, "deleted-access", client.access_account(account_id),
             {401, 403, 404, 410}, account_id, session_id)
+    check_timeout()
 
 
 def _cleanup(client: CareClient, run_id: str, evidence: list[Evidence],
@@ -92,7 +105,9 @@ def _cleanup(client: CareClient, run_id: str, evidence: list[Evidence],
         client.cleanup(run_id)
         evidence.append(_event("cleanup", None, *identifiers))
     except Exception as exc:
-        evidence.append(_event("cleanup", None, *identifiers, error=str(exc)))
+        evidence.append(_event(
+            "cleanup", None, *identifiers, error=_safe_error(exc, identifiers)
+        ))
 
 
 def _check_rate_limit(client: CareClient, account_id: str, session_id: str,
@@ -132,6 +147,13 @@ def _event(step: str, status: int | None, account_id: str, session_id: str,
 
 def _redact(identifier: str) -> str:
     return f"***{identifier[-4:]}" if identifier else ""
+
+
+def _safe_error(exc: Exception, identifiers: list[str]) -> str:
+    error = str(exc)
+    for identifier in filter(None, identifiers):
+        error = error.replace(identifier, _redact(identifier))
+    return error
 
 
 def _check_timeout(started: float, timeout_s: float) -> None:
