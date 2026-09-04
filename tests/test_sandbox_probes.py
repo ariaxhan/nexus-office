@@ -21,9 +21,11 @@ from nexus.checkout_probe import Checkout  # noqa: E402
 from nexus.ledger import Ledger, loads  # noqa: E402
 from nexus.messaging import Destination, ProviderReceipt  # noqa: E402
 
-TRANSACTIONAL = {"nexus.checkout_probe", "nexus.care_probe", "nexus.journeys",
-                 "nexus.sandbox_probes", "checkout_probe", "care_probe", "journeys",
-                 "sandbox_probes"}
+TRANSACTIONAL = {
+    "nexus.checkout_probe", "nexus.care_probe", "nexus.journeys", "nexus.messaging",
+    "nexus.sandbox_probes", "checkout_probe", "care_probe", "journeys", "messaging",
+    "sandbox_probes",
+}
 CORE = [ROOT / "nexus" / name for name in
         ("tower.py", "flights.py", "ledger.py", "cli.py", "radio.py", "landing.py",
          "repairs.py", "probes.py", "__main__.py")] + sorted((ROOT / "client").glob("*.py"))
@@ -136,7 +138,7 @@ class IsolationTest(unittest.TestCase):
         self.assertEqual("provider rejected [redacted]", report["error"])
         self.assertNotIn(secret, output.getvalue())
 
-    def test_all_three_transactional_clients_are_required(self):
+    def test_all_transactional_clients_are_required(self):
         with self.assertRaisesRegex(ValueError, "care, journey, messaging"):
             sp.load_clients({sp.CLIENTS_ENV: f"{__name__}:clients",
                              "NEXUS_SANDBOX_KEY": "test"})
