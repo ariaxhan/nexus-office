@@ -311,6 +311,46 @@ public struct WorkBoard: Decodable, Equatable {
         public var summary = ""
         public var at = ""
         public var url = ""
+        public var repo = ""
+        public var pr: Reference = Reference()
+        public var issues: [Reference] = []
+        public var chronicles: [Artifact] = []
+        public var documents: [Artifact] = []
+        public var files: [Artifact] = []
+        enum CodingKeys: String, CodingKey {
+            case id, project, summary, at, url, repo, pr, issues, chronicles, documents, files
+        }
+        public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = c.str(.id) ?? ""
+            project = c.str(.project) ?? ""
+            summary = c.str(.summary) ?? ""
+            at = c.str(.at) ?? ""
+            url = c.str(.url) ?? ""
+            repo = c.str(.repo) ?? ""
+            pr = (try? c.decode(Reference.self, forKey: .pr)) ?? Reference()
+            issues = c.list(.issues, Reference.self)
+            chronicles = c.list(.chronicles, Artifact.self)
+            documents = c.list(.documents, Artifact.self)
+            files = c.list(.files, Artifact.self)
+        }
+    }
+
+    public struct Reference: Decodable, Equatable, Identifiable {
+        public var label = ""
+        public var url = ""
+        public var id: String { "\(label)@\(url)" }
+        public init() {}
+    }
+
+    public struct Artifact: Decodable, Equatable, Identifiable {
+        public var id = ""
+        public var name = ""
+        public var path = ""
+        public var repo = ""
+        public var url = ""
+        public init() {}
     }
 }
 

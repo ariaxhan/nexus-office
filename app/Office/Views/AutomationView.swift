@@ -62,7 +62,7 @@ struct AutomationView: View {
                     .officeFont(size: 12).foregroundStyle(Theme.faint)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(work.changes) { change in ChangeRow(change: change) }
+                    ForEach(work.changes) { change in ChangeRow(store: store, change: change) }
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
             }
@@ -178,21 +178,88 @@ private struct ProductRow: View {
 }
 
 private struct ChangeRow: View {
+    @Bindable var store: Store
     let change: WorkBoard.Change
+    @State private var open = false
     var body: some View {
-        HStack(spacing: 9) {
-            Text("✓").officeFont(size: 12, weight: .semibold).foregroundStyle(Theme.green)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(change.summary).officeFont(size: 12).foregroundStyle(Theme.text).lineLimit(2)
-                Text(change.project).officeFont(size: 10.5).foregroundStyle(Theme.faint)
+        VStack(alignment: .leading, spacing: 0) {
+            Button { open.toggle() } label: {
+                HStack(spacing: 9) {
+                    Text("✓").officeFont(size: 12, weight: .semibold).foregroundStyle(Theme.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(change.summary).officeFont(size: 12).foregroundStyle(Theme.text).lineLimit(2)
+                        Text(change.project).officeFont(size: 10.5).foregroundStyle(Theme.faint)
+                    }
+                    Spacer()
+                    Text(StateRules.moment(change.at)).officeFont(size: 10.5).foregroundStyle(Theme.faint)
+                    Text(open ? "hide" : "receipts").officeFont(size: 10.5).foregroundStyle(Theme.blue)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 9).contentShape(Rectangle())
             }
-            Spacer()
-            Text(StateRules.moment(change.at)).officeFont(size: 10.5).foregroundStyle(Theme.faint)
-            if let url = URL(string: change.url) {
-                Link("proof ↗", destination: url).officeFont(size: 10.5).foregroundStyle(Theme.blue)
+            .buttonStyle(.plain)
+            if open {
+                VStack(alignment: .leading, spacing: 9) {
+                    references
+                    artifactGroup("chronicle", change.chronicles)
+                    artifactGroup("documents", change.documents.filter { document in
+                        !change.chronicles.contains(where: { $0.id == document.id })
+                    })
+                    fileGroup(change.files.filter { file in
+                        !change.documents.contains(where: { $0.id == file.id })
+                    })
+                }
+                .padding(.horizontal, 30).padding(.bottom, 12)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+    }
+
+    private var references: some View {
+        HStack(spacing: 10) {
+            if let url = URL(string: change.url) {
+                Link("commit ↗", destination: url)
+            }
+            if let url = URL(string: change.pr.url), !change.pr.label.isEmpty {
+                Link(change.pr.label + " ↗", destination: url)
+            }
+            ForEach(change.issues) { issue in
+                if let url = URL(string: issue.url) { Link(issue.label + " ↗", destination: url) }
+            }
+        }
+        .officeFont(size: 11).foregroundStyle(Theme.blue)
+    }
+
+    @ViewBuilder private func artifactGroup(_ label: String, _ artifacts: [WorkBoard.Artifact]) -> some View {
+        if !artifacts.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(label).officeFont(size: 10.5, weight: .semibold).foregroundStyle(Theme.faint)
+                ForEach(artifacts) { artifact in
+                    Button {
+                        Task { await store.open(repo: artifact.repo, path: artifact.path) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(artifact.name).lineLimit(1)
+                            Text("open in desk ↗").foregroundStyle(Theme.blue)
+                        }
+                        .officeFont(size: 11.5).foregroundStyle(Theme.text)
+                    }
+                    .buttonStyle(.plain).help(artifact.path)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func fileGroup(_ files: [WorkBoard.Artifact]) -> some View {
+        if !files.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("files").officeFont(size: 10.5, weight: .semibold).foregroundStyle(Theme.faint)
+                ForEach(files) { file in
+                    if let url = URL(string: file.url) {
+                        Link(file.name + " ↗", destination: url)
+                            .officeFont(size: 11.5).foregroundStyle(Theme.blue).help(file.path)
+                    }
+                }
+            }
+        }
     }
 }
 
