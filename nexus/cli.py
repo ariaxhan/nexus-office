@@ -17,7 +17,7 @@ import sys
 
 from . import flights as fl
 from . import tower
-from .ledger import Ledger, loads
+from .ledger import TERMINAL, Ledger, loads
 
 PLIST_LABEL = "com.nexus.tower"
 PLIST_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -64,6 +64,9 @@ def cmd_kill(args):
     if flight is None:
         print(f"no such flight: {args.flight}", file=sys.stderr)
         return 1
+    if flight["state"] in TERMINAL:
+        print(f"{args.flight} already ended ({flight['state']})")
+        return 0
     if not fl.kill(flight["pid"], flight["workspace"]):
         led.set_state(args.flight, "resolving", expect=flight["state"],
                       resolution_step="teardown_unconfirmed")
