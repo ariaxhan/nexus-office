@@ -164,6 +164,11 @@ from the source tree. Today its exact failure picture becomes a `ready+p0` issue
 repo. #92 splits that picture by stable check ID and repair owner; #93 closes each only after the
 same live check passes.
 
+The closure handoff is `nexus.live-probe-repairs/v1`. Its `checks` array is sorted by
+`check_id`; every row contains `check_id`, `owner`, positive `repair_issue`, and `state` (`pass` or
+`fail`). `nexus.probes.encode_probe_output` validates and canonically serializes that handoff, so
+closure selects a repair by number rather than mutable title or evidence text.
+
 ```mermaid
 flowchart TD
   A[#87 route Nexus failures] --> D[#91 independent heartbeat]
