@@ -35,7 +35,7 @@ class Schema(LedgerCase):
     def test_wal_and_version(self):
         mode = self.led.conn.execute("PRAGMA journal_mode").fetchone()[0]
         self.assertEqual(mode.lower(), "wal")
-        self.assertEqual(self.led.user_version(), 2)
+        self.assertEqual(self.led.user_version(), 3)
 
     def test_schema_v1_tables_all_present(self):
         names = {r[0] for r in self.led.conn.execute(
@@ -52,7 +52,7 @@ class Schema(LedgerCase):
         led = Ledger(self.path)
         self.addCleanup(led.close)
         self.assertTrue(os.path.exists(self.path + ".bak-0"))
-        self.assertEqual(2, led.user_version())
+        self.assertEqual(3, led.user_version())
         # the copy is the old file, not a fresh one
         self.assertGreater(os.path.getsize(self.path + ".bak-0"), 0)
 
@@ -222,7 +222,7 @@ class Integrity(LedgerCase):
 
 
 class Parity(unittest.TestCase):
-    """A live v1 file upgraded through Ledger() is the same ledger as a fresh v2."""
+    """Legacy paths converge on the same current ledger without losing meaning."""
 
     def schema(self, path):
         """Every table, index and trigger by name, and every table's column names."""
@@ -244,7 +244,7 @@ class Parity(unittest.TestCase):
         led = Ledger(old)
         self.addCleanup(led.close)
 
-        self.assertEqual(2, led.user_version())
+        self.assertEqual(3, led.user_version())
         self.assertEqual(self.schema(fresh), self.schema(old))
         self.assertEqual([], led.integrity_check())
 
@@ -294,6 +294,70 @@ class Parity(unittest.TestCase):
         self.assertEqual("missing", conn.execute(
             "SELECT objective_id FROM tasks WHERE id='task_1'"
         ).fetchone()[0])
+
+    def partial_v2(self, path, clear_references=True):
+        """The early-v2 shape: legacy tables gone, stale objective_id columns kept."""
+        build(path)
+        conn = sqlite3.connect(path)
+        for table, columns in {
+            "plans": ("objective", "autonomy"),
+            "tasks": ("objective", "autonomy", "parent_id", "output", "check"),
+        }.items():
+            for column in columns:
+                conn.execute(f'ALTER TABLE {table} ADD COLUMN "{column}" TEXT')
+        if clear_references:
+            conn.execute("UPDATE plans SET objective_id=NULL")
+            conn.execute("UPDATE tasks SET objective_id=NULL")
+        for table in ("objectives", "observations", "messages", "gates"):
+            conn.execute(f"DROP TABLE {table}")
+        conn.execute(
+            "INSERT INTO events (ts,kind,subject,payload,source) "
+            "VALUES (1,'migration.marker',NULL,'{}','test')"
+        )
+        conn.execute("PRAGMA user_version=2")
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_partial_v2_equals_fresh_v3(self):
+        d = tempfile.mkdtemp(prefix="nexus-parity-")
+        self.addCleanup(shutil.rmtree, d, True)
+        old = self.partial_v2(os.path.join(d, "old.sqlite"))
+        fresh = os.path.join(d, "fresh.sqlite")
+        Ledger(fresh).close()
+        led = Ledger(old)
+        self.addCleanup(led.close)
+
+        self.assertEqual(3, led.user_version())
+        self.assertEqual(self.schema(fresh), self.schema(old))
+        self.assertEqual([], led.integrity_check())
+        self.assertEqual(1, led.conn.execute(
+            "SELECT count(*) FROM events WHERE kind='migration.marker'"
+        ).fetchone()[0])
+        self.assertEqual((None, None), tuple(led.conn.execute(
+            "SELECT objective, autonomy FROM plans WHERE id='plan_1'"
+        ).fetchone()))
+        self.assertEqual((None, None), tuple(led.conn.execute(
+            "SELECT objective, autonomy FROM tasks WHERE id='task_1'"
+        ).fetchone()))
+        bak = sqlite3.connect(old + ".bak-2")
+        self.assertEqual(2, bak.execute("PRAGMA user_version").fetchone()[0])
+        bak.close()
+
+    def test_partial_v2_with_relationships_is_refused(self):
+        d = tempfile.mkdtemp(prefix="nexus-parity-")
+        self.addCleanup(shutil.rmtree, d, True)
+        old = self.partial_v2(os.path.join(d, "old.sqlite"), clear_references=False)
+
+        with self.assertRaisesRegex(LedgerError, "references cannot be repaired"):
+            Ledger(old)
+
+        conn = sqlite3.connect(old)
+        self.addCleanup(conn.close)
+        self.assertEqual(2, conn.execute("PRAGMA user_version").fetchone()[0])
+        self.assertIn("objective_id", {
+            row[1] for row in conn.execute("PRAGMA table_info(plans)")
+        })
 
 
 if __name__ == "__main__":

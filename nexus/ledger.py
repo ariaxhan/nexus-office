@@ -5,7 +5,7 @@ two readings. Every mutating call is a single transaction that also appends the
 `events` row explaining it, state transitions are checked against a fixed table,
 and history is made immutable by triggers rather than by good manners.
 
-Schema v2 is `docs/foundation.md`, cut to what the seven verbs need: plans, tasks,
+Schema v3 is `docs/foundation.md`, cut to what the seven verbs need: plans, tasks,
 flights, artifacts, landings, events, leases. Objectives, observations, messages and
 gates are `events` rows; the v1 tables that held them are copied in and dropped. Leases are on
 RESOURCES (a repo+branch, a mailbox, a deploy slot, a paid budget), never on
@@ -22,7 +22,7 @@ import sqlite3
 import time
 import uuid
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 TERMINAL = ("landed", "failed", "cancelled")
 
@@ -358,6 +358,24 @@ class Ledger:
                     f"UPDATE {table} SET objective=?, autonomy=? WHERE id=?",
                     (row[3], row[4], row[0]),
                 )
+
+    def _migrate_v3(self):
+        """Repair early v2 files that dropped objectives but kept empty references."""
+        with self.tx() as c:
+            for table in V2_COLUMNS:
+                columns = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+                if "objective_id" not in columns:
+                    continue
+                linked = c.execute(
+                    f"SELECT count(*) FROM {table} WHERE objective_id IS NOT NULL"
+                ).fetchone()[0]
+                if linked:
+                    raise LedgerError(
+                        f"{table}: {linked} objective references cannot be repaired from v2"
+                    )
+                c.execute(f"ALTER TABLE {table} DROP COLUMN objective_id")
+            self._backfill_state_events(c)
+            c.execute("PRAGMA user_version=3")
 
     def _backfill_state_events(self, c):
         """A v1 row whose state has no event gets one, from nothing: v2 reads
