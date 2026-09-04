@@ -64,7 +64,11 @@ def cmd_kill(args):
     if flight is None:
         print(f"no such flight: {args.flight}", file=sys.stderr)
         return 1
-    fl.kill(flight["pid"])
+    if not fl.kill(flight["pid"], flight["workspace"]):
+        led.set_state(args.flight, "resolving", expect=flight["state"],
+                      resolution_step="teardown_unconfirmed")
+        print(f"could not stop the complete process tree for {args.flight}", file=sys.stderr)
+        return 1
     if led.set_state(args.flight, "cancelled", expect=flight["state"],
                      result={"ok": False, "artifacts": [],
                              "error": {"code": "cancelled", "detail": "operator"}, "cost": {}}):

@@ -21,6 +21,7 @@ import contextlib
 import datetime
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -122,7 +123,8 @@ def _enforce_budgets(ledger, now):
         started = flight["started_at"] or flight["created_at"]
         if started + timeout_s > now:
             continue
-        fl.kill(flight["pid"])
+        if not _confirm_teardown(ledger, flight, now, "timeout"):
+            continue
         if ledger.fail(flight["id"], "timeout", f"over {timeout_s}s budget",
                        expect="running", now=now):
             _finish_failed(ledger, flight, now)
@@ -142,6 +144,8 @@ def _reap(ledger, now, root):
         if error == "missing_result":
             continue
         if error is not None:
+            if not _confirm_teardown(ledger, flight, now, error):
+                continue
             if ledger.fail(flight["id"], error, f"unreadable {fl.RESULT_NAME}",
                            expect="running", now=now):
                 _finish_failed(ledger, flight, now)
@@ -164,6 +168,8 @@ def _reap(ledger, now, root):
             continue
         err = result.get("error") or {}
         code = err.get("code") or "unknown"
+        if not _confirm_teardown(ledger, flight, now, code):
+            continue
         if ledger.fail(flight["id"], code, str(err.get("detail", "")), expect="running",
                        now=now, cost=result.get("cost"), error=err):
             _finish_failed(ledger, flight, now)
@@ -191,12 +197,21 @@ def _reconcile_vanished(ledger, now, root):
 
 def _finish_failed(ledger, flight, now):
     """A failed flight leaves nothing behind but its log: process, leases, workspace go."""
-    fl.kill(flight["pid"])
     ledger.release_leases(flight["id"], now=now)
     workspace = flight["workspace"]
     if workspace and os.path.isdir(workspace):
         if _keep_log(ledger, flight["id"], workspace):
             shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _confirm_teardown(ledger, flight, now, reason):
+    if fl.kill(flight["pid"], flight["workspace"]):
+        return True
+    ledger.event("flight.teardown_unconfirmed", flight["id"],
+                 {"reason": reason}, "tower", now)
+    ledger.set_state(flight["id"], "resolving", expect="running", now=now,
+                     resolution_step="teardown_unconfirmed")
+    return False
 
 
 def logs_root(ledger):
@@ -617,6 +632,7 @@ def _spawn(ledger, plan, flight_id, workspace, timeout_s):
             grandchild = os.fork()
             if grandchild == 0:
                 os.close(write_fd)
+                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
                 log = os.open(os.path.join(workspace, fl.LOG_NAME),
                               os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
                 null = os.open(os.devnull, os.O_RDONLY)
@@ -639,9 +655,19 @@ def _spawn(ledger, plan, flight_id, workspace, timeout_s):
         with contextlib.suppress(ChildProcessError, OSError):
             os.waitpid(middle, 0)
     try:
-        return int(data)
+        runner_pid = int(data)
     except ValueError:
         return None
+    deadline = time.monotonic() + PID_GRACE_S
+    while time.monotonic() < deadline:
+        if fl.runner_ready(workspace, runner_pid):
+            return runner_pid
+        if not fl.alive(runner_pid):
+            return None
+        time.sleep(0.01)
+    with contextlib.suppress(OSError):
+        os.kill(runner_pid, signal.SIGKILL)
+    return None
 
 
 # ---- run loop and views ----------------------------------------------------

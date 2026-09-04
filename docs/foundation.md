@@ -133,9 +133,9 @@ flowchart TD
   A[#68 Vaults landing] --> B[#69 retire morning scrape] --> C[#70 midday pulse]
   F[#73 manual coordinator] --> E[#72 parent/child tasks]
   D[#71 ledger v2] --> E
-  F --> G[#74 Claude]
-  F --> H[#75 Codex]
-  F --> I[#76 Antigravity]
+  E --> G[#74 Claude]
+  E --> H[#75 Codex]
+  E --> I[#76 Antigravity]
   D --> J[#77 radio]
   D --> K[#78 structural refusal]
   G --> L[#79 issue to PR]
@@ -152,9 +152,36 @@ flowchart TD
   P --> Q[#84 delete hcom and duplicate stores]
 ```
 
-Ready now: #86, then #68, #71, and manual decomposition #73. Migration, schema, and manual
-coordination are file-disjoint; integration remains serial.
+Completed: #86, #73. Ready now: #68, #123, #124. Migration, fixture, and schema are
+file-disjoint; integration remains serial.
 Every further airline migration gets its own child issue before work begins.
+
+### The first manual coordinator flight: #71
+
+#73 decomposed [#71](https://github.com/ariaxhan/nexus-office/issues/71) by hand. Frozen
+destination: `SCHEMA_VERSION` 2; `plans` carries `objective` and `autonomy`; `tasks` carries
+`objective`, `autonomy`, `parent_id`, `output`, `check`; `objectives`, `observations`, `messages`
+and `gates` become `events` rows (`objective`, `observation`, `radio.message`, `gate`, delivery as
+`radio.delivered`); the four tables drop only after counts match. Each child owns one file and one
+check; #71 closes only on the live proof in #126.
+
+```mermaid
+flowchart LR
+  A[#123 fixture: tests/ledger_fixture.py] --> C[#125 parity: tests/test_ledger.py]
+  B[#124 schema v2: nexus/ledger.py] --> C
+  C --> D[#126 live migration: docs/NEXT.md]
+```
+
+Observed while coordinating, for the automated version in #72:
+
+- One shared file forces serial order. `nexus/ledger.py` is the only surface every step
+  touches, so parallelism was two of four children, not the tracker's "file-disjoint" default.
+- The live legacy tables hold zero rows, so parity is proven on a seeded fixture (#123), not on
+  the live file; the live step proves counts of the seven tables that do have rows.
+- A child's check must name a command and a number. "Fresh and upgraded schemas match" became a
+  `sqlite_master` equality and exact row counts before any executor could take it.
+- GitHub sub-issues require the REST `sub_issues` endpoint; `gh issue` has no verb for it.
+  #72 must write the parent link into the ledger, not into GitHub alone.
 
 ### Self-healing closure
 
@@ -168,6 +195,11 @@ The closure handoff is `nexus.live-probe-repairs/v1`. Its `checks` array is sort
 `check_id`; every row contains `check_id`, `owner`, positive `repair_issue`, and `state` (`pass` or
 `fail`). `nexus.probes.encode_probe_output` validates and canonically serializes that handoff, so
 closure selects a repair by number rather than mutable title or evidence text.
+
+`nexus.probes.CHECK_OWNERS` is the canonical repair registry. Core TBS checks use stable
+`tbs.core.*` IDs and resolve to `Thinking-Brain-School/tbs-www`; the delivery-loop check resolves
+to `ariaxhan/nexus-office`. `assign_repair_owners` rejects missing, unknown, or duplicate IDs and
+derives owners from that registry, leaving result text and evidence outside check identity.
 
 `nexus.repairs.reconcile_repairs` resolves each failed `check_id` through the canonical registry.
 Its hidden `nexus-repair-check:<check_id>` issue marker survives changing evidence: the first
@@ -186,6 +218,9 @@ flowchart TD
 The independent heartbeat survives tower failure. The core probe never charges, sends customer
 messages, or mutates customer data. Slower sandbox probes cover checkout, care lifecycle,
 Kakao/SMS receipts, PWA playback/install, and complete KR/EN/ES journeys.
+
+Delivery recovery is idempotent: each review flight compares `main...staging`, promotes the exact
+staging SHA through the repository release controller, and retries until both branches agree.
 
 ## Ledger model
 
