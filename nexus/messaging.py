@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 import uuid
 from dataclasses import dataclass
@@ -75,7 +76,7 @@ def run_messaging_probe(provider: MessagingProvider,
                         channels: tuple[str, ...] = CHANNELS,
                         ) -> tuple[ReceiptEvidence, ...]:
     """Send at most one sandbox delivery per channel and verify its receipts."""
-    selected = _validate_probe(destinations, channels)
+    selected = _validate_probe(destinations, channels, timeout_s)
     probe_id = f"messaging-{uuid.uuid4().hex}"
     sent = _send(provider, probe_id, channels, selected)
     evidence = tuple(
@@ -83,17 +84,25 @@ def run_messaging_probe(provider: MessagingProvider,
                          timeout_s)
         for channel, destination, provider_id in sent
     )
-    if any(item.delivered_at is None for item in evidence):
+    if any(item.accepted_at is None or item.delivered_at is None
+           for item in evidence):
         raise ProbeFailure(evidence)
     return evidence
 
 
 def _validate_probe(destinations: dict[str, Destination],
-                    channels: tuple[str, ...]) -> tuple[Destination, ...]:
+                    channels: tuple[str, ...],
+                    timeout_s: float) -> tuple[Destination, ...]:
+    if (not isinstance(timeout_s, (int, float))
+            or not math.isfinite(timeout_s) or timeout_s <= 0):
+        raise ValueError("timeout must be a positive finite number")
     if len(channels) > SEND_CAP:
         raise ValueError(f"send cap is {SEND_CAP}")
     if len(set(channels)) != len(channels) or set(channels) != set(CHANNELS):
         raise ValueError("exactly one Kakao and one SMS delivery are required")
+    missing = sorted(set(channels) - set(destinations))
+    if missing:
+        raise ValueError(f"missing destinations: {', '.join(missing)}")
     selected = tuple(destinations[channel] for channel in channels)
     if any(not item.sandbox or not item.value.strip() for item in selected):
         raise ValueError("every destination must be a named sandbox destination")
@@ -137,5 +146,5 @@ def _verify_receipts(provider: MessagingProvider, run_id: str, channel: str,
 
 
 def _redact(destination: str) -> str:
-    visible = destination[-2:]
+    visible = destination[-2:] if len(destination) > 2 else ""
     return f"***{visible}"

@@ -82,6 +82,33 @@ class MessagingProbeTest(unittest.TestCase):
         self.assertTrue(all(row.accepted_at for row in raised.exception.evidence))
         self.assertTrue(all(row.timeout_at for row in raised.exception.evidence))
 
+    def test_delivery_without_acceptance_fails(self):
+        provider = Provider({
+            f"{channel}-id": [ProviderReceipt("delivered", f"{channel}-delivered")]
+            for channel in DESTINATIONS
+        })
+
+        with self.assertRaises(ProbeFailure) as raised:
+            run_messaging_probe(provider, DESTINATIONS)
+        self.assertTrue(all(row.delivered_at for row in raised.exception.evidence))
+        self.assertTrue(all(row.accepted_at is None for row in raised.exception.evidence))
+
+    def test_short_destinations_are_fully_redacted(self):
+        destinations = {
+            "kakao": Destination("k"),
+            "sms": Destination("1"),
+        }
+        evidence = run_messaging_probe(Provider(), destinations)
+        self.assertEqual(["***", "***"], [row.destination for row in evidence])
+
+    def test_invalid_timeout_and_missing_destination_send_nothing(self):
+        provider = Provider()
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            run_messaging_probe(provider, DESTINATIONS, timeout_s=0)
+        with self.assertRaisesRegex(ValueError, "missing destinations: sms"):
+            run_messaging_probe(provider, {"kakao": DESTINATIONS["kakao"]})
+        self.assertEqual([], provider.sent)
+
     def test_send_cap_and_sandbox_gate_apply_before_sending(self):
         provider = Provider()
         with self.assertRaisesRegex(ValueError, "send cap"):
