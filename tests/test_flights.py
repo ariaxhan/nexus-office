@@ -1,107 +1,75 @@
+import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from nexus import flights
 
 
-class KillTest(unittest.TestCase):
-    def test_kill_reaches_a_child_that_started_its_own_session(self):
+def wait_for(predicate, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+class RunnerCancellationTest(unittest.TestCase):
+    def runner(self, workspace, cmd):
+        return subprocess.Popen(
+            [sys.executable, "-m", "nexus", "flight-run", "--workspace", workspace,
+             "--cmd", cmd, "--timeout", "60"],
+            start_new_session=True,
+        )
+
+    def test_runner_cancels_its_owned_command_group(self):
         with tempfile.TemporaryDirectory() as tmp:
             child_file = os.path.join(tmp, "child")
-            script = (
-                "import os, subprocess, sys, time; "
-                "p=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
-                "start_new_session=True); "
-                f"open({child_file!r}, 'w').write(str(p.pid)); "
-                "time.sleep(60)"
-            )
-            root = subprocess.Popen(
-                ["python3", "-c", script], start_new_session=True)
-            self.addCleanup(lambda: flights.kill(root.pid))
-            deadline = time.time() + 5
-            while not os.path.exists(child_file) and time.time() < deadline:
-                time.sleep(0.02)
+            runner = self.runner(tmp, f"sleep 60 & echo $! > {child_file}; wait")
+            self.addCleanup(lambda: runner.poll() is None and runner.kill())
+            self.assertTrue(wait_for(lambda: os.path.exists(child_file)))
             with open(child_file) as handle:
                 child = int(handle.read())
 
-            flights.kill(root.pid)
-            root.wait(timeout=5)
-            deadline = time.time() + 5
-            while flights.alive(child) and time.time() < deadline:
-                time.sleep(0.02)
+            os.kill(runner.pid, signal.SIGTERM)
+            runner.wait(timeout=5)
 
-            self.assertFalse(flights.alive(child))
+            result, error = flights.read_result(tmp)
+            self.assertIsNone(error)
+            self.assertEqual("cancelled", result["error"]["code"])
+            self.assertTrue(wait_for(lambda: not flights.alive(child)))
 
-    def test_kill_freezes_a_grandchild_created_after_the_first_snapshot(self):
+    def test_runner_reaps_background_work_after_its_group_leader_exits(self):
         with tempfile.TemporaryDirectory() as tmp:
             child_file = os.path.join(tmp, "child")
-            grand_file = os.path.join(tmp, "grand")
-            go_file = os.path.join(tmp, "go")
-            child_script = (
-                "import os, subprocess, sys, time; "
-                f"open({child_file!r}, 'w').write(str(os.getpid())); "
-                f"\nwhile not os.path.exists({go_file!r}): time.sleep(.01)\n"
-                "p=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
-                "start_new_session=True); "
-                f"open({grand_file!r}, 'w').write(str(p.pid)); "
-                "time.sleep(60)"
-            )
-            root_script = (
-                "import subprocess, sys, time; "
-                f"subprocess.Popen([sys.executable, '-c', {child_script!r}]); "
-                "time.sleep(60)"
-            )
-            root = subprocess.Popen(["python3", "-c", root_script], start_new_session=True)
-            self.addCleanup(lambda: flights.kill(root.pid))
-            deadline = time.time() + 5
-            while not os.path.exists(child_file) and time.time() < deadline:
-                time.sleep(0.02)
-            original = flights._descendants
-            first = True
+            runner = self.runner(tmp, f"sleep 60 & echo $! > {child_file}")
+            self.addCleanup(lambda: runner.poll() is None and runner.kill())
+            runner.wait(timeout=5)
+            with open(child_file) as handle:
+                child = int(handle.read())
 
-            def spawn_after_snapshot(pid):
-                nonlocal first
-                rows = original(pid)
-                if first:
-                    first = False
-                    open(go_file, "w").close()
-                    deadline = time.time() + 5
-                    while not os.path.exists(grand_file) and time.time() < deadline:
-                        time.sleep(0.01)
-                return rows
+            self.assertTrue(wait_for(lambda: not flights.alive(child)))
+            with open(os.path.join(tmp, flights.RESULT_NAME)) as handle:
+                result = json.load(handle)
+            self.assertTrue(result["ok"])
 
-            flights._descendants = spawn_after_snapshot
-            try:
-                self.assertTrue(flights.kill(root.pid))
-            finally:
-                flights._descendants = original
-            root.wait(timeout=5)
-            with open(grand_file) as handle:
-                grand = int(handle.read())
-            deadline = time.time() + 5
-            while flights.alive(grand) and time.time() < deadline:
-                time.sleep(0.02)
-            self.assertFalse(flights.alive(grand))
 
-    def test_kill_reports_enumeration_failure_and_resumes_the_runner(self):
-        root = subprocess.Popen(["python3", "-c", "import time; time.sleep(60)"],
-                                start_new_session=True)
-        def cleanup():
-            if flights.alive(root.pid):
-                root.kill()
-            root.wait(timeout=5)
-        self.addCleanup(cleanup)
-        original = flights._descendants
-        flights._descendants = lambda _pid: (_ for _ in ()).throw(RuntimeError("no ps"))
-        try:
-            self.assertFalse(flights.kill(root.pid))
-        finally:
-            flights._descendants = original
-        self.assertIsNone(root.poll())
+class KillContractTest(unittest.TestCase):
+    @mock.patch("nexus.flights.time.sleep")
+    @mock.patch("nexus.flights.alive", return_value=True)
+    @mock.patch("nexus.flights.os.kill")
+    def test_unresponsive_runner_is_escalated_but_not_reported_clean(self, kill, _alive, _sleep):
+        self.assertFalse(flights.kill(123, grace_s=0))
+        self.assertEqual(
+            [mock.call(123, signal.SIGTERM), mock.call(123, signal.SIGKILL)],
+            kill.call_args_list,
+        )
 
 
 if __name__ == "__main__":

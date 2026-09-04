@@ -19,6 +19,12 @@ from . import landing, radio
 
 RESULT_NAME = "result.json"
 LOG_NAME = "log"
+KILL_GRACE_S = 5.0
+KILL_POLL_S = 0.02
+
+
+class _Cancelled(Exception):
+    pass
 
 
 def workspace_path(root: str, flight_id: str) -> str:
@@ -73,30 +79,41 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
     started = time.time()
     code = None
     error = None
+    proc = None
     cwd = workspace
-    if target is not None:
-        try:
-            cwd = landing.clone_hangar(target[0], target[1], workspace)
-        except (landing.LandingError, subprocess.TimeoutExpired, OSError) as exc:
-            error = {"code": "hangar_failed", "detail": str(exc)[:400]}
-    with open(os.path.join(workspace, LOG_NAME), "ab") as log:
-        try:
-            if error is not None:
-                raise OSError(error["detail"])
-            proc = subprocess.Popen(
-                ["/bin/sh", "-c", cmd], cwd=cwd, stdin=subprocess.DEVNULL,
-                stdout=log, stderr=log, start_new_session=True)
-        except OSError as exc:
-            if error is None:
-                error = {"code": "spawn_failed", "detail": str(exc)}
-            proc = None
+    previous_term = signal.getsignal(signal.SIGTERM)
+
+    def cancel(_signum, _frame):
         if proc is not None:
+            _kill_owned_group(proc.pid)
+        raise _Cancelled()
+
+    signal.signal(signal.SIGTERM, cancel)
+    try:
+        if target is not None:
+            cwd = landing.clone_hangar(target[0], target[1], workspace)
+        with open(os.path.join(workspace, LOG_NAME), "ab") as log:
             try:
-                code = proc.wait(timeout=timeout_s)
-            except subprocess.TimeoutExpired:
-                _kill_group(proc.pid)
-                code = None
-                error = {"code": "timeout", "detail": f"over {timeout_s}s"}
+                proc = subprocess.Popen(
+                    ["/bin/sh", "-c", cmd], cwd=cwd, stdin=subprocess.DEVNULL,
+                    stdout=log, stderr=log, start_new_session=True)
+                try:
+                    code = proc.wait(timeout=timeout_s)
+                except subprocess.TimeoutExpired:
+                    error = {"code": "timeout", "detail": f"over {timeout_s}s"}
+                finally:
+                    _kill_owned_group(proc.pid)
+            except OSError as exc:
+                error = {"code": "spawn_failed", "detail": str(exc)}
+    except (landing.LandingError, subprocess.TimeoutExpired, OSError) as exc:
+        error = {"code": "hangar_failed", "detail": str(exc)[:400]}
+    except _Cancelled:
+        code = None
+        error = {"code": "cancelled", "detail": "operator"}
+    finally:
+        # A second cancellation while the small result-writing tail runs must not
+        # interrupt the receipt that tells tower teardown completed.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
     artifacts = []
     rel = os.path.relpath(cwd, workspace) if cwd != workspace else ""
@@ -129,11 +146,14 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
     }
     if target is not None:
         result["hangar"] = rel
-    write_result(workspace, result)
-    # The result is on disk before the radio is touched: a hung radio can delay
-    # this process by at most radio.timeout_s(), and cannot change what tower reads.
-    radio.notify("flight.exiting", {"workspace": workspace, "ok": result["ok"]})
-    return result
+    try:
+        write_result(workspace, result)
+        # The result is on disk before the radio is touched: a hung radio can delay
+        # this process by at most radio.timeout_s(), and cannot change what tower reads.
+        radio.notify("flight.exiting", {"workspace": workspace, "ok": result["ok"]})
+        return result
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
 
 
 def declared_outputs(cwd: str, outputs):
@@ -149,90 +169,38 @@ def declared_outputs(cwd: str, outputs):
     return found
 
 
-def _kill_group(pid: int, sig=signal.SIGKILL) -> None:
+def _kill_owned_group(group: int) -> None:
+    """Kill the command group by its stable id, even after its leader exits."""
     try:
-        os.killpg(os.getpgid(pid), sig)
-    except (ProcessLookupError, PermissionError, OSError):
-        try:
-            os.kill(pid, sig)
-        except OSError:
-            pass
+        os.killpg(group, signal.SIGKILL)
+    except OSError:
+        pass
 
 
-def _descendants(pid: int) -> list[int]:
-    """Snapshot every descendant, deepest first.
-
-    Flight commands deliberately start their own session for timeout handling, so killing only
-    the detached runner's process group can leave the actual command alive. One `ps` snapshot is
-    enough once the runner is stopped and can no longer create another child.
-    """
-    try:
-        rows = subprocess.check_output(
-            ["ps", "-axo", "pid=,ppid="], text=True, timeout=5).splitlines()
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(f"could not enumerate process tree: {exc}") from exc
-    children: dict[int, list[int]] = {}
-    for row in rows:
-        try:
-            child, parent = (int(value) for value in row.split())
-        except (TypeError, ValueError):
-            continue
-        children.setdefault(parent, []).append(child)
-    found: list[int] = []
-
-    def walk(parent: int) -> None:
-        for child in children.get(parent, []):
-            walk(child)
-            found.append(child)
-
-    walk(pid)
-    return found
-
-
-def kill(pid, sig=signal.SIGKILL) -> bool:
+def kill(pid, grace_s: float = KILL_GRACE_S) -> bool:
+    """Ask the runner to tear down its owned command group; escalate truthfully."""
     if not pid:
         return True
     root = int(pid)
-    stopped = {root}
     try:
-        os.kill(root, signal.SIGSTOP)
+        os.kill(root, signal.SIGTERM)
     except ProcessLookupError:
         return True
     except OSError:
         return False
-    try:
-        while True:
-            fresh = set(_descendants(root)) - stopped
-            if not fresh:
-                break
-            for child in fresh:
-                try:
-                    os.kill(child, signal.SIGSTOP)
-                    stopped.add(child)
-                except ProcessLookupError:
-                    pass
-        own_group = os.getpgrp()
-        groups = set()
-        for child in stopped:
-            try:
-                group = os.getpgid(child)
-            except OSError:
-                continue
-            if group != own_group:
-                groups.add(group)
-        for group in groups:
-            try:
-                os.killpg(group, sig)
-            except OSError:
-                pass
+    deadline = time.monotonic() + grace_s
+    while alive(root) and time.monotonic() < deadline:
+        time.sleep(KILL_POLL_S)
+    if not alive(root):
         return True
-    except RuntimeError:
-        for child in stopped:
-            try:
-                os.kill(child, signal.SIGCONT)
-            except OSError:
-                pass
+    try:
+        os.kill(root, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    except OSError:
         return False
+    # Forced runner death cannot confirm that its command-group cleanup ran.
+    return False
 
 
 def alive(pid) -> bool:
