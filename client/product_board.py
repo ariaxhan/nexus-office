@@ -48,20 +48,9 @@ def _catalog_item(path: pathlib.Path) -> dict | None:
                  if not row.get("is_published")
                  and str(row.get("build_status") or "") not in READY]
     ready = len(rows) - len(remaining)
-    sha = _git(CATALOG.parent, "rev-parse", "HEAD")
-    remote = _remote(CATALOG.parent)
-    proof = []
-    if remote and sha:
-        proof.append({"label": "catalog", "url": f"{remote}/blob/{sha}/catalog/{path.name}"})
-    live = next((row for row in reversed(rows)
-                 if row.get("is_published") and row.get("slug")), None)
-    if live:
-        proof.append({"label": "live", "url": "https://thinkingbrainschool.com/" +
-                      str(live["slug"]).lstrip("/")})
-    blockers = [f"{str(row.get('slug') or '').rsplit('/', 1)[-1]} {row.get('build_status', '')}".strip()
-                for row in remaining[:4]]
-    newest = _git(CATALOG.parent, "log", "-1", "--format=%cI%x09%s", "--", f"catalog/{path.name}")
-    changed_at, changed = (newest.split("\t", 1) + [""])[:2] if newest else ("", "")
+    proof = _catalog_proof(path, rows)
+    blockers = _blockers(remaining)
+    changed_at, changed = _catalog_change(path)
     return {
         "id": product, "name": PRODUCT_NAMES.get(product, product),
         "status": f"{ready}/{len(rows)} built", "ready": ready, "total": len(rows),
@@ -70,6 +59,30 @@ def _catalog_item(path: pathlib.Path) -> dict | None:
         "next": blockers[0] if blockers else "keep it current",
         "proof": proof, "updated_at": changed_at,
     }
+
+
+def _catalog_proof(path: pathlib.Path, rows: list[dict]) -> list[dict]:
+    sha = _git(CATALOG.parent, "rev-parse", "HEAD")
+    remote = _remote(CATALOG.parent)
+    proof = ([{"label": "catalog", "url": f"{remote}/blob/{sha}/catalog/{path.name}"}]
+             if remote and sha else [])
+    live = next((row for row in reversed(rows)
+                 if row.get("is_published") and row.get("slug")), None)
+    if live:
+        proof.append({"label": "live", "url": "https://thinkingbrainschool.com/" +
+                      str(live["slug"]).lstrip("/")})
+    return proof
+
+
+def _blockers(rows: list[dict]) -> list[str]:
+    return [f"{str(row.get('slug') or '').rsplit('/', 1)[-1]} "
+            f"{row.get('build_status', '')}".strip() for row in rows[:4]]
+
+
+def _catalog_change(path: pathlib.Path) -> tuple[str, str]:
+    newest = _git(CATALOG.parent, "log", "-1", "--format=%cI%x09%s", "--",
+                  f"catalog/{path.name}")
+    return tuple((newest.split("\t", 1) + [""])[:2]) if newest else ("", "")
 
 
 def _recent_changes() -> list[dict]:
