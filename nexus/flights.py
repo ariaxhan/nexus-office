@@ -159,9 +159,80 @@ def _kill_group(pid: int, sig=signal.SIGKILL) -> None:
             pass
 
 
-def kill(pid, sig=signal.SIGKILL) -> None:
-    if pid:
-        _kill_group(int(pid), sig)
+def _descendants(pid: int) -> list[int]:
+    """Snapshot every descendant, deepest first.
+
+    Flight commands deliberately start their own session for timeout handling, so killing only
+    the detached runner's process group can leave the actual command alive. One `ps` snapshot is
+    enough once the runner is stopped and can no longer create another child.
+    """
+    try:
+        rows = subprocess.check_output(
+            ["ps", "-axo", "pid=,ppid="], text=True, timeout=5).splitlines()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"could not enumerate process tree: {exc}") from exc
+    children: dict[int, list[int]] = {}
+    for row in rows:
+        try:
+            child, parent = (int(value) for value in row.split())
+        except (TypeError, ValueError):
+            continue
+        children.setdefault(parent, []).append(child)
+    found: list[int] = []
+
+    def walk(parent: int) -> None:
+        for child in children.get(parent, []):
+            walk(child)
+            found.append(child)
+
+    walk(pid)
+    return found
+
+
+def kill(pid, sig=signal.SIGKILL) -> bool:
+    if not pid:
+        return True
+    root = int(pid)
+    stopped = {root}
+    try:
+        os.kill(root, signal.SIGSTOP)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    try:
+        while True:
+            fresh = set(_descendants(root)) - stopped
+            if not fresh:
+                break
+            for child in fresh:
+                try:
+                    os.kill(child, signal.SIGSTOP)
+                    stopped.add(child)
+                except ProcessLookupError:
+                    pass
+        own_group = os.getpgrp()
+        groups = set()
+        for child in stopped:
+            try:
+                group = os.getpgid(child)
+            except OSError:
+                continue
+            if group != own_group:
+                groups.add(group)
+        for group in groups:
+            try:
+                os.killpg(group, sig)
+            except OSError:
+                pass
+        return True
+    except RuntimeError:
+        for child in stopped:
+            try:
+                os.kill(child, signal.SIGCONT)
+            except OSError:
+                pass
+        return False
 
 
 def alive(pid) -> bool:
