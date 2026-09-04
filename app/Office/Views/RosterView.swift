@@ -85,14 +85,14 @@ struct RosterView: View {
         // decision this file gets to make once. The divider still moves it;
         // `minimal` has no divider to drag, so it takes the whole window.
         //
-        // The ceiling is the number that actually decides where it opens.
+        // The ceiling is the number that decides how far the divider can move.
         // `HSplitView` hands a flexible child its MAXIMUM and lets the detail
         // pane take what is left, so `idealWidth` was never what a person saw:
         // the roster opened at 560 for as long as the ceiling said 560, and
         // halving the ideal alone changed nothing on screen.
         .frame(minWidth: 140,
                idealWidth: Theme.rosterWidth,
-               maxWidth: store.layout == .minimal ? .infinity : Theme.rosterWidth,
+               maxWidth: store.layout == .minimal ? .infinity : Theme.rosterMaxWidth,
                maxHeight: .infinity)
         .background(Theme.roster)
     }

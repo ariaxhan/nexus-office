@@ -44,6 +44,7 @@ enum Theme {
     /// said 560; 152 was too narrow to read a repo name in. This is the middle,
     /// measured on screen rather than argued about in a comment.
     static let rosterWidth: CGFloat = 240
+    static let rosterMaxWidth: CGFloat = 520
 
     /// A fact's colour, from the tone its source put on it.
     ///
@@ -72,10 +73,34 @@ private struct TypeScaleKey: EnvironmentKey {
     static let defaultValue: Double = 1
 }
 
+private struct FontPresetKey: EnvironmentKey {
+    static let defaultValue: FontPreset = .system
+}
+private struct ThemeRevisionKey: EnvironmentKey { static let defaultValue = "" }
+
 extension EnvironmentValues {
     var typeScale: Double {
         get { self[TypeScaleKey.self] }
         set { self[TypeScaleKey.self] = newValue }
+    }
+
+    var fontPreset: FontPreset {
+        get { self[FontPresetKey.self] }
+        set { self[FontPresetKey.self] = newValue }
+    }
+    var themeRevision: String {
+        get { self[ThemeRevisionKey.self] }
+        set { self[ThemeRevisionKey.self] = newValue }
+    }
+}
+
+extension FontPreset {
+    var design: Font.Design {
+        switch self {
+        case .system: return .default
+        case .rounded: return .rounded
+        case .serif: return .serif
+        }
     }
 }
 
@@ -83,6 +108,8 @@ extension EnvironmentValues {
 /// persisted scale itself, so a leaf view cannot forget to thread it through.
 private struct OfficeFontModifier: ViewModifier {
     @Environment(\.typeScale) private var scale
+    @Environment(\.fontPreset) private var preset
+    @Environment(\.themeRevision) private var themeRevision
     let size: Double
     let weight: Font.Weight
     let design: Font.Design
@@ -90,7 +117,9 @@ private struct OfficeFontModifier: ViewModifier {
     let monospacedDigits: Bool
 
     func body(content: Content) -> some View {
-        var font = Font.system(size: size * scale, weight: weight, design: design)
+        _ = themeRevision
+        let chosenDesign = design == .default ? preset.design : design
+        var font = Font.system(size: size * scale, weight: weight, design: chosenDesign)
         if monospaced { font = font.monospaced() }
         if monospacedDigits { font = font.monospacedDigit() }
         return content.font(font)
@@ -144,7 +173,7 @@ extension Palette.Swatch {
 
     var nsColor: NSColor {
         NSColor(name: nil) { appearance in
-            let rgb = self.value(dark: appearance.isDark)
+            let rgb = Palette.surface(self, dark: appearance.isDark)
             return NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
         }
     }
@@ -181,6 +210,14 @@ extension Color {
         let hues: [Double] = [0.47, 0.72, 0.09, 0.60, 0.85, 0.33]
         let index = abs(seed.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) }) % hues.count
         return Color(hue: hues[index], saturation: 0.55, brightness: 0.78)
+    }
+
+    var hexRGB: String? {
+        guard let color = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        return String(format: "#%02x%02x%02x",
+                      Int((color.redComponent * 255).rounded()),
+                      Int((color.greenComponent * 255).rounded()),
+                      Int((color.blueComponent * 255).rounded()))
     }
 }
 

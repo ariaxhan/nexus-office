@@ -23,6 +23,8 @@ struct OfficeApp: App {
             MenuBarContents()
                 .officeFont(size: 13)
                 .environment(\.typeScale, Store.shared.typeScale)
+                .environment(\.fontPreset, Store.shared.fontPreset)
+                .environment(\.themeRevision, Store.shared.lightCanvas + Store.shared.darkCanvas)
                 .preferredColorScheme(Store.shared.appearance.colorScheme)
         } label: {
             Image(nsImage: MenuDot.image(for: Store.shared.dot))
@@ -151,6 +153,8 @@ struct RootView: View {
             .officeFont(size: 13)
             .background(Theme.ink)
             .environment(\.typeScale, store.typeScale)
+            .environment(\.fontPreset, store.fontPreset)
+            .environment(\.themeRevision, store.lightCanvas + store.darkCanvas)
             .preferredColorScheme(store.appearance.colorScheme)
             .task {
                 guard store.selection == nil else { return }

@@ -167,6 +167,9 @@ public final class Store {
     public var appearance: AppearancePreset = .system {
         didSet { prefs.set(appearance: appearance) }
     }
+    public var lightCanvas = Palette.defaultLightCanvas { didSet { prefs.set(lightCanvas: lightCanvas) } }
+    public var darkCanvas = Palette.defaultDarkCanvas { didSet { prefs.set(darkCanvas: darkCanvas) } }
+    public var fontPreset: FontPreset = .system { didSet { prefs.set(fontPreset: fontPreset) } }
     /// Which groups the roster draws.
     public var showBots = true {
         didSet { prefs.set(showBots: showBots) }
@@ -290,6 +293,9 @@ public final class Store {
         needsOnly = prefs.needsOnly
         layout = prefs.layout
         appearance = prefs.appearance
+        lightCanvas = prefs.lightCanvas
+        darkCanvas = prefs.darkCanvas
+        fontPreset = prefs.fontPreset
         showBots = prefs.showBots
         showWall = prefs.showWall
         typeScale = prefs.typeScale

@@ -44,6 +44,12 @@ public enum AppearancePreset: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+public enum FontPreset: String, CaseIterable, Identifiable, Sendable {
+    case system, rounded, serif
+    public var id: String { rawValue }
+    public var label: String { rawValue.capitalized }
+}
+
 /// The choices a person made about how the floor looks, kept between launches.
 ///
 /// Everything in here is a view of the same office: an order and a filter.
@@ -72,6 +78,9 @@ public final class Preferences {
     private static let needsOnlyKey = "settings.needsOnly.v1"
     private static let layoutKey = "settings.layout.v1"
     private static let appearanceKey = "settings.appearance.v1"
+    static let lightCanvasKey = "settings.canvas.light.v1"
+    static let darkCanvasKey = "settings.canvas.dark.v1"
+    private static let fontPresetKey = "settings.fontPreset.v1"
     private static let botsKey = "settings.pane.bots.v1"
     private static let wallKey = "settings.pane.wall.v1"
     private static let typeScaleKey = "settings.typeScale.v1"
@@ -87,6 +96,9 @@ public final class Preferences {
     public private(set) var needsOnly = false
     public private(set) var layout: LayoutPreset = .focus
     public private(set) var appearance: AppearancePreset = .system
+    public private(set) var lightCanvas = Palette.defaultLightCanvas
+    public private(set) var darkCanvas = Palette.defaultDarkCanvas
+    public private(set) var fontPreset: FontPreset = .system
     /// Which groups of the roster are drawn. Both default to on, and neither is
     /// allowed to hide a raised hand: a gate comes from the runtime and opens a
     /// sheet over the whole window, so turning a group off cannot bury one.
@@ -126,6 +138,9 @@ public final class Preferences {
             layout = preset
         }
         appearance = Self.appearance(defaults.string(forKey: Self.appearanceKey))
+        lightCanvas = Self.canvas(defaults.string(forKey: Self.lightCanvasKey), fallback: Palette.defaultLightCanvas)
+        darkCanvas = Self.canvas(defaults.string(forKey: Self.darkCanvasKey), fallback: Palette.defaultDarkCanvas)
+        fontPreset = defaults.string(forKey: Self.fontPresetKey).flatMap(FontPreset.init(rawValue:)) ?? .system
         // `bool(forKey:)` cannot tell "off" from "never set", and these two
         // default to ON, so an untouched install would come up with an empty
         // roster if this were read the way `needsOnly` is.
@@ -166,6 +181,27 @@ public final class Preferences {
 
     private static func appearance(_ raw: String?) -> AppearancePreset {
         raw.flatMap(AppearancePreset.init(rawValue:)) ?? .system
+    }
+
+    private static func canvas(_ raw: String?, fallback: String) -> String {
+        raw.flatMap(Faces.normalise(hex:)) ?? fallback
+    }
+
+    public func set(lightCanvas: String) {
+        guard let clean = Faces.normalise(hex: lightCanvas) else { return }
+        self.lightCanvas = clean
+        defaults?.set(clean, forKey: Self.lightCanvasKey)
+    }
+
+    public func set(darkCanvas: String) {
+        guard let clean = Faces.normalise(hex: darkCanvas) else { return }
+        self.darkCanvas = clean
+        defaults?.set(clean, forKey: Self.darkCanvasKey)
+    }
+
+    public func set(fontPreset: FontPreset) {
+        self.fontPreset = fontPreset
+        defaults?.set(fontPreset.rawValue, forKey: Self.fontPresetKey)
     }
 
     public func set(homeLastSeen: Date?) {

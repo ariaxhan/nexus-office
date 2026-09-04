@@ -66,6 +66,13 @@ public enum Palette {
             let a = one.relativeLuminance, b = other.relativeLuminance
             return (max(a, b) + 0.05) / (min(a, b) + 0.05)
         }
+
+        public func mixed(with other: RGB, amount: Double) -> RGB {
+            let amount = min(max(amount, 0), 1)
+            return RGB(red: red + (other.red - red) * amount,
+                       green: green + (other.green - green) * amount,
+                       blue: blue + (other.blue - blue) * amount)
+        }
     }
 
     /// One colour, in two rooms.
@@ -90,7 +97,9 @@ public enum Palette {
     /// The pane a thread is drawn on. Pure black in the dark room; warm paper
     /// rather than white in the light one, because a screen full of #ffffff
     /// under a chat is a screen that glares.
-    public static let ink = Swatch(light: RGB(hex: "#fbfaf8"), dark: RGB(white: 0))
+    public static let defaultLightCanvas = "#f8f2e8"
+    public static let defaultDarkCanvas = "#000000"
+    public static let ink = Swatch(light: RGB(hex: defaultLightCanvas), dark: RGB(white: 0))
 
     /// The left column.
     public static let roster = Swatch(light: RGB(hex: "#f1efeb"), dark: RGB(white: 0.055))
@@ -139,6 +148,31 @@ public enum Palette {
     public static let red = Swatch(light: RGB(hex: "#b81d1d"), dark: RGB(hex: "#ff5d5d"))
     public static let green = Swatch(light: RGB(hex: "#0d6a3d"), dark: RGB(hex: "#39d98a"))
     public static let blue = Swatch(light: RGB(hex: "#1854c4"), dark: RGB(hex: "#4c8dff"))
+
+    /// Custom canvases tint every structural surface together, preserving the
+    /// room's depth instead of replacing only the page and leaving cards from
+    /// another palette behind. Demo shots stay isolated from real preferences.
+    public static func surface(_ swatch: Swatch, dark: Bool) -> RGB {
+        let isDemo = CommandLine.arguments.contains("--demo")
+            || !(ProcessInfo.processInfo.environment["OFFICE_DEMO"] ?? "").isEmpty
+        guard !isDemo,
+              let hex = UserDefaults.standard.string(forKey: dark
+                  ? "settings.canvas.dark.v1" : "settings.canvas.light.v1")
+        else { return swatch.value(dark: dark) }
+        let canvas = RGB(hex: hex, fallback: ink.value(dark: dark))
+        let edge = RGB(white: dark ? 1 : 0)
+        let amount: Double
+        switch swatch {
+        case ink: amount = 0
+        case roster: amount = dark ? 0.055 : 0.04
+        case raised: amount = dark ? 0.105 : 0.08
+        case selected: amount = dark ? 0.165 : 0.12
+        case hairline: amount = dark ? 0.13 : 0.16
+        case well: amount = dark ? 0 : 0.12
+        default: return swatch.value(dark: dark)
+        }
+        return canvas.mixed(with: edge, amount: amount)
+    }
 
     // MARK: - the menu bar
 

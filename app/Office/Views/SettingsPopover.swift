@@ -35,6 +35,15 @@ struct SettingsPopover: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
+                label("typeface")
+                Picker("", selection: $store.fontPreset) {
+                    ForEach(FontPreset.allCases) { preset in Text(preset.label).tag(preset) }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 label("appearance")
                 Picker("", selection: $store.appearance) {
                     ForEach(AppearancePreset.allCases) { preset in
@@ -43,6 +52,14 @@ struct SettingsPopover: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
+                ColorPicker("Light canvas", selection: colorBinding(for: \Store.lightCanvas))
+                ColorPicker("Dark canvas", selection: colorBinding(for: \Store.darkCanvas))
+                Button("Reset colors") {
+                    store.lightCanvas = Palette.defaultLightCanvas
+                    store.darkCanvas = Palette.defaultDarkCanvas
+                }
+                .buttonStyle(.link)
+                .officeFont(size: 11)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -84,6 +101,11 @@ struct SettingsPopover: View {
                 .frame(width: 220, alignment: .leading)
         }
         .padding(16)
+    }
+
+    private func colorBinding(for keyPath: ReferenceWritableKeyPath<Store, String>) -> Binding<Color> {
+        Binding(get: { Color(hex: store[keyPath: keyPath]) },
+                set: { if let hex = $0.hexRGB { store[keyPath: keyPath] = hex } })
     }
 
     private var layoutBlurb: String {
