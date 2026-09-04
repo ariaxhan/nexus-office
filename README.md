@@ -226,7 +226,7 @@ false green this project exists to kill.
 ## The sandbox probes
 
 Transactional checks (a no-charge checkout, a care account lifecycle, the KR EN
-ES journeys) never run in the five-minute core. They run only as flights of the
+ES journeys, and Kakao plus SMS receipts) never run in the five-minute core. They run only as flights of the
 `sandbox-probes` plan, which `nexus/sandbox_probes.py` adds disabled, hourly or
 slower, with a timeout that ends before the next run. The client factory it
 loads sees only `NEXUS_SANDBOX_*` variables, so live credentials cannot reach it.
@@ -241,6 +241,11 @@ python3 -m nexus plans release sandbox-probes                       # lift a qua
 python3 -m nexus retry <flight>                                     # one more attempt
 python3 -m nexus log <flight>                                       # retained evidence
 ```
+
+The factory must return `checkout`, `care`, `journey`, `browser_factory`,
+`messaging`, and `messaging_destinations`. Missing adapters fail before the
+flight can report success. The messaging probe shares the flight's run id,
+requires sandbox-marked Kakao and SMS destinations, and caps the run at two sends.
 
 Each flight prints one JSON report under a fresh `sandbox-<uuid>` run id, with
 every probe's redacted evidence rows; that report is the flight log the tower

@@ -20,14 +20,15 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import care_probe, checkout_probe, journeys
+from . import care_probe, checkout_probe, journeys, messaging
 
 PLAN_NAME = "sandbox-probes"
 MIN_EVERY_S = 3600.0
 MAX_TIMEOUT_S = 1800.0
 CLIENTS_ENV = "NEXUS_SANDBOX_CLIENTS"
 ENV_PREFIX = "NEXUS_SANDBOX_"
-REQUIRED_CLIENTS = frozenset({"checkout", "care", "journey", "browser_factory"})
+REQUIRED_CLIENTS = frozenset({"checkout", "care", "journey", "browser_factory",
+                              "messaging", "messaging_destinations"})
 
 
 def plan_definition(every_s: float = MIN_EVERY_S, timeout_s: float = 600.0) -> dict:
@@ -98,6 +99,9 @@ def run(clients: dict, run_id: str, timeout_s: float, evidence_dir: Path) -> dic
         except journeys.JourneyFailure as failure:
             report["probes"][name] = _rows((failure.evidence,))
             report["ok"] = False
+        except messaging.ProbeFailure as failure:
+            report["probes"][name] = _rows(failure.evidence)
+            report["ok"] = False
     return report
 
 
@@ -113,6 +117,10 @@ def _probes(clients: dict, run_id: str, timeout_s: float, evidence_dir: Path) ->
         probes["journeys"] = lambda: list(journeys.run_journeys(
             clients["journey"], clients["browser_factory"], evidence_dir / run_id,
             timeout_s=timeout_s))
+    if "messaging" in clients:
+        probes["messaging"] = lambda: _rows(messaging.run_messaging_probe(
+            clients["messaging"], clients["messaging_destinations"],
+            timeout_s=timeout_s, run_id=run_id))
     return probes
 
 

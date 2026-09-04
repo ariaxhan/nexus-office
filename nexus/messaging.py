@@ -74,10 +74,11 @@ def run_messaging_probe(provider: MessagingProvider,
                         destinations: dict[str, Destination],
                         timeout_s: float = 30,
                         channels: tuple[str, ...] = CHANNELS,
+                        run_id: str | None = None,
                         ) -> tuple[ReceiptEvidence, ...]:
     """Send at most one sandbox delivery per channel and verify its receipts."""
     selected = _validate_probe(destinations, channels, timeout_s)
-    probe_id = f"messaging-{uuid.uuid4().hex}"
+    probe_id = run_id or f"messaging-{uuid.uuid4().hex}"
     sent = _send(provider, probe_id, channels, selected)
     evidence = tuple(
         _verify_receipts(provider, probe_id, channel, destination, provider_id,

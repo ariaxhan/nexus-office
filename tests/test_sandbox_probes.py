@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from nexus import sandbox_probes as sp  # noqa: E402
 from nexus.checkout_probe import Checkout  # noqa: E402
 from nexus.ledger import Ledger, loads  # noqa: E402
+from nexus.messaging import Destination, ProviderReceipt  # noqa: E402
 
 TRANSACTIONAL = {"nexus.checkout_probe", "nexus.care_probe", "nexus.journeys",
                  "nexus.sandbox_probes", "checkout_probe", "care_probe", "journeys",
@@ -136,9 +137,35 @@ class IsolationTest(unittest.TestCase):
         self.assertNotIn(secret, output.getvalue())
 
     def test_all_three_transactional_clients_are_required(self):
-        with self.assertRaisesRegex(ValueError, "care, journey"):
+        with self.assertRaisesRegex(ValueError, "care, journey, messaging"):
             sp.load_clients({sp.CLIENTS_ENV: f"{__name__}:clients",
                              "NEXUS_SANDBOX_KEY": "test"})
+
+    def test_scheduler_runs_messaging_with_the_shared_run_id(self):
+        class Messages:
+            def __init__(self):
+                self.receipts = {}
+
+            def send(self, channel, destination, body, run_id):
+                self.receipts[f"{channel}-id"] = [
+                    ProviderReceipt("accepted", f"{channel}-accepted"),
+                    ProviderReceipt("delivered", f"{channel}-delivered"),
+                ]
+                return f"{channel}-id"
+
+            def wait_receipt(self, provider_id, timeout_s):
+                return self.receipts[provider_id].pop(0)
+
+        clients = {
+            "messaging": Messages(),
+            "messaging_destinations": {
+                "kakao": Destination("kakao-sandbox"),
+                "sms": Destination("15550000123"),
+            },
+        }
+        rows = sp._probes(clients, "sandbox-fixed", 8, pathlib.Path("unused"))["messaging"]()
+        self.assertEqual({"sandbox-fixed"}, {row["run_id"] for row in rows})
+        self.assertEqual({"kakao", "sms"}, {row["channel"] for row in rows})
 
     def test_run_refuses_without_a_client_factory(self):
         for environ in ({}, {sp.CLIENTS_ENV: "nowhere"}):

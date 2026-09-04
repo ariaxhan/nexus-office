@@ -56,6 +56,14 @@ class MessagingProbeTest(unittest.TestCase):
         self.assertTrue(next(iter(run_ids)).startswith("messaging-"))
         self.assertTrue(all(row[3] in row[2] for row in provider.sent))
 
+    def test_scheduler_can_bind_receipts_to_its_run_id(self):
+        provider = Provider()
+        evidence = run_messaging_probe(
+            provider, DESTINATIONS, timeout_s=8, run_id="sandbox-fixed"
+        )
+        self.assertEqual({"sandbox-fixed"}, {row.run_id for row in evidence})
+        self.assertEqual({"sandbox-fixed"}, {row[3] for row in provider.sent})
+
     def test_terminal_failure_is_mapped_for_each_channel(self):
         self.assertEqual("terminal_failure", receipt_state("failed"))
         provider = Provider({
