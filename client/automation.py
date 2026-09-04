@@ -159,7 +159,7 @@ def _row(receipt: dict, issues: dict, now_iso: str) -> dict:
 
 
 def build(by_repo: dict, stations: list, sections: dict, counts: dict,
-          now_iso: str = "", board: dict | None = None) -> dict:
+          now_iso: str = "", board: dict | None = None, work: dict | None = None) -> dict:
     """The whole automation page, from what the snapshot already measured.
 
     `by_repo`  the runner's receipts, grouped and newest-first, from office-sync
@@ -253,6 +253,7 @@ def build(by_repo: dict, stations: list, sections: dict, counts: dict,
         # "that is everything that happened".
         "activity_dropped": dropped,
         "runs": dict(board or {}),
+        "work": dict(work or {}),
     }
 
 

@@ -343,7 +343,7 @@ struct RosterView: View {
                     Text("work board")
                         .officeFont(size: 12.5, weight: .medium)
                         .foregroundStyle(Theme.text)
-                    Text(workBoardLine(page.runs))
+                    Text(workBoardLine(page.work, runs: page.runs))
                         .officeFont(size: 11)
                         .foregroundStyle(page.needsSomebody ? Theme.amber.opacity(0.85) : Theme.dim)
                         .lineLimit(2)
@@ -363,11 +363,12 @@ struct RosterView: View {
         .buttonStyle(.plain)
     }
 
-    private func workBoardLine(_ board: RunBoard) -> String {
-        if board.state != "ok" { return board.detail.isEmpty ? "not read yet" : board.detail }
-        var parts = ["\(board.done) done", "\(board.open) open"]
-        if board.active > 0 { parts.append("\(board.active) running") }
-        if board.needs > 0 { parts.append("\(board.needs) needs you") }
+    private func workBoardLine(_ work: WorkBoard, runs: RunBoard) -> String {
+        if work.state != "ok" { return work.detail.isEmpty ? "not read yet" : work.detail }
+        let remaining = work.products.reduce(0) { $0 + $1.remaining }
+        var parts = ["\(remaining) acceptance items remain"]
+        if runs.active > 0 { parts.append("\(runs.active) running") }
+        if runs.needs > 0 { parts.append("\(runs.needs) severe") }
         return parts.joined(separator: " · ")
     }
 

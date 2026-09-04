@@ -3,6 +3,7 @@ import SwiftUI
 struct AutomationView: View {
     @Bindable var store: Store
     private var board: RunBoard { store.automation.runs }
+    private var work: WorkBoard { store.automation.work }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -10,23 +11,14 @@ struct AutomationView: View {
             Divider().overlay(Theme.hairline)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    summary
-                    if board.state != "ok" {
-                        notice(board.detail.isEmpty ? "the run ledger is not available" : board.detail,
+                    if work.state != "ok" {
+                        notice(work.detail.isEmpty ? "product state is not available" : work.detail,
                                color: Theme.amber)
-                    } else if board.families.isEmpty {
-                        notice("No automated run has finished in the last 24 hours.", color: Theme.faint)
                     } else {
-                        group("Needs you", families: board.families.filter(\.needs), color: Theme.red)
-                        group("In progress", families: board.families.filter { !$0.needs && $0.active > 0 },
-                              color: Theme.blue, empty: "Nothing running right now.")
-                        group("Still open", families: board.families.filter {
-                            !$0.needs && $0.active == 0 && $0.open > 0
-                        }, color: Theme.amber, empty: "No queued work.")
-                        group("Recently done", families: board.families.filter {
-                            !$0.needs && $0.active == 0 && $0.open == 0
-                        }, color: Theme.green)
+                        products
+                        recentChanges
                     }
+                    automationHistory
                 }
                 .padding(18)
                 .frame(maxWidth: 820, alignment: .leading)
@@ -41,8 +33,8 @@ struct AutomationView: View {
         HStack(spacing: 9) {
             Circle().fill(board.needs > 0 ? Theme.red : (board.active > 0 ? Theme.blue : Theme.green))
                 .frame(width: 9, height: 9)
-            Text("Work board").officeFont(size: 14, weight: .semibold).foregroundStyle(Theme.text)
-            Text("last 24 hours").officeFont(size: 11).foregroundStyle(Theme.faint)
+            Text("Work").officeFont(size: 14, weight: .semibold).foregroundStyle(Theme.text)
+            Text("what exists now").officeFont(size: 11).foregroundStyle(Theme.faint)
             Spacer()
             Button("close") { store.automationOpen = false }
                 .buttonStyle(.plain).officeFont(size: 11).foregroundStyle(Theme.dim)
@@ -51,12 +43,48 @@ struct AutomationView: View {
         .frame(height: 52)
     }
 
-    private var summary: some View {
-        HStack(spacing: 8) {
-            Metric(value: board.done, label: "done", color: Theme.green)
-            Metric(value: board.active, label: "running", color: Theme.blue)
-            Metric(value: board.open, label: "open", color: Theme.text)
-            Metric(value: board.needs, label: "needs you", color: board.needs > 0 ? Theme.red : Theme.faint)
+    private var products: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What exists now").officeFont(size: 11, weight: .semibold).foregroundStyle(Theme.text)
+            if work.products.isEmpty {
+                notice("Every tracked product acceptance item is complete.", color: Theme.green)
+            } else {
+                ForEach(work.products) { product in ProductRow(product: product) }
+            }
+        }
+    }
+
+    private var recentChanges: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent changes").officeFont(size: 11, weight: .semibold).foregroundStyle(Theme.text)
+            if work.changes.isEmpty {
+                Text("No product change landed in the last 24 hours.")
+                    .officeFont(size: 12).foregroundStyle(Theme.faint)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(work.changes) { change in ChangeRow(change: change) }
+                }
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
+            }
+        }
+    }
+
+    private var automationHistory: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().overlay(Theme.hairline).padding(.vertical, 4)
+            HStack {
+                Text("Automation history").officeFont(size: 11, weight: .semibold)
+                    .foregroundStyle(Theme.faint)
+                Spacer()
+                Text("\(board.active) running · \(board.done) active workflows completed")
+                    .officeFont(size: 10.5).foregroundStyle(Theme.faint)
+            }
+            if board.state != "ok" {
+                notice(board.detail.isEmpty ? "the run ledger is not available" : board.detail,
+                       color: Theme.amber)
+            } else {
+                group("", families: board.families, color: Theme.faint)
+            }
         }
     }
 
@@ -89,19 +117,82 @@ struct AutomationView: View {
     }
 }
 
-private struct Metric: View {
-    let value: Int
-    let label: String
-    let color: Color
+private struct ProductRow: View {
+    let product: WorkBoard.Product
+    @State private var open = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("\(value)").officeFont(size: 19, weight: .semibold, design: .monospaced)
-                .foregroundStyle(color)
-            Text(label).officeFont(size: 10.5, weight: .medium).foregroundStyle(Theme.faint)
+        VStack(alignment: .leading, spacing: 8) {
+            Button { open.toggle() } label: {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 8) {
+                            Text(product.name).officeFont(size: 13, weight: .semibold)
+                                .foregroundStyle(Theme.text)
+                            Text(product.status).officeFont(size: 11.5).foregroundStyle(Theme.green)
+                        }
+                        Text(product.remaining == 1 ? "1 acceptance item remains" :
+                             "\(product.remaining) acceptance items remain")
+                            .officeFont(size: 11.5).foregroundStyle(Theme.amber)
+                    }
+                    Spacer()
+                    Text(open ? "less" : "details").officeFont(size: 11).foregroundStyle(Theme.faint)
+                }
+                .padding(13).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if open {
+                VStack(alignment: .leading, spacing: 7) {
+                    fact("changed", product.changed)
+                    fact("not done", product.blocked)
+                    fact("next", product.next)
+                    if !product.proof.isEmpty {
+                        HStack(spacing: 10) {
+                            Text("proof").frame(width: 58, alignment: .leading)
+                                .officeFont(size: 10.5, weight: .semibold).foregroundStyle(Theme.faint)
+                            ForEach(product.proof) { proof in
+                                if let url = URL(string: proof.url) {
+                                    Link(proof.label + " ↗", destination: url)
+                                        .officeFont(size: 11.5).foregroundStyle(Theme.blue)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 13).padding(.bottom, 13)
+            }
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.raised))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
+    }
+
+    private func fact(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(label).frame(width: 58, alignment: .leading)
+                .officeFont(size: 10.5, weight: .semibold).foregroundStyle(Theme.faint)
+            Text(value.isEmpty ? "no verified change recorded" : value)
+                .officeFont(size: 11.5).foregroundStyle(Theme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct ChangeRow: View {
+    let change: WorkBoard.Change
+    var body: some View {
+        HStack(spacing: 9) {
+            Text("✓").officeFont(size: 12, weight: .semibold).foregroundStyle(Theme.green)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(change.summary).officeFont(size: 12).foregroundStyle(Theme.text).lineLimit(2)
+                Text(change.project).officeFont(size: 10.5).foregroundStyle(Theme.faint)
+            }
+            Spacer()
+            Text(StateRules.moment(change.at)).officeFont(size: 10.5).foregroundStyle(Theme.faint)
+            if let url = URL(string: change.url) {
+                Link("proof ↗", destination: url).officeFont(size: 10.5).foregroundStyle(Theme.blue)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
     }
 }
 

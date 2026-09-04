@@ -27,6 +27,7 @@ public struct Automation: Decodable, Equatable {
     public var reached: Reached = Reached()
     public var activity: [Activity] = []
     public var runs: RunBoard = RunBoard()
+    public var work: WorkBoard = WorkBoard()
     /// How many rows the server left off the end. Drawn, always: a list capped
     /// in silence reads as "that is everything that happened".
     public var activityDropped: Int = 0
@@ -41,7 +42,7 @@ public struct Automation: Decodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case state, headline, how, schedule, now, trigger, reached, activity, runs
+        case state, headline, how, schedule, now, trigger, reached, activity, runs, work
         case activityDropped = "activity_dropped"
     }
 
@@ -61,6 +62,7 @@ public struct Automation: Decodable, Equatable {
         activity = c.list(.activity, Lenient<Activity>.self).compactMap(\.value)
         activityDropped = c.int(.activityDropped) ?? 0
         runs = ((try? c.decodeIfPresent(RunBoard.self, forKey: .runs)) ?? nil) ?? RunBoard()
+        work = ((try? c.decodeIfPresent(WorkBoard.self, forKey: .work)) ?? nil) ?? WorkBoard()
     }
 
     // MARK: - when it looks
@@ -269,6 +271,46 @@ public struct Automation: Decodable, Equatable {
             commentURL = c.str(.commentURL) ?? ""
             commentAt = c.str(.commentAt) ?? ""
         }
+    }
+}
+
+public struct WorkBoard: Decodable, Equatable {
+    public var state = "missing"
+    public var detail = ""
+    public var products: [Product] = []
+    public var changes: [Change] = []
+    public init() {}
+
+    public struct Product: Decodable, Equatable, Identifiable {
+        public var id = ""
+        public var name = ""
+        public var status = ""
+        public var ready = 0
+        public var total = 0
+        public var remaining = 0
+        public var changed = ""
+        public var blocked = ""
+        public var next = ""
+        public var proof: [Proof] = []
+        public var updatedAt = ""
+        enum CodingKeys: String, CodingKey {
+            case id, name, status, ready, total, remaining, changed, blocked, next, proof
+            case updatedAt = "updated_at"
+        }
+    }
+
+    public struct Proof: Decodable, Equatable, Identifiable {
+        public var label = ""
+        public var url = ""
+        public var id: String { "\(label)@\(url)" }
+    }
+
+    public struct Change: Decodable, Equatable, Identifiable {
+        public var id = ""
+        public var project = ""
+        public var summary = ""
+        public var at = ""
+        public var url = ""
     }
 }
 
