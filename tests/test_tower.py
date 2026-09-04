@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -188,6 +189,40 @@ class Budgets(TowerCase):
         self.assertEqual("failed", row["state"])
         self.assertIn('"code": "timeout"', row["result"])
         self.assertFalse(fl.alive(row["pid"]))
+
+    def test_budget_cancellation_kills_background_work_before_releasing_its_lease(self):
+        child_file = os.path.join(self.dir, "background-pid")
+        self.plan(cmd=f"sleep 60 & echo $! > {child_file}; wait", outputs=[],
+                  resources=["shared-repo"], schedule={"every": 3600},
+                  budget={"timeout_s": 1, "max_retries": 0})
+        self.tick()
+        flight = self.led.flights()[0]
+        self.assertTrue(wait_for(lambda: os.path.exists(child_file)))
+        with open(child_file) as handle:
+            child = int(handle.read())
+
+        self.tick(now=time.time() + 5)
+
+        row = self.led.flight(flight["id"])
+        self.assertEqual("failed", row["state"])
+        self.assertFalse(fl.alive(child))
+        self.assertEqual([], list(self.led.leases()))
+        self.assertFalse(os.path.exists(row["workspace"]))
+
+    def test_unconfirmed_budget_teardown_keeps_state_lease_and_workspace(self):
+        self.plan(cmd="sleep 60", outputs=[], resources=["shared-repo"],
+                  budget={"timeout_s": 1})
+        self.tick()
+        flight = self.led.flights()[0]
+        self.assertTrue(wait_for(lambda: self.led.flight(flight["id"])["pid"]))
+
+        with mock.patch("nexus.tower.fl.kill", return_value=False):
+            self.tick(now=time.time() + 5)
+
+        row = self.led.flight(flight["id"])
+        self.assertEqual("resolving", row["state"])
+        self.assertEqual(1, len(self.led.leases()))
+        self.assertTrue(os.path.isdir(row["workspace"]))
 
     def test_a_failing_script_fails_with_its_exit_code_not_its_output(self):
         self.plan(cmd="echo ERROR; exit 3", outputs=[])

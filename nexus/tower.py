@@ -122,7 +122,8 @@ def _enforce_budgets(ledger, now):
         started = flight["started_at"] or flight["created_at"]
         if started + timeout_s > now:
             continue
-        fl.kill(flight["pid"])
+        if not _confirm_teardown(ledger, flight, now, "timeout"):
+            continue
         if ledger.fail(flight["id"], "timeout", f"over {timeout_s}s budget",
                        expect="running", now=now):
             _finish_failed(ledger, flight, now)
@@ -142,6 +143,8 @@ def _reap(ledger, now, root):
         if error == "missing_result":
             continue
         if error is not None:
+            if not _confirm_teardown(ledger, flight, now, error):
+                continue
             if ledger.fail(flight["id"], error, f"unreadable {fl.RESULT_NAME}",
                            expect="running", now=now):
                 _finish_failed(ledger, flight, now)
@@ -164,6 +167,8 @@ def _reap(ledger, now, root):
             continue
         err = result.get("error") or {}
         code = err.get("code") or "unknown"
+        if not _confirm_teardown(ledger, flight, now, code):
+            continue
         if ledger.fail(flight["id"], code, str(err.get("detail", "")), expect="running",
                        now=now, cost=result.get("cost"), error=err):
             _finish_failed(ledger, flight, now)
@@ -191,12 +196,21 @@ def _reconcile_vanished(ledger, now, root):
 
 def _finish_failed(ledger, flight, now):
     """A failed flight leaves nothing behind but its log: process, leases, workspace go."""
-    fl.kill(flight["pid"])
     ledger.release_leases(flight["id"], now=now)
     workspace = flight["workspace"]
     if workspace and os.path.isdir(workspace):
         if _keep_log(ledger, flight["id"], workspace):
             shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _confirm_teardown(ledger, flight, now, reason):
+    if fl.kill(flight["pid"]):
+        return True
+    ledger.event("flight.teardown_unconfirmed", flight["id"],
+                 {"reason": reason}, "tower", now)
+    ledger.set_state(flight["id"], "resolving", expect="running", now=now,
+                     resolution_step="teardown_unconfirmed")
+    return False
 
 
 def logs_root(ledger):
