@@ -315,6 +315,8 @@ class Ledger:
                         c.execute(f"ALTER TABLE {table} ADD COLUMN \"{column}\" TEXT")
             present = {r[0] for r in c.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
+            if "objectives" in present:
+                self._inherit_v2_objectives(c)
             for table in LEGACY_TABLES:
                 if table not in present:
                     continue
@@ -338,6 +340,24 @@ class Ledger:
                     c.execute(f"ALTER TABLE {table} DROP COLUMN objective_id")
             self._backfill_state_events(c)
             c.execute("PRAGMA user_version=2")
+
+    def _inherit_v2_objectives(self, c):
+        """Denormalize each referenced v1 objective before its table is dropped."""
+        for table in V2_COLUMNS:
+            rows = c.execute(
+                f"SELECT t.id, t.objective_id, o.id, o.statement, o.autonomy_policy "
+                f"FROM {table} t LEFT JOIN objectives o ON o.id=t.objective_id "
+                "WHERE t.objective_id IS NOT NULL"
+            ).fetchall()
+            for row in rows:
+                if row[2] is None:
+                    raise LedgerError(
+                        f"{table} {row[0]} references missing objective {row[1]}, keeping v1"
+                    )
+                c.execute(
+                    f"UPDATE {table} SET objective=?, autonomy=? WHERE id=?",
+                    (row[3], row[4], row[0]),
+                )
 
     def _backfill_state_events(self, c):
         """A v1 row whose state has no event gets one, from nothing: v2 reads

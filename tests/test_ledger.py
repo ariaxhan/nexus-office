@@ -255,9 +255,45 @@ class Parity(unittest.TestCase):
         self.assertEqual({"objective": 1, "observation": 1, "radio.message": 2,
                           "gate": 1, "radio.delivered": 1}, counts)
 
+        expected = ("keep main green", '{"gate": "risky"}')
+        self.assertEqual(expected, tuple(led.conn.execute(
+            "SELECT objective, autonomy FROM plans WHERE id='plan_1'"
+        ).fetchone()))
+        self.assertEqual(expected, tuple(led.conn.execute(
+            "SELECT objective, autonomy FROM tasks WHERE id='task_1'"
+        ).fetchone()))
+
         bak = sqlite3.connect(old + ".bak-1")
         self.assertEqual(1, bak.execute("PRAGMA user_version").fetchone()[0])
         bak.close()
+
+    def test_missing_objective_reference_rolls_back_v2(self):
+        d = tempfile.mkdtemp(prefix="nexus-parity-")
+        self.addCleanup(shutil.rmtree, d, True)
+        old = build(os.path.join(d, "old.sqlite"))
+        conn = sqlite3.connect(old)
+        conn.execute("UPDATE tasks SET objective_id='missing'")
+        conn.commit()
+        conn.close()
+
+        with self.assertRaisesRegex(LedgerError, "references missing objective"):
+            Ledger(old)
+
+        conn = sqlite3.connect(old)
+        self.addCleanup(conn.close)
+        self.assertEqual(1, conn.execute("PRAGMA user_version").fetchone()[0])
+        self.assertIsNotNone(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='objectives'"
+        ).fetchone())
+        self.assertNotIn("objective", {
+            row[1] for row in conn.execute("PRAGMA table_info(tasks)")
+        })
+        self.assertEqual("obj_1", conn.execute(
+            "SELECT objective_id FROM plans WHERE id='plan_1'"
+        ).fetchone()[0])
+        self.assertEqual("missing", conn.execute(
+            "SELECT objective_id FROM tasks WHERE id='task_1'"
+        ).fetchone()[0])
 
 
 if __name__ == "__main__":
