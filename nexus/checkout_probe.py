@@ -46,8 +46,7 @@ def run_checkout_probe(client: CheckoutClient, *, amount: int = 0,
                        success_redirect: str = "https://example.invalid/probe/success",
                        timeout_s: float = 30) -> tuple[Evidence, ...]:
     """Create, verify, and expire one uniquely identified sandbox checkout."""
-    if amount < 0 or not currency.strip() or not success_redirect.strip() or timeout_s <= 0:
-        raise ValueError("amount, currency, redirect, and timeout must be valid")
+    _check_arguments(amount, currency, success_redirect, timeout_s)
     request = {
         "run_id": f"checkout-{uuid.uuid4().hex}",
         "amount": amount,
@@ -66,15 +65,24 @@ def run_checkout_probe(client: CheckoutClient, *, amount: int = 0,
                                checkout, request, _safe_error(exc, checkout)))
     finally:
         if checkout is not None:
-            try:
-                client.expire_checkout(checkout.identifier)
-                evidence.append(_event("cleanup", checkout, request))
-            except Exception as exc:
-                evidence.append(_event("cleanup", checkout, request,
-                                       _safe_error(exc, checkout)))
+            _expire(client, checkout, request, evidence)
     if any(row.error for row in evidence):
         raise ProbeFailure(tuple(evidence))
     return tuple(evidence)
+
+
+def _check_arguments(amount: int, currency: str, redirect: str, timeout_s: float) -> None:
+    if amount < 0 or not currency.strip() or not redirect.strip() or timeout_s <= 0:
+        raise ValueError("amount, currency, redirect, and timeout must be valid")
+
+
+def _expire(client: CheckoutClient, checkout: Checkout, request: Mapping[str, object],
+            evidence: list[Evidence]) -> None:
+    try:
+        client.expire_checkout(checkout.identifier)
+        evidence.append(_event("cleanup", checkout, request))
+    except Exception as exc:
+        evidence.append(_event("cleanup", checkout, request, _safe_error(exc, checkout)))
 
 
 def _verify(checkout: Checkout, request: Mapping[str, object], deadline: float) -> None:
