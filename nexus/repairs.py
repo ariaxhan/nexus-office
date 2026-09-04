@@ -6,7 +6,7 @@ import json
 import subprocess
 from collections.abc import Callable, Iterable, Mapping
 
-from .probes import SCHEMA, build_probe_output
+from .probes import CHECK_OWNERS, SCHEMA, build_probe_output
 
 MARKER_PREFIX = "nexus-repair-check:"
 REPAIR_LABELS = {"p0", "ready"}
@@ -42,10 +42,23 @@ def reconcile_probe_output(
         raise RepairError("checks must be an array")
     try:
         rows = build_probe_output(checks)["checks"]
+        rows = [_canonical_proof(row) for row in rows]
     except (TypeError, ValueError) as exc:
         raise RepairError(str(exc)) from exc
     call = request or _gh
     return [_apply_proof(row, call) for row in rows]
+
+
+def _canonical_proof(proof: dict) -> dict:
+    check_id = proof["check_id"]
+    owner = CHECK_OWNERS.get(check_id)
+    if owner is None:
+        raise ValueError(f"missing owner for check_id: {check_id}")
+    if proof["owner"] != owner:
+        raise ValueError(
+            f"owner for check_id {check_id} must be canonical repository {owner}"
+        )
+    return {**proof, "owner": owner}
 
 
 def _apply_proof(proof: dict, call: Callable[[list[str]], object]) -> dict:
@@ -57,12 +70,15 @@ def _apply_proof(proof: dict, call: Callable[[list[str]], object]) -> dict:
               if isinstance(label, Mapping) and label.get("name")}
     passing = proof["state"] == "pass"
     wanted_state = "closed" if passing else "open"
-    wanted_labels = labels if passing else labels | REPAIR_LABELS
+    wanted_labels = labels - REPAIR_LABELS if passing else labels | REPAIR_LABELS
     if issue.get("state") == wanted_state and labels == wanted_labels:
         return _proof_result(proof, "unchanged")
     args = ["PATCH", path, "state=" + wanted_state]
-    if not passing:
-        args.extend("labels[]=" + label for label in sorted(wanted_labels))
+    if labels != wanted_labels:
+        if wanted_labels:
+            args.extend("labels[]=" + label for label in sorted(wanted_labels))
+        else:
+            args.append("labels[]")
     call(args)
     return _proof_result(proof, "closed" if passing else "requeued")
 
@@ -150,7 +166,7 @@ def _gh(args: list[str]):
     command = ["gh", "api", "--method", args[0], args[1]]
     for value in args[2:]:
         if value != "--paginate":
-            command.extend(["-f", value])
+            command.extend(["-F" if value.endswith("[]") else "-f", value])
     if "--paginate" in args:
         command.extend(["--paginate", "--slurp"])
     proc = subprocess.run(command, capture_output=True, text=True, timeout=60)
