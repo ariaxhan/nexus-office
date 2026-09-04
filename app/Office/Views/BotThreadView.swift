@@ -170,6 +170,10 @@ struct BotThreadView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Selection belongs to the transcript, not to each Markdown
+                // paragraph. A drag can therefore cross block and bubble
+                // boundaries before the standard Copy command is used.
+                .textSelection(.enabled)
                 // Where the bottom of everything sits, measured against the
                 // window onto it. `onScrollGeometryChange` would say this in one
                 // line and is macOS 15; this is the same fact, read the way a
@@ -511,25 +515,16 @@ struct Bubble: View {
     /// where the marks live and the one that owns them is chosen at the call
     /// site. Nothing to react to when it is absent.
     var reactions: Reactions?
+    @State private var copied = false
 
     var body: some View {
         HStack {
             if turn.isUser { Spacer(minLength: 60) }
             VStack(alignment: turn.isUser ? .trailing : .leading, spacing: 3) {
                 if !turn.content.isEmpty || !turn.hasPhoto {
-                    if let reactions, !thread.isEmpty {
-                        ReactionMenu(reactions: reactions, thread: thread, turn: turn) {
-                            bubble
-                        }
-                        // Under the bubble rather than overlapping its corner:
-                        // an overlay would sit on top of the last line of a one
-                        // line reply, and the mark is worth less than the words.
-                        ReactionBadge(reactions: reactions, thread: thread,
-                                      turn: turn, color: color)
-                            .padding(.horizontal, 4)
-                    } else {
-                        bubble
-                    }
+                    bubbleWithMenu
+                    actions
+                        .padding(.horizontal, 4)
                 }
                 // The picture itself is gone: the office carried the bytes and
                 // never wrote them down, so this says a photo went and stops
@@ -543,6 +538,43 @@ struct Bubble: View {
             }
             .frame(maxWidth: 560, alignment: turn.isUser ? .trailing : .leading)
             if !turn.isUser { Spacer(minLength: 60) }
+        }
+    }
+
+    @ViewBuilder private var bubbleWithMenu: some View {
+        if let reactions, !thread.isEmpty {
+            ReactionMenu(reactions: reactions, thread: thread, turn: turn) { bubble }
+        } else {
+            bubble
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 7) {
+            if let reactions, !thread.isEmpty {
+                ReactionBadge(reactions: reactions, thread: thread, turn: turn, color: color)
+            }
+            Button { copy() } label: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .officeSymbol(size: 9, weight: .semibold)
+                    .foregroundStyle(copied ? Theme.green : Theme.faint)
+                    .frame(width: 18, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(copied ? "Copied" : "Copy message")
+            .accessibilityLabel(copied ? "Message copied" : "Copy message")
+        }
+    }
+
+    private func copy() {
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(turn.content, forType: .string)
+        copied = true
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            copied = false
         }
     }
 
