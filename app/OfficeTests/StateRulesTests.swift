@@ -1010,6 +1010,15 @@ final class StateRulesTests: XCTestCase {
         XCTAssertEqual(StateRules.sectionOrder([b, a]).map(\.id), ["aaa", "bbb"])
     }
 
+    func testPodcastsStayAtTheTopOfTheWall() {
+        let ordered = StateRules.sectionOrder([
+            section("clock", state: "ok", needs: 5),
+            section("podcasts", state: "ok"),
+            section("mail", state: "error", needs: 2)
+        ])
+        XCTAssertEqual(ordered.map(\.id), ["podcasts", "clock", "mail"])
+    }
+
     func testTheWallTotalAndItsLine() {
         let wall = [section("clock", state: "ok", needs: 5),
                     section("mail", state: "error", needs: 2),

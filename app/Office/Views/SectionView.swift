@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 /// One thing on the wall, opened.
 ///
@@ -213,9 +214,18 @@ enum SectionRows {
 /// worse than a row that draws no button.
 struct SectionRowView: View {
     let row: SectionRowItem
+    @State private var audioPlayer: AVPlayer?
+
+    init(row: SectionRowItem) {
+        self.row = row
+        let destination = row.destination
+        _audioPlayer = State(initialValue: destination?.pathExtension.lowercased() == "mp3"
+            ? AVPlayer(url: destination!) : nil)
+    }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 title
                 if !row.subtitle.isEmpty {
@@ -235,6 +245,12 @@ struct SectionRowView: View {
             if !row.badge.isEmpty {
                 Pill(text: row.badge, color: Theme.tone(StateRules.tone(row.tone)))
             }
+            }
+            if let audioPlayer {
+                VideoPlayer(player: audioPlayer)
+                    .frame(height: 54)
+                    .accessibilityLabel("Play \(row.title)")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
@@ -243,7 +259,12 @@ struct SectionRowView: View {
     }
 
     @ViewBuilder private var title: some View {
-        if let destination = row.destination {
+        if audioPlayer != nil {
+            Text(row.title)
+                .officeFont(size: 12.5, weight: .medium)
+                .foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if let destination = row.destination {
             Link(row.title, destination: destination)
                 .officeFont(size: 12.5, weight: .medium)
                 .foregroundStyle(Theme.blue)

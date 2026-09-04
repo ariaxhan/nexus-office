@@ -723,6 +723,7 @@ public enum StateRules {
     }
 
     private static func rank(_ section: Section) -> Int {
+        if section.id == "podcasts" { return -1 }
         if section.needs > 0 { return 0 }
         return section.isOK ? 2 : 1
     }
