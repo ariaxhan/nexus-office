@@ -135,13 +135,12 @@ def _check_timeout(started: float, timeout_s: float) -> None:
 def _evidence(browser: Browser, locale: str, step: str, run_id: str,
               root: Path, exc: Exception) -> FailureEvidence:
     shot = root / f"{run_id}-{step}.png"
-    screenshot = ""
+    screenshot = str(shot)
     try:
         root.mkdir(parents=True, exist_ok=True)
         browser.screenshot(shot)
-        screenshot = str(shot)
-    except Exception:
-        pass
+    except Exception as evidence_error:
+        screenshot += f" (capture failed: {evidence_error})"
     try:
         console_errors = browser.console_errors()
     except Exception as evidence_error:
