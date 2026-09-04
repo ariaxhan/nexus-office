@@ -29,6 +29,21 @@ public enum LayoutPreset: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Whether this window follows macOS or keeps a chosen room appearance.
+public enum AppearancePreset: String, CaseIterable, Identifiable, Sendable {
+    case system, light, dark
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+}
+
 /// The choices a person made about how the floor looks, kept between launches.
 ///
 /// Everything in here is a view of the same office: an order and a filter.
@@ -56,6 +71,7 @@ public final class Preferences {
     private static let sortKey = "settings.deskSort.v1"
     private static let needsOnlyKey = "settings.needsOnly.v1"
     private static let layoutKey = "settings.layout.v1"
+    private static let appearanceKey = "settings.appearance.v1"
     private static let botsKey = "settings.pane.bots.v1"
     private static let wallKey = "settings.pane.wall.v1"
     private static let typeScaleKey = "settings.typeScale.v1"
@@ -70,6 +86,7 @@ public final class Preferences {
     public private(set) var deskSort: StateRules.DeskSort = .owner
     public private(set) var needsOnly = false
     public private(set) var layout: LayoutPreset = .focus
+    public private(set) var appearance: AppearancePreset = .system
     /// Which groups of the roster are drawn. Both default to on, and neither is
     /// allowed to hide a raised hand: a gate comes from the runtime and opens a
     /// sheet over the whole window, so turning a group off cannot bury one.
@@ -108,6 +125,7 @@ public final class Preferences {
            let preset = LayoutPreset(rawValue: raw) {
             layout = preset
         }
+        appearance = Self.appearance(defaults.string(forKey: Self.appearanceKey))
         // `bool(forKey:)` cannot tell "off" from "never set", and these two
         // default to ON, so an untouched install would come up with an empty
         // roster if this were read the way `needsOnly` is.
@@ -139,6 +157,15 @@ public final class Preferences {
     public func set(layout: LayoutPreset) {
         self.layout = layout
         defaults?.set(layout.rawValue, forKey: Self.layoutKey)
+    }
+
+    public func set(appearance: AppearancePreset) {
+        self.appearance = appearance
+        defaults?.set(appearance.rawValue, forKey: Self.appearanceKey)
+    }
+
+    private static func appearance(_ raw: String?) -> AppearancePreset {
+        raw.flatMap(AppearancePreset.init(rawValue:)) ?? .system
     }
 
     public func set(homeLastSeen: Date?) {

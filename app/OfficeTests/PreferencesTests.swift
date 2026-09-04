@@ -119,6 +119,17 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(Preferences(defaults: defaults).layout, .focus)
     }
 
+    func test_appearance_defaults_to_system_and_survives_a_relaunch() {
+        XCTAssertEqual(Preferences(defaults: defaults).appearance, .system)
+        Preferences(defaults: defaults).set(appearance: .dark)
+        XCTAssertEqual(Preferences(defaults: defaults).appearance, .dark)
+    }
+
+    func test_an_unknown_appearance_falls_back_to_system() {
+        defaults.set("sepia", forKey: "settings.appearance.v1")
+        XCTAssertEqual(Preferences(defaults: defaults).appearance, .system)
+    }
+
     /// A preset written by a newer version. Same reasoning as the desk order:
     /// guessing which of the three it meant rearranges the window into a shape
     /// nobody chose and says nothing about having done it.

@@ -35,6 +35,17 @@ struct SettingsPopover: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
+                label("appearance")
+                Picker("", selection: $store.appearance) {
+                    ForEach(AppearancePreset.allCases) { preset in
+                        Text(preset.label).tag(preset)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 label("panes")
                 Toggle("Bots", isOn: $store.showBots)
                     .toggleStyle(.checkbox)

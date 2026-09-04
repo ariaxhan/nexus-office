@@ -163,6 +163,10 @@ public final class Store {
     public var layout: LayoutPreset = .focus {
         didSet { prefs.set(layout: layout) }
     }
+    /// System follows macOS; light and dark are explicit local overrides.
+    public var appearance: AppearancePreset = .system {
+        didSet { prefs.set(appearance: appearance) }
+    }
     /// Which groups the roster draws.
     public var showBots = true {
         didSet { prefs.set(showBots: showBots) }
@@ -285,6 +289,7 @@ public final class Store {
         deskSort = prefs.deskSort
         needsOnly = prefs.needsOnly
         layout = prefs.layout
+        appearance = prefs.appearance
         showBots = prefs.showBots
         showWall = prefs.showWall
         typeScale = prefs.typeScale

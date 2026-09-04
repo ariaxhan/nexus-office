@@ -23,6 +23,7 @@ struct OfficeApp: App {
             MenuBarContents()
                 .officeFont(size: 13)
                 .environment(\.typeScale, Store.shared.typeScale)
+                .preferredColorScheme(Store.shared.appearance.colorScheme)
         } label: {
             Image(nsImage: MenuDot.image(for: Store.shared.dot))
         }
@@ -150,6 +151,7 @@ struct RootView: View {
             .officeFont(size: 13)
             .background(Theme.ink)
             .environment(\.typeScale, store.typeScale)
+            .preferredColorScheme(store.appearance.colorScheme)
             .task {
                 guard store.selection == nil else { return }
                 await store.refreshBots()
@@ -246,6 +248,16 @@ struct RootView: View {
             Empty(text: second
                   ? "Drag a desk in here to read it beside the one on the left."
                   : "Pick a bot to talk to it, a desk to work its issues, or a card on the wall to see a flow. A raised hand opens by itself.")
+        }
+    }
+}
+
+private extension AppearancePreset {
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
         }
     }
 }
