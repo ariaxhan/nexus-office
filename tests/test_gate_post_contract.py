@@ -13,7 +13,11 @@ sys.path.insert(0, str(HARNESS_SRC))
 sys.path.insert(0, str(CLIENT))
 
 import board  # noqa: E402
-from tradition_harness.permissions import PermissionGate  # noqa: E402
+
+if HARNESS_SRC.is_dir():
+    from tradition_harness.permissions import PermissionGate  # noqa: E402
+else:
+    PermissionGate = None
 
 
 class GatePostContractTests(unittest.TestCase):
