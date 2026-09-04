@@ -73,7 +73,7 @@ LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchService
 # registering either is what makes the Dock, Spotlight and the icon pick the
 # wrong one. They are unregistered rather than deleted, because deleting them
 # means the next shoot rebuilds the whole app for nothing.
-"$LSREG" -dump 2>/dev/null | grep -o '/[^ ]*Office\.app' | sort -u | while read -r found; do
+"$LSREG" -dump 2>/dev/null | sed -nE 's/^path:[[:space:]]+(.*Office\.app) \(0x[0-9a-f]+\)$/\1/p' | sort -u | while read -r found; do
   [ "$found" = "$DEST" ] && continue
   "$LSREG" -u "$found" >/dev/null 2>&1 || true
 done
@@ -89,7 +89,7 @@ rm -rf "$ROOT/app/build/Build/Products/Debug/Office.app"
 
 echo "install: $DEST"
 echo "install: $CLI"
-LEFT="$("$LSREG" -dump 2>/dev/null | grep -o '/[^ ]*Office\.app' | sort -u | grep -v "^$DEST\$" || true)"
+LEFT="$("$LSREG" -dump 2>/dev/null | sed -nE 's/^path:[[:space:]]+(.*Office\.app) \(0x[0-9a-f]+\)$/\1/p' | sort -u | grep -v "^$DEST\$" || true)"
 if [ -n "$LEFT" ]; then
   echo "install: still registered, and should not be:"
   echo "$LEFT"
