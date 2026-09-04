@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 
@@ -43,6 +44,7 @@ class ReceiptEvidence:
     accepted_at: str | None = None
     delivered_at: str | None = None
     failure_at: str | None = None
+    timeout_at: str | None = None
 
 
 class MessagingProvider(Protocol):
@@ -71,23 +73,11 @@ def run_messaging_probe(provider: MessagingProvider,
                         destinations: dict[str, Destination],
                         timeout_s: float = 30,
                         channels: tuple[str, ...] = CHANNELS,
-                        run_id: str | None = None
                         ) -> tuple[ReceiptEvidence, ...]:
     """Send at most one sandbox delivery per channel and verify its receipts."""
-    if len(channels) > SEND_CAP:
-        raise ValueError(f"send cap is {SEND_CAP}")
-    if len(set(channels)) != len(channels) or set(channels) != set(CHANNELS):
-        raise ValueError("exactly one Kakao and one SMS delivery are required")
-    selected = tuple(destinations[channel] for channel in channels)
-    if any(not item.sandbox or not item.value.strip() for item in selected):
-        raise ValueError("every destination must be a named sandbox destination")
-
-    probe_id = run_id or f"messaging-{uuid.uuid4().hex}"
-    sent = [
-        (channel, destination,
-         provider.send(channel, destination.value, f"probe {probe_id}", probe_id))
-        for channel, destination in zip(channels, selected)
-    ]
+    selected = _validate_probe(destinations, channels)
+    probe_id = f"messaging-{uuid.uuid4().hex}"
+    sent = _send(provider, probe_id, channels, selected)
     evidence = tuple(
         _verify_receipts(provider, probe_id, channel, destination, provider_id,
                          timeout_s)
@@ -96,6 +86,28 @@ def run_messaging_probe(provider: MessagingProvider,
     if any(item.delivered_at is None for item in evidence):
         raise ProbeFailure(evidence)
     return evidence
+
+
+def _validate_probe(destinations: dict[str, Destination],
+                    channels: tuple[str, ...]) -> tuple[Destination, ...]:
+    if len(channels) > SEND_CAP:
+        raise ValueError(f"send cap is {SEND_CAP}")
+    if len(set(channels)) != len(channels) or set(channels) != set(CHANNELS):
+        raise ValueError("exactly one Kakao and one SMS delivery are required")
+    selected = tuple(destinations[channel] for channel in channels)
+    if any(not item.sandbox or not item.value.strip() for item in selected):
+        raise ValueError("every destination must be a named sandbox destination")
+    return selected
+
+
+def _send(provider: MessagingProvider, run_id: str, channels: tuple[str, ...],
+          destinations: tuple[Destination, ...]
+          ) -> list[tuple[str, Destination, str]]:
+    return [
+        (channel, destination,
+         provider.send(channel, destination.value, f"probe {run_id}", run_id))
+        for channel, destination in zip(channels, destinations)
+    ]
 
 
 def _verify_receipts(provider: MessagingProvider, run_id: str, channel: str,
@@ -110,6 +122,7 @@ def _verify_receipts(provider: MessagingProvider, run_id: str, channel: str,
             return ReceiptEvidence(
                 run_id, channel, _redact(destination.value), provider_id,
                 accepted_at=accepted_at,
+                timeout_at=datetime.now(UTC).isoformat(),
             )
         state = receipt_state(receipt.status)
         if state == "accepted":

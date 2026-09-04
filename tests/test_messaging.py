@@ -43,9 +43,7 @@ class Provider:
 class MessagingProbeTest(unittest.TestCase):
     def test_both_channels_deliver_with_redacted_evidence(self):
         provider = Provider()
-        evidence = run_messaging_probe(
-            provider, DESTINATIONS, run_id="run-7", timeout_s=8
-        )
+        evidence = run_messaging_probe(provider, DESTINATIONS, timeout_s=8)
 
         self.assertEqual(["kakao", "sms"], [row.channel for row in evidence])
         self.assertEqual(["kakao-id", "sms-id"],
@@ -53,8 +51,10 @@ class MessagingProbeTest(unittest.TestCase):
         self.assertEqual(["***34", "***23"],
                          [row.destination for row in evidence])
         self.assertTrue(all(row.accepted_at and row.delivered_at for row in evidence))
-        self.assertTrue(all("run-7" in row[2] for row in provider.sent))
-        self.assertEqual({"run-7"}, {row[3] for row in provider.sent})
+        run_ids = {row[3] for row in provider.sent}
+        self.assertEqual(1, len(run_ids))
+        self.assertTrue(next(iter(run_ids)).startswith("messaging-"))
+        self.assertTrue(all(row[3] in row[2] for row in provider.sent))
 
     def test_terminal_failure_is_mapped_for_each_channel(self):
         self.assertEqual("terminal_failure", receipt_state("failed"))
@@ -65,7 +65,7 @@ class MessagingProbeTest(unittest.TestCase):
         })
 
         with self.assertRaises(ProbeFailure) as raised:
-            run_messaging_probe(provider, DESTINATIONS, run_id="run-fail")
+            run_messaging_probe(provider, DESTINATIONS)
         self.assertEqual(["kakao-failed", "sms-failed"],
                          [row.failure_at for row in raised.exception.evidence])
 
@@ -76,10 +76,11 @@ class MessagingProbeTest(unittest.TestCase):
         })
 
         with self.assertRaises(ProbeFailure) as raised:
-            run_messaging_probe(provider, DESTINATIONS, run_id="run-timeout")
+            run_messaging_probe(provider, DESTINATIONS)
         self.assertEqual(["kakao-id", "sms-id"],
                          [row.provider_id for row in raised.exception.evidence])
         self.assertTrue(all(row.accepted_at for row in raised.exception.evidence))
+        self.assertTrue(all(row.timeout_at for row in raised.exception.evidence))
 
     def test_send_cap_and_sandbox_gate_apply_before_sending(self):
         provider = Provider()
