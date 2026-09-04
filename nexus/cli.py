@@ -24,6 +24,10 @@ PLIST_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "launchd", f"{PLIST_LABEL}.plist")
 
 
+def _ended(flight):
+    return flight["state"] in TERMINAL
+
+
 def _ledger(args) -> Ledger:
     return Ledger(args.ledger)
 
@@ -64,7 +68,7 @@ def cmd_kill(args):
     if flight is None:
         print(f"no such flight: {args.flight}", file=sys.stderr)
         return 1
-    if flight["state"] in TERMINAL:
+    if _ended(flight):
         print(f"{args.flight} already ended ({flight['state']})")
         return 0
     if not fl.kill(flight["pid"], flight["workspace"]):
