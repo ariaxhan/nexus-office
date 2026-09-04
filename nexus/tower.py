@@ -21,6 +21,7 @@ import contextlib
 import datetime
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -204,7 +205,7 @@ def _finish_failed(ledger, flight, now):
 
 
 def _confirm_teardown(ledger, flight, now, reason):
-    if fl.kill(flight["pid"]):
+    if fl.kill(flight["pid"], flight["workspace"]):
         return True
     ledger.event("flight.teardown_unconfirmed", flight["id"],
                  {"reason": reason}, "tower", now)
@@ -631,6 +632,7 @@ def _spawn(ledger, plan, flight_id, workspace, timeout_s):
             grandchild = os.fork()
             if grandchild == 0:
                 os.close(write_fd)
+                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
                 log = os.open(os.path.join(workspace, fl.LOG_NAME),
                               os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
                 null = os.open(os.devnull, os.O_RDONLY)
@@ -653,9 +655,19 @@ def _spawn(ledger, plan, flight_id, workspace, timeout_s):
         with contextlib.suppress(ChildProcessError, OSError):
             os.waitpid(middle, 0)
     try:
-        return int(data)
+        runner_pid = int(data)
     except ValueError:
         return None
+    deadline = time.monotonic() + PID_GRACE_S
+    while time.monotonic() < deadline:
+        if fl.runner_ready(workspace, runner_pid):
+            return runner_pid
+        if not fl.alive(runner_pid):
+            return None
+        time.sleep(0.01)
+    with contextlib.suppress(OSError):
+        os.kill(runner_pid, signal.SIGKILL)
+    return None
 
 
 # ---- run loop and views ----------------------------------------------------

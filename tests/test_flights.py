@@ -28,14 +28,21 @@ class RunnerCancellationTest(unittest.TestCase):
             start_new_session=True,
         )
 
-    def test_runner_cancels_its_owned_command_group(self):
+    def test_runner_cancels_nested_groups_in_its_owned_session(self):
         with tempfile.TemporaryDirectory() as tmp:
+            timeout_file = os.path.join(tmp, "timeout")
             child_file = os.path.join(tmp, "child")
-            runner = self.runner(tmp, f"sleep 60 & echo $! > {child_file}; wait")
+            cmd = (f"timeout 900 /bin/sh -c 'echo $$ > {child_file}; sleep 900' & "
+                   f"echo $! > {timeout_file}; wait")
+            runner = self.runner(tmp, cmd)
             self.addCleanup(lambda: runner.poll() is None and runner.kill())
-            self.assertTrue(wait_for(lambda: os.path.exists(child_file)))
+            self.assertTrue(wait_for(lambda: os.path.exists(child_file)
+                                     and os.path.exists(timeout_file)))
             with open(child_file) as handle:
                 child = int(handle.read())
+            with open(timeout_file) as handle:
+                timeout_pid = int(handle.read())
+            self.assertEqual(timeout_pid, os.getpgid(child))
 
             os.kill(runner.pid, signal.SIGTERM)
             runner.wait(timeout=5)
@@ -44,11 +51,18 @@ class RunnerCancellationTest(unittest.TestCase):
             self.assertIsNone(error)
             self.assertEqual("cancelled", result["error"]["code"])
             self.assertTrue(wait_for(lambda: not flights.alive(child)))
+            self.assertFalse(flights.alive(timeout_pid))
+            self.assertTrue(flights.teardown_confirmed(tmp, runner.pid))
 
     def test_runner_reaps_background_work_after_its_group_leader_exits(self):
         with tempfile.TemporaryDirectory() as tmp:
             child_file = os.path.join(tmp, "child")
-            runner = self.runner(tmp, f"sleep 60 & echo $! > {child_file}")
+            command = (
+                "python3 -c \"import subprocess; "
+                "p=subprocess.Popen(['sleep','900'], process_group=0); "
+                f"open('{child_file}','w').write(str(p.pid))\""
+            )
+            runner = self.runner(tmp, command)
             self.addCleanup(lambda: runner.poll() is None and runner.kill())
             runner.wait(timeout=5)
             with open(child_file) as handle:
@@ -58,9 +72,14 @@ class RunnerCancellationTest(unittest.TestCase):
             with open(os.path.join(tmp, flights.RESULT_NAME)) as handle:
                 result = json.load(handle)
             self.assertTrue(result["ok"])
+            self.assertTrue(flights.teardown_confirmed(tmp, runner.pid))
 
 
 class KillContractTest(unittest.TestCase):
+    @mock.patch("nexus.flights.subprocess.check_output", side_effect=OSError("no ps"))
+    def test_session_enumeration_failure_is_not_confirmed(self, _check):
+        self.assertFalse(flights._kill_owned_session(123, timeout_s=0.1))
+
     @mock.patch("nexus.flights.time.sleep")
     @mock.patch("nexus.flights.alive", return_value=True)
     @mock.patch("nexus.flights.os.kill")

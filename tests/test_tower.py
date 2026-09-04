@@ -191,21 +191,29 @@ class Budgets(TowerCase):
         self.assertFalse(fl.alive(row["pid"]))
 
     def test_budget_cancellation_kills_background_work_before_releasing_its_lease(self):
+        timeout_file = os.path.join(self.dir, "timeout-pid")
         child_file = os.path.join(self.dir, "background-pid")
-        self.plan(cmd=f"sleep 60 & echo $! > {child_file}; wait", outputs=[],
+        cmd = (f"timeout 900 /bin/sh -c 'echo $$ > {child_file}; sleep 900' & "
+               f"echo $! > {timeout_file}; wait")
+        self.plan(cmd=cmd, outputs=[],
                   resources=["shared-repo"], schedule={"every": 3600},
                   budget={"timeout_s": 1, "max_retries": 0})
         self.tick()
         flight = self.led.flights()[0]
-        self.assertTrue(wait_for(lambda: os.path.exists(child_file)))
+        self.assertTrue(wait_for(lambda: os.path.exists(child_file)
+                                 and os.path.exists(timeout_file)))
         with open(child_file) as handle:
             child = int(handle.read())
+        with open(timeout_file) as handle:
+            timeout_pid = int(handle.read())
+        self.assertEqual(timeout_pid, os.getpgid(child))
 
         self.tick(now=time.time() + 5)
 
         row = self.led.flight(flight["id"])
         self.assertEqual("failed", row["state"])
         self.assertFalse(fl.alive(child))
+        self.assertFalse(fl.alive(timeout_pid))
         self.assertEqual([], list(self.led.leases()))
         self.assertFalse(os.path.exists(row["workspace"]))
 
@@ -256,7 +264,7 @@ class Budgets(TowerCase):
 
 
 class Reconciliation(TowerCase):
-    def test_a_killed_flight_becomes_failed_vanished_and_is_retried(self):
+    def test_a_stopped_flight_records_cancellation_and_is_retried(self):
         self.plan(cmd="sleep 30", outputs=[], schedule={"every": 3600},
                   budget={"max_retries": 1})
         self.tick()
@@ -266,7 +274,7 @@ class Reconciliation(TowerCase):
         self.assertTrue(wait_for(lambda: (self.tick(), self.led.flight(
             flight["id"])["state"] == "failed")[1]))
         row = self.led.flight(flight["id"])
-        self.assertIn('"code": "vanished"', row["result"])
+        self.assertIn('"code": "cancelled"', row["result"])
         self.assertFalse(os.path.exists(row["workspace"]))
         self.assertEqual(2, len(self.led.flights()))
         self.assertEqual([], self.led.integrity_check())
