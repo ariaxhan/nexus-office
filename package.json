@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "icon": "swift scripts/icon.swift",
+    "pwa-probe": "node scripts/pwa-probe.mjs",
     "test": "scripts/test.sh",
     "shot": "scripts/shoot.sh"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
   }
 }

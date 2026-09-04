@@ -11,6 +11,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 python3 -m unittest discover -s tests -p 'test_*.py'
+node --test tests/pwa_probe.test.mjs
 
 if [ ! -d app/Office.xcodeproj ]; then
   command -v xcodegen >/dev/null 2>&1 || {
