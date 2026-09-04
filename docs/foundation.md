@@ -129,6 +129,7 @@ actual subissue with its own output and acceptance check.
 
 ```mermaid
 flowchart TD
+  Z[#86 coalesce scheduled flights] --> F[#73 manual coordinator]
   A[#68 Vaults landing] --> B[#69 retire morning scrape] --> C[#70 midday pulse]
   F[#73 manual coordinator] --> E[#72 parent/child tasks]
   D[#71 ledger v2] --> E
@@ -151,8 +152,8 @@ flowchart TD
   P --> Q[#84 delete hcom and duplicate stores]
 ```
 
-Ready now: #68, #71, and manual decomposition #73. Migration, schema, and manual coordination are
-file-disjoint; integration remains serial.
+Ready now: #86, then #68, #71, and manual decomposition #73. Migration, schema, and manual
+coordination are file-disjoint; integration remains serial.
 Every further airline migration gets its own child issue before work begins.
 
 ## Ledger model

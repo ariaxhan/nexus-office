@@ -474,6 +474,18 @@ def _schedule(ledger, now):
     """A due plan produces a TASK. Flights only ever come from tasks."""
     made = 0
     for plan in ledger.plans(runnable_only=True):
+        # Interval ticks are reminders, not work inventory. A slow plan gets one
+        # execution, then becomes eligible again after that flight terminates.
+        # Without this, every elapsed interval accumulates another queued flight.
+        active = ledger.conn.execute(
+            "SELECT 1 FROM flights f LEFT JOIN tasks t ON t.id=f.task_id"
+            " WHERE f.plan_id=? AND (f.state IN"
+            " ('queued','running','verifying','verified','landing','resolving')"
+            " OR (f.state='produced' AND t.state='running')) LIMIT 1",
+            (plan["id"],),
+        ).fetchone()
+        if active is not None:
+            continue
         ready, key, trigger = due(ledger, plan, now)
         if not ready:
             continue

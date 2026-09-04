@@ -90,7 +90,26 @@ class Scheduling(TowerCase):
         now = time.time()
         self.assertEqual(1, self.tick(now=now)["scheduled"])
         self.assertEqual(0, self.tick(now=now + 30)["scheduled"])
+        self.settle()
         self.assertEqual(1, self.tick(now=now + 61)["scheduled"])
+
+    def test_elapsed_intervals_do_not_queue_behind_an_active_flight(self):
+        self.plan(cmd="sleep 30", outputs=[], schedule={"every": 1})
+        now = time.time()
+        self.assertEqual(1, self.tick(now=now)["scheduled"])
+        for elapsed in range(1, 10):
+            self.assertEqual(0, self.tick(now=now + elapsed)["scheduled"])
+        self.assertEqual(1, len(self.led.flights()))
+
+    def test_crash_between_queued_flight_and_running_task_does_not_duplicate(self):
+        plan = self.plan(cmd="sleep 30", outputs=[], schedule={"every": 1})
+        now = time.time()
+        task = self.led.add_task("run job", origin="plan", plan_id=plan,
+                                 dedupe_key="first", now=now)
+        self.led.set_task_state(task, "accepted", expect="candidate", now=now)
+        self.led.create_flight(plan, task_id=task, now=now)
+        self.assertEqual(0, tower._schedule(self.led, now + 2))
+        self.assertEqual(1, len(self.led.tasks()))
 
     def test_at_hhmm_is_due_once_that_day(self):
         plan = self.plan(schedule={"at": "03:00"})
