@@ -161,16 +161,11 @@ public enum Palette {
         else { return swatch.value(dark: dark) }
         let canvas = RGB(hex: hex, fallback: ink.value(dark: dark))
         let edge = RGB(white: dark ? 1 : 0)
-        let amount: Double
-        switch swatch {
-        case ink: amount = 0
-        case roster: amount = dark ? 0.055 : 0.04
-        case raised: amount = dark ? 0.105 : 0.08
-        case selected: amount = dark ? 0.165 : 0.12
-        case hairline: amount = dark ? 0.13 : 0.16
-        case well: amount = dark ? 0 : 0.12
-        default: return swatch.value(dark: dark)
-        }
+        let surfaces = [ink, roster, raised, selected, hairline, well]
+        guard let index = surfaces.firstIndex(of: swatch) else { return swatch.value(dark: dark) }
+        let amounts = dark ? [0, 0.055, 0.105, 0.165, 0.13, 0]
+                           : [0, 0.04, 0.08, 0.12, 0.16, 0.12]
+        let amount = amounts[index]
         return canvas.mixed(with: edge, amount: amount)
     }
 
