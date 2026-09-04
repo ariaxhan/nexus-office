@@ -5,8 +5,9 @@ two readings. Every mutating call is a single transaction that also appends the
 `events` row explaining it, state transitions are checked against a fixed table,
 and history is made immutable by triggers rather than by good manners.
 
-Schema v1 is `docs/foundation.md`, cut to what the seven verbs need: plans, tasks,
-flights, artifacts, landings, events, leases. Leases are on
+Schema v2 is `docs/foundation.md`, cut to what the seven verbs need: plans, tasks,
+flights, artifacts, landings, events, leases. Objectives, observations, messages and
+gates are `events` rows; the v1 tables that held them are copied in and dropped. Leases are on
 RESOURCES (a repo+branch, a mailbox, a deploy slot, a paid budget), never on
 filesystem paths: isolated workspaces already solve execution collisions.
 """
@@ -21,7 +22,7 @@ import sqlite3
 import time
 import uuid
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 TERMINAL = ("landed", "failed", "cancelled")
 
@@ -61,6 +62,8 @@ CREATE TABLE IF NOT EXISTS plans (
   budget TEXT NOT NULL DEFAULT '{}',
   resolution_policy TEXT NOT NULL DEFAULT '{}',
   resources TEXT NOT NULL DEFAULT '[]',
+  objective TEXT,
+  autonomy TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   quarantined_at REAL,
   created_at REAL NOT NULL
@@ -79,6 +82,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   dedupe_key TEXT,
   decided_by TEXT,
   decided_at REAL,
+  objective TEXT,
+  autonomy TEXT,
+  parent_id TEXT,
+  output TEXT,
+  "check" TEXT,
   created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tasks_state ON tasks(state);
@@ -178,6 +186,35 @@ END;
 """
 
 
+#: what v2 added to the two tables a person shapes work in.
+V2_COLUMNS = {
+    "plans": ("objective", "autonomy"),
+    "tasks": ("objective", "autonomy", "parent_id", "output", "check"),
+}
+
+#: v1 tables whose rows are events now, in the order they fold in.
+LEGACY_TABLES = ("objectives", "observations", "messages", "gates")
+
+
+def _legacy_events(table, row):
+    """The events one v1 row becomes: (kind, subject, payload, source, ts)."""
+    if table == "objectives":
+        row["autonomy_policy"] = loads(row["autonomy_policy"], {})
+        yield "objective", row.pop("id"), row, "migration", row.pop("created_at")
+    elif table == "observations":
+        row["payload"] = loads(row["payload"], {})
+        yield "observation", row.pop("subject"), row, row.pop("source"), row.pop("ts")
+    elif table == "messages":
+        flight, at = row.pop("delivered_to_flight"), row.pop("delivered_at")
+        task = row["task_id"]
+        yield "radio.message", task, row, row["from_flight"] or "radio", row.pop("created_at")
+        if at is not None:
+            yield "radio.delivered", task, {"message": row["id"], "flight": flight}, flight, at
+    elif table == "gates":
+        row["options"] = loads(row["options"], [])
+        yield "gate", row["task_id"], row, "migration", row.pop("created_at")
+
+
 class LedgerError(Exception):
     """A refusal from the ledger. Never a corrupt row."""
 
@@ -228,7 +265,7 @@ class Ledger:
         return int(self.conn.execute("PRAGMA user_version").fetchone()[0])
 
     def migrate(self):
-        """Bring the file to SCHEMA_VERSION, backing it up before it moves."""
+        """Bring the file to SCHEMA_VERSION one step at a time, backed up first."""
         version = self.user_version()
         if version == SCHEMA_VERSION:
             return
@@ -241,12 +278,51 @@ class Ledger:
         if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
             self.conn.execute("PRAGMA wal_checkpoint(FULL)")
             shutil.copyfile(self.path, f"{self.path}.bak-{version}")
+        for step in range(version, SCHEMA_VERSION):
+            getattr(self, f"_migrate_v{step + 1}")()
+        self.event("ledger.migrated", None, {"from": version, "to": SCHEMA_VERSION}, "tower")
+
+    def _migrate_v1(self):
         # executescript commits on its own, so the schema cannot ride inside tx().
         # It is idempotent (every statement is IF NOT EXISTS), so a crash halfway
         # through leaves the next open to finish the job.
         self.conn.executescript(SCHEMA)
-        self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        self.event("ledger.migrated", None, {"from": version, "to": SCHEMA_VERSION}, "tower")
+        self.conn.execute("PRAGMA user_version=1")
+
+    def _migrate_v2(self):
+        """Objective and autonomy columns; legacy tables folded into events.
+
+        Every legacy row becomes one event (a delivered message becomes two), the
+        copies are counted against the sources, and only a full match drops the
+        tables. Anything short rolls the whole step back and leaves the file at v1.
+        """
+        with self.tx() as c:
+            for table, columns in V2_COLUMNS.items():
+                have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+                for column in columns:
+                    if column not in have:
+                        c.execute(f"ALTER TABLE {table} ADD COLUMN \"{column}\" TEXT")
+            present = {r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            for table in LEGACY_TABLES:
+                if table not in present:
+                    continue
+                want = c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                if table == "messages":
+                    want += c.execute(
+                        "SELECT count(*) FROM messages WHERE delivered_at IS NOT NULL"
+                    ).fetchone()[0]
+                copied = 0
+                for row in c.execute(f"SELECT * FROM {table}").fetchall():
+                    for event in _legacy_events(table, dict(row)):
+                        self._event(*event)
+                        copied += 1
+                if copied != want:
+                    raise LedgerError(
+                        f"{table}: copied {copied} of {want} rows, keeping v1"
+                    )
+                c.execute(f"DROP TABLE {table}")
+            c.execute("PRAGMA user_version=2")
 
     @contextlib.contextmanager
     def tx(self):

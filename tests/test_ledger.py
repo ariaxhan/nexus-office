@@ -34,7 +34,7 @@ class Schema(LedgerCase):
     def test_wal_and_version(self):
         mode = self.led.conn.execute("PRAGMA journal_mode").fetchone()[0]
         self.assertEqual(mode.lower(), "wal")
-        self.assertEqual(self.led.user_version(), 1)
+        self.assertEqual(self.led.user_version(), 2)
 
     def test_schema_v1_tables_all_present(self):
         names = {r[0] for r in self.led.conn.execute(
@@ -51,7 +51,7 @@ class Schema(LedgerCase):
         led = Ledger(self.path)
         self.addCleanup(led.close)
         self.assertTrue(os.path.exists(self.path + ".bak-0"))
-        self.assertEqual(1, led.user_version())
+        self.assertEqual(2, led.user_version())
         # the copy is the old file, not a fresh one
         self.assertGreater(os.path.getsize(self.path + ".bak-0"), 0)
 
