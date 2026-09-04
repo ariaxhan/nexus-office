@@ -8,6 +8,7 @@ import { chromium } from "playwright-core";
 
 const DEFAULT_BROWSER = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const REQUIRED_MANIFEST_FIELDS = ["name", "short_name", "start_url", "display", "icons"];
+const SERVICE_WORKER_TIMEOUT_MS = 10_000;
 
 export function missingManifestFields(manifest) {
   return REQUIRED_MANIFEST_FIELDS.filter((field) => {
@@ -24,11 +25,16 @@ export async function inspectPwa(page, { mediaSelector = "audio,video", sampleMs
   const fields = missingManifestFields(await manifestResponse.json());
   if (fields.length) throw new Error(`manifest fields absent: ${fields.join(", ")}`);
 
-  const serviceWorker = await page.evaluate(async () => {
+  const serviceWorker = await page.evaluate(async (timeoutMs) => {
     if (!("serviceWorker" in navigator)) return false;
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise(function resolveAfterTimeout(resolve) {
+        setTimeout(resolve, timeoutMs, null);
+      }),
+    ]);
     return Boolean(registration.active);
-  });
+  }, SERVICE_WORKER_TIMEOUT_MS);
   if (!serviceWorker) throw new Error("service worker inactive");
 
   const media = page.locator(mediaSelector).first();
@@ -62,6 +68,15 @@ export async function verifyInstallability(page) {
   if (manifest.errors?.length) throw new Error(`manifest invalid: ${JSON.stringify(manifest.errors)}`);
   if (errors.length) throw new Error(`installability failed: ${JSON.stringify(errors)}`);
   return { manifestUrl: manifest.url };
+}
+
+async function captureFailureScreenshot(page, evidenceDir, evidence) {
+  if (!page) return;
+  try {
+    await page.screenshot({ path: path.join(evidenceDir, "failure.png"), fullPage: true });
+  } catch (error) {
+    evidence.screenshotError = error.message;
+  }
 }
 
 export async function runProbe({ url, browserPath, evidenceDir, mediaSelector, sampleMs }) {
@@ -107,7 +122,7 @@ export async function runProbe({ url, browserPath, evidenceDir, mediaSelector, s
       consoleErrors,
       error: error.message,
     };
-    if (page) await page.screenshot({ path: path.join(evidenceDir, "failure.png"), fullPage: true });
+    await captureFailureScreenshot(page, evidenceDir, evidence);
     await writeFile(path.join(evidenceDir, "failure.json"), `${JSON.stringify(evidence, null, 2)}\n`);
     throw error;
   } finally {

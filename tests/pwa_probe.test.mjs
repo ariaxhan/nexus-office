@@ -44,6 +44,11 @@ test("repository PWA check covers playback, offline shell, and installability re
     name: "Sandbox", short_name: "Sandbox", start_url: "/", display: "standalone", icons: [],
   }), ["icons"]);
 
+  await assert.rejects(
+    inspectPwa({ ...pageFixture(), evaluate: async () => false }),
+    /service worker inactive/,
+  );
+
   const installabilityPage = {
     context: () => ({ newCDPSession: async () => ({ send: async (method) => method.endsWith("Errors")
       ? { errors: [{ errorId: "no-icon" }] }
