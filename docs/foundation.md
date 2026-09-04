@@ -152,9 +152,36 @@ flowchart TD
   P --> Q[#84 delete hcom and duplicate stores]
 ```
 
-Completed: #86. Ready now: #68, #71, and manual decomposition #73. Migration, schema, and manual
-coordination are file-disjoint; integration remains serial.
+Completed: #86, #73. Ready now: #68, #123, #124. Migration, fixture, and schema are
+file-disjoint; integration remains serial.
 Every further airline migration gets its own child issue before work begins.
+
+### The first manual coordinator flight: #71
+
+#73 decomposed [#71](https://github.com/ariaxhan/nexus-office/issues/71) by hand. Frozen
+destination: `SCHEMA_VERSION` 2; `plans` carries `objective` and `autonomy`; `tasks` carries
+`objective`, `autonomy`, `parent_id`, `output`, `check`; `objectives`, `observations`, `messages`
+and `gates` become `events` rows (`objective`, `observation`, `radio.message`, `gate`, delivery as
+`radio.delivered`); the four tables drop only after counts match. Each child owns one file and one
+check; #71 closes only on the live proof in #126.
+
+```mermaid
+flowchart LR
+  A[#123 fixture: tests/ledger_fixture.py] --> C[#125 parity: tests/test_ledger.py]
+  B[#124 schema v2: nexus/ledger.py] --> C
+  C --> D[#126 live migration: docs/NEXT.md]
+```
+
+Observed while coordinating, for the automated version in #72:
+
+- One shared file forces serial order. `nexus/ledger.py` is the only surface every step
+  touches, so parallelism was two of four children, not the tracker's "file-disjoint" default.
+- The live legacy tables hold zero rows, so parity is proven on a seeded fixture (#123), not on
+  the live file; the live step proves counts of the seven tables that do have rows.
+- A child's check must name a command and a number. "Fresh and upgraded schemas match" became a
+  `sqlite_master` equality and exact row counts before any executor could take it.
+- GitHub sub-issues require the REST `sub_issues` endpoint; `gh issue` has no verb for it.
+  #72 must write the parent link into the ledger, not into GitHub alone.
 
 ### Self-healing closure
 
