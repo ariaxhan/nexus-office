@@ -57,6 +57,16 @@ class BotReportsTest(unittest.TestCase):
         self.assertEqual(turn["id"], "reply-north")
         self.assertFalse(Door.turns["relay"])
 
+    def test_each_role_has_a_visibly_distinct_report_contract(self):
+        headings = {
+            prompt.split("'", 2)[1]
+            for prompt in bot_reports.PROMPTS.values()
+        }
+        self.assertEqual(len(headings), len(bot_reports.BOTS))
+        for bot, prompt in bot_reports.PROMPTS.items():
+            self.assertIn(bot.upper(), prompt)
+            self.assertIn("Start with the exact heading", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
