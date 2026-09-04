@@ -169,6 +169,11 @@ The closure handoff is `nexus.live-probe-repairs/v1`. Its `checks` array is sort
 `fail`). `nexus.probes.encode_probe_output` validates and canonically serializes that handoff, so
 closure selects a repair by number rather than mutable title or evidence text.
 
+`nexus.repairs.reconcile_repairs` resolves each failed `check_id` through the canonical registry.
+Its hidden `nexus-repair-check:<check_id>` issue marker survives changing evidence: the first
+failure creates `ready+p0`; recurrence replaces the evidence, reopens the issue, and restores both
+labels; an identical rerun makes no write.
+
 ```mermaid
 flowchart TD
   A[#87 route Nexus failures] --> D[#91 independent heartbeat]
