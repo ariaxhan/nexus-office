@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import plistlib
 import subprocess
 import sys
@@ -176,6 +177,22 @@ def cmd_log(args):
     return 1
 
 
+def cmd_sandbox_install(args):
+    """Add the slow transactional plan, disabled. Imported here so tower never loads it."""
+    from . import sandbox_probes
+    try:
+        print(sandbox_probes.install_plan(_ledger(args), args.every, args.timeout))
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_sandbox_run(args):
+    from . import sandbox_probes
+    return sandbox_probes.main(dict(os.environ), args.timeout, pathlib.Path("evidence"))
+
+
 def cmd_install(args):
     """Write the plist and load it. launchd only keeps tower alive; it decides nothing."""
     target_dir = os.path.expanduser("~/Library/LaunchAgents")
@@ -265,6 +282,16 @@ def build_parser():
     run_p.add_argument("--repo")
     run_p.add_argument("--branch")
     run_p.set_defaults(func=cmd_flight_run)
+
+    sandbox = subs.add_parser("sandbox-probes", help="transactional probes, hourly or slower")
+    sandbox_subs = sandbox.add_subparsers(dest="sandbox_command", required=True)
+    sandbox_install = sandbox_subs.add_parser("install", help="add the plan, disabled")
+    sandbox_install.add_argument("--every", type=float, default=3600.0, help="seconds, >= 3600")
+    sandbox_install.add_argument("--timeout", type=float, default=600.0)
+    sandbox_install.set_defaults(func=cmd_sandbox_install)
+    sandbox_run = sandbox_subs.add_parser("run", help=argparse.SUPPRESS)
+    sandbox_run.add_argument("--timeout", type=float, default=600.0)
+    sandbox_run.set_defaults(func=cmd_sandbox_run)
 
     install = subs.add_parser("install", help="write and load the launchd plist")
     install.add_argument("--interval", type=float, default=5.0)

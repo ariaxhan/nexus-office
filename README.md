@@ -223,6 +223,30 @@ there. A message addressed to a session `hcom` calls inactive is refused rather
 than sent, since a "sent" over a message nothing will ever read is exactly the
 false green this project exists to kill.
 
+## The sandbox probes
+
+Transactional checks (a no-charge checkout, a care account lifecycle, the KR EN
+ES journeys) never run in the five-minute core. They run only as flights of the
+`sandbox-probes` plan, which `nexus/sandbox_probes.py` adds disabled, hourly or
+slower, with a timeout that ends before the next run. The client factory it
+loads sees only `NEXUS_SANDBOX_*` variables, so live credentials cannot reach it.
+`tests/test_sandbox_probes.py` proves all three bounds.
+
+```sh
+export NEXUS_SANDBOX_CLIENTS=serving_repo.probes:sandbox_clients   # module:function(env)
+python3 -m nexus sandbox-probes install --every 3600 --timeout 600  # added disabled
+python3 -m nexus plans enable sandbox-probes                        # start scheduling
+python3 -m nexus plans disable sandbox-probes                       # stop scheduling
+python3 -m nexus plans release sandbox-probes                       # lift a quarantine
+python3 -m nexus retry <flight>                                     # one more attempt
+python3 -m nexus log <flight>                                       # retained evidence
+```
+
+Each flight prints one JSON report under a fresh `sandbox-<uuid>` run id, with
+every probe's redacted evidence rows; that report is the flight log the tower
+keeps after failure. Journey screenshots land in the flight workspace under
+`evidence/<run id>/`.
+
 ## Verify gates
 
 ```sh

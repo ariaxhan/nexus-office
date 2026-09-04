@@ -1,0 +1,98 @@
+"""The repository check for the sandbox plan: cadence, timeout, isolation from the core."""
+
+from __future__ import annotations
+
+import ast
+import pathlib
+import sys
+import tempfile
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from nexus import sandbox_probes as sp  # noqa: E402
+from nexus.checkout_probe import Checkout  # noqa: E402
+from nexus.ledger import Ledger, loads  # noqa: E402
+
+TRANSACTIONAL = {"nexus.checkout_probe", "nexus.care_probe", "nexus.journeys",
+                 "nexus.sandbox_probes", "checkout_probe", "care_probe", "journeys",
+                 "sandbox_probes"}
+CORE = [ROOT / "nexus" / name for name in
+        ("tower.py", "flights.py", "ledger.py", "cli.py", "radio.py", "landing.py",
+         "repairs.py", "probes.py", "__main__.py")] + sorted((ROOT / "client").glob("*.py"))
+
+
+def module_imports(path: pathlib.Path) -> set:
+    """Imports at module level only: the core may not load a probe when it starts."""
+    names = set()
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.update(f"{node.module or ''}.{alias.name}".strip(".") for alias in node.names)
+            names.update(alias.name for alias in node.names)
+    return names
+
+
+class CheckoutClient:
+    def create_checkout(self, request):
+        return Checkout("checkout-abcd", request["amount"], request["currency"],
+                        request["success_redirect"], False, {"status": "open"})
+
+    def expire_checkout(self, checkout_id):
+        pass
+
+
+def clients(env):
+    assert set(env) == {sp.CLIENTS_ENV, "NEXUS_SANDBOX_KEY"}, env
+    return {"checkout": CheckoutClient()}
+
+
+class PlanBoundsTest(unittest.TestCase):
+    def test_cadence_is_hourly_or_slower(self):
+        self.assertEqual(3600.0, sp.plan_definition()["schedule"]["every"])
+        self.assertEqual(7200.0, sp.plan_definition(7200)["schedule"]["every"])
+        with self.assertRaises(ValueError):
+            sp.plan_definition(300)
+
+    def test_timeout_is_bounded_and_ends_before_the_next_run(self):
+        self.assertEqual(1800.0, sp.plan_definition(timeout_s=1800)["budget"]["timeout_s"])
+        for timeout in (0, 1801, 3601):
+            with self.assertRaises(ValueError):
+                sp.plan_definition(timeout_s=timeout)
+
+    def test_install_adds_the_plan_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Ledger(f"{tmp}/ledger.sqlite")
+            plan = ledger.plan(sp.install_plan(ledger))
+            self.assertEqual(0, plan["enabled"])
+            self.assertEqual({"every": 3600.0}, loads(plan["schedule"]))
+            self.assertEqual(0, loads(plan["budget"])["max_retries"])
+            self.assertIn("sandbox-probes run", loads(plan["inputs"])["cmd"])
+            with self.assertRaises(ValueError):
+                sp.install_plan(ledger)
+
+
+class IsolationTest(unittest.TestCase):
+    def test_core_imports_no_transactional_probe(self):
+        for path in CORE:
+            self.assertFalse(module_imports(path) & TRANSACTIONAL, path.name)
+
+    def test_only_sandbox_variables_reach_the_client_factory(self):
+        environ = {sp.CLIENTS_ENV: f"{__name__}:clients", "NEXUS_SANDBOX_KEY": "sk_test",
+                   "STRIPE_LIVE_KEY": "sk_live", "HOME": "/nowhere"}
+        self.assertEqual({sp.CLIENTS_ENV, "NEXUS_SANDBOX_KEY"}, set(sp.sandbox_env(environ)))
+        with tempfile.TemporaryDirectory() as tmp:
+            report = sp.run(sp.load_clients(environ), "sandbox-1", 30, pathlib.Path(tmp))
+        self.assertTrue(report["ok"])
+        self.assertEqual(["verify", "cleanup"], [r["step"] for r in report["probes"]["checkout"]])
+
+    def test_run_refuses_without_a_client_factory(self):
+        for environ in ({}, {sp.CLIENTS_ENV: "nowhere"}):
+            with self.assertRaises(ValueError):
+                sp.load_clients(environ)
+
+
+if __name__ == "__main__":
+    unittest.main()
