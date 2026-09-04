@@ -1458,7 +1458,24 @@
           "comment_at": ""
         }
       ],
-      "activity_dropped": 12
+      "activity_dropped": 12,
+      "work": {
+        "state": "ok",
+        "products": [
+          {"id":"mommyai","name":"MommyAI","status":"22/24 built","ready":22,"total":24,"remaining":2,"changed":"MommyAI L023 canonical page landed","blocked":"lesson021 DRAFT, lesson022 DRAFT","next":"lesson021 DRAFT","proof":[{"label":"catalog","url":"https://github.com/Thinking-Brain-School/tbs-curriculum"},{"label":"live","url":"https://thinkingbrainschool.com/mommyai/paid/lesson020"}],"updated_at":"2026-09-04T17:14:30Z"},
+          {"id":"superpowerai","name":"Superpower","status":"11/12 built","ready":11,"total":12,"remaining":1,"changed":"L013 artwork landed","blocked":"lesson012 DRAFT","next":"lesson012 DRAFT","proof":[{"label":"catalog","url":"https://github.com/Thinking-Brain-School/tbs-curriculum"},{"label":"live","url":"https://thinkingbrainschool.com/superpowerai/paid/lesson011"}],"updated_at":"2026-09-04T17:17:33Z"}
+        ],
+        "changes": [
+          {"id":"change-1","project":"tbs-curriculum","summary":"Superpower L013 artwork landed","at":"2026-09-04T17:17:33Z","url":"https://github.com/Thinking-Brain-School/tbs-curriculum"},
+          {"id":"change-2","project":"tbs-landing","summary":"MommyAI L023 canonical page landed","at":"2026-09-04T16:14:30Z","url":"https://github.com/Thinking-Brain-School/tbs-landing"}
+        ]
+      },
+      "runs": {
+        "state":"ok","detail":"","done":3,"active":1,"open":0,"needs":0,
+        "families":[
+          {"id":"tbs-work","name":"tbs-work","state":"running","enabled":true,"last_at":"2026-09-04T18:00:00Z","summary":"repairing Superpower lesson012","count":7,"done":6,"failed":0,"active":1,"open":0,"needs":false,"runs":[{"id":"flt-demo","state":"running","title":"run tbs-work","started_at":"2026-09-04T18:00:00Z","ended_at":"","duration_s":312,"summary":"repairing lesson012","transcript":[{"speaker":"requested","text":"Repair the next unmet lesson acceptance criterion."},{"speaker":"run","text":"Opened the catalog, selected lesson012, and started the repair."}]}]}
+        ]
+      }
     }
   },
   "sessions": {
