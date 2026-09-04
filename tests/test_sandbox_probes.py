@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
+import json
+import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -69,9 +74,27 @@ class PlanBoundsTest(unittest.TestCase):
             self.assertEqual(0, plan["enabled"])
             self.assertEqual({"every": 3600.0}, loads(plan["schedule"]))
             self.assertEqual(0, loads(plan["budget"])["max_retries"])
-            self.assertIn("sandbox-probes run", loads(plan["inputs"])["cmd"])
+            self.assertIn("sandbox-probes run --timeout 600", loads(plan["inputs"])["cmd"])
             with self.assertRaises(ValueError):
                 sp.install_plan(ledger)
+
+    def test_configured_timeout_reaches_the_flight_command(self):
+        self.assertIn("--timeout 17", sp.plan_definition(timeout_s=17)["inputs"]["cmd"])
+
+    def test_cli_installs_the_disabled_plan_with_exact_bounds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "ledger.sqlite"
+            installed = subprocess.run(
+                [sys.executable, "-m", "nexus", "--ledger", str(path),
+                 "sandbox-probes", "install", "--every", "7200", "--timeout", "17"],
+                cwd=ROOT, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, installed.returncode, installed.stderr)
+            plan = Ledger(str(path)).plan_by_name(sp.PLAN_NAME)
+            self.assertEqual(0, plan["enabled"])
+            self.assertEqual({"every": 7200.0}, loads(plan["schedule"]))
+            self.assertEqual(17.0, loads(plan["budget"])["timeout_s"])
+            self.assertIn("--timeout 17", loads(plan["inputs"])["cmd"])
 
 
 class IsolationTest(unittest.TestCase):
@@ -83,10 +106,39 @@ class IsolationTest(unittest.TestCase):
         environ = {sp.CLIENTS_ENV: f"{__name__}:clients", "NEXUS_SANDBOX_KEY": "sk_test",
                    "STRIPE_LIVE_KEY": "sk_live", "HOME": "/nowhere"}
         self.assertEqual({sp.CLIENTS_ENV, "NEXUS_SANDBOX_KEY"}, set(sp.sandbox_env(environ)))
-        with tempfile.TemporaryDirectory() as tmp:
-            report = sp.run(sp.load_clients(environ), "sandbox-1", 30, pathlib.Path(tmp))
-        self.assertTrue(report["ok"])
-        self.assertEqual(["verify", "cleanup"], [r["step"] for r in report["probes"]["checkout"]])
+        with self.assertRaisesRegex(ValueError, "client factory missing"):
+            sp.load_clients(environ)
+
+    def test_main_hides_live_environment_and_redacts_sandbox_secrets(self):
+        secret = "sandbox-secret-value"
+        module = sys.modules[__name__]
+        previous = getattr(module, "isolated_clients", None)
+
+        def isolated_clients(env):
+            self.assertNotIn("STRIPE_LIVE_KEY", os.environ)
+            self.assertEqual(secret, os.environ["NEXUS_SANDBOX_KEY"])
+            raise RuntimeError(f"provider rejected {secret}")
+
+        module.isolated_clients = isolated_clients
+        output = io.StringIO()
+        environ = {sp.CLIENTS_ENV: f"{__name__}:isolated_clients",
+                   "NEXUS_SANDBOX_KEY": secret, "STRIPE_LIVE_KEY": "live-secret"}
+        try:
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(1, sp.main(environ, 30, pathlib.Path("unused")))
+        finally:
+            if previous is None:
+                delattr(module, "isolated_clients")
+            else:
+                module.isolated_clients = previous
+        report = json.loads(output.getvalue())
+        self.assertEqual("provider rejected [redacted]", report["error"])
+        self.assertNotIn(secret, output.getvalue())
+
+    def test_all_three_transactional_clients_are_required(self):
+        with self.assertRaisesRegex(ValueError, "care, journey"):
+            sp.load_clients({sp.CLIENTS_ENV: f"{__name__}:clients",
+                             "NEXUS_SANDBOX_KEY": "test"})
 
     def test_run_refuses_without_a_client_factory(self):
         for environ in ({}, {sp.CLIENTS_ENV: "nowhere"}):

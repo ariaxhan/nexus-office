@@ -13,8 +13,11 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import json
+import os
+import shlex
 import sys
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import care_probe, checkout_probe, journeys
@@ -24,7 +27,7 @@ MIN_EVERY_S = 3600.0
 MAX_TIMEOUT_S = 1800.0
 CLIENTS_ENV = "NEXUS_SANDBOX_CLIENTS"
 ENV_PREFIX = "NEXUS_SANDBOX_"
-COMMAND = f"{sys.executable} -m nexus sandbox-probes run"
+REQUIRED_CLIENTS = frozenset({"checkout", "care", "journey", "browser_factory"})
 
 
 def plan_definition(every_s: float = MIN_EVERY_S, timeout_s: float = 600.0) -> dict:
@@ -33,8 +36,10 @@ def plan_definition(every_s: float = MIN_EVERY_S, timeout_s: float = 600.0) -> d
         raise ValueError(f"cadence must be at least {MIN_EVERY_S:g}s, got {every_s:g}")
     if not 0 < timeout_s <= min(MAX_TIMEOUT_S, every_s):
         raise ValueError(f"timeout must be within (0, {min(MAX_TIMEOUT_S, every_s):g}]s")
+    command = (f"{shlex.quote(sys.executable)} -m nexus sandbox-probes run "
+               f"--timeout {timeout_s:g}")
     return {"name": PLAN_NAME, "kind": "script", "schedule": {"every": every_s},
-            "inputs": {"cmd": COMMAND, "env": [CLIENTS_ENV]},
+            "inputs": {"cmd": command},
             "budget": {"timeout_s": timeout_s, "max_retries": 0, "concurrency": 1},
             "resources": ["sandbox"],
             "resolution_policy": {"may_retry": True, "may_accept": True}}
@@ -62,7 +67,23 @@ def load_clients(environ: dict) -> dict:
     clients = getattr(importlib.import_module(module_name), function)(env)
     if not clients:
         raise ValueError("client factory returned no sandbox clients")
+    missing = sorted(REQUIRED_CLIENTS - set(clients))
+    if missing:
+        raise ValueError(f"client factory missing: {', '.join(missing)}")
     return clients
+
+
+@contextmanager
+def isolated_environment(environ: dict):
+    """Make live process credentials unavailable while adapters import and run."""
+    before = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(sandbox_env(environ))
+    try:
+        yield dict(os.environ)
+    finally:
+        os.environ.clear()
+        os.environ.update(before)
 
 
 def run(clients: dict, run_id: str, timeout_s: float, evidence_dir: Path) -> dict:
@@ -102,9 +123,26 @@ def _rows(evidence) -> list:
 def main(environ: dict, timeout_s: float, evidence_dir: Path) -> int:
     """The flight body: exit 0 only when every probe passed; the report is the log."""
     run_id = f"sandbox-{uuid.uuid4().hex}"
+    safe_env = sandbox_env(environ)
     try:
-        report = run(load_clients(environ), run_id, timeout_s, evidence_dir)
+        with isolated_environment(safe_env) as isolated:
+            report = run(load_clients(isolated), run_id, timeout_s, evidence_dir)
     except Exception as exc:
         report = {"run_id": run_id, "ok": False, "error": str(exc)}
+    report = _redact(report, tuple(
+        value for key, value in safe_env.items()
+        if key != CLIENTS_ENV and len(value) >= 8
+    ))
     print(json.dumps(report, sort_keys=True, default=str))
     return 0 if report["ok"] else 1
+
+
+def _redact(value, secrets: tuple[str, ...]):
+    if isinstance(value, dict):
+        return {key: _redact(item, secrets) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item, secrets) for item in value]
+    if isinstance(value, str):
+        for secret in secrets:
+            value = value.replace(secret, "[redacted]")
+    return value
