@@ -28,6 +28,22 @@ def _ended(flight):
     return flight["state"] in TERMINAL
 
 
+def _cancel(led, flight, flight_id):
+    if not fl.kill(flight["pid"], flight["workspace"]):
+        led.set_state(flight_id, "resolving", expect=flight["state"],
+                      resolution_step="teardown_unconfirmed")
+        print(f"could not stop the complete process tree for {flight_id}", file=sys.stderr)
+        return 1
+    if led.set_state(flight_id, "cancelled", expect=flight["state"],
+                     result={"ok": False, "artifacts": [],
+                             "error": {"code": "cancelled", "detail": "operator"}, "cost": {}}):
+        led.release_leases(flight_id)
+        print(f"cancelled {flight_id}")
+        return 0
+    print(f"{flight_id} moved on its own; nothing to cancel", file=sys.stderr)
+    return 1
+
+
 def _ledger(args) -> Ledger:
     return Ledger(args.ledger)
 
@@ -71,19 +87,7 @@ def cmd_kill(args):
     if _ended(flight):
         print(f"{args.flight} already ended ({flight['state']})")
         return 0
-    if not fl.kill(flight["pid"], flight["workspace"]):
-        led.set_state(args.flight, "resolving", expect=flight["state"],
-                      resolution_step="teardown_unconfirmed")
-        print(f"could not stop the complete process tree for {args.flight}", file=sys.stderr)
-        return 1
-    if led.set_state(args.flight, "cancelled", expect=flight["state"],
-                     result={"ok": False, "artifacts": [],
-                             "error": {"code": "cancelled", "detail": "operator"}, "cost": {}}):
-        led.release_leases(args.flight)
-        print(f"cancelled {args.flight}")
-        return 0
-    print(f"{args.flight} moved on its own; nothing to cancel", file=sys.stderr)
-    return 1
+    return _cancel(led, flight, args.flight)
 
 
 def cmd_retry(args):
