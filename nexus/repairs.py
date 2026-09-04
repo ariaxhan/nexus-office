@@ -1,10 +1,12 @@
-"""One GitHub repair issue for each failed deterministic check."""
+"""Keep GitHub repair issues aligned with deterministic live proof."""
 
 from __future__ import annotations
 
 import json
 import subprocess
 from collections.abc import Callable, Iterable, Mapping
+
+from .probes import SCHEMA, build_probe_output
 
 MARKER_PREFIX = "nexus-repair-check:"
 REPAIR_LABELS = {"p0", "ready"}
@@ -26,6 +28,48 @@ def reconcile_repairs(
     if len(ids) != len(set(ids)):
         raise RepairError("duplicate failed check_id")
     return [_reconcile(row, call) for row in rows]
+
+
+def reconcile_probe_output(
+    output: Mapping,
+    request: Callable[[list[str]], object] | None = None,
+) -> list[dict]:
+    """Close passing repairs and requeue failed ones from one complete proof."""
+    if not isinstance(output, Mapping) or output.get("schema_version") != SCHEMA:
+        raise RepairError(f"schema_version must be {SCHEMA}")
+    checks = output.get("checks")
+    if not isinstance(checks, list):
+        raise RepairError("checks must be an array")
+    try:
+        rows = build_probe_output(checks)["checks"]
+    except (TypeError, ValueError) as exc:
+        raise RepairError(str(exc)) from exc
+    call = request or _gh
+    return [_apply_proof(row, call) for row in rows]
+
+
+def _apply_proof(proof: dict, call: Callable[[list[str]], object]) -> dict:
+    path = f"repos/{proof['owner']}/issues/{proof['repair_issue']}"
+    issue = call(["GET", path])
+    if not isinstance(issue, Mapping) or issue.get("number") != proof["repair_issue"]:
+        raise RepairError("GitHub issue response did not match repair_issue")
+    labels = {label.get("name") for label in issue.get("labels", [])
+              if isinstance(label, Mapping) and label.get("name")}
+    passing = proof["state"] == "pass"
+    wanted_state = "closed" if passing else "open"
+    wanted_labels = labels if passing else labels | REPAIR_LABELS
+    if issue.get("state") == wanted_state and labels == wanted_labels:
+        return _proof_result(proof, "unchanged")
+    args = ["PATCH", path, "state=" + wanted_state]
+    if not passing:
+        args.extend("labels[]=" + label for label in sorted(wanted_labels))
+    call(args)
+    return _proof_result(proof, "closed" if passing else "requeued")
+
+
+def _proof_result(proof: dict, action: str) -> dict:
+    return {"check_id": proof["check_id"], "repository": proof["owner"],
+            "issue": proof["repair_issue"], "action": action}
 
 
 def _failure(failure: Mapping, registry: Mapping[str, str]) -> dict:
