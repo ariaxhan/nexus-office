@@ -187,6 +187,9 @@ The independent heartbeat survives tower failure. The core probe never charges, 
 messages, or mutates customer data. Slower sandbox probes cover checkout, care lifecycle,
 Kakao/SMS receipts, PWA playback/install, and complete KR/EN/ES journeys.
 
+Delivery recovery is idempotent: each review flight compares `main...staging`, promotes the exact
+staging SHA through the repository release controller, and retries until both branches agree.
+
 ## Ledger model
 
 One file: `~/Library/Application Support/nexus/ledger.sqlite`, WAL mode, `PRAGMA user_version`
