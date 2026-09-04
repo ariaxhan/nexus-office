@@ -27,8 +27,8 @@ becomes unnecessary. This is not a cleanup campaign.
 
 Controlled repair of the live ledger against reviewed merge
 `4a22bbe24293c30249160b0ffc621a0f0fed0276` (#132), run from the installed checkout with the
-tower stopped. Do not rerun it and do not restore a backup over it: `bak-2` predates flights
-that have since landed.
+tower stopped. Do not rerun it and do not restore a backup over it: flights ran and finished
+after `bak-2`, while the landing count stayed at 3.
 
 Background: cancelled flight `flt_88142dd1ded2` moved the live ledger from v1 to a PR #129
 style v2 at 2026-09-04T08:28:45Z, leaving a foreign key on the dropped `objectives` table.
