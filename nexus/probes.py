@@ -26,6 +26,19 @@ _CHECK_OWNER_ROWS = (
 )
 
 
+def _text(value, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+    return value.strip()
+
+
+def _owner(value) -> str:
+    owner = _text(value, "owner")
+    if owner.count("/") != 1 or not all(owner.split("/")):
+        raise ValueError("owner must be a GitHub owner/repository")
+    return owner
+
+
 def build_check_registry(rows: Iterable[tuple[str, str]]) -> dict[str, str]:
     """Validate check-to-repository declarations without hiding duplicates."""
     registry = {}
@@ -90,16 +103,3 @@ def _repair_row(check: Mapping) -> dict:
         raise ValueError("state must be pass or fail")
     return {"check_id": check_id, "owner": owner,
             "repair_issue": issue, "state": state}
-
-
-def _text(value, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field} must be a non-empty string")
-    return value.strip()
-
-
-def _owner(value) -> str:
-    owner = _text(value, "owner")
-    if owner.count("/") != 1 or not all(owner.split("/")):
-        raise ValueError("owner must be a GitHub owner/repository")
-    return owner
