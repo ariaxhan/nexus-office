@@ -231,10 +231,58 @@ def cmd_install(args):
     return 0
 
 
+def cmd_work(args):
+    from . import work
+    try:
+        entries = work.registry(args.registry)
+        if args.work_command == "status":
+            print(json.dumps(work.read_status(args.ledger, entries), sort_keys=True))
+            return 0
+        led = _ledger(args)
+        try:
+            if args.work_command == "run":
+                result = work.run(led, entries, args.repo)
+            elif args.work_command == "claim":
+                entry = next((e for e in entries if e["repo"] == args.repo.lower()), None)
+                if entry is None:
+                    raise work.WorkError(f"unknown repository: {args.repo}")
+                work.discover(led, entry)
+                result = {"flight": work.claim(led, entry["repo"], args.issue, args.pid)}
+            else:
+                work.release(led, args.flight, args.pid)
+                result = {"released": args.flight}
+            print(json.dumps(result, sort_keys=True))
+            if isinstance(result, list):
+                return int(any(r["state"] in ("failed", "exhausted") for r in result))
+            return 0
+        finally:
+            led.close()
+    except (OSError, ValueError, KeyError, StopIteration, work.LedgerError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="nexus", description="one ledger, one tower")
     parser.add_argument("--ledger", default=None, help="ledger path (default: NEXUS_LEDGER)")
     subs = parser.add_subparsers(dest="command", required=True)
+
+    work_p = subs.add_parser("work", help="registry issue delivery")
+    work_subs = work_p.add_subparsers(dest="work_command", required=True)
+    for name in ("status", "run", "claim", "release"):
+        sub = work_subs.add_parser(name)
+        sub.add_argument("--registry", required=True)
+        sub.set_defaults(func=cmd_work)
+        if name == "status":
+            sub.add_argument("--json", action="store_true")
+        if name in ("run", "claim"):
+            sub.add_argument("--repo", required=name == "claim")
+        if name in ("claim", "release"):
+            sub.add_argument("--pid", type=int, required=True)
+        if name == "claim":
+            sub.add_argument("issue", type=int)
+        if name == "release":
+            sub.add_argument("flight")
 
     tower_p = subs.add_parser("tower", help="the controller")
     tower_subs = tower_p.add_subparsers(dest="tower_command", required=True)

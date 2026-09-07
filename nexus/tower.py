@@ -118,6 +118,8 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
 def _enforce_budgets(ledger, now):
     killed = 0
     for flight in ledger.flights(states=("running",)):
+        if ledger.plan(flight["plan_id"])["kind"] == "work":
+            continue
         plan = ledger.plan(flight["plan_id"])
         timeout_s, _, _ = _budget(plan)
         started = flight["started_at"] or flight["created_at"]
@@ -139,6 +141,8 @@ def _reap(ledger, now, root):
     """Read `result.json`, never the log. The runner decides, the child does not."""
     out = {"produced": 0, "failed": 0}
     for flight in ledger.flights(states=("running",)):
+        if ledger.plan(flight["plan_id"])["kind"] == "work":
+            continue
         workspace = flight["workspace"] or fl.workspace_path(root, flight["id"])
         result, error = fl.read_result(workspace)
         if error == "missing_result":
@@ -181,6 +185,8 @@ def _reconcile_vanished(ledger, now, root):
     """Narrow: only a row whose process is provably gone with nothing to show."""
     gone = 0
     for flight in ledger.flights(states=("running",)):
+        if ledger.plan(flight["plan_id"])["kind"] == "work":
+            continue
         if fl.alive(flight["pid"]):
             continue
         if flight["pid"] is None and (flight["started_at"] or now) + PID_GRACE_S > now:
@@ -253,6 +259,8 @@ def _sweep_workspaces(ledger):
     a produced flight" survives tower being killed between the two writes.
     """
     for flight in ledger.flights(states=("failed", "cancelled", "landed"), limit=200):
+        if ledger.plan(flight["plan_id"])["kind"] == "work":
+            continue
         workspace = flight["workspace"]
         if workspace and os.path.isdir(workspace):
             if flight["state"] != "landed" and not _keep_log(ledger, flight["id"], workspace):
@@ -264,6 +272,8 @@ def _retry_exhausted(ledger, now):
     """Retry per budget; when the budget is spent the task is abandoned, not looped."""
     made = 0
     for flight in ledger.flights(states=("failed",), limit=200):
+        if ledger.plan(flight["plan_id"])["kind"] == "work":
+            continue
         task_id = flight["task_id"]
         if not task_id:
             continue
@@ -301,6 +311,8 @@ def _land(ledger, now):
     """
     landed = 0
     for flight in ledger.flights(states=("produced",)):
+        if ledger.plan(flight["plan_id"])["kind"] == "work":
+            continue
         target = _target(ledger, flight)
         if target is None:
             continue
@@ -429,6 +441,8 @@ def _quarantine(ledger, now):
     """N consecutive failures and the plan stops, loudly, instead of failing forever."""
     count = 0
     for plan in ledger.plans(runnable_only=True):
+        if plan["kind"] == "work":
+            continue
         _, max_retries, _ = _budget(plan)
         limit = QUARANTINE_AFTER  # a scheduled plan failing once is Tuesday, not a quarantine
         recent = ledger.flights(plan_id=plan["id"], limit=limit)
@@ -489,6 +503,8 @@ def _schedule(ledger, now):
     """A due plan produces a TASK. Flights only ever come from tasks."""
     made = 0
     for plan in ledger.plans(runnable_only=True):
+        if plan["kind"] == "work":
+            continue
         # Interval ticks are reminders, not work inventory. A slow plan gets one
         # execution, then becomes eligible again after that flight terminates.
         # Without this, every elapsed interval accumulates another queued flight.
@@ -525,6 +541,8 @@ def accept_tasks(ledger, now=None):
     now = now if now is not None else time.time()
     accepted = rejected = 0
     for task in ledger.tasks(states=("candidate", "ranked")):
+        if task["origin"] == "github-work":
+            continue
         plan = ledger.plan(task["plan_id"]) if task["plan_id"] else None
         policy = effective_policy(ledger, plan) if plan else {}
         if plan is None or not plan["enabled"] or plan["quarantined_at"] is not None \
@@ -545,6 +563,8 @@ def accept_tasks(ledger, now=None):
 
     # accepted-with-no-flight is the state a crash between the two writes leaves.
     for task in ledger.tasks(states=("accepted",)):
+        if task["origin"] == "github-work":
+            continue
         if not task["plan_id"]:
             continue
         flight = ledger.create_flight(task["plan_id"], task_id=task["id"], now=now,
@@ -565,6 +585,8 @@ def _launch(ledger, now, root):
         running[row["plan_id"]] = running.get(row["plan_id"], 0) + 1
     queued = sorted(ledger.flights(states=("queued",)), key=lambda r: r["created_at"])
     for flight in queued:
+        if ledger.plan(flight["plan_id"])["kind"] == "work":
+            continue
         plan = ledger.plan(flight["plan_id"])
         timeout_s, _, concurrency = _budget(plan)
         if running.get(plan["id"], 0) >= concurrency:
