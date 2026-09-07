@@ -113,6 +113,25 @@ else:
         self.assertEqual(1, len(work.registry(path)))
         self.assertEqual(str(self.root.resolve()), work.registry(path)[0]["path"])
 
+    def test_null_workspace_remains_unavailable_and_never_executes_in_cwd(self):
+        entry = dict(self.entry, path=None)
+        path = self.root / "registry.json"
+        path.write_text(json.dumps({"repositories": [entry]}))
+        loaded = work.registry(path)
+        self.assertIsNone(loaded[0]["path"])
+        self.assertFalse(work.status(self.led, loaded)["repositories"][0]["available"])
+        self.assertFalse(work.read_status(self.root / "absent.sqlite", loaded)["repositories"][0]["available"])
+        with patch("nexus.work.subprocess.Popen") as spawn:
+            with self.assertRaisesRegex(work.WorkError, "checkout unavailable"):
+                work.adapter([sys.executable], entry, {}, self.root / "adapter.log")
+            spawn.assert_not_called()
+
+    def test_inventory_offloaded_directory_is_not_a_checkout(self):
+        entry = dict(self.entry, availability={"local_git_at_inventory": True})
+        self.assertFalse(work.workspace_available(entry))
+        (self.root / ".git").mkdir()
+        self.assertTrue(work.workspace_available(entry))
+
     def test_intake_survives_source_window(self):
         work.discover(self.led, self.entry)
         self.led.conn.execute("UPDATE tasks SET created_at=1")
