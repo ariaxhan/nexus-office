@@ -54,6 +54,24 @@ class RunnerCancellationTest(unittest.TestCase):
             self.assertFalse(flights.alive(timeout_pid))
             self.assertTrue(flights.teardown_confirmed(tmp, runner.pid))
 
+    def test_runner_cancels_descendant_new_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            child_file = os.path.join(tmp, "detached-child")
+            script = os.path.join(tmp, "spawn.py")
+            with open(script, "w") as f:
+                f.write("import subprocess,time,sys\np=subprocess.Popen([sys.executable,'-c','import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)'],start_new_session=True)\nopen(sys.argv[1],'w').write(str(p.pid))\ntime.sleep(60)\n")
+            runner = self.runner(tmp, f"{sys.executable} {script} {child_file}")
+            self.addCleanup(lambda: runner.poll() is None and runner.kill())
+            self.assertTrue(wait_for(lambda: os.path.exists(child_file)))
+            with open(child_file) as handle:
+                child = int(handle.read())
+            self.addCleanup(lambda: flights.alive(child) and os.kill(child, signal.SIGKILL))
+            self.assertEqual(child, os.getsid(child))
+            os.kill(runner.pid, signal.SIGTERM)
+            runner.wait(timeout=5)
+            self.assertTrue(wait_for(lambda: not flights.alive(child)))
+            self.assertTrue(flights.teardown_confirmed(tmp, runner.pid))
+
     def test_runner_reaps_background_work_after_its_group_leader_exits(self):
         with tempfile.TemporaryDirectory() as tmp:
             child_file = os.path.join(tmp, "child")
