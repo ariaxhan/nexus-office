@@ -36,6 +36,10 @@ if mode == 'verify':
         print((root / 'pending').read_text())
     elif any(any(l['name'] == 'direct' for l in pr.get('labels', [])) for pr in data['pull_requests']):
         print(json.dumps(dict(state='pending', reason='PR claimed', evidence=['claim'])))
+    elif receipt.exists() and (root / 'source-stage').exists():
+        result = json.loads((root / 'source-stage').read_text())
+        result.setdefault('idempotency_key', data['idempotency_key'])
+        print(json.dumps(result))
     elif receipt.exists():
         print(json.dumps(dict(state='delivered', verified=True,
             evidence=[str(receipt)], idempotency_key=data['idempotency_key'])))
@@ -491,6 +495,46 @@ else:
         work.release(self.led, fid, os.getpid())
         self.assertEqual('done', self.run_work()[0]['state'])
         self.assertEqual(1, len(self.calls()))
+
+    def test_verified_source_continuation_is_pending_not_failed(self):
+        (self.root / 'source-stage').write_text(json.dumps(dict(
+            state='absent', retry_safe=True, resume_kind='review',
+            evidence=[{'url':'https://github.com/sample/product/pull/2', 'head':'exact-head'}])))
+        self.assertEqual('pending', self.run_work()[0]['state'])
+        self.assertEqual(1, len(self.calls()))
+        self.assertEqual([], self.led.events(kind='work.failure'))
+        self.assertEqual([], self.closed)
+        self.assertNotEqual('done', self.led.tasks()[0]['state'])
+        self.assertTrue(self.led.events(kind='work.pending'))
+
+    def test_source_continuation_with_foreign_identity_cannot_hide_failure(self):
+        (self.root / 'source-stage').write_text(json.dumps(dict(
+            state='absent', retry_safe=True, resume_kind='review',
+            idempotency_key='github:other/repo#1',
+            evidence=[{'url':'https://github.com/sample/product/pull/2', 'head':'exact-head'}])))
+        self.assertEqual('failed', self.run_work()[0]['state'])
+        self.assertEqual([], self.led.events(kind='work.pending'))
+        self.assertEqual([], self.closed)
+
+    def test_source_continuation_without_evidence_cannot_hide_failure(self):
+        (self.root / 'source-stage').write_text(json.dumps(dict(
+            state='absent', retry_safe=True, resume_kind='review', evidence=[])))
+        self.assertEqual('failed', self.run_work()[0]['state'])
+        self.assertEqual([], self.led.events(kind='work.pending'))
+        self.assertEqual([], self.closed)
+
+    def test_malformed_source_evidence_does_not_suppress_failures(self):
+        for number, evidence in enumerate((True, ' ', [None], [{}],
+                                          [{'url':' ', 'head':'sha'}],
+                                          [{'url':'https://example.test/pr', 'head':False}]), 1):
+            with self.subTest(evidence=evidence):
+                self.issues = [dict(number=number, title='Source stage', state='open',
+                                    labels=[{'name':'ready'}])]
+                (self.root / 'source-stage').write_text(json.dumps(dict(
+                    state='absent', retry_safe=True, resume_kind='review', evidence=evidence)))
+                self.assertEqual('failed', self.run_work()[-1]['state'])
+                self.assertEqual([], self.led.events(kind='work.pending'))
+                self.assertEqual([], self.closed)
 
     def test_fair_bounded_selection_across_repositories(self):
         self.issues += [dict(number=n, title=str(n), state='open', labels=[{'name': 'ready'}]) for n in range(2, 5)]

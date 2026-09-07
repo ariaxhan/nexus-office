@@ -367,6 +367,21 @@ def select_executor(entry, issue):
     return routes[next(iter(selected))] if selected else entry["executor"]
 
 
+def source_evidence(value):
+    return (isinstance(value, list) and bool(value)
+            and all(isinstance(item, dict)
+                    and all(isinstance(item.get(key), str) and item[key].strip()
+                            for key in ('url', 'head')) for item in value))
+
+
+def source_continuation(result, payload):
+    """Only an authoritative verifier can attest a resumable source review stage."""
+    return (result['state'] == 'absent' and result.get('retry_safe') is True
+            and result.get('idempotency_key') == payload['idempotency_key']
+            and result.get('resume_kind') in ('review', 'repair')
+            and source_evidence(result.get('evidence')))
+
+
 def execute(led, entry, task):
     previous = led.flights(task_id=task["id"])
     uncertain = any(row["state"] != "cancelled" or latest(led, "work.executing", row["id"]) for row in previous)
@@ -418,6 +433,9 @@ def execute(led, entry, task):
         adapter(argv, entry, payload, log,
                 lambda pid: led.event("work.process", fid, {"pid": pid}, "work"))
         result = proof(entry, payload, log)
+        if source_continuation(result, payload):
+            result = dict(result, state='pending',
+                          reason=result.get('reason') or f"Verified source awaits {result['resume_kind']}")
         if result["state"] == "pending":
             return pending(led, fid, result)
         if result["state"] != "delivered":
