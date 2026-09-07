@@ -29,6 +29,7 @@ import os
 import json
 import pathlib
 import re
+import sqlite3
 import time
 
 from sources import _card
@@ -202,7 +203,7 @@ def _flow(job: str, name: str, reg: dict | None, receipts: list[dict],
     }
 
 
-def read(now: float | None = None) -> dict:
+def _read_scheduled(now: float | None = None) -> dict:
     root = clock._root()
     if root is None:
         return {"state": "unconfigured",
@@ -287,7 +288,7 @@ def _why(fl: dict) -> str:
     return state
 
 
-def card(data: dict, now: float | None = None) -> dict:
+def _scheduled_card(data: dict, now: float | None = None) -> dict:
     """One line per flow, worst first, and a headline that names the worst."""
     if data.get("state") != "ok":
         return _card.trouble(TITLE, data.get("state"), data.get("detail"), TROUBLE)
@@ -312,3 +313,42 @@ def card(data: dict, now: float | None = None) -> dict:
              for fl in flows]
     as_of = max((fl.get("last_run") or "" for fl in flows), default="")
     return _card.build(TITLE, headline, alarm, as_of, facts)
+
+
+def read(now: float | None = None) -> dict:
+    data = _read_scheduled(now)
+    registry_path = os.environ.get("OFFICE_WORK_REGISTRY")
+    if not registry_path:
+        return data
+    try:
+        from nexus import work
+        outcomes = work.read_status(os.environ.get("OFFICE_WORK_LEDGER"),
+                                    work.registry(registry_path))
+    except (OSError, ValueError, KeyError, ImportError, sqlite3.Error) as exc:
+        return {"state": "unreadable", "detail": str(exc)}
+    data["work"] = outcomes
+    return data
+
+
+def card(data: dict, now: float | None = None) -> dict:
+    result = _scheduled_card(data, now)
+    outcomes = data.get("work")
+    if outcomes is None:
+        return result
+    tasks = outcomes["tasks"]
+    done = sum(t["state"] == "done" for t in tasks)
+    failures = sum(t.get("disposition", {}).get("state", "failed" if t["failure"] else t["state"]) == "failed" and t["state"] != "done" for t in tasks)
+    missing = sum(e["enabled"] and not e["available"] for e in outcomes["repositories"])
+    facts = list(result.get("facts", []))[:5]
+    facts += [_card.fact("Work outcomes", f"{done}/{len(tasks)} proven", "ok" if done == len(tasks) else "warn"),
+              _card.fact("Work failures", str(failures), "bad" if failures else "dim"),
+              _card.fact("Work coverage gaps", str(missing), "warn" if missing else "dim")]
+    rows = [_card.row(t["id"], t["title"], t["dedupe_key"],
+                      t.get("disposition", {}).get("reason", t["failure"].get("error", "")),
+                      t.get("disposition", {}).get("state", t["state"]),
+                      "bad" if t.get("disposition", {}).get("state") == "failed" else "dim") for t in tasks]
+    headline = result["headline"]
+    if failures or missing:
+        headline = f"Work: {failures} failed items, {missing} coverage gaps"
+    return _card.build(TITLE, headline, result.get("needs", 0) + failures + missing,
+                       result.get("as_of", ""), facts, rows)
