@@ -189,7 +189,7 @@ def eligibility(issue):
         return "owned"
     if labels.intersection({"hold", "on-hold", "blocked", "cancelled", "canceled"}):
         return "held"
-    return "ready" if "ready" in labels else "resume" if "in-pr" in labels else "ineligible"
+    return "ready" if "ready" in labels else "resume" if labels.intersection({"in-pr", "in pr"}) else "ineligible"
 
 
 def context(led, entry, task, issue=None):

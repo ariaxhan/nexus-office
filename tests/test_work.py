@@ -505,3 +505,11 @@ else:
             report = work.run(self.led, [self.entry], max_items=1)
         self.assertEqual(['held', 'done'], [row['state'] for row in report])
         self.assertEqual([2], [call['issue']['number'] for call in self.calls()])
+
+    def test_spaced_tbs_in_pr_label_resumes_pending_proof(self):
+        self.issues[0]['labels'] = [{'name': 'in pr'}]
+        self.prs = [dict(number=20, state='open')]
+        (self.root / 'pending').write_text(json.dumps(dict(state='pending', reason='exact-head client review', evidence=['PR20'])))
+        self.assertEqual('pending', self.run_work()[0]['state'])
+        self.assertEqual([], self.calls())
+        self.assertEqual([], self.led.events(kind='work.failure'))
