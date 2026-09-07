@@ -173,6 +173,39 @@ def claim(led, repo, number, owner_pid, *, runner=False):
     return fid
 
 
+def stop(led, flight):
+    """Stop recorded execution sessions; a direct claim never owns its desktop PID."""
+    fid = flight["id"]
+    process = latest(led, "work.process", fid).get("pid")
+    runner = bool(led.events(kind="work.runner", subject=fid))
+    owner = flight["pid"]
+    if latest(led, "work.executing", fid) and not process:
+        return False
+    if runner and owner and owner != os.getpid() and flights.alive(owner):
+        try:
+            os.kill(owner, signal.SIGSTOP)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            return False
+    if process and not flights._kill_owned_session(process):
+        return False
+    if runner and owner and owner != os.getpid():
+        try:
+            os.kill(owner, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            return False
+        deadline = time.monotonic() + flights.SESSION_KILL_S
+        while flights._live_pids([owner]) != []:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(flights.KILL_POLL_S)
+    led.event("work.teardown", fid, {"session": process, "runner": runner, "ok": True}, "work")
+    return True
+
+
 def release(led, fid, owner_pid):
     row = led.flight(fid)
     if row is None or row["pid"] != owner_pid:

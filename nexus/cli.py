@@ -17,6 +17,7 @@ import sys
 
 from . import flights as fl
 from . import tower
+from . import work
 from .ledger import TERMINAL, Ledger, loads
 
 PLIST_LABEL = "com.nexus.tower"
@@ -29,9 +30,12 @@ def _ended(flight):
 
 
 def _cancel(led, flight, flight_id):
-    if not fl.kill(flight["pid"], flight["workspace"]):
-        led.set_state(flight_id, "resolving", expect=flight["state"],
-                      resolution_step="teardown_unconfirmed")
+    owned_work = led.plan(flight["plan_id"])["kind"] == "work"
+    stopped = work.stop(led, flight) if owned_work else fl.kill(flight["pid"], flight["workspace"])
+    if not stopped:
+        if flight["state"] != "resolving":
+            led.set_state(flight_id, "resolving", expect=flight["state"],
+                          resolution_step="teardown_unconfirmed")
         print(f"could not stop the complete process tree for {flight_id}", file=sys.stderr)
         return 1
     if led.set_state(flight_id, "cancelled", expect=flight["state"],

@@ -264,11 +264,55 @@ def _session_members(session_id: int):
     return members
 
 
+def _owned_members(session_id):
+    """Include new sessions created by descendants before freezing the owner tree."""
+    members = _session_members(session_id)
+    if members is None:
+        return None
+    try:
+        rows = subprocess.check_output(["ps", "-axo", "pid=,ppid=,stat="],
+                                       text=True, timeout=2).splitlines()
+        parents = {}
+        for row in rows:
+            pid, parent, state = row.split()
+            if not state.startswith("Z"):
+                parents[int(pid)] = int(parent)
+        owned = {pid for pid, _ in members}
+        while True:
+            children = {pid for pid, parent in parents.items() if parent in owned}
+            if children <= owned:
+                break
+            owned.update(children)
+        result = []
+        for pid in owned:
+            try:
+                result.append((pid, os.getpgid(pid)))
+            except ProcessLookupError:
+                continue
+        return result
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _live_pids(pids):
+    if not pids:
+        return []
+    try:
+        result = subprocess.run(["ps", "-p", ",".join(map(str, pids)), "-o", "pid=,stat="],
+                                capture_output=True, text=True, timeout=2)
+        if result.returncode not in (0, 1):
+            return None
+        return [int(row.split()[0]) for row in result.stdout.splitlines()
+                if not row.split()[1].startswith("Z")]
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+
+
 def _kill_owned_session(session_id: int, timeout_s: float = SESSION_KILL_S) -> bool:
     """Freeze and kill every live process in the command's stable POSIX session."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        members = _session_members(session_id)
+        members = _owned_members(session_id)
         if members is None:
             return False
         if not members:
@@ -280,18 +324,40 @@ def _kill_owned_session(session_id: int, timeout_s: float = SESSION_KILL_S) -> b
                 pass
             except OSError:
                 return False
-        frozen = _session_members(session_id)
+        frozen = _owned_members(session_id)
         if frozen is None:
             return False
-        for group in {group for _pid, group in frozen}:
+        # A child may fork between the first snapshot and its parent's SIGSTOP.
+        stopped = {pid for pid, _ in members}
+        while {pid for pid, _ in frozen} - stopped:
+            if time.monotonic() >= deadline:
+                return False
+            for pid, _ in frozen:
+                try:
+                    os.kill(pid, signal.SIGSTOP)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    return False
+            stopped.update(pid for pid, _ in frozen)
+            frozen = _owned_members(session_id)
+            if frozen is None:
+                return False
+        # Every frozen PID is owned, including descendants that created another session.
+        # Signal exact PIDs; killing their now-empty group again can return EPERM on macOS.
+        for pid, _group in frozen:
             try:
-                os.killpg(group, signal.SIGKILL)
+                os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             except OSError:
                 return False
         time.sleep(KILL_POLL_S)
-    members = _session_members(session_id)
+        while _live_pids([pid for pid, _ in frozen]) != []:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(KILL_POLL_S)
+    members = _owned_members(session_id)
     return members == []
 
 
