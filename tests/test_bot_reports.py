@@ -14,6 +14,7 @@ import bot_reports  # noqa: E402
 class Door(BaseHTTPRequestHandler):
     turns = {bot: [] for bot in bot_reports.BOTS}
     messages = []
+    scenario = "success"
     world = {
         "generated": "2026-09-04T08:00:00Z",
         "stations": [{"repo": "owner/repo"}],
@@ -31,7 +32,13 @@ class Door(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(size))
         bot = body["bot"]
         self.messages.append(body["message"])
-        self.turns[bot].append({"id": f"reply-{bot}", "role": "assistant", "content": "done"})
+        group = None if self.scenario == "missing-group" else f"group-{bot}"
+        self.turns[bot].append({"id": f"user-{bot}", "role": "user", "content": "Daily report." if self.scenario == "wrong-request" else body["message"], "inference_group_id": group})
+        if self.scenario != "unrelated-only":
+            self.turns[bot].append({"id": f"reply-{bot}", "role": "assistant", "content": "done",
+                                    "inference_group_id": group, "ok": self.scenario != "failed"})
+        self.turns[bot].append({"id": "unrelated", "role": "assistant", "content": "other",
+                                "inference_group_id": "other-group", "ok": True})
         self.reply(202, {"ok": True})
 
     def reply(self, status, body):
@@ -50,6 +57,7 @@ class BotReportsTest(unittest.TestCase):
     def setUp(self):
         Door.turns = {bot: [] for bot in bot_reports.BOTS}
         Door.messages = []
+        Door.scenario = "success"
         Door.world = {
             "generated": "2026-09-04T08:00:00Z",
             "stations": [{"repo": "owner/repo"}],
@@ -79,7 +87,26 @@ class BotReportsTest(unittest.TestCase):
 
     def test_the_scheduler_triggers_identity_instead_of_puppeteering_the_voice(self):
         bot_reports.run_report("north", self.base, timeout_s=1)
-        self.assertEqual(Door.messages, [bot_reports.REPORT_TRIGGER])
+        self.assertEqual(len(Door.messages), 1)
+        self.assertRegex(Door.messages[0], r"^Daily report\.\n\n<!-- office-report:[0-9a-f]{32} -->$")
+
+    def test_failed_matching_inference_is_not_a_success(self):
+        Door.scenario = "failed"
+        with self.assertRaisesRegex(ValueError, "inference did not succeed"):
+            bot_reports.run_report("north", self.base, timeout_s=1)
+
+    def test_missing_group_and_wrong_request_fail_closed(self):
+        for scenario in ("missing-group", "wrong-request"):
+            with self.subTest(scenario=scenario):
+                Door.turns = {bot: [] for bot in bot_reports.BOTS}
+                Door.scenario = scenario
+                with self.assertRaises(TimeoutError):
+                    bot_reports.run_report("north", self.base, timeout_s=0.05)
+
+    def test_unrelated_assistant_does_not_complete_report(self):
+        Door.scenario = "unrelated-only"
+        with self.assertRaises(TimeoutError):
+            bot_reports.run_report("north", self.base, timeout_s=0.05)
 
 
 if __name__ == "__main__":
