@@ -487,7 +487,7 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
             if count >= max_items or time.monotonic() >= deadline:
                 break
             token = _deadline.set(min(deadline, time.monotonic() +
-                                      (deadline - time.monotonic()) / (len(entries) - index)))
+                                      (deadline - time.monotonic()) / min(len(entries) - index, max_items - count)))
             try:
                 name = entry["repo"]
                 if name not in queues:

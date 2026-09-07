@@ -500,6 +500,17 @@ else:
         self.assertEqual(['sample/product', 'sample/other'], [r['repo'] for r in report])
         self.assertEqual(2, len(self.calls()))
 
+    def test_single_item_keeps_execution_budget_and_rotates_repositories(self):
+        self.script.write_text('import time; time.sleep(0.6)\n' + self.script.read_text())
+        entries = [self.entry] + [dict(self.entry, repo=f'sample/other-{i}') for i in range(7)]
+        report = work.run(self.led, entries, budget_s=3, max_items=1)
+        self.assertEqual(['done'], [row['state'] for row in report])
+        self.assertEqual('sample/product', report[0]['repo'])
+        self.assertEqual(1, len(self.calls()))
+        following = work.run(self.led, entries, budget_s=3, max_items=1)
+        self.assertEqual('sample/other-0', following[0]['repo'])
+        self.assertEqual('done', following[0]['state'])
+
     def test_budget_prevents_launch_and_reserves_other_repository_time(self):
         other = dict(self.entry, repo='sample/other')
         self.entry['executor'] = [sys.executable, '-c', 'import time; time.sleep(10)']
