@@ -295,6 +295,8 @@ def _owned_members(session_id):
 
 
 def _live_pids(pids):
+    if not pids:
+        return []
     try:
         result = subprocess.run(["ps", "-p", ",".join(map(str, pids)), "-o", "pid=,stat="],
                                 capture_output=True, text=True, timeout=2)

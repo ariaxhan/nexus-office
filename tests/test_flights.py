@@ -94,6 +94,11 @@ class RunnerCancellationTest(unittest.TestCase):
 
 
 class KillContractTest(unittest.TestCase):
+    @mock.patch("nexus.flights.subprocess.run")
+    def test_empty_pid_inventory_is_already_stopped(self, run):
+        self.assertEqual([], flights._live_pids([]))
+        run.assert_not_called()
+
     @mock.patch("nexus.flights.subprocess.check_output", side_effect=OSError("no ps"))
     def test_session_enumeration_failure_is_not_confirmed(self, _check):
         self.assertFalse(flights._kill_owned_session(123, timeout_s=0.1))

@@ -169,6 +169,27 @@ else:
         self.assertFalse(flights.alive(child))
         self.assertIsNone(self.led.conn.execute("SELECT * FROM leases WHERE holder_flight=?",(fid,)).fetchone())
 
+    def test_cancel_separate_runner_confirms_it_exited_before_release(self):
+        from nexus import cli, flights
+        import time
+        childfile=self.root/"runner-session"
+        program="import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)'],start_new_session=True); open(sys.argv[1],'w').write(str(p.pid)); time.sleep(60)"
+        runner=subprocess.Popen([sys.executable,"-c",program,str(childfile)],start_new_session=True)
+        self.addCleanup(lambda: runner.poll() is None and runner.kill())
+        deadline=time.monotonic()+3
+        while not childfile.exists() and time.monotonic()<deadline: time.sleep(.01)
+        child=int(childfile.read_text())
+        self.addCleanup(lambda: flights.alive(child) and os.kill(child,9))
+        work.discover(self.led,self.entry)
+        fid=work.claim(self.led,self.entry["repo"],1,runner.pid,runner=True)
+        self.led.event("work.executing",fid,{"issue":1},"work")
+        self.led.event("work.process",fid,{"pid":child},"work")
+        self.assertEqual(0,cli._cancel(self.led,self.led.flight(fid),fid))
+        self.assertEqual([],flights._live_pids([runner.pid,child]))
+        runner.wait(timeout=2)
+        self.assertIsNone(self.led.conn.execute("SELECT * FROM leases WHERE holder_flight=?",(fid,)).fetchone())
+        self.assertTrue(work.latest(self.led,"work.teardown",fid)["ok"])
+
     def test_repeat_unconfirmed_cancellation_keeps_lease_without_transition_error(self):
         from nexus import cli
         work.discover(self.led,self.entry)

@@ -197,6 +197,11 @@ def stop(led, flight):
             pass
         except OSError:
             return False
+        deadline = time.monotonic() + flights.SESSION_KILL_S
+        while flights._live_pids([owner]) != []:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(flights.KILL_POLL_S)
     led.event("work.teardown", fid, {"session": process, "runner": runner, "ok": True}, "work")
     return True
 
