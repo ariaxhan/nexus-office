@@ -339,8 +339,11 @@ def card(data: dict, now: float | None = None) -> dict:
     done = sum(t["state"] == "done" for t in tasks)
     failures = sum(t.get("disposition", {}).get("state", "failed" if t["failure"] else t["state"]) == "failed" and t["state"] != "done" for t in tasks)
     missing = sum(e["enabled"] and not e["available"] for e in outcomes["repositories"])
-    facts = list(result.get("facts", []))[:5]
-    facts += [_card.fact("Work outcomes", f"{done}/{len(tasks)} proven", "ok" if done == len(tasks) else "warn"),
+    available = sum(e["available"] for e in outcomes["repositories"])
+    total = len(outcomes["repositories"])
+    facts = list(result.get("facts", []))[:4]
+    facts += [_card.fact("Work coverage", f"{total} registered · {available} local · {total - available} unavailable", "dim"),
+              _card.fact("Work outcomes", f"{done}/{len(tasks)} proven", "ok" if done == len(tasks) else "warn"),
               _card.fact("Work failures", str(failures), "bad" if failures else "dim"),
               _card.fact("Work coverage gaps", str(missing), "warn" if missing else "dim")]
     rows = [_card.row(t["id"], t["title"], t["dedupe_key"],

@@ -225,6 +225,13 @@ else:
         self.assertTrue(any(row["label"] == "Work failures" and row["value"] == "1"
                             for row in card["facts"]))
 
+    def test_office_names_registry_coverage_separately_from_desks(self):
+        from sources import flows
+        report = work.status(self.led, [self.entry, dict(self.entry, repo="other/repo", path=None)])
+        card = flows.card({"state": "unconfigured", "work": report})
+        self.assertIn({"label": "Work coverage", "value": "2 registered · 1 local · 1 unavailable", "tone": "dim"}, card["facts"])
+        self.assertTrue(any(f["label"] == "Work coverage gaps" and f["value"] == "1" for f in card["facts"]))
+
     def test_capture_all_execute_only_ready(self):
         for number, label in enumerate((None, "hold", "direct", "cancelled"), 2):
             self.issues.append(dict(number=number, title=str(number), state="open",
