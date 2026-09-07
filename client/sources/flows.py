@@ -337,15 +337,16 @@ def card(data: dict, now: float | None = None) -> dict:
         return result
     tasks = outcomes["tasks"]
     done = sum(t["state"] == "done" for t in tasks)
-    failures = sum(bool(t["failure"]) and t["state"] != "done" for t in tasks)
+    failures = sum(t.get("disposition", {}).get("state", "failed" if t["failure"] else t["state"]) == "failed" and t["state"] != "done" for t in tasks)
     missing = sum(e["enabled"] and not e["available"] for e in outcomes["repositories"])
     facts = list(result.get("facts", []))[:5]
     facts += [_card.fact("Work outcomes", f"{done}/{len(tasks)} proven", "ok" if done == len(tasks) else "warn"),
               _card.fact("Work failures", str(failures), "bad" if failures else "dim"),
               _card.fact("Work coverage gaps", str(missing), "warn" if missing else "dim")]
     rows = [_card.row(t["id"], t["title"], t["dedupe_key"],
-                      t["failure"].get("error", ""), t["state"],
-                      "bad" if t["failure"] and t["state"] != "done" else "dim") for t in tasks]
+                      t.get("disposition", {}).get("reason", t["failure"].get("error", "")),
+                      t.get("disposition", {}).get("state", t["state"]),
+                      "bad" if t.get("disposition", {}).get("state") == "failed" else "dim") for t in tasks]
     headline = result["headline"]
     if failures or missing:
         headline = f"Work: {failures} failed items, {missing} coverage gaps"

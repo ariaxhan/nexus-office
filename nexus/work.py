@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+import math
 import json
 import os
 from pathlib import Path
@@ -13,6 +15,19 @@ import time
 
 from . import flights
 from .ledger import Ledger, LedgerError, TERMINAL, default_path, loads, new_id
+
+
+_deadline = ContextVar("work_deadline", default=None)
+
+
+def remaining(limit):
+    deadline = _deadline.get()
+    if deadline is None:
+        return limit
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise WorkError("command budget exhausted")
+    return min(limit, left)
 
 
 class WorkError(LedgerError):
@@ -59,7 +74,7 @@ def registry(path):
 
 def github(repo, endpoint):
     proc = subprocess.run(["gh", "api", "--paginate", "--slurp", f"repos/{repo}/{endpoint}"],
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, timeout=remaining(60))
     if proc.returncode:
         raise WorkError(proc.stderr.strip() or "GitHub API failed")
     pages = json.loads(proc.stdout)
@@ -156,7 +171,7 @@ def release(led, fid, owner_pid):
 def issue_now(led, entry, task):
     number = latest(led, "work.issue", task["id"])["number"]
     proc = subprocess.run(["gh", "api", f"repos/{entry['repo']}/issues/{number}"],
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, timeout=remaining(60))
     if proc.returncode:
         raise WorkError(proc.stderr.strip() or "issue lookup failed")
     issue = json.loads(proc.stdout)
@@ -174,7 +189,7 @@ def eligibility(issue):
         return "owned"
     if labels.intersection({"hold", "on-hold", "blocked", "cancelled", "canceled"}):
         return "held"
-    return "ready" if "ready" in labels else "ineligible"
+    return "ready" if "ready" in labels else "resume" if "in-pr" in labels else "ineligible"
 
 
 def context(led, entry, task, issue=None):
@@ -188,7 +203,7 @@ def context(led, entry, task, issue=None):
             matches[source["html_url"]] = source
     return {"repo": entry["repo"], "issue": issue, "pull_requests": list(matches.values()),
             "task": task["id"], "provider": entry["provider"], "account": entry["account"],
-            "idempotency_key": task["dedupe_key"], "mode": "resume" if matches else "build",
+            "idempotency_key": task["dedupe_key"], "mode": "resume" if matches or eligibility(issue) == "resume" else "build",
             "item_attempts": conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))}
 
 
@@ -196,13 +211,14 @@ def adapter(argv, entry, payload, log, started=None):
     """One bounded process session; JSON input, retained output and diagnostics."""
     timeout = min(3600, max(1, float(entry.get("timeout_s", 600))))
     env = dict(os.environ, NEXUS_WORK_PROVIDER=entry["provider"], NEXUS_WORK_ACCOUNT=entry["account"])
+    timeout = remaining(timeout)
     with open(log, "ab") as handle:
         proc = subprocess.Popen(argv, cwd=entry["path"], env=env, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=handle, start_new_session=True)
         try:
             if started:
                 started(proc.pid)
-            output, _ = proc.communicate(json.dumps(payload).encode(), timeout=timeout)
+            output, _ = proc.communicate(json.dumps(payload).encode(), timeout=remaining(timeout))
         except BaseException:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.communicate()
@@ -248,11 +264,11 @@ def close_issue(led, payload):
     if issue["state"] == "closed":
         led.event("work.closed", payload["task"], {"repo": payload["repo"]}, "work")
         return
-    if eligibility(issue) != "ready":
+    if eligibility(issue) not in ("ready", "resume"):
         raise WorkError("issue closure held by current eligibility")
     proc = subprocess.run(["gh", "api", "--method", "PATCH",
                            f"repos/{payload['repo']}/issues/{payload['issue']['number']}",
-                           "-f", "state=closed"], capture_output=True, text=True, timeout=60)
+                           "-f", "state=closed"], capture_output=True, text=True, timeout=remaining(60))
     if proc.returncode:
         raise WorkError(proc.stderr.strip() or "issue closure failed")
     if json.loads(proc.stdout).get("state") != "closed":
@@ -278,6 +294,19 @@ def fail(led, fid, exc):
         led.fail(fid, "work_failed", str(exc), expect=row["state"])
 
 
+def pending(led, fid, result):
+    now = time.time()
+    retry = result.get("retry_at", now + 60)
+    if not isinstance(retry, (int, float)) or not math.isfinite(retry):
+        retry = now + 60
+    retry = min(now + 86400, max(now + 1, retry))
+    tid = led.flight(fid)["task_id"]
+    led.event("work.pending", tid, dict(result, next_retry=retry), "work")
+    item_attempt(led, fid, "pending", retry, result.get("evidence"))
+    led.set_state(fid, "cancelled", expect="running", source="work")
+    return "pending"
+
+
 def select_executor(entry, issue):
     routes = entry.get("routes", {})
     labels = {r["name"] for r in issue.get("labels", [])}
@@ -289,7 +318,7 @@ def select_executor(entry, issue):
 
 def execute(led, entry, task):
     previous = led.flights(task_id=task["id"])
-    uncertain = any(row["state"] != "cancelled" for row in previous)
+    uncertain = any(row["state"] != "cancelled" or latest(led, "work.executing", row["id"]) for row in previous)
     for row in previous:
         if row["state"] in TERMINAL:
             continue
@@ -310,38 +339,36 @@ def execute(led, entry, task):
     try:
         payload = context(led, entry, task)
         state = eligibility(payload["issue"])
-        if state != "ready" and not uncertain:
+        if state not in ("ready", "resume") and not uncertain:
             led.set_state(fid, "cancelled", expect="running", source="work")
             return state
         result = proof(entry, payload, log)
         if result["state"] == "delivered":
             finish(led, fid, payload, result)
             return "done"
-        if state != "ready":
+        if state not in ("ready", "resume"):
             led.set_state(fid, "cancelled", expect="running", source="work")
             return state
         if result["state"] == "pending":
-            raise WorkError("delivery pending")
-        if (uncertain or payload["item_attempts"]) and result.get("retry_safe") is not True:
+            return pending(led, fid, result)
+        if (uncertain or payload["item_attempts"] or payload["mode"] == "resume") and result.get("retry_safe") is not True:
             raise WorkError("prior execution requires authoritative retry clearance")
         attempts = sum(bool(latest(led, "work.executing", r["id"])) for r in previous)
         if attempts >= min(10, entry.get("max_attempts", 3)):
             raise WorkError("executor attempts exhausted")
         payload["issue"] = issue_now(led, entry, task)
         state = eligibility(payload["issue"])
-        if state != "ready":
+        if state not in ("ready", "resume"):
             led.set_state(fid, "cancelled", expect="running", source="work")
             return state
-        if any({label["name"].lower() for label in pr.get("labels", [])}.intersection(
-                {"direct", "claimed", "hold", "on-hold", "blocked"}) for pr in payload["pull_requests"]):
-            led.set_state(fid, "cancelled", expect="running", source="work")
-            return "owned"
         argv = select_executor(entry, payload["issue"])
         led.event("work.executing", fid, payload, "work")
         item_attempt(led, fid, "started")
         adapter(argv, entry, payload, log,
                 lambda pid: led.event("work.process", fid, {"pid": pid}, "work"))
         result = proof(entry, payload, log)
+        if result["state"] == "pending":
+            return pending(led, fid, result)
         if result["state"] != "delivered":
             raise WorkError("requested outcome not proven")
         finish(led, fid, payload, result)
@@ -351,25 +378,86 @@ def execute(led, entry, task):
         return "failed"
 
 
-def run(led, entries, repo=None):
+def run(led, entries, repo=None, *, budget_s=300, max_items=20):
+    if not math.isfinite(budget_s) or not 1 <= budget_s <= 3600 or not 1 <= max_items <= 100:
+        raise WorkError("budget must be 1..3600 seconds; max_items must be 1..100")
     if repo and repo.lower() not in {e["repo"] for e in entries}:
         raise WorkError(f"unknown repository: {repo}")
-    report = []
-    for entry in entries:
-        if not entry["enabled"] or (repo and entry["repo"] != repo.lower()):
-            continue
-        try:
-            discover(led, entry)
-        except (OSError, ValueError, KeyError, TypeError, LedgerError, subprocess.SubprocessError) as exc:
-            led.event("work.discovery_failed", entry["repo"], {"error": str(exc)}, "work")
-            report.append({"repo": entry["repo"], "state": "failed", "error": str(exc)})
-            continue
-        for task in led.tasks():
-            if not str(task["dedupe_key"]).startswith(f"github:{entry['repo']}#"):
-                continue
-            state = run_task(led, entry, task)
-            report.append({"repo": entry["repo"], "task": task["id"], "state": state})
+    entries = [e for e in entries if e["enabled"] and (not repo or e["repo"] == repo.lower())]
+    # Least recently serviced repositories first, using existing ledger receipts.
+    entries.sort(key=lambda e: latest(led, "work.serviced", e["repo"]).get("at", 0))
+    deadline = time.monotonic() + budget_s
+    report, queues = [], {}
+    count = 0
+    while entries and count < max_items and time.monotonic() < deadline:
+        for index, entry in enumerate(entries[:]):
+            if count >= max_items or time.monotonic() >= deadline:
+                break
+            token = _deadline.set(min(deadline, time.monotonic() +
+                                      (deadline - time.monotonic()) / (len(entries) - index)))
+            try:
+                name = entry["repo"]
+                if name not in queues:
+                    discover(led, entry)
+                    tasks = [t for t in led.tasks() if str(t["dedupe_key"]).startswith(f"github:{name}#")
+                             and not (t["state"] == "done" and latest(led, "work.closed", t["id"]))]
+                    def priority(t):
+                        issue = latest(led, "work.issue", t["id"])
+                        labels = {l["name"].lower() for l in issue.get("labels", [])}
+                        bonus = 86400 * (bool(led.flights(task_id=t["id"])) + bool(labels & {"urgent", "p0", "p1", "in-pr"}))
+                        return t["created_at"] - bonus
+                    queues[name] = sorted(tasks, key=priority)
+                queue = queues[name]
+                while (queue and eligibility(latest(led, "work.issue", queue[0]["id"])) in ("ready", "resume")
+                       and next_retry(led, queue[0]) > time.time()):
+                    task = queue.pop(0)
+                    detail = latest(led, "work.pending", task["id"])
+                    disposition(led, task, "backoff", detail.get("reason", "waiting for next check"),
+                                evidence=detail.get("evidence", []), next_retry=next_retry(led, task))
+                    report.append(dict(repo=name, task=task["id"], state="backoff"))
+                if not queue:
+                    continue
+                task = queue.pop(0)
+                count += 1
+                state = run_task(led, entry, task)
+                report.append(dict(repo=name, task=task["id"], state=state))
+            except (OSError, ValueError, KeyError, TypeError, LedgerError, subprocess.SubprocessError) as exc:
+                led.event("work.discovery_failed", entry["repo"], {"error": str(exc)}, "work")
+                report.append(dict(repo=entry["repo"], state="failed", error=str(exc)))
+                queues[entry["repo"]] = []
+            finally:
+                led.event("work.serviced", entry["repo"], {"at": time.time()}, "work")
+                _deadline.reset(token)
+        entries = [e for e in entries if queues.get(e["repo"])]
     return report
+
+
+def next_retry(led, task):
+    if task["state"] == "done":
+        return 0
+    row = led.conn.execute("SELECT payload FROM events WHERE subject=? AND kind IN "
+                           "('work.failure','work.pending') ORDER BY id DESC LIMIT 1", (task["id"],)).fetchone()
+    rows = [loads(row[0], {})] if row else []
+    return max([0] + [r.get("next_retry", 0) for r in rows] +
+               [float(r.get("retry_at") or 0) for r in conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))])
+
+
+def disposition(led, task, state, reason, **details):
+    led.event("work.disposition", task["id"], dict(state=state, reason=reason, **details), "work")
+
+
+def run_task(led, entry, task):
+    state = _run_task(led, entry, task)
+    detail = latest(led, "work.pending", task["id"]) if state == "pending" else {}
+    if state == "failed":
+        detail = latest(led, "work.failure", task["id"])
+    issue = latest(led, "work.issue", task["id"])
+    reason = state
+    if state in ("held", "owned", "ineligible"):
+        reason = f"{state}: current issue labels " + ", ".join(l["name"] for l in issue.get("labels", []))
+    disposition(led, task, state, detail.get("reason", detail.get("error", reason)),
+                evidence=detail.get("evidence", []), next_retry=next_retry(led, task))
+    return state
 
 
 def conveyor_attempts(led, subject):
@@ -382,7 +470,7 @@ def conveyor_attempts(led, subject):
     return list(steps.values())
 
 
-def run_task(led, entry, task):
+def _run_task(led, entry, task):
     try:
         if task["state"] == "done":
             if not latest(led, "work.closed", task["id"]):
@@ -391,15 +479,12 @@ def run_task(led, entry, task):
         state = eligibility(issue_now(led, entry, task))
         reconcile = state == "closed" and any(
             latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"]))
-        if state != "ready" and not reconcile:
+        if state not in ("ready", "resume") and not reconcile:
             return state
         conveyor = conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))
         if any(float(row.get("retry_at") or 0) > time.time() for row in conveyor):
             return "backoff"
-        if any(row.get("status") in ("running", "started", "pending", "owned", "held") for row in conveyor):
-            return "owned"
-        failure = latest(led, "work.failure", task["id"])
-        if failure.get("next_retry", 0) > time.time():
+        if next_retry(led, task) > time.time():
             return "backoff"
         return execute(led, entry, task)
     except Owned:
@@ -412,7 +497,7 @@ def run_task(led, entry, task):
 def status(led, entries):
     return {"repositories": [dict(repo=e["repo"], path=e["path"], enabled=e["enabled"],
                                   available=Path(e["path"]).is_dir()) for e in entries],
-            "tasks": [dict(t, failure=latest(led, "work.failure", t["id"]))
+            "tasks": [dict(t, disposition=latest(led, "work.disposition", t["id"]), failure=latest(led, "work.failure", t["id"]))
                       for t in led.tasks() if t["origin"] == "github-work"],
             "attempts": [dict(f) for f in led.flights()
                          if led.plan(f["plan_id"])["kind"] == "work"],

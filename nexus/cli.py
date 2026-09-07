@@ -241,7 +241,7 @@ def cmd_work(args):
         led = _ledger(args)
         try:
             if args.work_command == "run":
-                result = work.run(led, entries, args.repo)
+                result = work.run(led, entries, args.repo, budget_s=args.budget_s, max_items=args.max_items)
             elif args.work_command == "claim":
                 entry = next((e for e in entries if e["repo"] == args.repo.lower()), None)
                 if entry is None:
@@ -273,6 +273,9 @@ def build_parser():
         sub = work_subs.add_parser(name)
         sub.add_argument("--registry", required=True)
         sub.set_defaults(func=cmd_work)
+        if name == "run":
+            sub.add_argument("--budget-s", type=float, default=300)
+            sub.add_argument("--max-items", type=int, default=20)
         if name == "status":
             sub.add_argument("--json", action="store_true")
         if name in ("run", "claim"):

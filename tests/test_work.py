@@ -32,6 +32,10 @@ if mode == 'verify':
         sys.exit(7)
     if (root / 'unknown').exists():
         print('{}')
+    elif (root / 'pending').exists():
+        print((root / 'pending').read_text())
+    elif any(any(l['name'] == 'direct' for l in pr.get('labels', [])) for pr in data['pull_requests']):
+        print(json.dumps(dict(state='pending', reason='PR claimed', evidence=['claim'])))
     elif receipt.exists():
         print(json.dumps(dict(state='delivered', verified=True,
             evidence=[str(receipt)], idempotency_key=data['idempotency_key'])))
@@ -244,7 +248,7 @@ else:
 
     def test_existing_pr_direct_claim_prevents_execution(self):
         self.prs = [dict(number=20, state="open", labels=[{"name": "direct"}])]
-        self.assertEqual("owned", self.run_work()[0]["state"])
+        self.assertEqual("pending", self.run_work()[0]["state"])
         self.assertEqual([], self.calls())
 
     def test_independent_repository_survives_failure(self):
@@ -347,3 +351,128 @@ else:
         self.assertEqual("closed", self.run_work()[0]["state"])
         self.assertNotEqual("done", self.led.tasks()[0]["state"])
         self.assertEqual([], self.calls())
+
+    def test_in_pr_pending_rechecks_without_executor_or_failure(self):
+        self.issues[0]['labels'] = [{'name': 'in-pr'}]
+        self.prs = [dict(number=20, state='open')]
+        marker = self.root / 'pending'
+        marker.write_text(json.dumps(dict(state='pending', reason='required client review', evidence=['PR20'], retry_at=10**12)))
+        self.assertEqual('pending', self.run_work()[0]['state'])
+        task = self.led.tasks()[0]
+        pending = work.latest(self.led, 'work.pending', task['id'])
+        self.assertLessEqual(pending['next_retry'], work.time.time() + 86400)
+        self.assertEqual('backoff', self.run_work()[0]['state'])
+        self.assertEqual([], self.led.events(kind='work.failure'))
+        self.assertEqual([], self.led.events(kind='work.executing'))
+        marker.unlink()
+        (self.root / 'delivered-1').touch()
+        self.led.event('work.pending', task['id'], {'next_retry': 0}, 'fixture')
+        self.assertEqual('done', self.run_work()[0]['state'])
+        self.assertEqual([], self.calls())
+
+    def test_historical_hold_reconciles_after_release_but_active_owner_survives(self):
+        self.led.event('work.item_attempt', 'sample/product#1', dict(step='build', status='held'), 'conveyor')
+        self.issues[0]['labels'].append({'name': 'hold'})
+        self.assertEqual('held', self.run_work()[0]['state'])
+        self.issues[0]['labels'] = [{'name': 'ready'}]
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid())
+        self.assertEqual('owned', self.run_work()[0]['state'])
+        self.assertEqual([], self.calls())
+        work.release(self.led, fid, os.getpid())
+        self.assertEqual('done', self.run_work()[0]['state'])
+        self.assertEqual(1, len(self.calls()))
+
+    def test_fair_bounded_selection_across_repositories(self):
+        self.issues += [dict(number=n, title=str(n), state='open', labels=[{'name': 'ready'}]) for n in range(2, 5)]
+        (self.root / 'fail-1').touch()
+        other = dict(self.entry, repo='sample/other')
+        report = work.run(self.led, [self.entry, other], max_items=2)
+        self.assertEqual(['sample/product', 'sample/other'], [r['repo'] for r in report])
+        self.assertEqual(2, len(self.calls()))
+
+    def test_budget_prevents_launch_and_reserves_other_repository_time(self):
+        other = dict(self.entry, repo='sample/other')
+        self.entry['executor'] = [sys.executable, '-c', 'import time; time.sleep(10)']
+        start = work.time.monotonic()
+        report = work.run(self.led, [self.entry, other], budget_s=2, max_items=2)
+        self.assertEqual(['failed', 'done'], [r['state'] for r in report])
+        self.assertLess(work.time.monotonic() - start, 3)
+        token = work._deadline.set(work.time.monotonic() - 1)
+        try:
+            with patch('nexus.work.subprocess.Popen') as spawn:
+                with self.assertRaises(work.WorkError):
+                    work.adapter(other['executor'], other, {}, self.root / 'log')
+                spawn.assert_not_called()
+        finally:
+            work._deadline.reset(token)
+
+    def test_current_dispositions_retain_held_and_cancelled(self):
+        self.issues[0]['labels'] = [{'name': 'cancelled'}]
+        self.assertEqual('held', self.run_work()[0]['state'])
+        report = work.status(self.led, [self.entry])
+        self.assertEqual('held', report['tasks'][0]['disposition']['state'])
+        self.assertNotEqual('done', report['tasks'][0]['state'])
+
+    def test_executor_pending_is_not_failure_and_later_proof_finishes(self):
+        self.entry['executor'] = [sys.executable, '-c', "import pathlib,json; pathlib.Path('pending').write_text(json.dumps(dict(state='pending',reason='capture required',evidence=['source PR'])))"]
+        self.assertEqual('pending', self.run_work()[0]['state'])
+        self.assertEqual(1, len(self.led.events(kind='work.executing')))
+        self.assertEqual([], self.led.events(kind='work.failure'))
+        self.assertNotEqual('done', self.led.tasks()[0]['state'])
+        (self.root / 'pending').unlink()
+        (self.root / 'delivered-1').touch()
+        self.led.event('work.pending', self.led.tasks()[0]['id'], {'next_retry': 0}, 'fixture')
+        self.assertEqual('done', self.run_work()[0]['state'])
+        self.assertEqual(1, len(self.led.events(kind='work.executing')))
+
+    def test_future_backoff_does_not_spend_selection_capacity(self):
+        self.issues.append(dict(number=2, title='Second', state='open', labels=[{'name': 'ready'}]))
+        self.led.event('work.item_attempt', 'sample/product#1', dict(step='review', status='pending', retry_at=10**12), 'conveyor')
+        report = work.run(self.led, [self.entry], max_items=1)
+        self.assertEqual(['backoff', 'done'], [r['state'] for r in report])
+        self.assertEqual([2], [c['issue']['number'] for c in self.calls()])
+
+    def test_aging_and_urgent_selection(self):
+        self.issues.append(dict(number=2, title='Urgent', state='open', labels=[{'name': 'ready'}, {'name': 'urgent'}]))
+        work.discover(self.led, self.entry)
+        first = next(t for t in self.led.tasks() if t['title'] == 'First')
+        self.led.conn.execute('UPDATE tasks SET created_at=1 WHERE id=?', (first['id'],))
+        work.run(self.led, [self.entry], max_items=1)
+        self.assertEqual([1], [c['issue']['number'] for c in self.calls()])
+
+    def test_office_pending_reason_replaces_historical_failure(self):
+        from sources import flows
+        (self.root / 'fail-1').touch()
+        self.run_work()
+        task = self.led.tasks()[0]
+        self.led.event('work.failure', task['id'], {'next_retry': 0}, 'fixture')
+        (self.root / 'pending').write_text(json.dumps(dict(state='pending', reason='client review', evidence=['PR20'])))
+        self.assertEqual('pending', self.run_work()[0]['state'])
+        report = work.status(self.led, [self.entry])
+        card = flows.card({'state': 'unconfigured', 'work': report})
+        self.assertTrue(any(f['label'] == 'Work failures' and f['value'] == '0' for f in card['facts']))
+        self.assertEqual('client review', report['tasks'][0]['disposition']['reason'])
+        self.assertTrue(report['tasks'][0]['failure'])
+
+    def test_pending_execution_requires_retry_clearance_when_ready_remains(self):
+        self.entry['executor'] = [sys.executable, '-c', "import pathlib,json; pathlib.Path('pending').write_text(json.dumps(dict(state='pending',reason='review')))" ]
+        self.assertEqual('pending', self.run_work()[0]['state'])
+        task = self.led.tasks()[0]
+        self.led.event('work.pending', task['id'], {'next_retry': 0}, 'fixture')
+        with patch('nexus.work.proof', return_value={'state': 'absent'}):
+            self.assertEqual('failed', self.run_work()[0]['state'])
+        self.assertEqual(1, len(self.led.events(kind='work.executing')))
+
+    def test_historical_started_requires_adapter_clearance(self):
+        self.led.event('work.item_attempt', 'sample/product#1', dict(step='build', status='started'), 'conveyor')
+        with patch('nexus.work.proof', return_value={'state': 'absent'}) as verify:
+            self.assertEqual('failed', self.run_work()[0]['state'])
+            verify.assert_called_once()
+        self.assertEqual([], self.calls())
+
+    def test_done_obligations_do_not_consume_future_budget(self):
+        self.run_work()
+        self.issues.append(dict(number=2, title='Next', state='open', labels=[{'name': 'ready'}]))
+        report = work.run(self.led, [self.entry], max_items=1)
+        self.assertEqual(1, len(report))
+        self.assertEqual([1, 2], [c['issue']['number'] for c in self.calls()])
