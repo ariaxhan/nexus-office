@@ -378,6 +378,43 @@ def execute(led, entry, task):
         return "failed"
 
 
+def needs_reconciliation(led, task, state):
+    if task["state"] == "done":
+        return True
+    return state == "closed" and any(
+        latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"]))
+
+
+def selection_queue(led, entry):
+    """Fresh intake dispositions do not spend the bounded actionable-work slots."""
+    name = entry["repo"]
+    queue, report = [], []
+    for task in led.tasks():
+        if not str(task["dedupe_key"]).startswith(f"github:{name}#"):
+            continue
+        if task["state"] == "done" and latest(led, "work.closed", task["id"]):
+            continue
+        issue = latest(led, "work.issue", task["id"])
+        state = eligibility(issue)
+        if state in ("ready", "resume") or needs_reconciliation(led, task, state):
+            queue.append(task)
+            continue
+        if state == "closed" and latest(led, "work.disposition", task["id"]).get("state") == "closed":
+            continue
+        reason = f"{state}: current intake labels " + ", ".join(l["name"] for l in issue.get("labels", []))
+        disposition(led, task, state, reason)
+        report.append(dict(repo=name, task=task["id"], state=state))
+    return sorted(queue, key=lambda task: selection_priority(led, task)), report
+
+
+def selection_priority(led, task):
+    issue = latest(led, "work.issue", task["id"])
+    labels = {label["name"].lower() for label in issue.get("labels", [])}
+    bonus = 86400 * (bool(led.flights(task_id=task["id"])) +
+                     bool(labels & {"urgent", "p0", "p1", "in-pr", "in pr"}))
+    return task["created_at"] - bonus
+
+
 def run(led, entries, repo=None, *, budget_s=300, max_items=20):
     if not math.isfinite(budget_s) or not 1 <= budget_s <= 3600 or not 1 <= max_items <= 100:
         raise WorkError("budget must be 1..3600 seconds; max_items must be 1..100")
@@ -399,14 +436,8 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
                 name = entry["repo"]
                 if name not in queues:
                     discover(led, entry)
-                    tasks = [t for t in led.tasks() if str(t["dedupe_key"]).startswith(f"github:{name}#")
-                             and not (t["state"] == "done" and latest(led, "work.closed", t["id"]))]
-                    def priority(t):
-                        issue = latest(led, "work.issue", t["id"])
-                        labels = {l["name"].lower() for l in issue.get("labels", [])}
-                        bonus = 86400 * (bool(led.flights(task_id=t["id"])) + bool(labels & {"urgent", "p0", "p1", "in-pr"}))
-                        return t["created_at"] - bonus
-                    queues[name] = sorted(tasks, key=priority)
+                    queues[name], passive = selection_queue(led, entry)
+                    report.extend(passive)
                 queue = queues[name]
                 while (queue and eligibility(latest(led, "work.issue", queue[0]["id"])) in ("ready", "resume")
                        and next_retry(led, queue[0]) > time.time()):
@@ -418,8 +449,9 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
                 if not queue:
                     continue
                 task = queue.pop(0)
-                count += 1
                 state = run_task(led, entry, task)
+                if state not in ("held", "owned", "ineligible", "closed", "backoff"):
+                    count += 1
                 report.append(dict(repo=name, task=task["id"], state=state))
             except (OSError, ValueError, KeyError, TypeError, LedgerError, subprocess.SubprocessError) as exc:
                 led.event("work.discovery_failed", entry["repo"], {"error": str(exc)}, "work")

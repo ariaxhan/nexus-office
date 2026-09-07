@@ -476,3 +476,32 @@ else:
         report = work.run(self.led, [self.entry], max_items=1)
         self.assertEqual(1, len(report))
         self.assertEqual([1, 2], [c['issue']['number'] for c in self.calls()])
+
+    def test_old_unready_backlog_does_not_starve_new_ready_with_one_slot(self):
+        self.issues = [dict(number=n, title=f'Old {n}', state='open',
+                            labels=[{'name': 'hold'}] if n % 2 else []) for n in range(1, 21)]
+        work.discover(self.led, self.entry)
+        self.led.conn.execute('UPDATE tasks SET created_at=1')
+        for number in (21, 22):
+            self.issues.append(dict(number=number, title=f'Ready {number}', state='open',
+                                    labels=[{'name': 'ready'}]))
+            work.run(self.led, [self.entry], max_items=1)
+            self.assertEqual(number, self.calls()[-1]['issue']['number'])
+        self.assertEqual([21, 22], [call['issue']['number'] for call in self.calls()])
+        old = [t for t in self.led.tasks() if t['title'].startswith('Old ')]
+        self.assertEqual(20, len(old))
+        self.assertTrue(all(work.latest(self.led, 'work.disposition', t['id'])['state']
+                            in ('held', 'ineligible') for t in old))
+        self.assertEqual(2, len(self.led.events(kind='work.executing')))
+
+    def test_live_eligibility_change_leaves_slot_for_next_ready(self):
+        self.issues.append(dict(number=2, title='Next', state='open', labels=[{'name': 'ready'}]))
+        original = work.issue_now
+        def changed(led, entry, task):
+            if 'title' in task.keys() and task['title'] == 'First':
+                self.issues[0]['labels'] = [{'name': 'hold'}]
+            return original(led, entry, task)
+        with patch('nexus.work.issue_now', side_effect=changed):
+            report = work.run(self.led, [self.entry], max_items=1)
+        self.assertEqual(['held', 'done'], [row['state'] for row in report])
+        self.assertEqual([2], [call['issue']['number'] for call in self.calls()])
