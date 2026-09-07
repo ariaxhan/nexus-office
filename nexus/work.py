@@ -47,7 +47,10 @@ def registry(path):
         if not re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", name):
             raise WorkError("invalid canonical repository")
         row["repo"] = name
-        row["path"] = str(Path(row["path"]).expanduser().resolve())
+        workspace = row.get("path")
+        if workspace is not None and (not isinstance(workspace, str) or not workspace.strip()):
+            raise WorkError(f"{name}: path must be a nonempty string or null")
+        row["path"] = str(Path(workspace).expanduser().resolve()) if workspace is not None else None
         if type(row["enabled"]) is not bool:
             raise WorkError("enabled must be boolean")
         for field in ("executor", "verify"):
@@ -209,6 +212,8 @@ def context(led, entry, task, issue=None):
 
 def adapter(argv, entry, payload, log, started=None):
     """One bounded process session; JSON input, retained output and diagnostics."""
+    if not workspace_available(entry):
+        raise WorkError("checkout unavailable; hydrate explicitly through vaults repos")
     timeout = min(3600, max(1, float(entry.get("timeout_s", 600))))
     env = dict(os.environ, NEXUS_WORK_PROVIDER=entry["provider"], NEXUS_WORK_ACCOUNT=entry["account"])
     timeout = remaining(timeout)
@@ -526,9 +531,19 @@ def _run_task(led, entry, task):
         return "failed"
 
 
+def workspace_available(entry):
+    """An unmapped path never means the caller's current directory."""
+    path = entry.get("path")
+    if not path or not Path(path).is_dir():
+        return False
+    # Inventory-backed repositories must contain their own Git metadata; an
+    # offloaded directory inside the vault is not the parent vault checkout.
+    return "availability" not in entry or (Path(path) / ".git").exists()
+
+
 def status(led, entries):
     return {"repositories": [dict(repo=e["repo"], path=e["path"], enabled=e["enabled"],
-                                  available=Path(e["path"]).is_dir()) for e in entries],
+                                  available=workspace_available(e)) for e in entries],
             "tasks": [dict(t, disposition=latest(led, "work.disposition", t["id"]), failure=latest(led, "work.failure", t["id"]))
                       for t in led.tasks() if t["origin"] == "github-work"],
             "attempts": [dict(f) for f in led.flights()
@@ -541,7 +556,7 @@ def status(led, entries):
 def read_status(path, entries):
     path = Path(path or default_path()).expanduser().resolve()
     coverage = [dict(repo=e["repo"], path=e["path"], enabled=e["enabled"],
-                     available=Path(e["path"]).is_dir()) for e in entries]
+                     available=workspace_available(e)) for e in entries]
     if not path.exists():
         return {"repositories": coverage, "tasks": [], "attempts": [],
                 "item_attempts": [], "gaps": [{"kind": "work.no_ledger"}]}
