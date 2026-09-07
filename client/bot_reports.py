@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,27 +35,35 @@ def fresh_evidence(office: str) -> dict:
     return world
 
 
-def assistant_ids(history: dict) -> set[str]:
-    return {
-        str(turn.get("id") or "")
-        for turn in history.get("turns", [])
-        if turn.get("role") == "assistant"
-    }
-
-
 def run_report(bot: str, base: str, timeout_s: float = 300) -> dict:
     if bot not in BOTS:
         raise ValueError(f"unknown bot: {bot}")
     fresh_evidence(base)
     query = "/api/chat?bot=" + urllib.parse.quote(bot)
-    before = assistant_ids(request(base, query))
-    request(base, "/api/chat", {"bot": bot, "message": REPORT_TRIGGER})
+    before = {str(turn.get("id") or "") for turn in request(base, query).get("turns", [])}
+    # The asynchronous Office endpoint cannot return the harness group yet.
+    # A unique inert marker binds the later user turn to this exact request.
+    message = REPORT_TRIGGER + "\n\n<!-- office-report:" + uuid.uuid4().hex + " -->"
+    accepted = request(base, "/api/chat", {"bot": bot, "message": message})
+    if accepted.get("ok") is not True:
+        raise ValueError(f"{bot} report request was not accepted")
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        for turn in reversed(request(base, query).get("turns", [])):
-            if turn.get("role") == "assistant" and str(turn.get("id") or "") not in before:
-                return turn
-        time.sleep(2)
+        turns = request(base, query).get("turns", [])
+        origins = [turn for turn in turns if turn.get("role") == "user"
+                   and str(turn.get("id") or "") not in before
+                   and turn.get("content", turn.get("text")) == message]
+        if len(origins) > 1:
+            raise ValueError(f"{bot} report request has ambiguous provenance")
+        group = origins[0].get("inference_group_id") if origins else None
+        if group:
+            for turn in reversed(turns):
+                if (turn.get("role") == "assistant" and str(turn.get("id") or "") not in before
+                        and turn.get("inference_group_id") == group):
+                    if turn.get("ok") is not True:
+                        raise ValueError(f"{bot} report inference did not succeed")
+                    return turn
+        time.sleep(min(2, max(0, deadline - time.monotonic())))
     raise TimeoutError(f"{bot} did not answer within {timeout_s:g}s")
 
 
