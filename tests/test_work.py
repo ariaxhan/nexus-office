@@ -140,6 +140,30 @@ else:
         self.assertEqual([], self.calls())
         self.assertEqual(1, len(self.led.tasks()))
 
+    def test_explicit_recovery_claim_preserves_abandoned_generation(self):
+        work.discover(self.led, self.entry)
+        old = work.claim(self.led, self.entry["repo"], 1, os.getpid())
+        old_task = self.led.flight(old)["task_id"]
+        self.led.fail(old, "vanished", "legacy Tower reconciled direct claim")
+        self.led.conn.execute("UPDATE tasks SET state='abandoned' WHERE id=?", (old_task,))
+        self.led.event("task.state", old_task, {"to": "abandoned"}, "tower")
+        with self.assertRaises(work.WorkError):
+            work.claim(self.led, self.entry["repo"], 1, os.getpid(), runner=True)
+        fresh = work.claim(self.led, self.entry["repo"], 1, os.getpid())
+        task = self.led.flight(fresh)["task_id"]
+        self.assertNotEqual(old_task, task)
+        self.assertEqual("abandoned", self.led.conn.execute("SELECT state FROM tasks WHERE id=?", (old_task,)).fetchone()[0])
+        self.assertEqual("failed", self.led.flight(old)["state"])
+        self.assertEqual(2, self.led.flight(fresh)["attempt"])
+        self.assertEqual(old_task, work.latest(self.led, "work.generation", task)["previous_task"])
+        self.assertEqual(task, work.capture(self.led, self.entry["repo"], self.issues[0]))
+        queue, _ = work.selection_queue(self.led, self.entry)
+        self.assertEqual([task], [t["id"] for t in queue])
+        with self.assertRaises(work.Owned):
+            work.claim(self.led, self.entry["repo"], 1, os.getpid())
+        work.release(self.led, fresh, os.getpid())
+        self.assertEqual([], self.led.integrity_check())
+
     def test_direct_claim_survives_expiry_and_tower_tick(self):
         work.discover(self.led, self.entry)
         fid = work.claim(self.led, self.entry["repo"], 1, os.getpid())

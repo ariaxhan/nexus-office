@@ -97,7 +97,7 @@ def discover(led, entry):
 def capture(led, repo, issue):
     key = f"github:{repo}#{int(issue['number'])}"
     with led.tx() as c:
-        task = c.execute("SELECT id FROM tasks WHERE dedupe_key=?", (key,)).fetchone()
+        task = c.execute("SELECT id FROM tasks WHERE dedupe_key=? ORDER BY created_at DESC, rowid DESC LIMIT 1", (key,)).fetchone()
         if task is None:
             tid = new_id("task")
             c.execute("INSERT INTO tasks(id,origin,title,state,dedupe_key,created_at)"
@@ -135,7 +135,7 @@ def claim(led, repo, number, owner_pid, *, runner=False):
     key = f"github:{repo}#{number}"
     pid = plan(led)
     with led.tx() as c:
-        task = c.execute("SELECT * FROM tasks WHERE dedupe_key=?", (key,)).fetchone()
+        task = c.execute("SELECT * FROM tasks WHERE dedupe_key=? ORDER BY created_at DESC, rowid DESC LIMIT 1", (key,)).fetchone()
         if task is None or task["state"] == "done":
             raise WorkError("issue must be captured and unfinished")
         active = c.execute("SELECT * FROM flights WHERE task_id=? AND state NOT IN"
@@ -145,8 +145,21 @@ def claim(led, repo, number, owner_pid, *, runner=False):
         held = c.execute("SELECT holder_flight FROM leases WHERE resource=?", (key,)).fetchone()
         if held:
             raise Owned(f"resource retained by {held[0]}")
+        if task["state"] in ("abandoned", "rejected_duplicate", "rejected_policy"):
+            if runner or task["state"] != "abandoned":
+                raise WorkError("decided issue requires explicit recovery claim")
+            previous = task["id"]
+            tid = new_id("task")
+            c.execute("INSERT INTO tasks(id,origin,title,state,dedupe_key,created_at)"
+                      " VALUES (?,'github-work',?,'accepted',?,?)",
+                      (tid, task["title"], key, time.time()))
+            led._event("work.generation", tid, {"previous_task": previous, "dedupe_key": key,
+                                               "reason": "explicit recovery claim"}, "work")
+            led._event("work.issue", tid, latest(led, "work.issue", previous), "work")
+            task = c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
         fid = new_id("flt")
-        attempt = c.execute("SELECT count(*)+1 FROM flights WHERE task_id=?", (task["id"],)).fetchone()[0]
+        attempt = c.execute("SELECT count(*)+1 FROM flights WHERE task_id IN"
+                            " (SELECT id FROM tasks WHERE dedupe_key=?)", (key,)).fetchone()[0]
         c.execute("INSERT INTO flights(id,task_id,plan_id,state,pid,created_at,started_at,attempt)"
                   " VALUES (?,?,?,'running',?,?,?,?)", (fid, task["id"], pid, owner_pid,
                                                          time.time(), time.time(), attempt))
@@ -396,6 +409,11 @@ def selection_queue(led, entry):
     queue, report = [], []
     for task in led.tasks():
         if not str(task["dedupe_key"]).startswith(f"github:{name}#"):
+            continue
+        newest = led.conn.execute("SELECT id FROM tasks WHERE dedupe_key=?"
+                                  " ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                                  (task["dedupe_key"],)).fetchone()
+        if newest[0] != task["id"]:
             continue
         if task["state"] == "done" and latest(led, "work.closed", task["id"]):
             continue
