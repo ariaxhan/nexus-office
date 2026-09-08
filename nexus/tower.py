@@ -156,19 +156,7 @@ def _reap(ledger, now, root):
                 out["failed"] += 1
             continue
         if result.get("ok"):
-            if ledger.set_state(flight["id"], "produced", expect="running", now=now,
-                                result=result, ended_at=now):
-                for artifact in result.get("artifacts", []):
-                    ledger.add_artifact(flight["id"], artifact.get("kind", "file"),
-                                        os.path.join(workspace, artifact.get("ref", "")),
-                                        artifact.get("sha"), now=now)
-                if _target(ledger, flight) is None:
-                    ledger.release_leases(flight["id"], now=now)
-                    if flight["task_id"]:
-                        ledger.set_task_state(flight["task_id"], "done",
-                                              decided_by="tower policy", expect="running",
-                                              now=now)
-                out["produced"] += 1
+            out["produced"] += int(_produced(ledger, flight, workspace, result, now))
             continue
         err = result.get("error") or {}
         code = err.get("code") or "unknown"
@@ -179,6 +167,27 @@ def _reap(ledger, now, root):
             _finish_failed(ledger, flight, now)
             out["failed"] += 1
     return out
+
+
+def _persistent_task(ledger, flight):
+    inputs = loads(ledger.plan(flight["plan_id"])["inputs"], {})
+    return inputs.get("persistent_task") is True
+
+
+def _produced(ledger, flight, workspace, result, now):
+    if not ledger.set_state(flight["id"], "produced", expect="running", now=now,
+                            result=result, ended_at=now):
+        return False
+    for artifact in result.get("artifacts", []):
+        ledger.add_artifact(flight["id"], artifact.get("kind", "file"),
+                            os.path.join(workspace, artifact.get("ref", "")),
+                            artifact.get("sha"), now=now)
+    if _target(ledger, flight) is None:
+        ledger.release_leases(flight["id"], now=now)
+        if flight["task_id"] and not _persistent_task(ledger, flight):
+            ledger.set_task_state(flight["task_id"], "done", decided_by="tower policy",
+                                  expect="running", now=now)
+    return True
 
 
 def _reconcile_vanished(ledger, now, root):
@@ -268,11 +277,15 @@ def _sweep_workspaces(ledger):
             shutil.rmtree(workspace, ignore_errors=True)
 
 
+def _manual_retry_only(ledger, flight):
+    return ledger.plan(flight["plan_id"])["kind"] == "work" or _persistent_task(ledger, flight)
+
+
 def _retry_exhausted(ledger, now):
     """Retry per budget; when the budget is spent the task is abandoned, not looped."""
     made = 0
     for flight in ledger.flights(states=("failed",), limit=200):
-        if ledger.plan(flight["plan_id"])["kind"] == "work":
+        if _manual_retry_only(ledger, flight):
             continue
         task_id = flight["task_id"]
         if not task_id:
@@ -520,12 +533,8 @@ def _schedule(ledger, now):
         ready, key, trigger = due(ledger, plan, now)
         if not ready:
             continue
-        if ledger.live_task_with_key(key) is not None:
+        if ledger.add_scheduled_task(plan, key, now) is None:
             continue
-        ledger.add_task(
-            title=f"run {plan['name']}", origin="plan", plan_id=plan["id"],
-            reason="schedule due",
-            risk="low", dedupe_key=key, now=now)
         if trigger is not None:
             ledger.event("plan.triggered", plan["id"], {"trigger_event_id": trigger},
                          "tower", now)
@@ -638,8 +647,16 @@ def _spawn(ledger, plan, flight_id, workspace, timeout_s):
             argv += ["--branch", target["branch"]]
     package_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = dict(os.environ)
+    # A caller may select a ledger explicitly rather than through its shell.
+    # Every child must use the ledger that owns this exact flight.
+    env["NEXUS_LEDGER"] = os.path.abspath(ledger.path)
+    env["OFFICE_NEXUS_LEDGER"] = os.path.abspath(ledger.path)
     env["PYTHONPATH"] = package_parent + os.pathsep + env.get("PYTHONPATH", "")
 
+    return _detach_runner(workspace,package_parent,argv,env)
+
+
+def _detach_runner(workspace,package_parent,argv,env):
     read_fd, write_fd = os.pipe()
     try:
         middle = os.fork()

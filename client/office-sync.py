@@ -172,6 +172,26 @@ class Access:
         self.dirty = True
         return None, None
 
+    def read_token_for(self, nwo: str):
+        """Choose an authenticated identity that can read; never grant write authority."""
+        cache = getattr(self, '_read_cache', {})
+        cached = cache.get(nwo)
+        if cached and time.time() - cached[0] < 120:
+            return cached[1], self._token(cached[1])
+        owner = nwo.split('/')[0]
+        order = ([owner] if owner in self.mine else []) + [m for m in self.mine if m != owner]
+        for who in order:
+            token = self._token(who)
+            if not token:
+                continue
+            rc, out, _ = sh(['gh', 'api', f'repos/{nwo}', '--jq', '.full_name'],
+                            timeout=25, env={'GH_TOKEN': token})
+            if rc == 0 and NWO_RE.fullmatch(out.strip()):
+                cache[nwo] = (time.time(), who)
+                self._read_cache = cache
+                return who, token
+        return None, None
+
     def _token(self, who):
         if not who:
             return ""
@@ -1153,6 +1173,8 @@ def apply_merge(repo, who, tok, payload, dry: bool):
     if err:
         return False, err
     head = pr.get("headRefName") or ""
+    if payload.get('head') and payload['head']!=pr.get('headRefOid'):
+        return False, 'PR head changed; review the current diff before merging'
     refusal = _merge_refusal(pr, num, head, repo, env)
     if refusal:
         return False, refusal
@@ -1161,7 +1183,7 @@ def apply_merge(repo, who, tok, payload, dry: bool):
         return True, f"would squash-merge #{num} ({head})"
 
     rc, _, err = sh(["gh", "pr", "merge", num, "--repo", repo,
-                     "--squash", "--delete-branch"], timeout=120, env=env)
+                     "--squash", "--delete-branch", "--match-head-commit", pr["headRefOid"]], timeout=120, env=env)
     if rc != 0:
         msg = (err.strip().splitlines() or ["failed"])[0][:160]
         return False, f"merge refused by GitHub: {msg}"

@@ -242,6 +242,9 @@ def _row(agent: dict) -> dict:
         # than left for the sender to infer from a status word.
         "reachable": status in REACHABLE,
         "session_id": str(agent.get("session_id") or ""),
+        "process_bound": bool(agent.get("process_bound")),
+        "hooks_bound": bool(agent.get("hooks_bound")),
+        "source": "hcom hooks; message queue",
         "age_s": (round(agent["status_age_seconds"])
                   if isinstance(agent.get("status_age_seconds"), (int, float)) else None),
         "started_at": (datetime.fromtimestamp(float(agent["created_at"]), timezone.utc)

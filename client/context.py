@@ -252,10 +252,20 @@ def read(repo: str, path: str = "") -> tuple[int, dict]:
     if not want:
         return 200, body
 
-    # Any file inside the checkout is readable. The index is a listing, not a
-    # permission: refusing files that were on disk but past the listing cap
-    # produced eleven sessions of "why does it say not in this desk's context"
-    # (Aria, 2026-09-01) and protected nothing that _inside does not.
+    return _read_document(root, want, body)
+
+
+def _read_document(root, want, body):
+    # The legacy route shares the new reader's credential and symlink policy.
+    # Its Markdown index remains a listing, never an exact-match permission.
+    import office_objects
+    if not office_objects.permitted(want):
+        return 403, {"error": "that path is not a work object"}
+    candidate = pathlib.Path(root)
+    for part in pathlib.Path(want).parts:
+        candidate /= part
+        if candidate.is_symlink():
+            return 403, {"error": "linked paths cannot be opened"}
     target = pathlib.Path(root) / want
     hit = _current_entry(root, target, want) or {"name": target.name, "bytes": 0}
     real = _inside(root, target)

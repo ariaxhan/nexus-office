@@ -528,6 +528,7 @@ class TriggerTest(unittest.TestCase):
         t.notice(wh.parse("issue_comment", "d1", issue_comment()))
         self.assertTrue(self.until(lambda: self.refreshed == ["acme/thing"]))
         self.assertEqual(self.runner.calls, [], "and nothing was dispatched")
+        self.assertTrue(self.until(lambda: bool(self.box.last_runs(5))))
         row = self.box.last_runs(5)[0]
         self.assertIsNone(row["rc"])
         self.assertEqual(row["path"], "")

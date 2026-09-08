@@ -1,0 +1,4 @@
+build/
+OfficeMobile.xcodeproj/
+fastlane/report.xml
+fastlane/README.md

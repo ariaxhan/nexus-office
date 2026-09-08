@@ -17,6 +17,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+"$ROOT/scripts/install-runtime.sh"
 DEST="/Applications/Office.app"
 CLI="$HOME/.local/bin/nexus"
 
@@ -96,3 +97,6 @@ if [ -n "$LEFT" ]; then
 else
   echo "install: it is the only Office registered"
 fi
+
+# The Mac owns one audio schedule and a separate retryable Office inbox notifier.
+"$ROOT/.venv/bin/python" -m nexus.podcast_daily --install-runtime

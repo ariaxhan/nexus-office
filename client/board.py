@@ -32,6 +32,8 @@ harness's pending-question layout instead of importing it. That is the entire co
 from __future__ import annotations
 
 import json
+import math
+from datetime import datetime
 import os
 import pathlib
 import time
@@ -180,9 +182,10 @@ def accounts(root: pathlib.Path) -> list:
 
 
 def read_feed(repo: str = "", limit: int = 60, kind: str = "", q: str = "",
-              now: float | None = None) -> dict:
+              now: float | None = None, cursor: str = "", since: float = 0) -> dict:
     """The timeline. Reports its own reachability, because "no vault", "nothing has posted
     yet" and "this repo has posted nothing" are three different facts."""
+    observed_at = time.time() if now is None else now
     root = _root()
     if root is None:
         return {"state": "unconfigured", "posts": [], "accounts": [],
@@ -220,9 +223,7 @@ def read_feed(repo: str = "", limit: int = 60, kind: str = "", q: str = "",
         rows = [r for r in rows
                 if needle in (r["text"] + " " + r["body"] + " " + r["account"]
                               + " " + r["by"]).lower()]
-    rows.sort(key=lambda r: r["ts"], reverse=True)
-    limit = max(1, min(int(limit or 60), MAX_POSTS))
-    shown = rows[:limit]
+    rows, shown, next_cursor = feed_page(rows, limit, cursor, since)
     for r in shown:
         r["replies"] = sorted(r["replies"] + _thread(root, r["id"], now),
                               key=lambda x: x.get("ts", ""))
@@ -234,6 +235,8 @@ def read_feed(repo: str = "", limit: int = 60, kind: str = "", q: str = "",
         "state": "ok",
         "repo": repo,
         "posts": shown,
+        "next_cursor": next_cursor,
+        "observed_at": observed_at,
         "total": len(rows),
         "accounts": names,
         # The number that used to be unmeasurable: how often an agent raised a hand,
@@ -242,6 +245,35 @@ def read_feed(repo: str = "", limit: int = 60, kind: str = "", q: str = "",
         "blocked": sum(1 for r in rows if r["kind"] == "blocked"),
         "kinds": sorted({r["kind"] for r in rows}),
     }
+
+
+def feed_key(row):
+    try:stamp = datetime.fromisoformat(row['ts'].replace('Z','+00:00')).timestamp()
+    except (ValueError,KeyError):stamp = 0
+    return (stamp,row['account'],row['id'])
+
+
+def feed_boundary(cursor):
+    if len(cursor)>8192:raise ValueError('Invalid feed cursor')
+    value=json.loads(cursor)
+    if not isinstance(value,list) or len(value)!=3:raise ValueError('Invalid feed cursor')
+    if type(value[0]) not in (int,float) or not math.isfinite(value[0]):raise ValueError('Invalid feed cursor')
+    if not all(isinstance(part,str) for part in value[1:]):raise ValueError('Invalid feed cursor')
+    return value
+
+
+def feed_page(rows, limit, cursor='', since=0):
+    since = float(since)
+    if not math.isfinite(since) or since<0:raise ValueError('Invalid seen timestamp')
+    rows = sorted((row for row in rows if row.get('unreadable') or not since or feed_key(row)[0]>=math.floor(since)),key=feed_key,reverse=True)
+    candidates = rows
+    if cursor:
+        boundary=feed_boundary(cursor)
+        candidates=[row for row in rows if feed_key(row)<tuple(boundary)]
+    limit=max(1,min(int(limit or 60),MAX_POSTS))
+    shown=candidates[:limit]
+    next_cursor=json.dumps(feed_key(shown[-1])) if len(candidates)>limit else None
+    return rows,shown,next_cursor
 
 
 def _find(root: pathlib.Path, post_id: str):

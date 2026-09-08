@@ -112,6 +112,16 @@ class Scheduling(TowerCase):
         self.assertEqual(0, tower._schedule(self.led, now + 2))
         self.assertEqual(1, len(self.led.tasks()))
 
+    def test_daily_occasion_cannot_restart_after_completion_or_abandonment(self):
+        plan=self.plan(schedule={"at":"03:00"})
+        now=time.mktime(time.localtime(time.time())[:3]+(4,0,0,0,0,-1))
+        for day,state in enumerate(('done','abandoned')):
+            today=now+day*86400
+            self.assertEqual(tower._schedule(self.led,today),1)
+            self.led.conn.execute("UPDATE tasks SET state=? WHERE plan_id=? AND state='candidate'",(state,plan));self.led.conn.commit()
+            self.assertEqual(tower._schedule(self.led,today+60),0)
+        self.assertEqual(tower._schedule(self.led,now+2*86400),1)
+
     def test_at_hhmm_is_due_once_that_day(self):
         plan = self.plan(schedule={"at": "03:00"})
         row = self.led.plan(plan)

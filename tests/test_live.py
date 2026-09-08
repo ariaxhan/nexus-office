@@ -136,6 +136,7 @@ class Machine:
         self.procs = procs  # {engine: {pid: (cwd, etime)}}
         self.fail = fail
         self.calls = []
+        self.descriptors = {}
 
     def __call__(self, args, timeout=live.PROBE_TIMEOUT_S):
         self.calls.append(list(args))
@@ -147,11 +148,15 @@ class Machine:
             return (0 if found else 1), "\n".join(str(p) for p in found) + "\n", ""
         if args[0] == "lsof":
             pid = int(args[args.index("-p") + 1])
+            if "-d" not in args:
+                return 0, "\n".join("n"+path for path in self.descriptors.get(pid, [])), ""
             for found in self.procs.values():
                 if pid in found:
                     return 0, f"p{pid}\nfcwd\nn{found[pid][0]}\n", ""
             return 1, "", ""
         if args[0] == "ps":
+            if "-axo" in args:
+                return 0, "", ""
             out = []
             for found in self.procs.values():
                 for pid, (_, etime) in found.items():
@@ -187,6 +192,10 @@ class ReadTest(unittest.TestCase):
 
     def machine(self, procs, fail=""):
         stub = Machine(procs, fail)
+        for engine, found in procs.items():
+            for pid, (cwd, _) in found.items():
+                path = live.claude_transcript(cwd) if engine == "claude" else live.codex_transcripts().get(cwd)
+                stub.descriptors[pid] = [path] if path else []
         live._run = stub
         return stub
 
@@ -211,6 +220,40 @@ class ReadTest(unittest.TestCase):
         return path
 
     # ── the roster ──────────────────────────────────────────────────────────
+    def test_full_executable_path_discovers_bundled_codex(self):
+        from unittest.mock import patch
+        with patch.object(live, '_run', return_value=(0, '4012 /Applications/ChatGPT.app/Contents/Resources/codex\n5000 /some/codex-code-mode-host\n', '')):
+            rows,error=live.executable_processes()
+        self.assertEqual(list(rows),[4012])
+        self.assertEqual(rows[4012]['engine'],'codex')
+        self.assertFalse(error)
+
+    def test_reused_pid_does_not_keep_previous_transcript(self):
+        self.claude_transcript('/repos/a',[claude_record('user',message={'role':'user','content':'previous process'})])
+        stub=self.machine({'claude':{101:('/repos/a','01:00')}})
+        self.assertTrue(live.read()['sessions'][0]['transcript'])
+        stub.procs={'claude':{101:('/repos/b','00:01')}}
+        stub.descriptors[101]=[]
+        row=live.read()['sessions'][0]
+        self.assertEqual(row['cwd'],'/repos/b')
+        self.assertEqual(row['transcript'],'')
+
+    def test_same_directory_does_not_prove_transcript_identity(self):
+        self.claude_transcript("/repos/thing", [claude_record("user", message={"role":"user", "content":"another session"})])
+        stub = self.machine({"claude": {101:("/repos/thing","01:00"),102:("/repos/thing","02:00")}})
+        stub.descriptors[101] = []
+        rows = {row['pid']:row for row in live.read()['sessions']}
+        self.assertEqual(rows[101]['transcript'], '')
+        self.assertEqual(rows[101]['title'], '')
+        self.assertTrue(rows[102]['transcript'])
+
+    def test_multiple_open_transcripts_are_not_guessed(self):
+        first = self.claude_transcript("/repos/a", [])
+        second = self.claude_transcript("/repos/b", [])
+        stub = self.machine({"claude":{101:("/repos/a","01:00")}})
+        stub.descriptors[101] = [str(first), str(second)]
+        self.assertEqual(live.read()['sessions'][0]['transcript'], '')
+
     def test_every_process_becomes_a_row_with_its_transcript(self):
         self.claude_transcript("/repos/thing", [
             claude_record("user", message={"role": "user", "content": "start here"}),
@@ -297,20 +340,20 @@ class ReadTest(unittest.TestCase):
         stub = self.machine({"claude": {101: ("/repos/thing", "01:00")}, "codex": {}},
                             fail="codex")
         got = live.read()
-        self.assertEqual(got["state"], "unreadable")
-        self.assertEqual(got["sessions"], [])
+        self.assertEqual(got["state"], "partial")
+        self.assertEqual(len(got["sessions"]), 1)
         self.assertIn("process table", got["detail"])
         # And it did not go on to walk the disk after the machine failed.
-        self.assertTrue(all(call[0] == "pgrep" for call in stub.calls))
+        self.assertTrue(any(call[0] == "pgrep" for call in stub.calls))
 
-    def test_the_join_is_cached_so_a_poll_is_not_three_subprocesses_a_session(self):
+    def test_process_identity_is_rechecked_on_each_observation(self):
         self.claude_transcript("/repos/thing", [claude_record(
             "user", message={"role": "user", "content": "hello"})])
         stub = self.machine({"claude": {101: ("/repos/thing", "01:00")}, "codex": {}})
         live.read()
         lsofs = sum(1 for call in stub.calls if call[0] == "lsof")
         live.read()
-        self.assertEqual(sum(1 for call in stub.calls if call[0] == "lsof"), lsofs)
+        self.assertGreater(sum(1 for call in stub.calls if call[0] == "lsof"), lsofs)
 
     def test_every_probe_is_capped(self):
         stub = self.machine({"claude": {101: ("/repos/thing", "01:00")}, "codex": {}})
@@ -319,6 +362,48 @@ class ReadTest(unittest.TestCase):
         self.assertLessEqual(live.PROBE_TIMEOUT_S, 2.0)
 
     # ── one transcript ──────────────────────────────────────────────────────
+    def test_transcript_continuation_rejects_changed_identity(self):
+        self.claude_transcript("/repos/thing", [claude_record(
+            "user", message={"role": "user", "content": "hello"})])
+        self.machine({"claude": {101: ("/repos/thing", "01:00")}, "codex": {}})
+        code, first = live.transcript("claude-101", 0, 1)
+        self.assertEqual(code, 200)
+        code, same = live.transcript("claude-101", 1, 1, identity=first["identity"])
+        self.assertEqual(code, 200)
+        code, changed = live.transcript("claude-101", 1, 1, identity="different-transcript")
+        self.assertEqual(code, 409)
+        self.assertNotIn("lines", changed)
+
+    def test_transcript_continuation_allows_append_but_rejects_same_inode_rewrite(self):
+        self.claude_transcript("/repos/thing", [claude_record(
+            "user", message={"role": "user", "content": "hello"})])
+        self.machine({"claude": {101: ("/repos/thing", "01:00")}, "codex": {}})
+        code, first = live.transcript("claude-101", 0, 1)
+        self.assertEqual(code, 200)
+        path = pathlib.Path(first['transcript'])
+        original = path.read_bytes()
+        with path.open('ab') as stream:stream.write(b'\n')
+        self.assertEqual(live.transcript("claude-101", 1, 1, identity=first['identity'])[0],200)
+        inode = path.stat().st_ino
+        path.write_bytes(original.replace(b'hello',b'other')+b'\n')
+        self.assertEqual(path.stat().st_ino,inode)
+        self.assertEqual(live.transcript("claude-101", 1, 1, identity=first['identity'])[0],409)
+
+    def test_transcript_response_never_reads_beyond_identity_prefix(self):
+        from unittest.mock import patch
+        self.claude_transcript("/repos/thing", [claude_record(
+            "user", message={"role": "user", "content": "hello"})])
+        self.machine({"claude": {101: ("/repos/thing", "01:00")}, "codex": {}})
+        original = live._all_lines
+        def append_then_read(path, engine, length):
+            with open(path,'ab') as stream:
+                stream.write((json.dumps(claude_record('user',message={'role':'user','content':'late append'}))+'\n').encode())
+            return original(path,engine,length)
+        with patch.object(live,'_all_lines',side_effect=append_then_read):
+            code, body = live.transcript('claude-101',0,100)
+        self.assertEqual(code,200)
+        self.assertEqual(body['total'],1)
+
     def test_the_whole_transcript_comes_back_a_page_at_a_time(self):
         lines = []
         for n in range(50):

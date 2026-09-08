@@ -7,9 +7,12 @@
     "icon": "swift scripts/icon.swift",
     "pwa-probe": "node scripts/pwa-probe.mjs",
     "test": "scripts/test.sh",
-    "shot": "scripts/shoot.sh"
+    "shot": "scripts/shoot.sh",
+    "complexity": "bash scripts/complexity.sh --check-baseline .complexity-baseline.tsv .",
+    "verify": "npm run complexity && npm test"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
     "playwright-core": "^1.62.1"
   }
 }

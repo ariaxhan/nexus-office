@@ -145,7 +145,14 @@ class MergeTest(unittest.TestCase):
         cmd = self.merged()[0]
         self.assertIn("--squash", cmd)
         self.assertIn("--delete-branch", cmd)
+        self.assertEqual(cmd[cmd.index("--match-head-commit")+1],self.pr["headRefOid"])
         self.assertIn("7", cmd)
+
+    def test_changed_reviewed_head_never_merges(self):
+        ok,message=self.mod.apply_merge('acme/site','who','tok',{'pr':7,'head':'another-commit'},False)
+        self.assertFalse(ok)
+        self.assertIn('head changed',message)
+        self.assertFalse(self.merged())
 
     def test_a_dry_run_says_what_it_would_do_and_does_nothing(self):
         ok, msg = self.merge(dry=True)

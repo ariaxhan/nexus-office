@@ -37,6 +37,30 @@ class FeedTests(unittest.TestCase):
         path.write_text(json.dumps(row), encoding="utf-8")
         return row["id"]
 
+    def test_feed_cursor_preserves_ties_and_new_posts_do_not_shift_pages(self):
+        for identifier in ['a','b','c']:self.write('repo',id=identifier)
+        first=board.read_feed(limit=2)
+        self.write('repo',id='new',ts='2026-09-02T07:00:00Z')
+        second=board.read_feed(limit=2,cursor=first['next_cursor'])
+        self.assertEqual([row['id'] for row in first['posts']+second['posts']],['c','b','a'])
+        self.assertIsNone(second['next_cursor'])
+        fresh=board.read_feed(since=board.feed_key(first['posts'][0])[0]+1)
+        self.assertEqual([row['id'] for row in fresh['posts']],['new'])
+
+    def test_feed_rejects_invalid_continuation_and_seen_timestamp(self):
+        self.write('repo')
+        for cursor in ['{}','[null,"a","b"]','[1,2,3]','[NaN,"a","b"]']:
+            with self.assertRaises(ValueError):board.read_feed(cursor=cursor)
+        for since in ['nan','inf',-1]:
+            with self.assertRaises(ValueError):board.read_feed(since=since)
+
+    def test_seen_boundary_overlaps_same_second_and_keeps_source_failures(self):
+        self.write('repo',id='late',ts='1970-01-01T00:16:40Z')
+        bad=self.root/'_meta/board/repo/broken.json';bad.write_text('{')
+        feed=board.read_feed(since=1000.25)
+        self.assertTrue(any(row['id']=='late' for row in feed['posts']))
+        self.assertTrue(any(row['unreadable'] for row in feed['posts']))
+
     # -- reachability: three different facts, three different words ---------------------
 
     def test_no_vault_is_not_an_empty_feed(self):

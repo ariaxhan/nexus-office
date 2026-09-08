@@ -56,6 +56,7 @@ import board  # noqa: E402
 import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import context  # noqa: E402
+import office_api  # noqa: E402
 import live  # noqa: E402
 import lesson_previews  # noqa: E402
 import runtime as rt  # noqa: E402
@@ -164,18 +165,20 @@ NO_PAGE = "the office is at /; there is nothing else here"
 # at request time. An exact map cannot be talked into serving a sibling, so the
 # traversal question never has to be answered correctly under pressure.
 PHONE = HERE / "phone"
-PAGE = {"/": "index.html", "/index.html": "index.html",
+PAGE = {"/": "office.html", "/index.html": "office.html", "/classic": "index.html",
         "/phone.css": "phone.css", "/phone.js": "phone.js",
         "/lessons": "lessons.html", "/lessons.html": "lessons.html",
         "/lessons.css": "lessons.css", "/lessons.js": "lessons.js"}
+PAGE.update({name: name[1:] for name in ['/office.css', '/office.js', '/office-ui.js', '/office-settings.js', '/office-media.js', '/office-files.js', '/office-markdown.js', '/office-tasks.js', '/office-attachments.js', '/office-state.js', '/office-native.js', '/office-sw.js', '/manifest.webmanifest', '/office-icon.svg', '/office-icon-192.png', '/office-icon-512.png']})
+
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
-         ".js": "text/javascript; charset=utf-8"}
+         ".js": "text/javascript; charset=utf-8", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".png": "image/png"}
 
 # The page loads two files from here, talks to this door, and can reach nowhere
 # else. No inline script, no inline style and no external host, which is why the
 # page is three files rather than one: a strict policy is worth two more GETs.
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; "
-       "connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'")
+       "connect-src 'self'; img-src 'self'; media-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
 
 
 def now_iso() -> str:
@@ -450,6 +453,7 @@ def validate(body: dict):
 
 
 class Handler(BaseHTTPRequestHandler):
+    github_sync = office_sync
     server_version = "nexus-office"
     protocol_version = "HTTP/1.1"
     world = None
@@ -538,123 +542,150 @@ class Handler(BaseHTTPRequestHandler):
         return out
 
     # ── routes ──────────────────────────────────────────────────────────────
-    def do_GET(self):  # noqa: N802 (http.server's name)
-        path, _, query = self.path.partition("?")
+    def do_GET(self):
+        path, _, query = self.path.partition('?')
         if not self._host_ok():
-            return self._json({"error": "wrong host"}, 403)
+            return self._json({'error': 'wrong host'}, 403)
         if not self._identity_ok():
-            return self._json({"error": "not you"}, 403)
+            return self._json({'error': 'not you'}, 403)
         try:
-            if path == "/api/world":
-                fresh = False
-                if urllib.parse.parse_qs(query).get("fresh"):
-                    fresh = self.world.fresh_build()
-                return self._json({"at": self.world.at, "world": self.world.snapshot,
-                                   "decisions": self.world.recent(),
-                                   "fresh": fresh, "server_time": now_iso()})
-            if path == "/api/lesson-previews":
-                return self._json(lesson_previews.build())
-            if path == "/api/desks":
-                return self._json({"hidden": office_sync.read_hidden()})
-            if path == "/api/pins":
-                return self._json({"pins": office_sync.read_pins()})
-            if path == "/api/gate":
-                return self._json(rt.read_gate())
-            if path == "/api/gates":
-                return self._json(self._gates())
-            if path == "/api/board":
-                # The feed. Every account is a repo. No `repo` is the global timeline;
-                # `?repo=owner-name` is one account's. `/api/gates` next door is what is
-                # blocked this second; this is the durable record of everything said.
-                q = urllib.parse.parse_qs(query)
-                try:
-                    limit = int((q.get("limit") or ["60"])[0])
-                except ValueError:
-                    limit = 60
-                return self._json(board.read_feed(
-                    repo=(q.get("repo") or [""])[0],
-                    kind=(q.get("kind") or [""])[0],
-                    q=(q.get("q") or [""])[0],
-                    limit=limit))
-            if path == "/api/bots":
-                return self._json(self.chatroom.roster())
-            if path == "/api/chat":
-                bot = (urllib.parse.parse_qs(query).get("bot") or [""])[0]
-                code, body = self.chatroom.history(bot)
-                return self._json(body, code)
-            if path == "/api/webhook":
-                return self._json(self._webhook_status())
-            if path == "/api/automation":
-                # Straight off the snapshot, never a rebuild: every number on
-                # this page was measured when the room was built, and a page
-                # that re-measures on open would disagree with the card that
-                # sent you to it.
-                return self._json({"at": self.world.at,
-                                   "automation": self.world.snapshot.get("automation") or {}})
-            if path == "/api/context":
-                # Two names off the query string and nothing else. Every rule
-                # about where this may look and what it may open lives in
-                # `context.read`, including the refusal of a repo nobody named:
-                # a door that pre-judged the request would be a second place
-                # deciding what is safe, and two of those drift.
-                q = urllib.parse.parse_qs(query)
-                code, body = context.read((q.get("repo") or [""])[0],
-                                          (q.get("path") or [""])[0])
-                return self._json(body, code)
-            if path == "/api/live":
-                # The other half of `/api/sessions`, and deliberately not folded
-                # into it: that one is the list of sessions that joined the
-                # harness, which is what can be ANSWERED, and this one is the
-                # process table, which is what is RUNNING. One route answering
-                # both would have to pick which of the two counts to be wrong
-                # about. Nothing here writes, and there is no POST beside it.
-                return self._json(live.read())
-            if path == "/api/live/transcript":
-                # The key is the whole of what a caller controls: `engine-pid`,
-                # refused before it is looked up. The file that gets opened is
-                # the one on the row this process built from `pgrep`, so no
-                # string off this query string ever reaches a path join.
-                q = urllib.parse.parse_qs(query)
-                code, body = live.transcript((q.get("key") or [""])[0],
-                                             (q.get("offset") or ["0"])[0],
-                                             (q.get("limit") or [""])[0]
-                                             or live.DEFAULT_LIMIT)
-                return self._json(body, code)
-            if path == "/api/sessions":
-                repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
-                return self._json(sessions.read(repo))
-            if path == "/api/session":
-                q = urllib.parse.parse_qs(query)
-                code, body = sessions.transcript((q.get("name") or [""])[0],
-                                                 (q.get("last") or [""])[0]
-                                                 or sessions.DEFAULT_EXCHANGES)
-                return self._json(body, code)
-            if path == "/api/readme":
-                # The desk's front page, read off this machine. A read, so the
-                # only thing it can be pointed at is a checkout the office
-                # already knows about, by a name that has to look like a repo.
-                repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
-                code, body = sessions.readme(repo)
-                return self._json(body, code)
-            if path == "/api/session/screen":
-                name = (urllib.parse.parse_qs(query).get("name") or [""])[0]
-                code, body = sessions.screen(name)
-                return self._json(body, code)
-            if path == "/api/search":
-                # One box over every desk: names, folders, whole paths, and the
-                # words inside. It can see exactly what `/api/context` can see
-                # and nothing else, so it shortens a walk a person could already
-                # have taken rather than opening a new door.
-                q = urllib.parse.parse_qs(query)
-                return self._json(search.run((q.get("q") or [""])[0]))
-            if path == "/api/health":
-                return self._json({"ok": True, "snapshot_at": self.world.at,
-                                   "server_time": now_iso(), "revision": SERVER_REVISION})
-            if path.startswith("/api/"):
-                return self._json({"error": "not found"}, 404)
+            if office_api.get(self, path, query):
+                return
+            routes = {
+                '/api/world': self._get_world,
+                '/api/lesson-previews': self._get_lesson_previews,
+                '/api/desks': self._get_desks,
+                '/api/pins': self._get_pins,
+                '/api/gate': self._get_gate,
+                '/api/gates': self._get_gates,
+                '/api/board': self._get_board,
+                '/api/bots': self._get_bots,
+                '/api/chat': self._get_chat,
+                '/api/webhook': self._get_webhook,
+                '/api/automation': self._get_automation,
+                '/api/context': self._get_context,
+                '/api/live': self._get_live,
+                '/api/live/transcript': self._get_live_transcript,
+                '/api/sessions': self._get_sessions,
+                '/api/session': self._get_session,
+                '/api/readme': self._get_readme,
+                '/api/session/screen': self._get_session_screen,
+                '/api/search': self._get_search,
+                '/api/health': self._get_health,
+            }
+            if path in routes:
+                return routes[path](query)
+            if path.startswith('/api/'):
+                return self._json({'error': 'not found'}, 404)
             return self._page(path)
-        except Exception as exc:  # noqa: BLE001
-            self._json({"error": f"{type(exc).__name__}: {exc}"[:300]}, 500)
+        except (FileNotFoundError, PermissionError, FileExistsError, ValueError, KeyError) as exc:
+            return self._mobile_error(exc)
+        except Exception as exc:
+            self._json({'error': f'{type(exc).__name__}: {exc}'[:300]}, 500)
+
+    def _mobile_error(self, exc):
+        codes = {FileNotFoundError: 404, PermissionError: 403, FileExistsError: 409,
+                 ValueError: 400, KeyError: 400}
+        self._json({'error': str(exc)}, codes.get(type(exc), 500))
+
+    def _get_world(self, query):
+        fresh = False
+        if urllib.parse.parse_qs(query).get("fresh"):
+            fresh = self.world.fresh_build()
+        return self._json({"at": self.world.at, "world": self.world.snapshot,
+                           "decisions": self.world.recent(),
+                           "fresh": fresh, "server_time": now_iso()})
+
+    def _get_lesson_previews(self, query):
+        return self._json(lesson_previews.build())
+
+    def _get_desks(self, query):
+        return self._json({"hidden": office_sync.read_hidden()})
+
+    def _get_pins(self, query):
+        return self._json({"pins": office_sync.read_pins()})
+
+    def _get_gate(self, query):
+        return self._json(rt.read_gate())
+
+    def _get_gates(self, query):
+        return self._json(self._gates())
+
+    def _get_board(self, query):
+        q = urllib.parse.parse_qs(query)
+        try:
+            limit = int((q.get("limit") or ["60"])[0])
+        except ValueError:
+            limit = 60
+        return self._json(board.read_feed(
+            repo=(q.get("repo") or [""])[0],
+            kind=(q.get("kind") or [""])[0],
+            q=(q.get("q") or [""])[0],
+            limit=limit, cursor=(q.get("cursor") or [""])[0],
+            since=(q.get("since") or ["0"])[0]))
+
+    def _get_bots(self, query):
+        return self._json(self.chatroom.roster())
+
+    def _get_chat(self, query):
+        bot = (urllib.parse.parse_qs(query).get("bot") or [""])[0]
+        code, body = self.chatroom.history(bot)
+        return self._json(body, code)
+
+    def _get_webhook(self, query):
+        return self._json(self._webhook_status())
+
+    def _get_automation(self, query):
+        return self._json({"at": self.world.at,
+                           "automation": self.world.snapshot.get("automation") or {}})
+
+    def _get_context(self, query):
+        q = urllib.parse.parse_qs(query)
+        code, body = context.read((q.get("repo") or [""])[0],
+                                  (q.get("path") or [""])[0])
+        return self._json(body, code)
+
+    def _get_live(self, query):
+        return self._json(live.read())
+
+    def _get_live_transcript(self, query):
+        q = urllib.parse.parse_qs(query)
+        code, body = live.transcript((q.get("key") or [""])[0],
+                                     (q.get("offset") or ["0"])[0],
+                                     (q.get("limit") or [""])[0]
+                                     or live.DEFAULT_LIMIT,
+                                     identity=(q.get("identity") or [""])[0])
+        return self._json(body, code)
+
+    def _get_sessions(self, query):
+        repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
+        return self._json(sessions.read(repo))
+
+    def _get_session(self, query):
+        q = urllib.parse.parse_qs(query)
+        code, body = sessions.transcript((q.get("name") or [""])[0],
+                                         (q.get("last") or [""])[0]
+                                         or sessions.DEFAULT_EXCHANGES)
+        return self._json(body, code)
+
+    def _get_readme(self, query):
+        repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
+        code, body = sessions.readme(repo)
+        return self._json(body, code)
+
+    def _get_session_screen(self, query):
+        name = (urllib.parse.parse_qs(query).get("name") or [""])[0]
+        code, body = sessions.screen(name)
+        return self._json(body, code)
+
+    def _get_search(self, query):
+        q = urllib.parse.parse_qs(query)
+        return self._json(search.run((q.get("q") or [""])[0]))
+
+    def _get_health(self, query):
+        return self._json({"ok": True, "snapshot_at": self.world.at,
+                           "server_time": now_iso(), "revision": SERVER_REVISION})
+
 
     do_HEAD = do_GET
 
@@ -690,41 +721,35 @@ class Handler(BaseHTTPRequestHandler):
         if why:
             return self._json({"error": why}, 403)
         try:
-            if path == "/api/decision":
-                return self._decision(self._read_json())
-            if path == "/api/gate":
-                return self._gate(self._read_json())
-            if path == "/api/board":
-                return self._board(self._read_json())
-            if path == "/api/desks":
-                return self._desks(self._read_json())
-            if path == "/api/pins":
-                return self._pins(self._read_json())
-            if path == "/api/context":
-                code, body = context.write(
-                    self._read_json(limit=context.MAX_BYTES + 4096))
-                return self._json(body, code)
-            if path == "/api/chat":
-                # Returns before the turn has run: a chat turn is an agent run,
-                # and nothing on the other end of this socket waits two minutes.
-                code, body = self.chatroom.say(self._read_json(limit=CHAT_LIMIT))
-                return self._json(body, code)
-            if path == "/api/session/say":
-                code, body = sessions.say(self._read_json(limit=CHAT_LIMIT))
-                return self._json(body, code)
-            if path == "/api/session/start":
-                # This starts a real agent with Aria's credentials, so it is the
-                # one write on this door that runs a program. Everything that
-                # makes that safe is in sessions.start(): the engine is one of
-                # two exact names, and the directory is one the office already
-                # knows about. Nothing from this body is interpolated anywhere.
-                code, body = sessions.start(self._read_json())
-                return self._json(body, code)
-            return self._json({"error": "not found"}, 404)
+            if office_api.post(self, path):
+                return
+            return self._post_route(path)
         except ValueError as exc:
             self._json({"error": str(exc)[:200]}, 400)
+        except (FileNotFoundError, PermissionError, FileExistsError) as exc:
+            return self._mobile_error(exc)
         except Exception as exc:  # noqa: BLE001
             self._json({"error": f"{type(exc).__name__}: {exc}"[:300]}, 500)
+
+    def _post_route(self, path):
+        immediate = {
+            '/api/decision': self._decision, '/api/gate': self._gate,
+            '/api/board': self._board, '/api/desks': self._desks,
+            '/api/pins': self._pins,
+        }
+        if path in immediate:
+            return immediate[path](self._read_json())
+        services = {
+            '/api/context': (context.write, context.MAX_BYTES + 4096),
+            '/api/chat': (self.chatroom.say, CHAT_LIMIT),
+            '/api/session/say': (sessions.say, CHAT_LIMIT),
+            '/api/session/start': (sessions.start, WRITE_LIMIT),
+        }
+        if path not in services:
+            return self._json({'error': 'not found'}, 404)
+        action, limit = services[path]
+        code, body = action(self._read_json(limit=limit))
+        return self._json(body, code)
 
     def _decision(self, body):
         err, _ = validate(body)

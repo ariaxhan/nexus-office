@@ -17,7 +17,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import shutil
 import sqlite3
 import time
 import uuid
@@ -277,7 +276,11 @@ class Ledger:
         # A brand new file is zero bytes and has nothing to lose.
         if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
             self.conn.execute("PRAGMA wal_checkpoint(FULL)")
-            shutil.copyfile(self.path, f"{self.path}.bak-{version}")
+            # Opening and closing this same inode through shutil releases all
+            # POSIX locks held by this process, including SQLite's WAL locks.
+            # A second process can then unlink a WAL still used by this one.
+            with contextlib.closing(sqlite3.connect(f"{self.path}.bak-{version}")) as backup:
+                self.conn.backup(backup)
         for step in range(version, SCHEMA_VERSION):
             getattr(self, f"_migrate_v{step + 1}")()
         self.event("ledger.migrated", None, {"from": version, "to": SCHEMA_VERSION}, "tower")
@@ -504,6 +507,17 @@ class Ledger:
             self._event("task.state", tid,
                         {"to": state, "origin": origin, "plan_id": plan_id,
                          "dedupe_key": dedupe_key}, "tower", now)
+        return tid
+
+    def add_scheduled_task(self, plan, key, now):
+        """One durable occasion, including completed and abandoned attempts."""
+        tid = new_id("task")
+        with self.tx():
+            prior = self.conn.execute("SELECT id FROM tasks WHERE plan_id=? AND dedupe_key=? LIMIT 1", (plan['id'], key)).fetchone()
+            if prior is not None:
+                return None
+            self.conn.execute("INSERT INTO tasks (id,plan_id,origin,title,reason,risk,state,dedupe_key,created_at) VALUES (?,?,'plan',?,'schedule due','low','candidate',?,?)", (tid,plan['id'],f"run {plan['name']}",key,now))
+            self._event("task.state",tid,{"to":"candidate","origin":"plan","plan_id":plan['id'],"dedupe_key":key},"tower",now)
         return tid
 
     def task(self, task_id):

@@ -1,0 +1,32 @@
+require 'shellwords'
+default_platform(:ios)
+platform :ios do
+  desc 'Build a local development archive for the paired phone'
+  lane :device do
+    build_app(project: 'OfficeMobile.xcodeproj', scheme: 'OfficeMobile', export_method: 'development',
+              output_directory: 'build', output_name: 'Office.ipa',
+              xcargs: "-allowProvisioningUpdates OFFICE_URL=#{Shellwords.escape(ENV.fetch('OFFICE_BUILD_URL', 'https://arias-macbook-pro-2.tail4f309a.ts.net'))}", export_xcargs: '-allowProvisioningUpdates')
+  end
+  desc 'Build the shared Office shell for Simulator'
+  lane :simulator do
+    build_app(project: 'OfficeMobile.xcodeproj', scheme: 'OfficeMobile', skip_archive: true,
+              skip_package_ipa: true, destination: 'generic/platform=iOS Simulator',
+              derived_data_path: 'build/simulator', xcargs: 'CODE_SIGNING_ALLOWED=NO')
+  end
+  desc 'Exercise the real podcast player on a paired iPhone'
+  lane :phone_test do
+    run_tests(project: 'OfficeMobile.xcodeproj', scheme: 'OfficeMobile',
+              destination: "platform=iOS,id=#{ENV.fetch('OFFICE_DEVICE_ID')}",
+              output_directory: 'build/test-results', result_bundle: true,
+              xcargs: '-allowProvisioningUpdates')
+  end
+
+  desc 'Exercise the shared player UI on Simulator'
+  lane :simulator_test do
+    run_tests(project: 'OfficeMobile.xcodeproj', scheme: 'OfficeMobile',
+              destination: 'platform=iOS Simulator,id=48FB25B5-8E0C-47B7-BBE1-B255A2B536EC',
+              output_directory: 'build/simulator-test-results', result_bundle: true,
+              xcargs: 'CODE_SIGNING_ALLOWED=NO')
+  end
+
+end

@@ -22,27 +22,11 @@ whole point of this surface is that those two agree.
 
 HOW A PROCESS FINDS ITS TRANSCRIPT
 ----------------------------------
-By directory, which is the only thing the two sides share.
-
-Claude Code writes `~/.claude/projects/<slug>/<sessionId>.jsonl`, where the slug
-is the cwd with every `/` and `.` turned into `-`. Two things bite here, both
-measured rather than guessed:
-
-  * a worktree under `/private/var/folders/...` has BOTH a fully dashed slug dir
-    and one that kept its dots, sitting side by side on disk, and only one of
-    them is being written to. Every candidate is tried and the one holding the
-    newest jsonl wins.
-  * macOS reports the cwd as `/private/var/...` while some sessions were logged
-    under `/var/...`. That prefix is tried too.
-
-Codex writes `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` and states its own
-cwd in the first line, so the join is a read rather than a guess. Only today's
-and yesterday's date folders are scanned: a session started before that is not
-one this page is claiming to be live about, and walking the whole tree on every
-poll is how a five second refresh becomes a spinning disk. A rollout written by
-a Codex SUBAGENT is skipped while a top-level one exists for that directory: the
-subagent runs inside the same process, and showing its thread as the session's
-would answer "what is this agent doing" with someone else's transcript.
+A unique open JSONL file descriptor proves the process has that exact history
+open. Its path must belong to a configured Personal/TBS native store. No cwd,
+modification-time ranking, or 48-hour window establishes identity. With no unique
+file, the process stays visible and its conversation remains unknown. A desktop
+app-server can host many sessions; it is not counted as one working conversation.
 
 NOTHING HERE BLOCKS THE DOOR
 ----------------------------
@@ -54,6 +38,7 @@ was actually told nothing.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -315,20 +300,37 @@ def codex_transcripts() -> dict:
 
 
 def _join(engine: str, pid: int, cwds: dict, codex_index: dict) -> str:
-    where = cwds.get(pid) or ""
-    if not where:
-        return ""
-    cached = _joins["tx"].get((engine, where))
+    # A directory is not a conversation identity. Only an exact file held by
+    # this process may supply a transcript; multiple open histories are ambiguous.
+    cached = _joins["tx"].get((engine, pid))
     if cached is not None:
         return cached
-    if engine == "claude":
-        found = claude_transcript(where)
-    else:
-        found = codex_index.get(where) or ""
-        if not found and where.startswith("/private/"):
-            found = codex_index.get(where[len("/private"):]) or ""
-    _joins["tx"][(engine, where)] = found
+    rc, out, _ = _run(["lsof", "-a", "-p", str(pid), "-Fn"])
+    candidates = transcript_descriptors(engine, out) if rc in (0, 1) else []
+    found = candidates[0] if len(candidates) == 1 else ""
+    _joins["tx"][(engine, pid)] = found
     return found
+
+
+def transcript_descriptors(engine, output):
+    import office_archives
+    try:
+        roots = [base.resolve() for kind, _, base in office_archives.locations() if kind == engine]
+    except ValueError:
+        roots = []  # Standalone process reader has only its configured native store.
+    # These constants remain test/development overrides for the original stores.
+    roots.append((CLAUDE_PROJECTS if engine == "claude" else CODEX_SESSIONS).resolve())
+    candidates = set()
+    for line in output.splitlines():
+        if not line.startswith("n") or not line.endswith(".jsonl"):
+            continue
+        path = pathlib.Path(line[1:])
+        if path.is_symlink() or not path.is_file():
+            continue
+        resolved = path.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            candidates.add(str(resolved))
+    return sorted(candidates)
 
 
 # ── one transcript, digested for a row ───────────────────────────────────────
@@ -535,22 +537,75 @@ def _codex_text(content) -> str:
 
 def _fresh_joins(found: dict) -> tuple[dict, dict]:
     """The pid to cwd and cwd to transcript joins, at most ten seconds old."""
-    now = time.monotonic()
-    if now - _joins["at"] > JOIN_CACHE_S:
-        _joins["at"] = now
-        _joins["cwd"] = {}
-        _joins["tx"] = {}
+    # Re-probe each observation: a reused PID must not inherit the old cwd or
+    # open-file identity, even inside a ten-second UI polling interval.
+    _joins.update(at=time.monotonic(), cwd={}, tx={}, codex_index={})
     cwds = _joins["cwd"]
     for engine in ENGINES:
         for pid in found.get(engine, []):
             if pid not in cwds:
                 cwds[pid] = cwd_of(pid)
-    want_codex = any(found.get("codex"))
-    index = codex_transcripts() if want_codex and not _joins.get("codex_index") else \
-        (_joins.get("codex_index") or {})
-    if want_codex:
-        _joins["codex_index"] = index
-    return cwds, index
+    return cwds, {}
+
+
+def executable_processes():
+    rc, out, error = _run(["ps", "-axo", "pid=,comm="])
+    if rc:
+        return {}, (error or 'Executable inventory unavailable')[:200]
+    found = {}
+    for line in out.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        engine = pathlib.Path(parts[1]).name
+        if engine in ENGINES:
+            found[int(parts[0])] = {'engine':engine, 'executable':parts[1]}
+    return found, ''
+
+
+def process_observation(engine, pid, cwds, codex_index, ages, executables, now):
+    where = cwds.get(pid) or ""
+    path = _join(engine, pid, cwds, codex_index)
+    touched = None
+    if path:
+        try:
+            touched = os.stat(path).st_mtime
+        except OSError:
+            path, touched = "", None
+    digest = _digest(path, engine) if path else {"title": "", "last_line": "", "turns": 0}
+    age = ages.get(pid)
+    return (touched or 0.0, {
+        "key": f"{engine}-{pid}",
+        "engine": engine,
+        "pid": pid,
+        "executable": executables.get(pid, {}).get("executable", ""),
+        "identity": "unique open transcript" if path else "process only",
+        "cwd": where,
+        "repo": sessions.origin_nwo(where) if where else "",
+        "started": _iso(now - age) if age is not None else "",
+        "last_activity": _iso(touched) if touched else "",
+        "title": digest["title"],
+        "last_line": digest["last_line"],
+        "turns": digest["turns"],
+        "transcript": path,
+        "state": ("working" if touched and now - touched <= WORKING_S
+                  else ("idle" if touched else "unknown")),
+    })
+
+
+def process_inventory():
+    found, faults = {}, []
+    for engine in ENGINES:
+        got, why = pids(engine)
+        found[engine] = got
+        if why:
+            faults.append(why)
+    executables, why = executable_processes()
+    if why:
+        faults.append(why)
+    for pid, info in executables.items():
+        found[info['engine']] = sorted(set(found[info['engine']]) | {pid})
+    return found, faults, executables
 
 
 def read() -> dict:
@@ -565,13 +620,8 @@ def read() -> dict:
       empty       asked, and nothing is running.
       ok          there are sessions.
     """
-    found, faults = {}, []
-    for engine in ENGINES:
-        got, why = pids(engine)
-        found[engine] = got
-        if why:
-            faults.append(why)
-    if faults:
+    found, faults, executables = process_inventory()
+    if faults and not any(found.values()):
         return {"state": "unreadable", "detail": " · ".join(faults)[:300],
                 "sessions": [], "working": 0, "as_of": now_iso()}
 
@@ -582,31 +632,7 @@ def read() -> dict:
     made = []
     for engine in ENGINES:
         for pid in found[engine]:
-            where = cwds.get(pid) or ""
-            path = _join(engine, pid, cwds, codex_index)
-            touched = None
-            if path:
-                try:
-                    touched = os.stat(path).st_mtime
-                except OSError:
-                    path, touched = "", None
-            digest = _digest(path, engine) if path else {"title": "", "last_line": "", "turns": 0}
-            age = ages.get(pid)
-            made.append((touched or 0.0, {
-                "key": f"{engine}-{pid}",
-                "engine": engine,
-                "pid": pid,
-                "cwd": where,
-                "repo": sessions.origin_nwo(where) if where else "",
-                "started": _iso(now - age) if age is not None else "",
-                "last_activity": _iso(touched) if touched else "",
-                "title": digest["title"],
-                "last_line": digest["last_line"],
-                "turns": digest["turns"],
-                "transcript": path,
-                "state": ("working" if touched and now - touched <= WORKING_S
-                          else ("idle" if touched else "unknown")),
-            }))
+            made.append(process_observation(engine, pid, cwds, codex_index, ages, executables, now))
 
     # Working first, then quiet, then the ones with nothing on disk; inside a
     # group, the one that moved most recently. A session with no transcript
@@ -615,7 +641,7 @@ def read() -> dict:
     order = {"working": 0, "idle": 1, "unknown": 2}
     made.sort(key=lambda pair: (order.get(pair[1]["state"], 3), -pair[0], pair[1]["key"]))
     rows = [row for _, row in made]
-    return {"state": "ok" if rows else "empty", "detail": "", "sessions": rows,
+    return {"state": "partial" if faults else ("ok" if rows else "empty"), "detail": " · ".join(faults), "sessions": rows,
             "working": sum(1 for r in rows if r["state"] == "working"),
             "as_of": now_iso()}
 
@@ -635,7 +661,7 @@ def _row(key: str):
     return None
 
 
-def _all_lines(path: str, engine: str) -> list:
+def _all_lines(path: str, engine: str, length: int) -> list:
     """The whole transcript as reader lines, cached against its own mtime.
 
     The path never comes from a caller. It comes off the row this process built
@@ -646,13 +672,17 @@ def _all_lines(path: str, engine: str) -> list:
         stat = os.stat(path)
     except OSError:
         return []
-    stamp = (path, stat.st_mtime, stat.st_size)
+    stamp = (path, stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, length)
     if _parsed["key"] == stamp:
         return _parsed["lines"]
     out = []
     try:
         with open(path, "rb") as handle:
-            for chunk in handle:
+            remaining = length
+            while remaining:
+                chunk = handle.readline(remaining)
+                if not chunk:break
+                remaining -= len(chunk)
                 out.extend(_lines_of(_loads(chunk), engine))
     except OSError:
         return []
@@ -661,7 +691,30 @@ def _all_lines(path: str, engine: str) -> list:
     return out
 
 
-def transcript(key: str, offset=0, limit=DEFAULT_LIMIT) -> tuple[int, dict]:
+def transcript_identity(row, previous=""):
+    path = pathlib.Path(row['transcript'])
+    with path.open('rb') as stream:
+        stat = os.fstat(stream.fileno())
+        value = f"{row['key']}:{path}:{stat.st_dev}:{stat.st_ino}"
+        owner = hashlib.sha256(value.encode()).hexdigest()
+        length = stat.st_size
+        if previous:
+            prior_owner, count, _ = previous.split(':')
+            length = int(count)
+            if prior_owner != owner or not 0 <= length <= stat.st_size:
+                raise ValueError('Transcript changed')
+        digest = hashlib.sha256()
+        remaining = length
+        while remaining:
+            chunk = stream.read(min(65536, remaining))
+            if not chunk:raise ValueError('Transcript truncated')
+            digest.update(chunk);remaining -= len(chunk)
+        result = f"{owner}:{length}:{digest.hexdigest()}"
+        if previous and result != previous:raise ValueError('Transcript rewritten')
+        return result
+
+
+def transcript(key: str, offset=0, limit=DEFAULT_LIMIT, identity="") -> tuple[int, dict]:
     """One session's whole conversation, a page at a time. (http status, body).
 
     A negative offset means "the end", which is what a reader wants on open: it
@@ -677,9 +730,20 @@ def transcript(key: str, offset=0, limit=DEFAULT_LIMIT) -> tuple[int, dict]:
     if not row["transcript"]:
         return 404, {"error": NO_TRANSCRIPT, "key": row["key"]}
 
+    try:
+        if identity:transcript_identity(row, identity)
+        observed_identity = transcript_identity(row)
+    except (OSError, ValueError):
+        return 409, {"error": "Transcript changed; reopen this conversation."}
+
     limit = _int(limit, DEFAULT_LIMIT)
     limit = max(1, min(MAX_LIMIT, limit))
-    lines = _all_lines(row["transcript"], row["engine"])
+    lines = _all_lines(row["transcript"], row["engine"], int(observed_identity.split(":")[1]))
+    try:
+        if transcript_identity(row, observed_identity) != observed_identity:
+            return 409, {"error": "Transcript changed; reopen this conversation."}
+    except (OSError, ValueError):
+        return 409, {"error": "Transcript changed; reopen this conversation."}
     total = len(lines)
     start = _int(offset, 0)
     if start < 0:
@@ -688,7 +752,7 @@ def transcript(key: str, offset=0, limit=DEFAULT_LIMIT) -> tuple[int, dict]:
     return 200, {"key": row["key"], "engine": row["engine"], "state": row["state"],
                  "title": row["title"], "cwd": row["cwd"], "repo": row["repo"],
                  "transcript": row["transcript"], "total": total, "offset": start,
-                 "lines": lines[start:start + limit], "as_of": now_iso()}
+                 "lines": lines[start:start + limit], "identity": observed_identity, "as_of": now_iso()}
 
 
 def _int(value, fallback: int) -> int:

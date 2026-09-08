@@ -85,7 +85,7 @@ class PageTest(unittest.TestCase):
         code, headers, body = self.fetch("/")
         self.assertEqual(code, 200)
         self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
-        self.assertIn("<title>The office</title>", body)
+        self.assertIn("<title>Nexus Office</title>", body)
         self.assertIn('href="/lessons"', body)
 
     def test_the_page_carries_the_policy_that_makes_three_files_worth_it(self):
@@ -105,7 +105,7 @@ class PageTest(unittest.TestCase):
 
     def test_the_two_files_the_page_asks_for_arrive_as_themselves(self):
         for path, ctype, needle in (
-            ("/index.html", "text/html; charset=utf-8", "<title>The office</title>"),
+            ("/index.html", "text/html; charset=utf-8", "<title>Nexus Office</title>"),
             ("/phone.css", "text/css; charset=utf-8", "--amber: #ffb020"),
             ("/phone.js", "text/javascript; charset=utf-8", "/api/gate"),
         ):
@@ -169,7 +169,7 @@ class PageTest(unittest.TestCase):
         code, headers, body = self.fetch("/", {"host": TAILNET,
                                                "tailscale-user-login": "aria"})
         self.assertEqual(code, 200)
-        self.assertIn("<title>The office</title>", body)
+        self.assertIn("<title>Nexus Office</title>", body)
         self.assertIn("content-security-policy", headers)
 
     def test_a_forged_login_on_loopback_is_ignored(self):
@@ -178,7 +178,7 @@ class PageTest(unittest.TestCase):
         page that trusts a header anybody can type."""
         code, _, body = self.fetch("/", {"tailscale-user-login": "not-aria"})
         self.assertEqual(code, 200)
-        self.assertIn("<title>The office</title>", body)
+        self.assertIn("<title>Nexus Office</title>", body)
 
 
 class SourceTest(unittest.TestCase):
