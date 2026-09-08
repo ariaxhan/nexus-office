@@ -366,11 +366,14 @@ class Chatroom:
             return 400, {"error": NO_MESSAGE}
         if len(message) > MAX_MESSAGE:
             return 400, {"error": LONG_MESSAGE}
+        uploads, why = check_uploads(body.get("uploads"))
+        if why:
+            return 400, {"error": why}
         attachments, why = check_attachments(body.get("attachments"))
         if why:
             return 400, {"error": why}
         # A picture with no words is a message; no words and no picture is not.
-        if not message.strip() and not attachments:
+        if not message.strip() and not attachments and not uploads:
             return 400, {"error": NO_MESSAGE}
         # Refused now rather than thirty seconds from now. A typo would otherwise
         # come back only as an `error` on a desk, long after the app moved on.
@@ -382,7 +385,7 @@ class Chatroom:
             if bot in self.busy:
                 return 409, {"error": "busy"}
             self.busy.add(bot)
-        threading.Thread(target=self._turn, args=(bot, message, attachments),
+        threading.Thread(target=self._turn, args=(bot, message, attachments, uploads),
                          daemon=True).start()
         return 202, {"ok": True, "bot": bot}
 
@@ -405,11 +408,13 @@ class Chatroom:
                 self.errors[bot] = (f"decision {r.get('repo', '?')}#{r.get('issue', '?')} "
                                     f"did not apply: {r.get('result')}")[:300]
 
-    def _turn(self, bot: str, message: str, attachments=()) -> None:
+    def _turn(self, bot: str, message: str, attachments=(), uploads=()) -> None:
         # No attachment means no key: a turn without a picture goes on the wire
         # exactly as it always has, so nothing already talking to the harness has
         # to learn a new shape to keep working.
         turn = {"message": message, "bot": bot}
+        if uploads:
+            turn["uploads"] = list(uploads)
         if self.evidence is not None:
             evidence = self.evidence(bot, message)
             if evidence:
@@ -430,3 +435,13 @@ class Chatroom:
         finally:
             with self.lock:
                 self.busy.discard(bot)
+
+
+def check_uploads(value):
+    import office_uploads
+    references = [] if value is None else value
+    try:
+        office_uploads.attachments(references)
+        return references, None
+    except (ValueError, OSError) as exc:
+        return None, str(exc)

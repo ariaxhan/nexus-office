@@ -1,4 +1,5 @@
 import * as userState from './office-state.js';
+import {attachments} from './office-attachments.js';
 import {restoreDraft,transcriptNavigation,rememberDetail,clearDetail,backDetail,$,api,el,button,sheet,section,card,intro,empty,failure,field,select,notice,link} from './office-ui.js';
 import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
@@ -309,10 +310,11 @@ function structured(value){
 async function botConversation(bot){
  rememberDetail('bot',bot.id);
  const body=el('div');sheet(bot.name).append(body);const history=el('div');body.append(button('All retained messages',()=>botHistory('bot-history:'+bot.id+'.jsonl')),button('Archived office conversations',botArchives),history);
- const refresh=async()=>{const data=await api(`/api/chat?bot=${encodeURIComponent(bot.id)}`);history.replaceChildren();for(const turn of data.turns||[])history.append(card(turn.role,turn.content||turn.text));};
- await refresh();if(!body.isConnected)return;transcriptNavigation(body,history);const message=field(body,'Message',el('textarea'));const photo=field(body,'Attach a picture',el('input'));photo.type='file';photo.accept='image/*';
- const clearMessage=restoreDraft(message,['bot',bot.id]);
- body.append(button('Send',async()=>{const payload={bot:bot.id,message:message.value};if(photo.files[0]){const file=photo.files[0];if(file.size>4*1024*1024)throw Error('Choose an image below 4 MB');const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file);});payload.attachments=[{name:file.name,mime_type:file.type,data_base64:data}];}await api('/api/chat',payload);clearMessage(payload.message);photo.value='';notice('Agent turn queued');await refresh();},'primary'),button('Refresh conversation',refresh));
+ const refresh=async()=>{const data=await api(`/api/chat?bot=${encodeURIComponent(bot.id)}`);history.replaceChildren();for(const turn of data.turns||[]){const row=card(turn.role,turn.content||turn.text);for(const item of turn.attachments||[])if(item.office_id)row.append(link(item.name||'Attached file',`/api/uploads/content?id=${encodeURIComponent(item.office_id)}&revision=${item.revision}`));history.append(row);}};
+ await refresh();if(!body.isConnected)return;transcriptNavigation(body,history);const message=field(body,'Message',el('textarea'));
+ const clearMessage=restoreDraft(message,['bot',bot.id]);const key='office-bot-uploads:'+bot.id;
+ const attached=attachments(body,JSON.parse(localStorage.getItem(key)||'[]'),items=>localStorage.setItem(key,JSON.stringify(items)));
+ body.append(button('Send',async()=>{const payload={bot:bot.id,message:message.value,uploads:attached.references()};await api('/api/chat',payload);clearMessage(payload.message);const stored=JSON.parse(localStorage.getItem(key)||'[]').map(({id,revision})=>({id,revision}));if(JSON.stringify(stored)===JSON.stringify(payload.uploads)&&JSON.stringify(attached.references())===JSON.stringify(payload.uploads))attached.clear();notice('Agent turn queued');await refresh();},'primary'),button('Refresh conversation',refresh));
 }
 
 async function projectionDetail(id,offset=0,parent=null,revision=''){
