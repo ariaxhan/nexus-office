@@ -76,6 +76,7 @@ def refresh_all(world):
             try:
                 if collect(access,repositories,repo)['state']=='fetching':pending.append(repo)
             except Exception as exc:failed(repo,exc)
+            admit_retries(repositories,pending)
 
     finally:LOCK.release()
 
@@ -136,3 +137,10 @@ def collection_status(repo,info):
     try:return office_github_stage.progress(path(repo),info.get('generation'))
     except (OSError,ValueError,sqlite3.Error) as exc:
         return {'state':'error','error':'Saved collection progress unavailable: '+str(exc)[:180]}
+
+
+def admit_retries(repositories,pending):
+    queued=set(pending)
+    for repo in repositories:
+        if repo not in queued and STATUS.get(repo,{}).get('state')=='error' and due(repo):
+            pending.append(repo)

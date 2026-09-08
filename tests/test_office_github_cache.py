@@ -135,3 +135,21 @@ class Cache(unittest.TestCase):
                 with db:db.execute('INSERT OR REPLACE INTO checkpoint VALUES (1,?)',(value,))
                 self.assertEqual(cache.coverage(['a/b'],[])[0]['state'],'error')
         finally:db.close()
+
+    def test_failed_repository_rejoins_live_queue_after_retry_cooldown(self):
+        from types import SimpleNamespace
+        clock=[10000];order=[];world=SimpleNamespace(access=lambda:None)
+        def collect(access,known,repo):
+            order.append(repo)
+            if repo=='a/recover' and order.count(repo)==1:raise ConnectionError('temporary')
+            if repo=='z/large':
+                clock[0]+=150
+                return {'state':'fetching' if order.count(repo)<4 else 'ready'}
+            cache.STATUS[repo]={'state':'ready'}
+            return {'state':'ready'}
+        with patch.object(cache,'known',return_value=['a/recover','z/large']),patch.object(cache,'collect',side_effect=collect),patch.object(cache.time,'time',side_effect=lambda:clock[0]):
+            cache.LOCK.acquire();cache.refresh_all(world)
+        self.assertEqual(order.count('a/recover'),2)
+        self.assertLess(order.index('a/recover',1),len(order)-1)
+        self.assertEqual(order[:3],['a/recover','z/large','z/large'])
+        self.assertFalse(cache.LOCK.locked())
