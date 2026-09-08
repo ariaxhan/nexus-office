@@ -439,3 +439,11 @@ Directory `/Users/slowember/Developer/Vaults/_meta/podcasts/2026-09-08/office-af
 - Clarified merge help text to describe existing GitHub merge rules accurately; no new approval requirement or backend policy change.
 - Persistent Mac keep-awake enabled through vaults awake on and confirmed by vaults awake status. Display sleep remains allowed. This does not prove unattended recovery after logout or FileVault boot.
 - Physical iPhone remains passcode locked. Real phone lock-screen audio, haptic feel and complete phone interaction acceptance remain unverified; browser and Simulator evidence do not substitute for those checks.
+
+
+### Restart coverage truth and affected-corpus proof (2026-09-08)
+- Actual restart showed retained Vaults/Hermes/Codex journal records as unbuilt with zero fetched until the worker reached them. Coverage now reads committed checkpoint/count in a read-only transaction when process-local status is absent, reports queued progress, and creates no journal. Published-generation leftovers remain indexed; unreadable, malformed or linked checkpoints report per-source errors.
+- Independent review found malformed valid JSON could escape as AttributeError; explicit checkpoint/publication shape validation fixes it. All 43 focused GitHub tests passed, including missing/corrupt/linked journals and crash-after-publication. Complexity remains 72 unchanged, zero regressions or additions.
+- Read-only proof against actual production journals recovered Vaults321, Hermes3200 and Codex3200 retained records: /tmp/office-restart-progress-live-journals.json. Worker continues normally; no index rebuild/reset or journal mutation performed by this observation.
+- Production armature-ai now has all 51 records indexed. Search returned its formerly failing PR #1 diff; the reader preserved repository/PR target and bounded continuation. Evidence: /tmp/office-armature-search-proof.json and /tmp/office-armature-authoritative-open.json. Other repository collection and physical-phone acceptance remain open.
+- Final parent verification 89872 passed: 1296 Python tests plus Node/Swift; the subsequent malformed-checkpoint fixture passed in the 43-test focused suite, with a fresh unchanged complexity gate. Independent correction review approved.

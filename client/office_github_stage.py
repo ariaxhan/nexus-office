@@ -71,3 +71,20 @@ def publish(db,target,repo,count,publication):
 def capacity(path,additional):
     if shutil.disk_usage(path.parent).free<5*1024**3+additional:
         raise OSError('GitHub collection paused: keep at least 5 GiB free; committed progress is retained')
+
+
+def progress(target, published_generation=None):
+    """Read committed restart progress without creating or changing a journal."""
+    path=target.with_suffix('.stage.sqlite')
+    private_state._assert_bounded(path,target.parent)
+    if not path.exists():return {}
+    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,timeout=0.1)) as db:
+        db.execute('BEGIN')
+        row=db.execute('SELECT body FROM checkpoint WHERE id=1').fetchone()
+        if row is None:return {}
+        state=json.loads(row[0])
+        if not isinstance(state,dict) or not isinstance(state.get('publication',{}),dict):
+            raise ValueError('Invalid saved collection checkpoint')
+        if state.get('publication',{}).get('generation')==published_generation and published_generation:return {}
+        count=db.execute('SELECT count(*) FROM records').fetchone()[0]
+    return {'state':'queued','records':count}

@@ -94,3 +94,44 @@ class Cache(unittest.TestCase):
             cache.coverage(['a/b'],[]);self.assertFalse(cache.due('a/b'))
         with patch.object(cache.time,'time',return_value=10400):
             cache.coverage(['a/b'],[]);self.assertTrue(cache.due('a/b'))
+
+    def test_restart_reports_saved_progress_without_publishing_or_rewriting(self):
+        with patch.object(stage.batches,'next_batch',return_value=([{'id':'one'}],{'stage':'issues','cursor':'next'})):
+            stage.advance(None,['a/b'],'a/b',cache.path('a/b'),limit=1)
+        journal=cache.path('a/b').with_suffix('.stage.sqlite');before=journal.read_bytes()
+        cache.STATUS.clear()
+        row=cache.coverage(['a/b'],[])[0]
+        self.assertEqual((row['state'],row['fetched'],row['indexed']),('queued',1,0))
+        self.assertEqual(journal.read_bytes(),before)
+        self.assertFalse(cache.path('a/b').exists())
+
+    def test_missing_progress_does_not_create_journal(self):
+        self.assertEqual(cache.coverage(['a/b'],[])[0]['state'],'unbuilt')
+        self.assertEqual(list(Path(self.temp.name).iterdir()),[])
+
+    def test_corrupt_progress_is_visible_and_preserved(self):
+        journal=cache.path('a/b').with_suffix('.stage.sqlite');journal.write_bytes(b'broken')
+        self.assertEqual(cache.coverage(['a/b'],[])[0]['state'],'error')
+        self.assertEqual(journal.read_bytes(),b'broken')
+
+    def test_published_generation_leftover_is_not_reported_as_queued(self):
+        with patch.object(Path,'unlink',side_effect=OSError('crash')):
+            with self.assertRaises(OSError):self.publish([{'id':'one'}])
+        cache.STATUS.clear()
+        info=cache.header('a/b')
+        indexed=[{'source':'a/b','coverage':'GitHub corpus:'+info['generation'],'indexed':1}]
+        self.assertEqual(cache.coverage(['a/b'],indexed)[0]['state'],'indexed')
+
+    def test_linked_progress_is_not_read(self):
+        elsewhere=Path(self.temp.name)/'outside';elsewhere.write_text('private')
+        cache.path('a/b').with_suffix('.stage.sqlite').symlink_to(elsewhere)
+        self.assertEqual(cache.coverage(['a/b'],[])[0]['state'],'error')
+        self.assertEqual(elsewhere.read_text(),'private')
+
+    def test_malformed_json_checkpoint_is_a_source_error(self):
+        db,_=stage.connect(cache.path('a/b'))
+        try:
+            for value in ('[]','{"publication":null}'):
+                with db:db.execute('INSERT OR REPLACE INTO checkpoint VALUES (1,?)',(value,))
+                self.assertEqual(cache.coverage(['a/b'],[])[0]['state'],'error')
+        finally:db.close()

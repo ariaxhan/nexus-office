@@ -103,11 +103,11 @@ def records(repositories,errors):
 def coverage(repositories,indexed):
     rows=[]
     for repo in repositories:
-        info=safe_header(repo) or {};status=STATUS.get(repo,{})
+        info=safe_header(repo) or {};status=collection_status(repo,info)
         count=sum(row['indexed'] for row in indexed if row['source']==repo and row['coverage']=='GitHub corpus:'+info.get('generation',''))
         stale=any(row['source']==repo and row['coverage'].startswith('GitHub corpus:') and row['coverage']!='GitHub corpus:'+info.get('generation','') for row in indexed)
         state='indexed' if info and count==info['count'] and not stale else 'indexing' if info else 'unbuilt'
-        if status.get('state') in ('fetching','error'):state=status['state']
+        if status.get('state') in ('fetching','error','queued'):state=status['state']
         rows.append({'repo':repo,'state':state,'indexed':count,'fetched':status.get('records',info.get('count',0)),'observed_at':info.get('finished_at'),'error':status.get('error')})
     return rows
 
@@ -127,3 +127,12 @@ def safe_header(repo):
 def due(repo):
     current=safe_header(repo) or {};last=STATUS.get(repo,{})
     return time.time()-current.get('finished_at',0)>=TTL and time.time()-last.get('failed_at',0)>=RETRY
+
+
+def collection_status(repo,info):
+    import office_github_stage
+    import sqlite3
+    if repo in STATUS:return STATUS[repo]
+    try:return office_github_stage.progress(path(repo),info.get('generation'))
+    except (OSError,ValueError,sqlite3.Error) as exc:
+        return {'state':'error','error':'Saved collection progress unavailable: '+str(exc)[:180]}
