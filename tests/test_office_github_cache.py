@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'client'))
 import office_github_cache as cache
+import office_github_stage as stage
 
 class Cache(unittest.TestCase):
     def setUp(self):
@@ -14,7 +15,7 @@ class Cache(unittest.TestCase):
         cache.STATUS.clear()
 
     def publish(self,rows):
-        with patch.object(cache.corpus,'repository_records',return_value=iter(rows)):
+        with patch.object(stage.batches,'next_batch',return_value=(rows,{'stage':'done'})):
             return cache.collect(None,['a/b'],'a/b')
 
     def test_late_failure_preserves_complete_prior_snapshot(self):
@@ -22,10 +23,10 @@ class Cache(unittest.TestCase):
         def broken(*args):
             yield {'id':'two','body':'partial'}
             raise ConnectionError('late failure')
-        with patch.object(cache.corpus,'repository_records',side_effect=broken):
+        with patch.object(stage.batches,'next_batch',side_effect=lambda *args:(list(broken()),{'stage':'done'})):
             with self.assertRaises(ConnectionError):cache.collect(None,['a/b'],'a/b')
         self.assertEqual(cache.path('a/b').read_bytes(),before)
-        self.assertEqual(len(list(Path(self.temp.name).iterdir())),1)
+        self.assertEqual(len(list(Path(self.temp.name).glob('*.jsonl'))),1)
 
     def test_open_reader_keeps_one_generation_during_replace(self):
         old=self.publish([{'id':'one'},{'id':'two'}])
@@ -68,3 +69,28 @@ class Cache(unittest.TestCase):
         from types import SimpleNamespace
         with patch.dict(cache.os.environ,{'OFFICE_RUNTIME_ROOT':'/vault'}),patch.object(cache.office_workspaces,'discover',return_value=[('other/repo',Path('/vault/project')),('Local / scratch',Path('/vault/scratch'))]):
             self.assertEqual(cache.known(SimpleNamespace(snapshot={'stations':[{'repo':'a/b'}]})),['a/b','other/repo'])
+
+    def test_partial_repository_rotates_behind_other_ready_work(self):
+        from types import SimpleNamespace
+        world=SimpleNamespace(access=lambda:None);order=[]
+        def collect(access,known,repo):
+            order.append(repo)
+            return {'state':'fetching' if repo=='a/large' and order.count(repo)<3 else 'ready'}
+        with patch.object(cache,'known',return_value=['a/large','b/small']),patch.object(cache,'collect',side_effect=collect):
+            cache.LOCK.acquire();cache.refresh_all(world)
+        self.assertEqual(order,['a/large','b/small','a/large','a/large'])
+        self.assertFalse(cache.LOCK.locked())
+
+    def test_fetching_progress_is_visible_before_publication(self):
+        cache.STATUS['a/b']={'state':'fetching','records':800}
+        row=cache.coverage(['a/b'],[])[0]
+        self.assertEqual(row['fetched'],800);self.assertEqual(row['indexed'],0)
+
+    def test_corrupt_header_observation_does_not_postpone_repair_retry(self):
+        cache.path('a/b').write_text('broken')
+        with patch.object(cache.time,'time',return_value=10000):
+            self.assertTrue(cache.due('a/b'));cache.failed('a/b',ConnectionError('offline'))
+        with patch.object(cache.time,'time',return_value=10100):
+            cache.coverage(['a/b'],[]);self.assertFalse(cache.due('a/b'))
+        with patch.object(cache.time,'time',return_value=10400):
+            cache.coverage(['a/b'],[]);self.assertTrue(cache.due('a/b'))

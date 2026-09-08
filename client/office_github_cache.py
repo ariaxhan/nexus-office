@@ -1,13 +1,12 @@
 """Atomic per-repository snapshots; failed collection never replaces good data."""
 import hashlib
+from collections import deque
 import json
 import os
 from pathlib import Path
-import tempfile
 import threading
 import time
 
-import office_github_corpus as corpus
 import office_preferences as preferences
 import private_state
 import office_workspaces
@@ -43,22 +42,10 @@ def read_header(stream,repo):
 
 
 def collect(access,known,repo):
-    target=path(repo);temporary=None;ids=set()
-    try:
-        with tempfile.NamedTemporaryFile(mode='w+',encoding='utf-8',dir=target.parent,delete=False) as stream:
-            temporary=Path(stream.name);stream.write(' '*HEADER_BYTES+'\n')
-            for row in corpus.repository_records(access,known,repo):
-                stream.write(json.dumps(row,ensure_ascii=False)+'\n');ids.add(row['id'])
-                STATUS[repo]={'state':'fetching','records':len(ids),'started_at':STATUS.get(repo,{}).get('started_at',time.time())}
-            info={'repo':repo,'generation':str(time.time_ns()),'finished_at':time.time(),'count':len(ids)}
-            encoded=json.dumps(info)
-            if len(encoded.encode())>HEADER_BYTES:raise ValueError('GitHub cache header is too large')
-            stream.seek(0);stream.write(encoded.ljust(HEADER_BYTES)+'\n');stream.flush();os.fsync(stream.fileno())
-        os.replace(temporary,target);temporary=None
-        STATUS[repo]={'state':'ready',**info}
-        return info
-    finally:
-        if temporary is not None:temporary.unlink(missing_ok=True)
+    import office_github_stage
+    result=office_github_stage.advance(access,known,repo,path(repo))
+    STATUS[repo]=dict(result,started_at=STATUS.get(repo,{}).get('started_at',time.time()))
+    return result
 
 
 def known(world):
@@ -82,13 +69,14 @@ def refresh_all(world):
         except Exception as exc:
             for repo in repositories:failed(repo,exc)
             return
-        ordered=sorted(repositories,key=lambda repo:(safe_header(repo) or {}).get('finished_at',0))
-        for repo in ordered:
-            current=safe_header(repo) or {};last=STATUS.get(repo,{})
-            if time.time()-current.get('finished_at',0)<TTL:continue
-            if time.time()-last.get('failed_at',0)<RETRY:continue
-            try:collect(access,repositories,repo)
+        ordered=sorted(repositories,key=lambda repo:((safe_header(repo) or {}).get('finished_at',0),repo.casefold()))
+        pending=deque(repo for repo in ordered if due(repo))
+        while pending:
+            repo=pending.popleft()
+            try:
+                if collect(access,repositories,repo)['state']=='fetching':pending.append(repo)
             except Exception as exc:failed(repo,exc)
+
     finally:LOCK.release()
 
 
@@ -120,16 +108,22 @@ def coverage(repositories,indexed):
         stale=any(row['source']==repo and row['coverage'].startswith('GitHub corpus:') and row['coverage']!='GitHub corpus:'+info.get('generation','') for row in indexed)
         state='indexed' if info and count==info['count'] and not stale else 'indexing' if info else 'unbuilt'
         if status.get('state') in ('fetching','error'):state=status['state']
-        rows.append({'repo':repo,'state':state,'indexed':count,'fetched':info.get('count',0),'observed_at':info.get('finished_at'),'error':status.get('error')})
+        rows.append({'repo':repo,'state':state,'indexed':count,'fetched':status.get('records',info.get('count',0)),'observed_at':info.get('finished_at'),'error':status.get('error')})
     return rows
 
 
 def failed(repo,exc):
-    STATUS[repo]={'state':'error','error':str(exc)[:250],'failed_at':time.time()}
+    STATUS[repo]={**STATUS.get(repo,{}),'state':'error','error':str(exc)[:250],'failed_at':time.time()}
 
 
 def safe_header(repo):
     try:return header(repo)
     except (OSError,ValueError,AttributeError) as exc:
-        failed(repo,exc)
+        prior=STATUS.get(repo,{})
+        if prior.get('state')!='fetching':STATUS[repo]={**prior,'state':'error','error':str(exc)[:250]}
         return None
+
+
+def due(repo):
+    current=safe_header(repo) or {};last=STATUS.get(repo,{})
+    return time.time()-current.get('finished_at',0)>=TTL and time.time()-last.get('failed_at',0)>=RETRY
