@@ -16,9 +16,9 @@ export async function newTask(project='',context=null){
  body.append(el('p','muted',data.workspace));
  const controls=composerControls(body,data,project);
  const draft=restoreComposer(controls,context,project);
- attachments(body,draft.uploads,items=>{draft.uploads=items;localStorage.setItem('office-new-task',JSON.stringify(composerPayload(controls,draft)));});
+ const attached=attachments(body,draft.uploads,items=>{draft.uploads=items;localStorage.setItem('office-new-task',JSON.stringify(composerPayload(controls,draft)));});
  const status=el('p','muted');body.append(status);
- const start=button('Start task',()=>startTask(controls,draft),'primary');
+ const start=button('Start task',()=>{if(!attached.ready())throw Error('Wait for the attachment upload to finish.');return startTask(controls,draft);},'primary');
  const readiness=()=>{
   const ready=data.profiles.find(p=>p.engine===controls.engine.value&&p.id===controls.profile.value);
   const pending=Boolean(localStorage.getItem('office-new-task-pending'));
@@ -114,12 +114,13 @@ function replyButton(id,prompt,attached){
   let pending=JSON.parse(localStorage.getItem(key)||'null');
   if(!pending){
    if(!prompt.value.trim())throw Error('Write a message first.');
+   if(!attached.ready())throw Error('Wait for the attachment upload to finish.');
    pending={task_id:id,request_id:crypto.randomUUID(),text:prompt.value,uploads:attached.references()};localStorage.setItem(key,JSON.stringify(pending));
   }
   try{await api('/api/tasks/say',pending);}
   catch(error){if([400,403,404,409,413,422].includes(error.status))localStorage.removeItem(key);throw error;}
   localStorage.removeItem(key);
-  if(JSON.stringify(attached.references())===JSON.stringify(pending.uploads||[]))attached.clear();
+  if(attached.ready()&&JSON.stringify(attached.references())===JSON.stringify(pending.uploads||[]))attached.clear();
   if(prompt.value===pending.text){prompt.value='';localStorage.removeItem('office-task-draft:'+id);}
   notice('Queued on your Mac. Delivery status appears in the conversation.');
  },'primary');

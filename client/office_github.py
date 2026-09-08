@@ -54,13 +54,14 @@ def detail(access,known,q):
     comments,comment_stamp=fetch(f'repos/{repo}/issues/{num}/comments?per_page=50&page=1',who,token)
     result=dict(item,comments=comments,acting_identity=who,observed_at=min(stamp,comment_stamp),source='GitHub',comments_next_cursor=2 if len(comments)==50 else None)
     if kind=='prs':
-        cache_identity=who+':'+item['head']['sha']
-        result['diff'],_=fetch(f'repos/{repo}/pulls/{num}',cache_identity,token,'application/vnd.github.v3.diff')
+        cache_identity=who+':'+item['head']['sha']+':'+item['base']['sha']
+        text,_=diff(repo,num,item['head']['sha'],item['base']['sha'],who,token)
+        result.update(diff_window(text,0))
         result['files'],_=fetch(f'repos/{repo}/pulls/{num}/files?per_page=100&page=1',cache_identity,token)
         result['files_next_cursor']=2 if len(result['files'])==100 else None
         checks,_=fetch(f"repos/{repo}/commits/{item['head']['sha']}/check-runs?per_page=100",who,token)
         result['checks']=checks
-        guard_head(repo,num,who,token,item['head']['sha'])
+        guard_diff(repo,num,who,token,item['head']['sha'],item['base']['sha'])
     return result
 
 
@@ -184,3 +185,57 @@ def read_identity(access,repo,known):
     who,token=resolver(repo)
     if not token:raise PermissionError('No configured GitHub identity can read this repository')
     return who,token
+
+
+def fetch_page(endpoint,who,token):
+    """Follow the provider's continuation, including cursor-based large collections."""
+    env=dict(os.environ,GH_TOKEN=token)
+    result=subprocess.run(['gh','api','--method','GET','--include',endpoint,'-H','Accept: application/vnd.github+json'],env=env,capture_output=True,text=True,timeout=30)
+    if result.returncode:raise ValueError('GitHub request failed: '+(result.stderr or 'unavailable')[:250])
+    headers,separator,body=result.stdout.partition('\n\n')
+    if not separator:raise ValueError('GitHub pagination headers are unavailable')
+    rows=json.loads(body)
+    if not isinstance(rows,list):raise ValueError('GitHub collection response is not a list')
+    links=next((line.partition(':')[2].strip() for line in headers.splitlines() if line.lower().startswith('link:')),'')
+    match=re.search(r'<([^>]+)>;\s*rel="next"',links)
+    return rows,time.time(),page_endpoint(match.group(1)) if match else None
+
+
+def page_endpoint(url):
+    parsed=urllib.parse.urlsplit(url)
+    if parsed.scheme!='https' or parsed.netloc!='api.github.com' or not parsed.path.startswith(('/repos/','/repositories/')):
+        raise ValueError('GitHub returned an unexpected pagination destination')
+    return parsed.path.lstrip('/')+('?' + parsed.query if parsed.query else '')
+
+
+def diff(repo,num,head,base,who,token):
+    try:return fetch(f'repos/{repo}/pulls/{num}',who+':'+head+':'+base,token,'application/vnd.github.v3.diff')
+    except ValueError as exc:
+        if 'HTTP 406' not in str(exc):raise
+        import office_github_diff
+        return office_github_diff.read(repo,base,head),time.time()
+
+
+def diff_window(text,cursor):
+    start=int(cursor)
+    if start<0 or start>len(text):raise ValueError('Diff position is unavailable')
+    end=min(len(text),start+65536)
+    return {'diff':text[start:end],'diff_offset':start,'diff_total':len(text),
+            'diff_next_cursor':end if end<len(text) else None,
+            'diff_previous_cursor':max(0,start-65536) if start else None}
+
+
+def diff_page(access,known,q):
+    repo=q.get('repo','');who,token=read_identity(access,repo,known)
+    num=number(q.get('number'));head=q.get('head','');base=q.get('base','')
+    guard_diff(repo,num,who,token,head,base)
+    text,_=diff(repo,num,head,base,who,token)
+    result=diff_window(text,q.get('cursor',0))
+    guard_diff(repo,num,who,token,head,base)
+    return result
+
+
+def guard_diff(repo,num,who,token,head,base):
+    item,_=fresh(f'repos/{repo}/pulls/{num}',who,token)
+    if (item['head']['sha'],item['base']['sha'])!=(head,base):
+        raise FileExistsError('Pull request changed; reopen its current diff')

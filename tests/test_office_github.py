@@ -66,3 +66,11 @@ class GitHubBlob(unittest.TestCase):
             second=office_github.tree(None,[],{'repo':'owner/repo','ref':'a'*40})
         self.assertEqual(first['object']['text'],'kept text');self.assertEqual(second['object']['text'],'kept text')
         self.assertIn('content',payload)
+
+    def test_page_preserves_provider_cursor_and_rejects_foreign_host(self):
+        from types import SimpleNamespace
+        result=SimpleNamespace(returncode=0,stdout='HTTP/2.0 200 OK\nLink: <https://api.github.com/repositories/1/issues?after=cursor>; rel="next"\n\n[{"id":1}]',stderr='')
+        with patch.object(office_github.subprocess,'run',return_value=result):
+            rows,_,next_page=office_github.fetch_page('repos/owner/repo/issues','seat','fixture')
+        self.assertEqual(rows,[{'id':1}]);self.assertEqual(next_page,'repositories/1/issues?after=cursor')
+        with self.assertRaises(ValueError):office_github.page_endpoint('https://elsewhere.test/repos/owner/repo')

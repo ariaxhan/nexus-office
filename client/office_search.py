@@ -15,6 +15,7 @@ import shutil
 import threading
 import time
 
+import office_search_inventory as inventory
 import office_projection as projection
 import office_bot_history as bot_history
 import office_archives as archives
@@ -50,6 +51,8 @@ def connect():
 def walk(root, errors, boundaries=()):
     base = Path(root['path'])
     nested=set(boundaries)-{str(base)}
+    if not base.is_dir():
+        errors.append({'source':root['name'],'error':'Source directory is unavailable'});return
     def error(exc):
         errors.append({'source': root['name'], 'error': str(exc)[:200]})
     for directory, dirs, files in os.walk(base, followlinks=False, onerror=error):
@@ -85,6 +88,7 @@ def rebuild(extra=()):
         with closing(connect()) as db, db:
             db.execute('DELETE FROM seen')
             roots=list(objects.roots().values())
+            declared=inventory.declared(roots)
             boundaries={root['path'] for root in roots}
             for root in roots:
                 for candidate in walk(root, STATUS['errors'],boundaries):
@@ -109,7 +113,7 @@ def rebuild(extra=()):
             for table in ('objects','signatures'):
                 db.execute(f'DELETE FROM {table} WHERE id NOT IN (SELECT id FROM seen)')
             completed=dict(STATUS,state='partial' if STATUS['errors'] else 'ready',finished_at=time.time(),count=count)
-            sources=source_coverage(db,completed)
+            sources=inventory.complete(source_coverage(db,completed),declared,completed)
             db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', ('source_coverage',json.dumps({'generation':completed['finished_at'],'sources':sources})))
             db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', ('coverage', json.dumps(completed)))
         STATUS.update(completed)
@@ -162,7 +166,7 @@ def coverage(db):
     result['sources'] = source_coverage(db,result)
     result['github'] = projection.github_cache.coverage(projection.github_cache.known(projection.WORLD),result['sources'])
     if any(repo['state']!='indexed' for repo in result['github']):result['state']='partial'
-    if any(source['state']=='partial' for source in result['sources']):result['state']='partial'
+    if any(source['state'] in ('partial','unavailable','error') for source in result['sources']):result['state']='partial'
     return result
 
 
@@ -275,6 +279,8 @@ def source_coverage(db,status):
         result.append({'source':row['project'],'kind':row['kind'],'indexed':row['indexed_count'],'total':None,
                        'coverage':row['coverage'],'state':'partial' if partial else 'indexed',
                        'observed_at':status.get('finished_at')})
+    if status.get('finished_at') is None:
+        return inventory.unbuilt(inventory.declared(list(objects.roots().values())))
     return result
 
 

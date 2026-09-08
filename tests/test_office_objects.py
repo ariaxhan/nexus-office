@@ -95,6 +95,22 @@ class Objects(unittest.TestCase):
         identifier=self.file('short.md','one\ntwo\n');data=objects.read(identifier)
         with self.assertRaises(ValueError):objects.selection({'id':identifier,'revision':data['revision'],'start_line':2,'end_line':9})
 
+    def test_checkout_provenance_reports_branch_commit_and_untracked_changes(self):
+        import subprocess
+        def git(*args):
+            return subprocess.check_output(['git','-C',str(self.root),*args],text=True,stderr=subprocess.DEVNULL).strip()
+        git('init','-b','phone-fixture');(self.root/'README.md').write_text('saved\n')
+        git('add','README.md');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture')
+        identifier=objects.encode('root','README.md');first=objects.provenance(identifier)
+        self.assertEqual(first['branch'],'phone-fixture');self.assertEqual(first['commit'],git('rev-parse','HEAD'));self.assertFalse(first['dirty'])
+        (self.root/'untracked.txt').write_text('new')
+        self.assertTrue(objects.provenance(identifier)['dirty'])
+
+    def test_collection_provenance_does_not_imply_a_git_checkout(self):
+        result=objects.provenance(objects.encode('root',''))
+        self.assertEqual(result['state'],'collection');self.assertNotIn('branch',result)
+
+
 class Ranges(unittest.TestCase):
     def test_seek_and_suffix(self):
         self.assertEqual(content.bounds('bytes=20-29', 100), (20,29,206))

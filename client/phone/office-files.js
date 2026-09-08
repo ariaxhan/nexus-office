@@ -5,7 +5,7 @@ import {prefs} from './office-settings.js';
 export async function browse(parent,id='',cursor=0){
  if(cursor===0&&parent.closest('dialog'))rememberDetail('folder',id);
  const data=await api(`/api/objects?id=${encodeURIComponent(id)}&cursor=${cursor}`);
- if(cursor===0){parent.replaceChildren();if(id)parent.append(button('↑ Parent folder',()=>browse(parent,data.parent||'')));if(data.path)parent.append(el('p','muted',data.path));}
+ if(cursor===0){parent.replaceChildren();if(id)parent.append(button('↑ Parent folder',()=>browse(parent,data.parent||'')));if(data.path)parent.append(el('p','muted',data.path));if(id)checkoutDetails(parent,id);}
  for(const item of data.items){parent.append(card(item.name,item.kind==='folder'?(item.path||''):`${item.mime} · ${Math.ceil(item.bytes/1024)} KB`,()=>item.kind==='folder'?browse(sheet(item.name),item.id):openFile(item.id)));}
  if(!data.items.length)empty(parent,'This folder has no visible work files.');
  if(data.next_cursor!==null)parent.append(button('More files',()=>browse(parent,id,data.next_cursor)));
@@ -15,6 +15,7 @@ export async function openFile(id,offset=0){
  rememberDetail('file',id);
  const data=await api(`/api/objects/detail?id=${encodeURIComponent(id)}&offset=${offset}`);const body=sheet(data.name);
  body.append(el('p','muted',`${data.project} / ${data.path}`),el('p','muted',`Revision ${data.revision.slice(0,12)}${data.is_text?` · lines ${data.line_start}–${data.line_end}`:''}`));
+ checkoutDetails(body,id);
  const actions=el('div','actions');actions.append(link('Download',data.content_url),button('Save to Library',()=>saveObject('file',id,data.name)),button('Ask an agent',()=>document.dispatchEvent(new CustomEvent('office-file-task',{detail:data}))));body.append(actions);
  if(data.mime==='text/html')actions.append(button('Preview',()=>preview(sheet(data.name),data)));
  if(data.editable)actions.append(button('Edit file',()=>editFile(data)));
@@ -46,7 +47,7 @@ function editFile(data){
 
 document.addEventListener('office-preferences',()=>{if(!prefs.remember)for(const key of Object.keys(localStorage))if(key.startsWith('office-read:'))localStorage.removeItem(key);});
 
-function numberedSource(data){
+export function numberedSource(data){
  const body=el('div');const lines=data.text.split('\n');let count=0;
  const list=el('ol','code-lines');list.start=data.line_start||1;body.append(list);
  const more=button('More source lines',append);body.append(more);
@@ -61,4 +62,13 @@ function contextSelection(data){
  }
  box.append(button('Ask an agent about these lines',()=>document.dispatchEvent(new CustomEvent('office-file-task',{detail:{...data,start_line:Number(start.value),end_line:Number(end.value)}}))));
  return box;
+}
+
+async function checkoutDetails(parent,id){
+ const details=el('details','card');details.append(el('summary','','File location & checkout'));const info=el('p','muted','Reading checkout status…');details.append(info);parent.append(details);
+ try{
+  const data=await api('/api/objects/provenance?id='+encodeURIComponent(id));
+  if(!details.isConnected)return;
+  info.textContent=data.state==='checkout'?`${data.source} · ${data.branch} · ${data.dirty?'Uncommitted changes':'Clean checkout'} · commit ${data.commit}`:`${data.source} · ${data.path}`;
+ }catch(error){info.textContent='Checkout status unavailable: '+error.message;}
 }

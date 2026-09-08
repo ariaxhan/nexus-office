@@ -3,7 +3,7 @@ import {attachments} from './office-attachments.js';
 import {restoreDraft,transcriptNavigation,rememberDetail,clearDetail,backDetail,$,api,el,button,sheet,section,card,intro,empty,failure,field,select,notice,link} from './office-ui.js';
 import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
-import {browse,openFile} from './office-files.js';
+import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
 import {newTask,taskList,permissions,taskDetail,permissionCard} from './office-tasks.js';
 let attention={items:[],errors:[]};
@@ -68,7 +68,7 @@ async function githubDetail(repo,item,kind){
  body.append(el('h2','',data.title),el('p','muted',`${data.state} · ${data.acting_identity} · observed ${new Date(data.observed_at*1000).toLocaleString()}`),markdownView(data.body||''),link('Open on GitHub',data.html_url));
  if(kind==='prs'){body.append(el('p','muted',`Head ${data.head.sha}`));const checks=section(body,'Checks');await githubChecks(checks,repo,data.head.sha);
  const changes=section(body,'Changed files');githubFiles(changes,repo,item.number,data.files,data.head.sha);if(data.files_next_cursor)changes.append(button('More changed files',()=>githubFilePage(changes,repo,item.number,data.files_next_cursor,data.head.sha)));
- body.append(button('Ask an agent about this change',()=>githubContext({kind:'change',repo,number:item.number,head:data.head.sha,base:data.base.sha})),button('Reviews & inline discussion',()=>githubReviews(repo,item.number)),button('Review this change',()=>reviewChange(repo,item.number,data.head.sha)),button('Merge checked pipeline change',()=>githubAction({action:'merge',repo,number:item.number,head:data.head.sha})));body.append(el('p','muted','Merge requires a pipeline branch, current reviewed commit, passing verify check, and GitHub approval.'));const diff=el('details');diff.append(el('summary','','Full diff'),el('pre','',data.diff||'No textual diff'));body.append(diff);}
+ body.append(button('Ask an agent about this change',()=>githubContext({kind:'change',repo,number:item.number,head:data.head.sha,base:data.base.sha})),button('Reviews & inline discussion',()=>githubReviews(repo,item.number)),button('Review this change',()=>reviewChange(repo,item.number,data.head.sha)),button('Merge checked pipeline change',()=>githubAction({action:'merge',repo,number:item.number,head:data.head.sha})));body.append(el('p','muted','Merge requires a pipeline branch, current reviewed commit, passing verify check, and GitHub approval.'));githubDiff(body,repo,item.number,data);}
  body.append(button('Full timeline',()=>githubTimeline(repo,item.number)));
  body.append(button('Edit labels',()=>editLabels(repo,item.number,data.labels||[])));
  const comments=section(body,'Discussion');for(const comment of data.comments||[])comments.append(commentView(comment));if(data.comments_next_cursor)comments.append(button('More comments',()=>githubComments(comments,repo,item.number,data.comments_next_cursor)));
@@ -89,7 +89,7 @@ async function githubTree(repo,path='',ref='HEAD'){
   body.append(el('p','muted',data.source),button('Choose branch',()=>githubBranches(repo)));
   if(path)body.append(button('Parent folder',()=>githubTree(repo,path.split('/').slice(0,-1).join('/'),revision)));
   if(data.items){for(const item of data.items)body.append(card(item.name,item.type,()=>githubTree(repo,item.path,revision)));}
-  else{body.append(el('p','muted',`Blob ${data.object.sha}`),el('pre','',data.object.text));if(data.object.readable)body.append(button('Ask an agent about this file',()=>githubContext({kind:'file',repo,path,ref:revision,blob:data.object.sha})));if(data.object.html_url)body.append(link('Open source',data.object.html_url));}
+  else{body.append(el('p','muted',`Blob ${data.object.sha}`),el('pre','',data.object.text));if(data.object.readable){body.append(button('Ask an agent about this file',()=>githubContext({kind:'file',repo,path,ref:revision,blob:data.object.sha})));githubLineSelection(body,{kind:'file',repo,path,ref:revision,blob:data.object.sha},data.object.text);}if(data.object.html_url)body.append(link('Open source',data.object.html_url));}
  });
 }
 async function githubBranches(repo,cursor=1,parent=null){
@@ -310,11 +310,15 @@ function structured(value){
 async function botConversation(bot){
  rememberDetail('bot',bot.id);
  const body=el('div');sheet(bot.name).append(body);const history=el('div');body.append(button('All retained messages',()=>botHistory('bot-history:'+bot.id+'.jsonl')),button('Archived office conversations',botArchives),history);
- const refresh=async()=>{const data=await api(`/api/chat?bot=${encodeURIComponent(bot.id)}`);history.replaceChildren();for(const turn of data.turns||[]){const row=card(turn.role,turn.content||turn.text);for(const item of turn.attachments||[])if(item.office_id)row.append(link(item.name||'Attached file',`/api/uploads/content?id=${encodeURIComponent(item.office_id)}&revision=${item.revision}`));history.append(row);}};
- await refresh();if(!body.isConnected)return;transcriptNavigation(body,history);const message=field(body,'Message',el('textarea'));
+ let seen='',refreshing=false;
+ const refresh=async()=>{if(refreshing||!body.isConnected)return;refreshing=true;try{const data=await api(`/api/chat?bot=${encodeURIComponent(bot.id)}`);if(!body.isConnected)return;const signature=JSON.stringify(data.turns||[]);if(signature===seen)return;seen=signature;history.replaceChildren();for(const turn of data.turns||[]){const row=card(turn.role,turn.content||turn.text);for(const item of turn.attachments||[])if(item.office_id)row.append(link(item.name||'Attached file',`/api/uploads/content?id=${encodeURIComponent(item.office_id)}&revision=${item.revision}`));history.append(row);}}finally{refreshing=false;}};
+ let initialError='';try{await refresh();}catch(error){initialError=error.message;}if(!body.isConnected)return;transcriptNavigation(body,history);const message=field(body,'Message',el('textarea'));
  const clearMessage=restoreDraft(message,['bot',bot.id]);const key='office-bot-uploads:'+bot.id;
  const attached=attachments(body,JSON.parse(localStorage.getItem(key)||'[]'),items=>localStorage.setItem(key,JSON.stringify(items)));
- body.append(button('Send',async()=>{const payload={bot:bot.id,message:message.value,uploads:attached.references()};await api('/api/chat',payload);clearMessage(payload.message);const stored=JSON.parse(localStorage.getItem(key)||'[]').map(({id,revision})=>({id,revision}));if(JSON.stringify(stored)===JSON.stringify(payload.uploads)&&JSON.stringify(attached.references())===JSON.stringify(payload.uploads))attached.clear();notice('Agent turn queued');await refresh();},'primary'),button('Refresh conversation',refresh));
+ body.append(button('Send',async()=>{if(!attached.ready())throw Error('Wait for the attachment upload to finish.');const payload={bot:bot.id,message:message.value,uploads:attached.references()};await api('/api/chat',payload);clearMessage(payload.message);const stored=JSON.parse(localStorage.getItem(key)||'[]').map(({id,revision})=>({id,revision}));if(attached.ready()&&JSON.stringify(stored)===JSON.stringify(payload.uploads)&&JSON.stringify(attached.references())===JSON.stringify(payload.uploads))attached.clear();notice('Agent turn queued');await refresh();},'primary'),button('Refresh conversation',refresh));
+ const status=el('p','muted',initialError?'Connection interrupted; retrying. '+initialError:'');body.append(status);
+ async function poll(){if(!body.isConnected||!$('#detail').open)return;try{await refresh();status.textContent='';}catch(error){status.textContent='Connection interrupted; retrying. '+error.message;}if(body.isConnected)setTimeout(poll,3000);}
+ setTimeout(poll,3000);
 }
 
 async function projectionDetail(id,offset=0,parent=null,revision=''){
@@ -421,7 +425,7 @@ async function botHistory(id){
 
 function showSearchCoverage(parent,coverage){
  const details=el('details','card');details.append(el('summary','','What search can see'));
- for(const source of coverage.sources||[])details.append(el('p','muted',`${source.source} · ${source.kind}: ${source.indexed} indexed · ${source.coverage}${source.state==='partial'?' · partial':''}`));
+ for(const source of coverage.sources||[])details.append(el('p','muted',`${source.source} · ${source.kind}: ${source.indexed} indexed · ${source.coverage} · ${source.state}${source.total===0?' · 0 retained':''}`));
  for(const repo of coverage.github||[])details.append(el('p','muted',`${repo.repo} · GitHub ${repo.state} · ${repo.indexed}/${repo.fetched} records${repo.error?' · '+repo.error:''}`));
  parent.append(details);
 }
@@ -545,4 +549,21 @@ async function githubContext(reference){
  if(location.href!==route)return;
  const revision=data.attachment.revision;
  return newTask(reference.repo,{id:data.attachment.id,revision,project:reference.repo,path:reference.path||`pull request #${reference.number}`});
+}
+
+function githubLineSelection(parent,reference,text){
+ const box=el('details','card');box.append(el('summary','','Ask about selected lines'));parent.append(box);
+ if(!text){box.append(el('p','muted','This file has no lines to select.'));return;}
+ const source=el('details');source.append(el('summary','','Numbered source'));box.append(source);let rendered=false;
+ source.addEventListener('toggle',()=>{if(source.open&&!rendered){source.append(numberedSource({text,line_start:1}));rendered=true;}});
+ const count=text.split('\n').length-(text.endsWith('\n')?1:0);const fields=[];
+ for(const [label,value] of [['First line',1],['Last line',Math.max(1,count)]]){const input=el('input');input.type='number';input.min=1;input.max=count;input.value=value;fields.push(field(box,label,input));}
+ box.append(button('Ask an agent about these lines',()=>githubContext({...reference,start_line:Number(fields[0].value),end_line:Number(fields[1].value)})));
+}
+
+function githubDiff(body,repo,number,data){
+ const details=el('details'),pane=el('div');details.append(el('summary','','Full diff'),pane);body.append(details);
+ const show=page=>{pane.replaceChildren(el('p','muted',`${page.diff_offset||0}–${(page.diff_offset||0)+(page.diff||'').length} of ${page.diff_total||0} characters`),el('pre','',page.diff||'No textual diff'));
+  for(const [label,cursor] of [['Previous section',page.diff_previous_cursor],['Next section',page.diff_next_cursor]]){if(cursor==null)continue;const control=button(label,async()=>{control.disabled=true;try{const query=new URLSearchParams({repo,number,head:data.head.sha,base:data.base.sha,cursor});const next=await api('/api/github/diff?'+query);if(!details.isConnected)return;show(next);details.scrollIntoView({block:'start'});}finally{control.disabled=false;}});pane.append(control);}
+ };show(data);
 }

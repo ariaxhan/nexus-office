@@ -274,3 +274,18 @@ def selection(reference):
     if last!=end:raise ValueError('Selected lines are outside this file')
     if file_revision(path)!=reference['revision']:raise FileExistsError('The file changed while selecting context')
     return ''.join(pieces)
+
+
+def provenance(identifier):
+    import subprocess
+    import time
+    root,_=resolve(identifier,directory=True)
+    checkout=Path(root['path'])
+    if not (checkout/'.git').exists():
+        return {'state':'collection','source':'Mac files','path':str(checkout)}
+    result=subprocess.run(['git','-C',str(checkout),'status','--porcelain=v2','--branch','--untracked-files=normal'],capture_output=True,text=True,timeout=5)
+    if result.returncode:raise ValueError('Checkout status is unavailable')
+    headers={line[2:].partition(' ')[0]:line[2:].partition(' ')[2] for line in result.stdout.splitlines() if line.startswith('# ')}
+    return {'state':'checkout','source':'Mac working copy','path':str(checkout),
+            'branch':headers.get('branch.head','unknown'),'commit':headers.get('branch.oid','unknown'),
+            'dirty':any(line and not line.startswith('# ') for line in result.stdout.splitlines()),'observed_at':time.time()}

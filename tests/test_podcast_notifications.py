@@ -29,3 +29,17 @@ class Notifications(unittest.TestCase):
                 self.assertEqual(len(ledger.plans()),2)
                 self.assertFalse(ledger.plan(plan)['enabled'])
                 self.assertEqual(json.loads(ledger.plan(plan)['schedule']),{'at':'06:00'})
+
+    def test_late_publication_of_older_edition_is_delivered(self):
+        from datetime import datetime,timezone
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);audio=root/'episode.mp3';audio.write_bytes(b'fixture')
+            with closing(Ledger(str(root/'ledger.sqlite'))) as ledger:
+                plan=ledger.add_plan('office-podcast-notifications')
+                started=ledger.plan(plan)['created_at']
+                episode={'id':'2026-09-07/office-daily','date':'2026-09-07','title':'Late edition','audio_path':str(audio),'duration_s':1500,'generated_at':datetime.fromtimestamp(started+1,timezone.utc).isoformat()}
+                old=dict(episode,id='old',generated_at=datetime.fromtimestamp(started-1,timezone.utc).isoformat())
+                (root/'manifest.json').write_text(json.dumps({'episodes':[episode,old]}))
+                first=notifications.deliver(ledger,root,'2026-09-08');second=notifications.deliver(ledger,root,'2026-09-08')
+                self.assertEqual([r['edition_id'] for r in first['notifications']],['2026-09-07/office-daily'])
+                self.assertEqual(second['notifications'][0]['state'],'already-delivered')

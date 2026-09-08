@@ -25,7 +25,8 @@ def locations():
 
 
 def files(base):
-    for directory,dirs,names in os.walk(base,followlinks=False):
+    def failed(exc):raise exc
+    for directory,dirs,names in os.walk(base,followlinks=False,onerror=failed):
         parent=Path(directory)
         dirs[:]=[d for d in dirs if not (parent/d).is_symlink()]
         for name in names:
@@ -97,7 +98,7 @@ def transcript(identifier,offset=0):
 
 def records(errors):
     try:
-        data=inventory()
+        data=inventory(refresh=True)
     except (OSError,ValueError) as exc:
         errors.append({'source':'Native histories','error':str(exc)[:200]})
         return

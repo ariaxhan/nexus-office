@@ -7,10 +7,10 @@ import office_github_corpus as corpus
 
 class Corpus(unittest.TestCase):
     def test_paging_includes_records_beyond_first_hundred(self):
-        with patch.object(corpus.github,'fetch',side_effect=[([{'id':i} for i in range(100)],1),([{'id':100}],2)]) as fetch:
+        with patch.object(corpus.github,'fetch_page',side_effect=[([{'id':i} for i in range(100)],1,'repos/owner/repo/issues?after=cursor'),([{'id':100}],2,None)]) as fetch:
             rows=list(corpus.pages('repos/owner/repo/issues?state=all','owner','unused'))
         self.assertEqual(len(rows),101)
-        self.assertIn('&per_page=100&page=2',fetch.call_args.args[0])
+        self.assertIn('after=cursor',fetch.call_args.args[0])
 
     def test_repository_includes_body_comments_inline_reviews_and_diff(self):
         issue={'id':1,'number':5,'title':'Title','body':'bodyneedle','pull_request':{'url':'pull'}}
@@ -21,7 +21,7 @@ class Corpus(unittest.TestCase):
             if '/reviews?' in endpoint:return [{'id':4,'body':'reviewneedle'}],1
             return 'diffneedle',1
         head={'title':'Title','head':{'sha':'a'},'base':{'sha':'b'}}
-        with patch.object(corpus.github,'identity',return_value=('owner','unused')),patch.object(corpus.github,'fetch',side_effect=fetch),patch.object(corpus.github,'fresh',return_value=(head,1)):
+        with patch.object(corpus.github,'identity',return_value=('owner','unused')),patch.object(corpus.github,'fetch',side_effect=fetch),patch.object(corpus.github,'fetch_page',side_effect=lambda endpoint,*args:(*fetch(endpoint,*args),None)),patch.object(corpus.github,'fresh',return_value=(head,1)):
             rows=list(corpus.repository_records(None,['owner/repo'],'owner/repo'))
         self.assertEqual(len(rows),5)
         for needle in ['bodyneedle','commentneedle','inlineneedle','reviewneedle','diffneedle']:self.assertTrue(any(needle in row['body'] for row in rows))
@@ -31,5 +31,10 @@ class Corpus(unittest.TestCase):
     def test_changed_head_cannot_complete_a_diff_snapshot(self):
         before={'title':'Title','head':{'sha':'a'},'base':{'sha':'b'}}
         after=dict(before,head={'sha':'new'})
-        with patch.object(corpus.github,'fresh',side_effect=[(before,1),(after,2)]),patch.object(corpus.github,'fetch',side_effect=[('diff',1),([],1)]):
+        with patch.object(corpus.github,'fresh',side_effect=[(before,1),(after,2)]),patch.object(corpus.github,'fetch',return_value=('diff',1)),patch.object(corpus.github,'fetch_page',return_value=([],1,None)):
             with self.assertRaises(FileExistsError):list(corpus.pull_records('owner/repo',5,'owner','unused'))
+
+    def test_repeated_cursor_fails_instead_of_looping_or_silent_truncation(self):
+        endpoint='repos/owner/repo/issues?per_page=100'
+        with patch.object(corpus.github,'fetch_page',return_value=([],1,endpoint)):
+            with self.assertRaises(ValueError):list(corpus.pages('repos/owner/repo/issues','owner','fixture'))

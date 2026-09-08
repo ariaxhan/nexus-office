@@ -8,14 +8,13 @@ JSON_ACCEPT='application/vnd.github+json'
 
 
 def pages(endpoint,who,token):
-    page=1
     separator='&' if '?' in endpoint else '?'
-    while True:
-        rows,stamp=github.fetch(f'{endpoint}{separator}per_page=100&page={page}',who,token)
-        if not isinstance(rows,list):raise ValueError('GitHub collection response is not a list')
+    current=f'{endpoint}{separator}per_page=100';seen=set()
+    while current:
+        if current in seen:raise ValueError('GitHub repeated a pagination cursor')
+        seen.add(current)
+        rows,stamp,current=github.fetch_page(current,who,token)
         yield from ((row,stamp) for row in rows)
-        if len(rows)<100:return
-        page+=1
 
 
 def record(repo,category,row,number,stamp):
@@ -46,7 +45,7 @@ def pull_records(repo,number,who,token):
     before,stamp=github.fresh(endpoint,who,token)
     identity=(before['head']['sha'],before['base']['sha'])
     cache_owner=who+':'+':'.join(identity)
-    diff,diff_stamp=github.fetch(endpoint,cache_owner,token,'application/vnd.github.v3.diff')
+    diff,diff_stamp=github.diff(repo,number,identity[0],identity[1],who,token)
     yield record(repo,'diff',{'id':number,'title':before['title']+' · diff','head':identity[0],'base':identity[1],'diff':diff},number,diff_stamp)
     for row,observed in pages(endpoint+'/reviews',cache_owner,token):
         yield record(repo,'review',row,number,observed)

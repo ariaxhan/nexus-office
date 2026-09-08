@@ -44,7 +44,7 @@ def change_context(repo,who,token,body):
     number=github.number(body.get('number'));head=commit(body.get('head'));base=commit(body.get('base'))
     endpoint=f'repos/{repo}/pulls/{number}'
     require_change(endpoint,who,token,head,base)
-    diff,_=github.fetch(endpoint,who+':'+head+':'+base,token,'application/vnd.github.v3.diff')
+    diff,_=github.diff(repo,number,head,base,who,token)
     require_change(endpoint,who,token,head,base)
     if not isinstance(diff,str):raise ValueError('GitHub did not return a text diff')
     return diff,{'kind':'github-change','repo':repo,'number':number,'head':head,'base':base}

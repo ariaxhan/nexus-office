@@ -8,6 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'client'))
 import office_search as search
 
 class Search(unittest.TestCase):
+    def setUp(self):
+        observed=patch.object(search.inventory,'declared',return_value=[])
+        observed.start();self.addCleanup(observed.stop)
+
     def test_full_text_beyond_first_chunk_and_honest_binary_coverage(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory).resolve()
