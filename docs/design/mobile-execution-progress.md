@@ -416,3 +416,9 @@ Directory `/Users/slowember/Developer/Vaults/_meta/podcasts/2026-09-08/office-af
 - Common bot image receipt proven against production9443: Relay recognized ORCHARD from phone-image.png; promptcontainednoword, responseOK/pinnedclaude-sonnet-5, receiptretainedinconversation. Proof/tmp/office-bot-image-proof.json. Bothfileandimageconsumptionnowobserved.
 - Finalconversationpolish: preventSend/Startduringuploads; showuploadprogress; botrepliesautorefreshwithoutoverlappingrequests, preserveearlierscroll, stopwhenleaving, recoverinitialnetworkfailure. Independentinterceptedbrowserproof: blockedprematuresend, onesendafterupload, automaticreply, stable104pxscroll, nofurtherreadsafterleave.
 - Finalparent npmrunverify66376 EXIT0 (Python+Node+Swift). LastJS-onlyinitialfetchrecoverypassedfreshcomplexity72unchanged/0regressed andindependent320pxfailure/recoverytest; savedtextpreserved. Readyforproductionpromotion.
+
+### Production acceptance 5375511 (2026-09-08)
+- Deployedboth443/9443; liveJSbyte-identical. Fullproductiongeometrypassed320/390/430/1024at130%text, nooverflow/JSerrors. Fourseatsready; realarmature#1diff911075characters pages65536; localcheckoutprovenanceexactdeployedHEAD.
+- Newcommittedsearchgeneration362099objects, noerrors; GitHub75indexed/20unbuilt/1fetching at10:14UTC. Fullcorpusacceptancependingcollectionfinish; existingresultsremainavailable.
+- Automaticlateeditioninboxevent28956 at1788862443.561553 deliveredMud(25m25), alongsideHarbour(25m34). Daily06:00andnotifier300sownersenabled/unquarantined. Noaudio regeneration.
+- Finalsearchcoveragepolish: 5000event-sourcefixture revealedunboundedexpandedrows. Nowgroupedbykind, lazy40-rowpageswithPrevious/More. Independent320px150%proof: zeroinitialrows, exactly40afterexpand, pagingreplacesDOM, labelsretained, nooverflow; gate72unchanged/0regressed. ThisJS-onlyfollowupdoesnotchangebackend.

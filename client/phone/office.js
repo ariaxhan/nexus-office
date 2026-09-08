@@ -425,9 +425,17 @@ async function botHistory(id){
 
 function showSearchCoverage(parent,coverage){
  const details=el('details','card');details.append(el('summary','','What search can see'));
- for(const source of coverage.sources||[])details.append(el('p','muted',`${source.source} · ${source.kind}: ${source.indexed} indexed · ${source.coverage} · ${source.state}${source.total===0?' · 0 retained':''}`));
- for(const repo of coverage.github||[])details.append(el('p','muted',`${repo.repo} · GitHub ${repo.state} · ${repo.indexed}/${repo.fetched} records${repo.error?' · '+repo.error:''}`));
+ const groups=new Map();for(const source of coverage.sources||[]){if(!groups.has(source.kind))groups.set(source.kind,[]);groups.get(source.kind).push(source);}
+ for(const [kind,rows] of groups)coverageGroup(details,kind,rows,source=>`${source.source}: ${source.indexed} indexed · ${source.coverage} · ${source.state}${source.total===0?' · 0 retained':''}`);
+ coverageGroup(details,'GitHub collection',coverage.github||[],repo=>`${repo.repo} · ${repo.state} · ${repo.indexed}/${repo.fetched} records${repo.error?' · '+repo.error:''}`);
  parent.append(details);
+}
+function coverageGroup(parent,title,rows,describe){
+ const group=el('details'),pane=el('div');group.append(el('summary','',`${title} · ${rows.length} sources`),pane);parent.append(group);let loaded=false;
+ function page(start){pane.replaceChildren(el('p','muted',`${start+1}–${Math.min(start+40,rows.length)} of ${rows.length}`));for(const row of rows.slice(start,start+40))pane.append(el('p','muted',describe(row)));
+  for(const [label,next] of [['Previous sources',start-40],['More sources',start+40]]){if(next<0||next>=rows.length)continue;pane.append(button(label,()=>{page(next);group.scrollIntoView({block:'start'});}));}
+ }
+ group.addEventListener('toggle',()=>{if(group.open&&!loaded){loaded=true;if(rows.length)page(0);else pane.append(el('p','muted','No declared sources.'));}});
 }
 
 async function githubAction(payload,onConfirmed=()=>{}){
