@@ -1,0 +1,1541 @@
+<!doctype html>
+<html lang="en" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Office Final</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Office Final" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot; data-visualize-standalone&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Office Final&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 10px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn,
+.nav-link {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover,
+.nav-link:not(:disabled):not([aria-disabled=&quot;true&quot;]):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled=&quot;true&quot;] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .btn,
+  .nav-link,
+  .form-control,
+  .form-select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, var(--font-size-normal));
+  }
+
+  .form-control[type=&quot;file&quot;]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type=&quot;color&quot;] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;week&quot;]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: &quot;&quot;;
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+
+  .form-range::-webkit-slider-runnable-track {
+    height: 44px;
+  }
+
+  .form-range::-moz-range-track {
+    height: 44px;
+  }
+
+  .form-range::-webkit-slider-thumb {
+    margin-top: 12px;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;style&gt;
+#office-everywhere{--o-bg:light-dark(#f5f3ee,#202321);--o-paper:light-dark(#fffdf8,#2a2e2a);--o-ink:light-dark(#26342e,#eceee4);--o-dim:light-dark(#687068,#aab3a8);--o-line:light-dark(#dfdfd5,#41473f);--o-soft:light-dark(#e8ece2,#343e33);--o-accent:#cf664b;font:14px/1.45 Arial,sans-serif;color:var(--o-ink);background:var(--o-bg);max-width:440px;margin:auto;border:1px solid var(--o-line);border-radius:24px;overflow:hidden}#office-everywhere *{box-sizing:border-box}#office-everywhere button,#office-everywhere input,#office-everywhere select,#office-everywhere textarea{font:inherit;color:inherit}#office-everywhere button{cursor:pointer}#office-everywhere button:focus-visible{outline:2px solid var(--o-accent);outline-offset:2px}#office-everywhere .head{padding:19px 20px 12px;display:flex;align-items:center;justify-content:space-between}#office-everywhere .wordmark{font-family:Georgia,serif;font-size:24px;letter-spacing:-1px}#office-everywhere .wordmark b{color:var(--o-accent);font-weight:400}#office-everywhere .small{font-size:11px;color:var(--o-dim)}#office-everywhere .plain{border:0;background:none;padding:8px;min-height:40px}#office-everywhere .searchbar{display:flex;align-items:center;gap:9px;margin:0 20px 18px;border:1px solid var(--o-line);border-radius:10px;background:var(--o-paper);padding:0 12px}#office-everywhere .searchbar input{width:100%;min-width:0;background:none;border:0;padding:12px 0;font-size:14px;outline:none}#office-everywhere .searchbar:focus-within{outline:2px solid var(--o-accent)}#office-everywhere svg{width:18px;height:18px;flex-shrink:0}#office-everywhere main{padding:0 20px 20px;min-height:530px}#office-everywhere h1{font:400 31px/1.12 Georgia,serif;letter-spacing:-.8px;margin:5px 0 8px}#office-everywhere h2{font-size:14px;margin:0;font-weight:600}#office-everywhere h3{font:400 23px/1.15 Georgia,serif;margin:9px 0}#office-everywhere p{margin:8px 0}#office-everywhere .eyebrow{font-size:10px;letter-spacing:1.6px;text-transform:uppercase;color:var(--o-dim)}#office-everywhere .section{display:flex;justify-content:space-between;align-items:center;margin:23px 0 8px}#office-everywhere .action{background:var(--o-ink);color:var(--o-bg);border:0;border-radius:8px;padding:10px 14px;font-size:12px;min-height:40px}#office-everywhere .outline{background:var(--o-paper);color:var(--o-ink);border:1px solid var(--o-line)}#office-everywhere .row{display:flex;width:100%;gap:12px;text-align:left;align-items:center;padding:14px 0;border:0;border-bottom:1px solid var(--o-line);background:none}#office-everywhere .row .copy{flex:1;min-width:0}#office-everywhere .row strong{display:block;font-size:13px;font-weight:500}#office-everywhere .row small{display:block;color:var(--o-dim);font-size:11px;margin-top:4px}#office-everywhere .tile{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;background:var(--o-soft);flex-shrink:0}#office-everywhere .attention{padding:14px;background:var(--o-paper);border:1px solid var(--o-line);border-left:3px solid var(--o-accent);border-radius:9px}#office-everywhere .attention p{font-size:12px;color:var(--o-dim)}#office-everywhere .split{display:flex;justify-content:space-between;align-items:center;gap:10px}#office-everywhere .dot{display:inline-block;width:6px;height:6px;background:#799268;border-radius:50%;margin-right:5px}#office-everywhere .shelf{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}#office-everywhere .paper{border:1px solid var(--o-line);border-radius:3px;background:var(--o-paper);padding:17px 14px;text-align:left;min-height:185px;box-shadow:3px 4px 0 var(--o-soft);display:flex;flex-direction:column;justify-content:space-between}#office-everywhere .paper h3{font-size:24px}#office-everywhere .paper p{font-family:Georgia,serif;font-size:12px;color:var(--o-dim)}#office-everywhere .tabs{display:flex;gap:4px;flex-wrap:wrap;margin:17px 0 8px}#office-everywhere .tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:9px 8px;font-size:12px}#office-everywhere .tabs button.chosen{border-color:var(--o-accent)}#office-everywhere .reader{padding:23px 19px;background:var(--o-paper);border:1px solid var(--o-line);margin:17px 0;border-radius:3px}#office-everywhere .reader p{font:16px/1.7 Georgia,serif}#office-everywhere .reader h2{font:22px Georgia,serif;margin:22px 0 8px}#office-everywhere .code{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.8 monospace;background:var(--o-soft);padding:14px;border-radius:5px}#office-everywhere .field{display:block;margin:17px 0;font-size:12px}#office-everywhere .field input,#office-everywhere .field select,#office-everywhere textarea{display:block;width:100%;margin-top:7px;background:var(--o-paper);border:1px solid var(--o-line);border-radius:7px;padding:11px;font-size:16px}#office-everywhere textarea{resize:vertical;min-height:100px}#office-everywhere .bubble{background:var(--o-soft);padding:14px;border-radius:10px;margin:18px 0;font-size:13px}#office-everywhere .note{font-size:10px;color:var(--o-dim);margin-top:20px}#office-everywhere .bottom{display:flex;border-top:1px solid var(--o-line);padding:8px 10px 13px;justify-content:space-around;background:var(--o-paper)}#office-everywhere .bottom button{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:62px;border:0;background:none;padding:8px;color:var(--o-dim);font-size:11px}#office-everywhere .bottom button.active{color:var(--o-accent)}#office-everywhere .mini{padding:10px 20px;border-top:1px solid var(--o-line);display:flex;justify-content:space-between;align-items:center;background:var(--o-soft)}#office-everywhere [hidden]{display:none!important}#office-everywhere .poem{font:22px/1.9 Georgia,serif;text-align:center;padding:42px 0;color:var(--o-ink)}#office-everywhere .subtitle{font-size:12px;color:var(--o-dim)}#office-everywhere input[type=range]{width:100%;accent-color:var(--o-accent)}
+&lt;/style&gt;
+&lt;div id=&quot;office-everywhere&quot; aria-label=&quot;Office mobile concept&quot;&gt;
+&lt;header class=&quot;head&quot;&gt;&lt;div class=&quot;wordmark&quot;&gt;&lt;b&gt;✳&lt;/b&gt; the office&lt;/div&gt;&lt;button class=&quot;plain small&quot; data-page=&quot;system&quot;&gt;&lt;span class=&quot;dot&quot;&gt;&lt;/span&gt;Mac connected&lt;/button&gt;&lt;button class=&quot;action&quot; data-page=&quot;new&quot;&gt;＋ New task&lt;/button&gt;&lt;/header&gt;
+&lt;label class=&quot;searchbar&quot;&gt;&lt;i data-lucide=&quot;search&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;input id=&quot;office-query&quot; aria-label=&quot;Search everything&quot; placeholder=&quot;Search everything…&quot;&gt;&lt;/label&gt;
+&lt;main id=&quot;office-main&quot;&gt;&lt;/main&gt;
+&lt;div class=&quot;mini&quot; id=&quot;office-mini&quot; hidden&gt;&lt;button class=&quot;plain&quot; data-page=&quot;podcast&quot;&gt;Daily edition &lt;span class=&quot;small&quot;&gt; · 26:18&lt;/span&gt;&lt;/button&gt;&lt;button class=&quot;plain&quot; data-action=&quot;play&quot; id=&quot;office-toggle&quot;&gt;Pause&lt;/button&gt;&lt;/div&gt;
+&lt;nav class=&quot;bottom&quot; aria-label=&quot;Main tabs&quot;&gt;&lt;button data-page=&quot;today&quot; class=&quot;active&quot;&gt;&lt;i data-lucide=&quot;sun&quot;&gt;&lt;/i&gt;Today&lt;/button&gt;&lt;button data-page=&quot;work&quot;&gt;&lt;i data-lucide=&quot;panels-top-left&quot;&gt;&lt;/i&gt;Work&lt;/button&gt;&lt;button data-page=&quot;library&quot;&gt;&lt;i data-lucide=&quot;book-open&quot;&gt;&lt;/i&gt;Library&lt;/button&gt;&lt;button data-page=&quot;system&quot;&gt;&lt;i data-lucide=&quot;activity&quot;&gt;&lt;/i&gt;System&lt;/button&gt;&lt;/nav&gt;
+&lt;/div&gt;
+&lt;template id=&quot;office-settings-template&quot;&gt;
+&lt;button class=&quot;plain small&quot; data-page=&quot;system&quot;&gt;← System&lt;/button&gt;
+&lt;div class=&quot;eyebrow&quot;&gt;Your office, your way&lt;/div&gt;&lt;h1&gt;Settings.&lt;/h1&gt;
+&lt;h2 class=&quot;settings-title&quot;&gt;Appearance&lt;/h2&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Theme&lt;/span&gt;&lt;select data-pref=&quot;theme&quot;&gt;&lt;option value=&quot;auto&quot;&gt;System&lt;/option&gt;&lt;option value=&quot;light&quot;&gt;Paper&lt;/option&gt;&lt;option value=&quot;dark&quot;&gt;Night&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Background color&lt;small&gt;Applies throughout the app&lt;/small&gt;&lt;/span&gt;&lt;input type=&quot;color&quot; data-pref=&quot;background&quot; aria-label=&quot;Background color&quot;&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Accent color&lt;/span&gt;&lt;input type=&quot;color&quot; data-pref=&quot;accent&quot; aria-label=&quot;Accent color&quot;&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Interface font&lt;/span&gt;&lt;select data-pref=&quot;font&quot;&gt;&lt;option value=&quot;Arial,sans-serif&quot;&gt;Classic&lt;/option&gt;&lt;option value=&quot;system-ui,sans-serif&quot;&gt;System&lt;/option&gt;&lt;option value=&quot;Georgia,serif&quot;&gt;Literary&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Reading font&lt;/span&gt;&lt;select data-pref=&quot;reading&quot;&gt;&lt;option value=&quot;Georgia,serif&quot;&gt;Bookish&lt;/option&gt;&lt;option value=&quot;Arial,sans-serif&quot;&gt;Clean&lt;/option&gt;&lt;option value=&quot;monospace&quot;&gt;Typewriter&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+&lt;h2 class=&quot;settings-title&quot;&gt;Size &amp; space&lt;/h2&gt;
+&lt;label class=&quot;setting range-setting&quot;&gt;&lt;span&gt;Text size &lt;output id=&quot;pref-size-output&quot;&gt;100%&lt;/output&gt;&lt;/span&gt;&lt;input type=&quot;range&quot; data-pref=&quot;size&quot; min=&quot;90&quot; max=&quot;130&quot; step=&quot;10&quot; aria-label=&quot;Text size&quot;&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Layout density&lt;/span&gt;&lt;select data-pref=&quot;density&quot;&gt;&lt;option value=&quot;10&quot;&gt;Compact&lt;/option&gt;&lt;option value=&quot;14&quot;&gt;Comfortable&lt;/option&gt;&lt;option value=&quot;20&quot;&gt;Roomy&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Large touch controls&lt;/span&gt;&lt;input type=&quot;checkbox&quot; data-pref=&quot;touch&quot;&gt;&lt;/label&gt;
+&lt;h2 class=&quot;settings-title&quot;&gt;Experience&lt;/h2&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Haptics&lt;small&gt;On supported devices&lt;/small&gt;&lt;/span&gt;&lt;input type=&quot;checkbox&quot; data-pref=&quot;haptics&quot;&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Reduce motion&lt;/span&gt;&lt;input type=&quot;checkbox&quot; data-pref=&quot;motion&quot;&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Remember reading position&lt;/span&gt;&lt;input type=&quot;checkbox&quot; data-pref=&quot;remember&quot;&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Show mini-player&lt;/span&gt;&lt;input type=&quot;checkbox&quot; data-pref=&quot;mini&quot;&gt;&lt;/label&gt;
+&lt;label class=&quot;setting&quot;&gt;&lt;span&gt;Playback speed&lt;/span&gt;&lt;select data-pref=&quot;speed&quot;&gt;&lt;option&gt;1×&lt;/option&gt;&lt;option&gt;1.15×&lt;/option&gt;&lt;option&gt;1.25×&lt;/option&gt;&lt;option&gt;1.5×&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+&lt;button class=&quot;plain&quot; data-action=&quot;reset-settings&quot;&gt;Restore defaults&lt;/button&gt;
+&lt;/template&gt;
+&lt;style&gt;
+#office-everywhere{width:100%;max-width:440px;overflow:visible;border-radius:20px;--o-scale:1;--o-density:14px;--o-font:Arial,sans-serif;--o-reading:Georgia,serif;font-family:var(--o-font);container-type:inline-size}
+#office-everywhere *{min-width:0;overflow-wrap:anywhere}
+#office-everywhere .head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px 12px}
+#office-everywhere .head .wordmark{grid-column:1;grid-row:1;font-size:24px}
+#office-everywhere .head&gt;.small{grid-column:1;grid-row:2;justify-self:start;padding:0;font-size:11px}
+#office-everywhere .head&gt;.action{grid-column:2;grid-row:1 / 3}
+#office-everywhere main{min-height:520px}
+#office-everywhere .bottom{border-radius:0 0 20px 20px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px}
+#office-everywhere .bottom button{min-width:0;width:100%;font-size:calc(11px * var(--o-scale))}
+#office-everywhere h1{font-size:calc(31px * var(--o-scale))}
+#office-everywhere .row strong{font-size:calc(13px * var(--o-scale))}
+#office-everywhere .row small,#office-everywhere .small{font-size:calc(11px * var(--o-scale))}
+#office-everywhere .row{padding:var(--o-density) 0}
+#office-everywhere .row .tile,#office-everywhere .row&gt;svg{flex-shrink:0}
+#office-everywhere .split,#office-everywhere .section{flex-wrap:wrap}
+#office-everywhere .split&gt;*{max-width:100%}
+#office-everywhere .shelf{grid-template-columns:repeat(2,minmax(0,1fr))}
+#office-everywhere .paper{width:100%;min-height:200px}
+#office-everywhere .paper h3{font-size:calc(22px * var(--o-scale));font-family:var(--o-reading)}
+#office-everywhere .reader p{font-size:calc(16px * var(--o-scale));font-family:var(--o-reading)}
+#office-everywhere .reader h1,#office-everywhere .reader h2,#office-everywhere .poem{font-family:var(--o-reading)}
+#office-everywhere .code{max-width:100%;white-space:pre-wrap;word-break:break-word}
+#office-everywhere input,#office-everywhere textarea,#office-everywhere select{max-width:100%}
+#office-everywhere .searchbar input{font-size:16px}
+#office-everywhere .action,#office-everywhere .plain,#office-everywhere .tabs button{min-height:44px}
+#office-everywhere .mini{flex-wrap:wrap;gap:4px}
+#office-everywhere .settings-title{margin:23px 0 7px;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--o-dim)}
+#office-everywhere .setting{display:grid;grid-template-columns:minmax(0,1fr) minmax(65px,120px);gap:12px;align-items:center;padding:var(--o-density) 0;border-bottom:1px solid var(--o-line);font-size:calc(13px * var(--o-scale))}
+#office-everywhere .setting small{display:block;font-size:11px;color:var(--o-dim);margin-top:4px}
+#office-everywhere .setting select{width:100%;padding:9px 4px;background:var(--o-paper);color:var(--o-ink);border:1px solid var(--o-line);border-radius:6px;font-size:14px;min-height:44px}
+#office-everywhere .setting input[type=color]{justify-self:end;width:55px;height:40px;border:1px solid var(--o-line);border-radius:6px;background:var(--o-paper);padding:4px;cursor:pointer}
+#office-everywhere .setting input[type=checkbox]{justify-self:end;width:23px;height:23px;accent-color:var(--o-accent)}
+#office-everywhere .range-setting{grid-template-columns:1fr}
+#office-everywhere .range-setting span{display:flex;justify-content:space-between}
+#office-everywhere .range-setting input{width:100%}
+@container(max-width:350px){#office-everywhere .shelf{grid-template-columns:1fr}#office-everywhere main{padding-left:16px;padding-right:16px}#office-everywhere .setting{grid-template-columns:minmax(0,1fr) minmax(65px,110px)}}
+&lt;/style&gt;
+
+&lt;script&gt;
+(()=&gt;{
+const root=document.getElementById(&#x27;office-everywhere&#x27;),main=root.querySelector(&#x27;#office-main&#x27;),query=root.querySelector(&#x27;#office-query&#x27;);
+const prefs={theme:&#x27;auto&#x27;,background:&#x27;&#x27;,accent:&#x27;#b9573c&#x27;,font:&#x27;Arial,sans-serif&#x27;,reading:&#x27;Georgia,serif&#x27;,size:100,density:14,touch:false,haptics:true,motion:false,remember:true,mini:true,speed:&#x27;1×&#x27;};
+const defaults={...prefs};
+const s={page:&#x27;today&#x27;,tab:&#x27;Files&#x27;,account:&#x27;Personal&#x27;,engine:&#x27;Codex&#x27;,project:&#x27;Nexus Office&#x27;,prompt:&#x27;&#x27;,playing:false,listening:false,raw:false,accent:&#x27;#cf664b&#x27;,paper:true,reply:&#x27;&#x27;,filter:&#x27;All&#x27;};
+const icon=n=&gt;`&lt;i data-lucide=&quot;${n}&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;`;
+const row=(name,detail,page,ic=&#x27;file-text&#x27;)=&gt;`&lt;button class=&quot;row&quot; data-page=&quot;${page}&quot;&gt;&lt;span class=&quot;tile&quot;&gt;${icon(ic)}&lt;/span&gt;&lt;span class=&quot;copy&quot;&gt;&lt;strong&gt;${name}&lt;/strong&gt;&lt;small&gt;${detail}&lt;/small&gt;&lt;/span&gt;${icon(&#x27;chevron-right&#x27;)}&lt;/button&gt;`;
+const back=(page,label)=&gt;`&lt;button class=&quot;plain small&quot; data-page=&quot;${page}&quot;&gt;← ${label}&lt;/button&gt;`;
+const heading=(tag,title,sub=&#x27;&#x27;)=&gt;`&lt;div class=&quot;eyebrow&quot;&gt;${tag}&lt;/div&gt;&lt;h1&gt;${title}&lt;/h1&gt;${sub?`&lt;p class=&quot;subtitle&quot;&gt;${sub}&lt;/p&gt;`:&#x27;&#x27;}`;
+const records=[[&#x27;Mobile workspace plan&#x27;,&#x27;Files · Nexus Office · docs/mobile.md&#x27;,&#x27;document&#x27;,&#x27;file-text&#x27;],[&#x27;Make file browsing available on mobile&#x27;,&#x27;GitHub · Nexus Office · pull request&#x27;,&#x27;diff&#x27;,&#x27;git-pull-request&#x27;],[&#x27;Mobile navigation refactor&#x27;,&#x27;Conversations · Codex · Personal&#x27;,&#x27;conversation&#x27;,&#x27;message-circle&#x27;],[&#x27;The things we build to last&#x27;,&#x27;Podcast · transcript · 26 minutes&#x27;,&#x27;podcast&#x27;,&#x27;headphones&#x27;],[&#x27;A grammar of small things&#x27;,&#x27;Substrate · computational poetry&#x27;,&#x27;poem&#x27;,&#x27;sparkles&#x27;],[&#x27;Evening publishing run&#x27;,&#x27;Runs · podcast · sample log&#x27;,&#x27;logs&#x27;,&#x27;activity&#x27;],[&#x27;session launch account routing&#x27;,&#x27;Files · client/sessions.py · local checkout&#x27;,&#x27;code&#x27;,&#x27;file-code&#x27;]];
+function render(){
+applyPrefs();
+let out=&#x27;&#x27;;
+if(s.page===&#x27;today&#x27;)out=heading(&#x27;Monday, September 7&#x27;,&#x27;Your office, from here.&#x27;)+`&lt;div class=&quot;section&quot;&gt;&lt;h2&gt;Needs you&lt;/h2&gt;&lt;span class=&quot;small&quot;&gt;1 item&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;attention&quot;&gt;&lt;div class=&quot;eyebrow&quot;&gt;Nexus Office · review&lt;/div&gt;&lt;p style=&quot;color:var(--o-ink)&quot;&gt;Mobile navigation is ready to look over.&lt;/p&gt;&lt;div class=&quot;split&quot;&gt;&lt;span class=&quot;small&quot;&gt;Codex · Personal&lt;/span&gt;&lt;button class=&quot;action outline&quot; data-page=&quot;diff&quot;&gt;Review changes →&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;section&quot;&gt;&lt;h2&gt;Working now&lt;/h2&gt;&lt;button class=&quot;plain small&quot; data-page=&quot;work&quot;&gt;All work ↗&lt;/button&gt;&lt;/div&gt;`+row(&#x27;Lesson preview improvements&#x27;,&#x27;Claude Code · TBS · preparing a preview&#x27;,&#x27;conversation&#x27;,&#x27;message-circle&#x27;)+row(&#x27;Mobile file browser&#x27;,&#x27;Codex · Personal · checking navigation&#x27;,&#x27;conversation&#x27;,&#x27;terminal&#x27;)+`&lt;div class=&quot;section&quot;&gt;&lt;h2&gt;Pick up where you left off&lt;/h2&gt;&lt;/div&gt;`+row(&#x27;Mobile workspace plan&#x27;,&#x27;Nexus Office / docs / mobile.md&#x27;,&#x27;document&#x27;)+`&lt;div class=&quot;section&quot;&gt;&lt;h2&gt;Fresh from your world&lt;/h2&gt;&lt;/div&gt;`+row(&#x27;Your daily edition&#x27;,&#x27;26 min · work, world &amp; a little history&#x27;,&#x27;podcast&#x27;,&#x27;headphones&#x27;)+row(&#x27;A grammar of small things&#x27;,&#x27;Substrate · a new computational poem&#x27;,&#x27;poem&#x27;,&#x27;sparkles&#x27;);
+if(s.page===&#x27;work&#x27;)out=heading(&#x27;Projects &amp; conversations&#x27;,&#x27;Work.&#x27;)+row(&#x27;Nexus Office&#x27;,&#x27;Mobile workspace · files, tasks &amp; reviews&#x27;,&#x27;project&#x27;,&#x27;panels-top-left&#x27;)+row(&#x27;Thinking Brain School&#x27;,&#x27;Curriculum · TBS workspace&#x27;,&#x27;project&#x27;,&#x27;book-open&#x27;)+row(&#x27;Urban Atlas&#x27;,&#x27;World generation · art &amp; environment&#x27;,&#x27;project&#x27;,&#x27;orbit&#x27;)+`&lt;div class=&quot;section&quot;&gt;&lt;h2&gt;Conversations&lt;/h2&gt;&lt;/div&gt;`+row(&#x27;Mobile navigation refactor&#x27;,&#x27;Codex · Personal · 4 min ago&#x27;,&#x27;conversation&#x27;,&#x27;message-circle&#x27;)+row(&#x27;Lesson preview improvements&#x27;,&#x27;Claude Code · TBS · 12 min ago&#x27;,&#x27;conversation&#x27;,&#x27;message-circle&#x27;);
+if(s.page===&#x27;project&#x27;){
+out=back(&#x27;work&#x27;,&#x27;Projects&#x27;)+heading(&#x27;Project workspace&#x27;,&#x27;Nexus Office&#x27;)+`&lt;div class=&quot;tabs&quot;&gt;${[&#x27;Files&#x27;,&#x27;Tasks&#x27;,&#x27;PRs&#x27;,&#x27;Agents&#x27;,&#x27;Outputs&#x27;].map(t=&gt;`&lt;button data-tab=&quot;${t}&quot; class=&quot;${s.tab===t?&#x27;chosen&#x27;:&#x27;&#x27;}&quot;&gt;${t}&lt;/button&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;`;
+const views={Files:`&lt;div class=&quot;split&quot;&gt;&lt;span class=&quot;small&quot;&gt;Local checkout / main&lt;/span&gt;&lt;span class=&quot;small&quot;&gt;1 modified&lt;/span&gt;&lt;/div&gt;`+row(&#x27;docs / mobile.md&#x27;,&#x27;Markdown · edited today&#x27;,&#x27;document&#x27;)+row(&#x27;client / sessions.py&#x27;,&#x27;Python · account routing&#x27;,&#x27;code&#x27;,&#x27;file-code&#x27;)+row(&#x27;README.md&#x27;,&#x27;Markdown · project introduction&#x27;,&#x27;document&#x27;),Tasks:row(&#x27;Mobile workspace refactor&#x27;,&#x27;Issue · open · view discussion&#x27;,&#x27;conversation&#x27;,&#x27;circle-dot&#x27;),PRs:row(&#x27;Make file browsing available on mobile&#x27;,&#x27;Pull request · review changes&#x27;,&#x27;diff&#x27;,&#x27;git-pull-request&#x27;),Agents:row(&#x27;Mobile navigation refactor&#x27;,&#x27;Codex · Personal · view conversation&#x27;,&#x27;conversation&#x27;,&#x27;terminal&#x27;)+`&lt;button class=&quot;action&quot; data-page=&quot;new&quot;&gt;＋ Start a task here&lt;/button&gt;`,Outputs:row(&#x27;Mobile workspace plan&#x27;,&#x27;Document · open reader&#x27;,&#x27;document&#x27;)+row(&#x27;Navigation changes&#x27;,&#x27;Diff · inspect implementation&#x27;,&#x27;diff&#x27;,&#x27;git-compare&#x27;)};out+=views[s.tab];}
+if(s.page===&#x27;library&#x27;)out=heading(&#x27;Your collected world&#x27;,&#x27;Library.&#x27;,&#x27;Read, listen, follow a thread.&#x27;)+`&lt;div class=&quot;shelf&quot;&gt;&lt;button class=&quot;paper&quot; data-page=&quot;document&quot;&gt;&lt;div&gt;&lt;div class=&quot;eyebrow&quot;&gt;Document / Office&lt;/div&gt;&lt;h3&gt;A workspace&lt;br&gt;in your pocket.&lt;/h3&gt;&lt;p&gt;The Mac does the work. The phone keeps you in the room.&lt;/p&gt;&lt;/div&gt;&lt;span class=&quot;small&quot;&gt;mobile.md · continue reading ↗&lt;/span&gt;&lt;/button&gt;&lt;button class=&quot;paper&quot; data-page=&quot;poem&quot;&gt;&lt;div&gt;&lt;div class=&quot;eyebrow&quot;&gt;Substrate / 007&lt;/div&gt;&lt;h3&gt;A grammar&lt;br&gt;of small things.&lt;/h3&gt;&lt;p&gt;the space between&lt;br&gt;one instruction&lt;br&gt;and another&lt;/p&gt;&lt;/div&gt;&lt;span class=&quot;small&quot;&gt;Computational poetry ↗&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;section&quot;&gt;&lt;h2&gt;Browse the shelves&lt;/h2&gt;&lt;/div&gt;`+row(&#x27;Documents &amp; notes&#x27;,&#x27;Markdown, research, meeting notes&#x27;,&#x27;search&#x27;,&#x27;files&#x27;)+row(&#x27;Podcasts&#x27;,&#x27;Your daily editions &amp; transcripts&#x27;,&#x27;podcast&#x27;,&#x27;headphones&#x27;)+row(&#x27;Substrate&#x27;,&#x27;Poetry, experiments &amp; generated pieces&#x27;,&#x27;poem&#x27;,&#x27;sparkles&#x27;)+row(&#x27;Project artifacts&#x27;,&#x27;Code, previews &amp; things you made&#x27;,&#x27;project&#x27;,&#x27;folder&#x27;);
+if(s.page===&#x27;document&#x27;)out=back(&#x27;project&#x27;,&#x27;Nexus Office / docs&#x27;)+`&lt;div class=&quot;split&quot;&gt;&lt;span class=&quot;small&quot;&gt;mobile.md · Local / main&lt;/span&gt;&lt;button class=&quot;plain small&quot; data-action=&quot;raw&quot;&gt;${s.raw?&#x27;Read&#x27;:&#x27;Source&#x27;}&lt;/button&gt;&lt;/div&gt;`+(s.raw?`&lt;pre class=&quot;code&quot;&gt;# A workspace in your pocket\n\nThe Mac does the work. The phone keeps you in the room.\n\n## One place to steer\nOpen a file, ask an agent, inspect the result.&lt;/pre&gt;`:`&lt;article class=&quot;reader&quot;&gt;&lt;div class=&quot;eyebrow&quot;&gt;Nexus Office / Design note&lt;/div&gt;&lt;h1&gt;A workspace&lt;br&gt;in your pocket.&lt;/h1&gt;&lt;p&gt;The Mac does the work. The phone keeps you in the room.&lt;/p&gt;&lt;h2&gt;One place to steer&lt;/h2&gt;&lt;p&gt;Open a file, ask an agent, inspect the result. Keep the project and the conversation connected.&lt;/p&gt;&lt;h2&gt;Less searching for the work.&lt;/h2&gt;&lt;p&gt;Documents, changes and decisions should open where you are. Every result keeps its source.&lt;/p&gt;&lt;/article&gt;`)+`&lt;div class=&quot;split&quot;&gt;&lt;button class=&quot;action outline&quot; data-page=&quot;edit&quot;&gt;Edit document&lt;/button&gt;&lt;button class=&quot;action&quot; data-page=&quot;conversation&quot;&gt;Discuss with agent&lt;/button&gt;&lt;/div&gt;`;
+if(s.page===&#x27;edit&#x27;)out=back(&#x27;document&#x27;,&#x27;Document&#x27;)+heading(&#x27;Local draft&#x27;,&#x27;Edit mobile.md&#x27;)+`&lt;textarea id=&quot;edit-text&quot; style=&quot;min-height:260px&quot;&gt;# A workspace in your pocket
+
+The Mac does the work. The phone keeps you in the room.
+
+## One place to steer
+Open a file, ask an agent, inspect the result.&lt;/textarea&gt;&lt;button class=&quot;action&quot; data-page=&quot;diff&quot; style=&quot;margin-top:16px&quot;&gt;Preview changes&lt;/button&gt;`;
+if(s.page===&#x27;code&#x27;)out=back(&#x27;project&#x27;,&#x27;Files&#x27;)+heading(&#x27;Local checkout / main&#x27;,&#x27;sessions.py&#x27;)+`&lt;pre class=&quot;code&quot;&gt;1  def start(body):
+2      tool = body.get(&quot;tool&quot;)
+3      directory = resolve_dir(body)
+4      prompt = body.get(&quot;prompt&quot;)
+5      return launch(tool, directory, prompt)
+
+Illustrative code excerpt&lt;/pre&gt;&lt;button class=&quot;action&quot; data-page=&quot;conversation&quot;&gt;Ask about this file&lt;/button&gt;`;
+if(s.page===&#x27;diff&#x27;)out=back(&#x27;project&#x27;,&#x27;Nexus Office&#x27;)+heading(&#x27;Pull request · sample&#x27;,&#x27;Mobile file browsing&#x27;,&#x27;Review the change, then steer the next step.&#x27;)+`&lt;div class=&quot;reader&quot;&gt;&lt;span class=&quot;small&quot;&gt;docs/mobile.md&lt;/span&gt;&lt;pre class=&quot;code&quot;&gt;  ## Navigation
+− Open files on the computer.
++ Browse and read files from your phone.
++ Keep source and revision visible.&lt;/pre&gt;&lt;/div&gt;&lt;button class=&quot;action&quot; data-page=&quot;conversation&quot;&gt;Discuss changes&lt;/button&gt;`;
+if(s.page===&#x27;conversation&#x27;)out=back(&#x27;work&#x27;,&#x27;Conversations&#x27;)+heading(`${s.engine} · ${s.account}`,&#x27;Mobile workspace&#x27;)+`&lt;div class=&quot;bubble&quot;&gt;${s.prompt?escape(s.prompt):&#x27;Make it easy to open files and steer work from my phone.&#x27;}&lt;/div&gt;&lt;div class=&quot;eyebrow&quot;&gt;Agent · sample response&lt;/div&gt;&lt;p&gt;I’ve outlined the file browser. You can inspect the document and proposed changes below.&lt;/p&gt;`+row(&#x27;mobile.md&#x27;,&#x27;Attached document&#x27;,&#x27;document&#x27;)+row(&#x27;Proposed changes&#x27;,&#x27;Open diff&#x27;,&#x27;diff&#x27;,&#x27;git-compare&#x27;)+(s.reply?`&lt;div class=&quot;bubble&quot;&gt;${escape(s.reply)}&lt;/div&gt;`:&#x27;&#x27;)+`&lt;label class=&quot;field&quot;&gt;Steer this task&lt;textarea id=&quot;reply&quot; placeholder=&quot;Add direction…&quot;&gt;&lt;/textarea&gt;&lt;/label&gt;&lt;button class=&quot;action&quot; data-action=&quot;send&quot;&gt;Send in preview&lt;/button&gt;`;
+if(s.page===&#x27;new&#x27;)out=back(&#x27;work&#x27;,&#x27;Work&#x27;)+heading(&#x27;Runs on your Mac&#x27;,&#x27;Start something.&#x27;)+`&lt;label class=&quot;field&quot;&gt;What should happen?&lt;textarea id=&quot;prompt&quot; placeholder=&quot;What would you like to work on?&quot;&gt;${escape(s.prompt)}&lt;/textarea&gt;&lt;/label&gt;&lt;label class=&quot;field&quot;&gt;Project&lt;select id=&quot;project&quot;&gt;${[&#x27;Nexus Office&#x27;,&#x27;Thinking Brain School&#x27;,&#x27;Urban Atlas&#x27;].map(x=&gt;`&lt;option ${s.project===x?&#x27;selected&#x27;:&#x27;&#x27;}&gt;${x}&lt;/option&gt;`).join(&#x27;&#x27;)}&lt;/select&gt;&lt;/label&gt;&lt;label class=&quot;field&quot;&gt;Agent&lt;select id=&quot;engine&quot;&gt;&lt;option&gt;Codex&lt;/option&gt;&lt;option&gt;Claude Code&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;&lt;label class=&quot;field&quot;&gt;Account&lt;select id=&quot;account&quot;&gt;&lt;option&gt;Personal&lt;/option&gt;&lt;option&gt;TBS&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;&lt;button class=&quot;action&quot; data-action=&quot;start&quot;&gt;Start on Mac · preview&lt;/button&gt;&lt;p class=&quot;small&quot;&gt;This mockup opens a sample conversation. No session is launched.&lt;/p&gt;`;
+if(s.page===&#x27;settings&#x27;)out=document.getElementById(&#x27;office-settings-template&#x27;).innerHTML;
+if(s.page===&#x27;system&#x27;)out=heading(&#x27;Your Mac, within reach&#x27;,&#x27;System.&#x27;)+row(&#x27;Settings&#x27;,&#x27;Theme, colors, typography &amp; experience&#x27;,&#x27;settings&#x27;,&#x27;settings-2&#x27;)+`&lt;div class=&quot;attention&quot;&gt;&lt;span class=&quot;dot&quot;&gt;&lt;/span&gt;Mac connected&lt;p&gt;Office reachable · last checked just now&lt;/p&gt;&lt;span class=&quot;small&quot;&gt;Sample connection state&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;section&quot;&gt;&lt;h2&gt;Automations&lt;/h2&gt;&lt;/div&gt;`+row(&#x27;Daily podcast&#x27;,&#x27;Automatic · evening edition&#x27;,&#x27;logs&#x27;,&#x27;headphones&#x27;)+row(&#x27;Substrate&#x27;,&#x27;Generated pieces · view recent runs&#x27;,&#x27;logs&#x27;,&#x27;sparkles&#x27;)+row(&#x27;Briefing emails&#x27;,&#x27;Morning, midday, research &amp; evening&#x27;,&#x27;logs&#x27;,&#x27;mail&#x27;)+`&lt;div class=&quot;section&quot;&gt;&lt;h2&gt;Machine &amp; history&lt;/h2&gt;&lt;/div&gt;`+row(&#x27;Machine health&#x27;,&#x27;Processes, storage &amp; connectivity&#x27;,&#x27;logs&#x27;,&#x27;monitor&#x27;)+row(&#x27;Run history&#x27;,&#x27;Logs, outcomes &amp; failed jobs&#x27;,&#x27;logs&#x27;,&#x27;list&#x27;);
+if(s.page===&#x27;logs&#x27;)out=back(&#x27;system&#x27;,&#x27;System&#x27;)+heading(&#x27;Automation / sample run&#x27;,&#x27;Publishing log&#x27;)+`&lt;pre class=&quot;code&quot;&gt;19:00  Collected source material
+19:02  Script saved
+19:07  Voice render complete
+19:08  Audio checks passed
+19:08  Episode published
+19:09  Notification delivered&lt;/pre&gt;&lt;button class=&quot;action outline&quot; data-page=&quot;podcast&quot;&gt;Open output&lt;/button&gt;`;
+if(s.page===&#x27;podcast&#x27;)out=back(&#x27;library&#x27;,&#x27;Library / Podcasts&#x27;)+heading(&#x27;Daily edition · sample&#x27;,&#x27;The things we&lt;br&gt;build to last.&#x27;)+`&lt;p class=&quot;subtitle&quot;&gt;Your work, the world, and Roman concrete.&lt;/p&gt;&lt;div class=&quot;reader&quot;&gt;&lt;div class=&quot;eyebrow&quot;&gt;Selected Qwen voice · 26:18&lt;/div&gt;&lt;input type=&quot;range&quot; min=&quot;0&quot; max=&quot;1578&quot; value=&quot;522&quot; aria-label=&quot;Playback position&quot;&gt;&lt;div class=&quot;split small&quot;&gt;&lt;span&gt;08:42&lt;/span&gt;&lt;span&gt;26:18&lt;/span&gt;&lt;/div&gt;&lt;button class=&quot;action&quot; data-action=&quot;play&quot; style=&quot;margin-top:20px&quot;&gt;${s.playing?&#x27;Pause&#x27;:&#x27;Play&#x27;} · preview&lt;/button&gt;&lt;/div&gt;&lt;h2&gt;Chapters&lt;/h2&gt;`+row(&#x27;Your day, in perspective&#x27;,&#x27;00:00 · work recap&#x27;,&#x27;document&#x27;)+row(&#x27;Beyond your desk&#x27;,&#x27;04:50 · world &amp; AI&#x27;,&#x27;document&#x27;)+row(&#x27;What the Romans left behind&#x27;,&#x27;14:25 · history&#x27;,&#x27;document&#x27;);
+if(s.page===&#x27;poem&#x27;)out=back(&#x27;library&#x27;,&#x27;Library / Substrate&#x27;)+heading(&#x27;Computational poetry · sample&#x27;,&#x27;A grammar of&lt;br&gt;small things.&#x27;)+`&lt;div class=&quot;poem&quot;&gt;the space between&lt;br&gt;one instruction&lt;br&gt;and another&lt;br&gt;&lt;br&gt;&lt;em&gt;is still a place&lt;br&gt;to live.&lt;/em&gt;&lt;/div&gt;&lt;div class=&quot;split&quot;&gt;&lt;span class=&quot;small&quot;&gt;Illustrative piece&lt;/span&gt;&lt;button class=&quot;plain small&quot; data-page=&quot;logs&quot;&gt;Generation details ↗&lt;/button&gt;&lt;/div&gt;`;
+if(s.page===&#x27;search&#x27;){
+const term=query.value.toLowerCase().trim(),filters=[&#x27;All&#x27;,&#x27;Files&#x27;,&#x27;GitHub&#x27;,&#x27;Conversations&#x27;,&#x27;Media&#x27;,&#x27;Runs&#x27;];const found=records.filter(r=&gt;(!term||r.join(&#x27; &#x27;).toLowerCase().includes(term))&amp;&amp;(s.filter===&#x27;All&#x27;||(s.filter===&#x27;Media&#x27;?/Podcast|Substrate/.test(r[1]):r[1].startsWith(s.filter))));out=heading(&#x27;Across your entire office&#x27;,&#x27;Find anything.&#x27;)+`&lt;div class=&quot;tabs&quot;&gt;${filters.map(f=&gt;`&lt;button data-filter=&quot;${f}&quot; class=&quot;${s.filter===f?&#x27;chosen&#x27;:&#x27;&#x27;}&quot;&gt;${f}&lt;/button&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;&lt;p class=&quot;small&quot;&gt;Searching sample files, contents, GitHub, conversations, media &amp; runs.&lt;/p&gt;`+found.map(r=&gt;row(r[0],r[1],r[2],r[3])).join(&#x27;&#x27;)+(found.length?&#x27;&#x27;:&#x27;&lt;p&gt;No matching sample results.&lt;/p&gt;&#x27;);}
+main.innerHTML=out+&#x27;&lt;div class=&quot;note&quot;&gt;Interactive concept · illustrative data&lt;/div&gt;&#x27;;
+root.querySelector(&#x27;#office-mini&#x27;).hidden=!prefs.mini||!s.listening||s.page===&#x27;podcast&#x27;;root.querySelector(&#x27;#office-toggle&#x27;).textContent=s.playing?&#x27;Pause&#x27;:&#x27;Play&#x27;;
+root.querySelectorAll(&#x27;.bottom button&#x27;).forEach(b=&gt;{const group={settings:&#x27;system&#x27;,logs:&#x27;system&#x27;,project:&#x27;work&#x27;,conversation:&#x27;work&#x27;,new:&#x27;work&#x27;,diff:&#x27;work&#x27;,code:&#x27;work&#x27;,document:&#x27;library&#x27;,edit:&#x27;library&#x27;,poem:&#x27;library&#x27;,podcast:&#x27;library&#x27;};const active=b.dataset.page===(group[s.page]||s.page);b.classList.toggle(&#x27;active&#x27;,active);if(active)b.setAttribute(&#x27;aria-current&#x27;,&#x27;page&#x27;);else b.removeAttribute(&#x27;aria-current&#x27;);});
+if(globalThis.lucide)lucide.createIcons();
+main.querySelectorAll(&#x27;[data-pref]&#x27;).forEach(el=&gt;{const v=prefs[el.dataset.pref];if(el.type===&#x27;checkbox&#x27;)el.checked=v;else el.value=el.type===&#x27;color&#x27;&amp;&amp;!v?&#x27;#f5f3ee&#x27;:v;});const size=main.querySelector(&#x27;#pref-size-output&#x27;);if(size)size.value=prefs.size+&#x27;%&#x27;;
+}
+function applyPrefs(){
+root.style.colorScheme=prefs.theme===&#x27;auto&#x27;?&#x27;light dark&#x27;:prefs.theme;
+root.style.setProperty(&#x27;--o-accent&#x27;,prefs.accent);
+root.style.setProperty(&#x27;--o-scale&#x27;,prefs.size/100);
+root.style.setProperty(&#x27;--o-density&#x27;,prefs.density+&#x27;px&#x27;);
+root.style.setProperty(&#x27;--o-font&#x27;,prefs.font);root.style.setProperty(&#x27;--o-reading&#x27;,prefs.reading);
+root.querySelectorAll(&#x27;button&#x27;).forEach(b=&gt;b.style.minHeight=prefs.touch?&#x27;48px&#x27;:&#x27;&#x27;);
+if(prefs.background){
+const hex=prefs.background.slice(1);const rgb=[0,2,4].map(i=&gt;parseInt(hex.slice(i,i+2),16));const light=rgb[0]*.299+rgb[1]*.587+rgb[2]*.114&gt;145;
+root.style.setProperty(&#x27;--o-bg&#x27;,prefs.background);root.style.setProperty(&#x27;--o-paper&#x27;,light?&#x27;#fffdf8&#x27;:&#x27;#292e2b&#x27;);root.style.setProperty(&#x27;--o-ink&#x27;,light?&#x27;#243029&#x27;:&#x27;#f1f2e9&#x27;);root.style.setProperty(&#x27;--o-dim&#x27;,light?&#x27;#515b52&#x27;:&#x27;#b9c3b8&#x27;);root.style.setProperty(&#x27;--o-line&#x27;,light?&#x27;#b9c0b5&#x27;:&#x27;#566153&#x27;);root.style.setProperty(&#x27;--o-soft&#x27;,light?&#x27;#e6eadd&#x27;:&#x27;#394536&#x27;);
+}else [&#x27;bg&#x27;,&#x27;paper&#x27;,&#x27;ink&#x27;,&#x27;dim&#x27;,&#x27;line&#x27;,&#x27;soft&#x27;].forEach(n=&gt;root.style.removeProperty(&#x27;--o-&#x27;+n));
+}
+root.addEventListener(&#x27;input&#x27;,e=&gt;{const key=e.target.dataset.pref;if(!key)return;prefs[key]=e.target.type===&#x27;checkbox&#x27;?e.target.checked:e.target.value;if(key===&#x27;theme&#x27;)prefs.background=&#x27;&#x27;;applyPrefs();const label=main.querySelector(&#x27;#pref-size-output&#x27;);if(label)label.value=prefs.size+&#x27;%&#x27;;});
+root.addEventListener(&#x27;change&#x27;,e=&gt;{if(e.target.dataset.pref)render();});
+function escape(x){const e=document.createElement(&#x27;span&#x27;);e.textContent=x;return e.innerHTML;}
+root.addEventListener(&#x27;click&#x27;,e=&gt;{const b=e.target.closest(&#x27;button&#x27;);if(!b)return;if(b.dataset.page){s.page=b.dataset.page;query.value=&#x27;&#x27;;}if(b.dataset.tab)s.tab=b.dataset.tab;if(b.dataset.filter)s.filter=b.dataset.filter;const a=b.dataset.action;if(a===&#x27;reset-settings&#x27;)Object.assign(prefs,defaults);if(a===&#x27;raw&#x27;)s.raw=!s.raw;if(a===&#x27;play&#x27;){s.playing=!s.playing;s.listening=true;}if(a===&#x27;start&#x27;){s.prompt=main.querySelector(&#x27;#prompt&#x27;).value;s.project=main.querySelector(&#x27;#project&#x27;).value;s.engine=main.querySelector(&#x27;#engine&#x27;).value;s.account=main.querySelector(&#x27;#account&#x27;).value;s.page=&#x27;conversation&#x27;;}if(a===&#x27;send&#x27;)s.reply=main.querySelector(&#x27;#reply&#x27;).value;render();});
+query.addEventListener(&#x27;input&#x27;,()=&gt;{s.page=&#x27;search&#x27;;render();});query.addEventListener(&#x27;focus&#x27;,()=&gt;{if(s.page!==&#x27;search&#x27;){s.page=&#x27;search&#x27;;render();}});
+render();if(false&amp;&amp;globalThis.Tweak){const t=new Tweak({container:root,onChange:render});t.addColorPicker(s,&#x27;accent&#x27;,{label:&#x27;Office accent&#x27;});t.addToggle(s,&#x27;paper&#x27;,{label:&#x27;Paper-style reading&#x27;});}
+})();
+&lt;/script&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) =&gt; {
+    lastPointerWasTouch =
+      event.type === &quot;pointerdown&quot; &amp;&amp; event.pointerType === &quot;touch&quot;;
+  };
+  const handleTouchClick = (event) =&gt; {
+    const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch &amp;&amp; activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() =&gt; {
+      if (activeTrigger === trigger &amp;&amp; !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) =&gt; {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerdown&quot;, handlePointer);
+    document.removeEventListener(&quot;pointercancel&quot;, handlePointer);
+    document.removeEventListener(&quot;click&quot;, handleTouchClick);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerdown&quot;, handlePointer);
+  document.addEventListener(&quot;pointercancel&quot;, handlePointer);
+  document.addEventListener(&quot;click&quot;, handleTouchClick);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-tabs&quot;&gt;
+(() =&gt; {
+  const selector = &#x27;.nav[role=&quot;tablist&quot;] [role=&quot;tab&quot;]&#x27;;
+  const disabled = &#x27;:disabled,[aria-disabled=&quot;true&quot;]&#x27;;
+  const selectTab = (selected) =&gt; {
+    const panelId = selected.getAttribute(&quot;aria-controls&quot;);
+    for (const tab of selected.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;)) {
+      const active = tab === selected;
+      tab.classList.toggle(&quot;active&quot;, active);
+      tab.setAttribute(&quot;aria-selected&quot;, String(active));
+      const id = tab.getAttribute(&quot;aria-controls&quot;);
+      const panel = id &amp;&amp; document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden &amp;&amp; selected.id) {
+          panel.setAttribute(&quot;aria-labelledby&quot;, selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) =&gt; {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === &quot;click&quot;) {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;),
+    ).filter((candidate) =&gt; !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === &quot;ArrowRight&quot; || event.key === &quot;ArrowDown&quot;) {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === &quot;ArrowLeft&quot; || event.key === &quot;ArrowUp&quot;) {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === &quot;Home&quot;) {
+      next = 0;
+    } else if (event.key === &quot;End&quot;) {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll(&#x27;.nav[role=&quot;tablist&quot;]&#x27;)) {
+    const selected =
+      list.querySelector(&#x27;[role=&quot;tab&quot;][aria-selected=&quot;true&quot;]&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;].active&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;]&#x27;);
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener(&quot;click&quot;, interact);
+  document.addEventListener(&quot;keydown&quot;, interact);
+  window.addEventListener(&quot;pagehide&quot;, () =&gt; {
+    document.removeEventListener(&quot;click&quot;, interact);
+    document.removeEventListener(&quot;keydown&quot;, interact);
+  }, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>
