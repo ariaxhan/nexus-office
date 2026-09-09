@@ -4,12 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>Lesson previews</title>
+<title>Lessons · Office</title>
 <link rel="stylesheet" href="/lessons.css">
 </head>
 <body>
-<header><a href="/">Office</a><h1>Lesson previews</h1><p id="summary">opening</p></header>
-<main id="lessons"></main>
+<header><a href="/">Office</a><h1>Lessons</h1><p id="summary" role="status">Opening lessons…</p></header>
+<main><p class="intro">View the lesson, check the evidence, and leave direction for its lane.</p>
+<div class="filters"><label>Product<select id="product"><option value="">Both products</option><option value="superpowerai">SuperPower AI</option><option value="mommyai">MommyAI</option></select></label><label>Find a lesson<input id="search" type="search" placeholder="L012 or topic"></label></div>
+<details class="coverage"><summary>Evidence coverage</summary><p id="gaps">Reading local sources…</p><p>Lifecycle is the furthest stage supported by local evidence. Main is the local origin/main snapshot; publication remains separate.</p></details>
+<div id="lessons"></div></main>
 <script src="/lessons.js"></script>
 </body>
 </html>

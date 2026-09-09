@@ -58,7 +58,7 @@ import chat  # noqa: E402
 import context  # noqa: E402
 import office_api  # noqa: E402
 import live  # noqa: E402
-import lesson_previews  # noqa: E402
+import lesson_status  # noqa: E402
 import runtime as rt  # noqa: E402
 import search  # noqa: E402
 import sessions  # noqa: E402
@@ -553,7 +553,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             routes = {
                 '/api/world': self._get_world,
-                '/api/lesson-previews': self._get_lesson_previews,
+                '/api/lesson-status': self._get_lesson_status,
+                '/api/lesson-report': self._get_lesson_report,
                 '/api/desks': self._get_desks,
                 '/api/pins': self._get_pins,
                 '/api/gate': self._get_gate,
@@ -596,8 +597,13 @@ class Handler(BaseHTTPRequestHandler):
                            "decisions": self.world.recent(),
                            "fresh": fresh, "server_time": now_iso()})
 
-    def _get_lesson_previews(self, query):
-        return self._json(lesson_previews.build())
+    def _get_lesson_status(self, query):
+        return self._json(lesson_status.build())
+
+    def _get_lesson_report(self, query):
+        relative = urllib.parse.parse_qs(query).get("path", [""])[0]
+        return self._send(200, lesson_status.report(relative).encode(), "text/plain; charset=utf-8",
+                          {"X-Content-Type-Options": "nosniff"})
 
     def _get_desks(self, query):
         return self._json({"hidden": office_sync.read_hidden()})
@@ -740,6 +746,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in immediate:
             return immediate[path](self._read_json())
         services = {
+            '/api/lesson-steering': (lesson_status.steer, WRITE_LIMIT),
             '/api/context': (context.write, context.MAX_BYTES + 4096),
             '/api/chat': (self.chatroom.say, CHAT_LIMIT),
             '/api/session/say': (sessions.say, CHAT_LIMIT),

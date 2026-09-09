@@ -117,19 +117,19 @@ class PageTest(unittest.TestCase):
 
     def test_lesson_hub_files_arrive_through_the_same_door(self):
         for path, ctype, needle in (
-            ("/lessons", "text/html; charset=utf-8", "<title>Lesson previews</title>"),
-            ("/lessons.css", "text/css; charset=utf-8", "--red:#ff5d5d"),
-            ("/lessons.js", "text/javascript; charset=utf-8", "/api/lesson-previews"),
+            ("/lessons", "text/html; charset=utf-8", "<title>Lessons · Office</title>"),
+            ("/lessons.css", "text/css; charset=utf-8", "--red:#ff7272"),
+            ("/lessons.js", "text/javascript; charset=utf-8", "/api/lesson-status"),
         ):
             code, headers, body = self.fetch(path)
             self.assertEqual((code, headers["content-type"]), (200, ctype), path)
             self.assertIn(needle, body, path)
 
-    def test_lesson_hub_api_is_generated_from_receipts(self):
-        was = self.serve.lesson_previews.build
-        self.serve.lesson_previews.build = lambda: {"state": "ok", "lessons": []}
-        self.addCleanup(setattr, self.serve.lesson_previews, "build", was)
-        code, _, body = self.fetch("/api/lesson-previews")
+    def test_lesson_hub_api_is_generated_from_evidence(self):
+        was = self.serve.lesson_status.build
+        self.serve.lesson_status.build = lambda: {"state": "ok", "lessons": []}
+        self.addCleanup(setattr, self.serve.lesson_status, "build", was)
+        code, _, body = self.fetch("/api/lesson-status")
         self.assertEqual(code, 200)
         self.assertEqual(json.loads(body), {"state": "ok", "lessons": []})
 
