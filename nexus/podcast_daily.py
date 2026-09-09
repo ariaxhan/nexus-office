@@ -144,11 +144,22 @@ def validated_audio(directory,voice):
     raise ValueError('Narration remains unverified')
 
 
+def production_date():
+    stamp=datetime.now(ZoneInfo('America/Los_Angeles')).timestamp()
+    ledger_path=os.environ.get('OFFICE_NEXUS_LEDGER') or os.environ.get('NEXUS_LEDGER')
+    if ledger_path:
+        with closing(Ledger(ledger_path)) as ledger:
+            flight=ledger.flight(Path.cwd().name)
+            task=ledger.task(flight['task_id']) if flight and flight['task_id'] else None
+            if task:stamp=task['created_at']
+    return datetime.fromtimestamp(stamp,ZoneInfo('America/Los_Angeles')).date().isoformat()
+
+
 def main():
     os.umask(0o077)
     vault=Path(os.environ['OFFICE_RUNTIME_ROOT']).resolve();root=vault/'_meta/podcasts'
     root.mkdir(parents=True,exist_ok=True)
-    date=datetime.now(ZoneInfo('America/Los_Angeles')).date().isoformat()
+    date=production_date()
     with (root/'.daily-production.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         receipt=produce(root,date)

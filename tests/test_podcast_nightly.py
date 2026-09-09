@@ -59,3 +59,17 @@ class NightlyPodcast(unittest.TestCase):
                 self.assertEqual(daily.fit_editorial(root,too_long,{},''),fitted)
                 writer.assert_called_once()
             self.assertEqual((root/'editorial-reviewed.json').read_text(),too_long)
+
+    def test_retry_after_midnight_keeps_original_task_date(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);database=str(root/'ledger.sqlite')
+            with closing(Ledger(database)) as ledger:
+                plan=ledger.add_plan('podcast')
+                task=ledger.add_task('tonight',origin='user',plan_id=plan)
+                stamp=datetime(2026,9,8,21,tzinfo=ZoneInfo('America/Los_Angeles')).timestamp()
+                ledger.conn.execute('UPDATE tasks SET created_at=? WHERE id=?',(stamp,task));ledger.conn.commit()
+                flight=ledger.create_flight(plan,task_id=task)
+            with patch.dict('os.environ',{'OFFICE_NEXUS_LEDGER':database}),patch.object(daily.Path,'cwd',return_value=root/flight):
+                self.assertEqual(daily.production_date(),'2026-09-08')
