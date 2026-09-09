@@ -8,8 +8,19 @@ import subprocess
 import lesson_status
 
 APPROVE = "bin/lesson-outline.py"
-HEADER_KEYS = ("status", "product", "lesson", "decision", "template", "lane", "drafted")
+HEADER_KEYS = ("status", "product", "lesson", "decision", "source", "value", "template", "lane", "drafted")
 LESSON_RE = re.compile(r"L\d{3}-[a-z0-9][a-z0-9-]*")
+
+
+def _options(folder):
+    """The idea behind the outline. decision-proposed: is the factory's own proposal, waiting on Aria;
+    approving the outline is what promotes it to decision: (bin/lesson-outline.py approve)."""
+    path = folder.parent / f"{folder.name[:4]}-OPTIONS.md"
+    text = lesson_status._read(path) if path.is_file() else ""
+    keys = dict(re.findall(r"(?m)^(decision-proposed|decision|value):\s*(.*)$", text))
+    return {"decision": keys.get("decision") or keys.get("decision-proposed", ""),
+            "proposed": bool(keys.get("decision-proposed") and not keys.get("decision")),
+            "value": keys.get("value", ""), "options": str(path.name) if path.is_file() else ""}
 
 
 def _parse(text):
@@ -32,8 +43,13 @@ def _parse(text):
 def _entry(root, path):
     folder = path.parent
     product = {"superkidsai": "superpowerai", "mommyai": "mommyai"}.get(folder.parent.name, "")
-    return {**_parse(lesson_status._read(path)), "product_dir": folder.parent.name,
-            "product": product, "lesson": folder.name, "source": str(path.relative_to(root))}
+    head = _parse(lesson_status._read(path))
+    idea = _options(folder)
+    proposed = idea["proposed"] or head["source"] == "proposed"
+    return {**head, "product_dir": folder.parent.name, "product": product, "lesson": folder.name,
+            "decision": idea["decision"] or head["decision"], "proposed": proposed and not head["approved"],
+            "value": head["value"] or idea["value"], "options": idea["options"],
+            "queued": head["approved"], "source": str(path.relative_to(root))}
 
 
 def build(root=None):

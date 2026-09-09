@@ -20,8 +20,18 @@ function render(markdown) {
   close();
   return out.join("");
 }
+function decisionLine(row) {
+  if (!row.decision) return "";
+  return `<span class="decision">${row.proposed ? '<em class="proposed">proposed</em> ' : ""}${esc(row.decision)}</span>`;
+}
+function valueLine(row) { return row.value ? `<span class="value">${esc(row.value)}</span>` : ""; }
+function action(row, index) {
+  return row.approved
+    ? '<span class="queued">queued for the factory</span>'
+    : `<button class="approve-row" data-index="${index}">Approve</button>`;
+}
 function card(row, index) {
-  return `<button class="outline-card" data-index="${index}"><span class="lesson-id">${esc(row.lesson)}</span>${badge(row)}<span class="meta">${esc(names[row.product] || row.product)} · drafted ${esc(row.drafted || "unknown")}</span></button>`;
+  return `<div class="outline-card"><button class="open" data-index="${index}"><span class="lesson-id">${esc(row.lesson)}</span>${badge(row)}<span class="meta">${esc(names[row.product] || row.product)} · drafted ${esc(row.drafted || "unknown")}</span>${decisionLine(row)}${valueLine(row)}</button>${action(row, index)}<span class="feedback" role="status"></span></div>`;
 }
 function drawList() {
   document.getElementById("summary").textContent = `${outlines.length} ${outlines.length === 1 ? "outline" : "outlines"}`;
@@ -37,7 +47,8 @@ function drawReader(index) {
   reader.hidden = false;
   reader.innerHTML = `<a class="back" href="#">Back to outlines</a><h1>${esc(names[row.product] || row.product)} ${esc(row.lesson)}</h1>
     <div class="reader-head">${badge(row)}<button id="approve" data-index="${index}" ${row.approved ? "disabled" : ""}>${row.approved ? "Approved" : "Approve outline"}</button><span class="feedback" role="status"></span></div>
-    <p class="meta">${esc(row.decision)}</p><small>template ${esc(row.template)} · lane ${esc(row.lane)} · ${esc(row.source)}</small>
+    <p class="meta">${decisionLine(row)}</p>${row.value ? `<p class="value">${esc(row.value)}</p>` : ""}
+    ${row.approved ? '<p class="queued">queued for the factory</p>' : ""}<small>template ${esc(row.template)} · lane ${esc(row.lane)} · ${esc(row.source)}</small>
     <div class="reader">${render(row.body)}</div>`;
   window.scrollTo(0, 0);
 }
@@ -50,21 +61,24 @@ async function load() {
   hash ? drawReader(Number(hash[1])) : drawList();
 }
 async function approve(button) {
-  const row = outlines[Number(button.dataset.index)];
-  const feedback = document.querySelector(".feedback");
+  const index = Number(button.dataset.index);
+  const row = outlines[index];
+  const feedback = button.parentElement.querySelector(".feedback") || document.querySelector(".feedback");
   button.disabled = true;
   feedback.textContent = "Approving…";
   try {
     const response = await fetch("/api/lesson-outlines/approve", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({product:row.product, lesson:row.lesson})});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Could not approve");
-    row.status = data.status; row.approved = true;
-    drawReader(Number(button.dataset.index));
+    row.status = data.status; row.approved = true; row.proposed = false; row.queued = true;
+    button.closest(".outline-card") ? drawList() : drawReader(index);
   } catch (error) { feedback.textContent = error.message; button.disabled = false; }
 }
 document.getElementById("list").addEventListener("click", event => {
-  const card = event.target.closest(".outline-card");
-  if (card) { location.hash = card.dataset.index; drawReader(Number(card.dataset.index)); }
+  const approveButton = event.target.closest(".approve-row");
+  if (approveButton) return approve(approveButton);
+  const open = event.target.closest(".open");
+  if (open) { location.hash = open.dataset.index; drawReader(Number(open.dataset.index)); }
 });
 document.getElementById("reader").addEventListener("click", event => {
   if (event.target.closest(".back")) { event.preventDefault(); history.replaceState(null, "", location.pathname); drawList(); }

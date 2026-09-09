@@ -79,6 +79,31 @@ class BuildTest(OutlineFixture):
         self.assertIn("status: approved by aria", self.path.read_text())
         self.assertEqual(outlines.approve({"product": "superpowerai", "lesson": "L017-clubhouse-makeover-1"}, self.root)[0], 409)
 
+    def test_a_factory_proposal_is_marked_proposed_and_carries_its_value_sentence(self):
+        self.write("proposed/tbs-curriculum/superkidsai/L021-OPTIONS.md",
+                   "# L021\ndecision-proposed: robot-pen; free tool, poster in 10 minutes\n"
+                   "value: after this, mom/kid can print a poster and she cares because it takes ten minutes\n"
+                   "proposed-by: factory 2026-09-09\n")
+        self.write("proposed/tbs-curriculum/superkidsai/L021-robot-pen/OUTLINE.md",
+                   "status: draft\nproduct: superpowerai\nlesson: L021-robot-pen\n"
+                   "decision: robot-pen; free tool, poster in 10 minutes\nsource: proposed\n\n## Outline\n- x\n")
+        row = {r["lesson"]: r for r in outlines.build(self.root)["outlines"]}["L021-robot-pen"]
+        self.assertTrue(row["proposed"])
+        self.assertFalse(row["queued"])
+        self.assertEqual(row["decision"], "robot-pen; free tool, poster in 10 minutes")
+        self.assertTrue(row["value"].startswith("after this, mom/kid can print a poster"))
+        self.assertEqual(row["options"], "L021-OPTIONS.md")
+
+    def test_an_options_decision_outranks_a_stale_proposal_and_an_approved_row_is_queued(self):
+        self.write("proposed/tbs-curriculum/superkidsai/L017-OPTIONS.md",
+                   "decision: makeover; Aria ruled\ndecision-proposed: old proposal\nvalue: a sentence\n")
+        row = {r["lesson"]: r for r in outlines.build(self.root)["outlines"]}["L017-clubhouse-makeover-1"]
+        self.assertFalse(row["proposed"])
+        self.assertEqual(row["decision"], "makeover; Aria ruled")
+        outlines.approve({"product": "superpowerai", "lesson": "L017-clubhouse-makeover-1"}, self.root)
+        row = {r["lesson"]: r for r in outlines.build(self.root)["outlines"]}["L017-clubhouse-makeover-1"]
+        self.assertTrue(row["queued"] and row["approved"] and not row["proposed"])
+
     def test_invalid_targets_rejected(self):
         for body in ({"product": "superpowerai", "lesson": "../L017"}, {"product": "nope", "lesson": "L017-x"}, {"product": "mommyai", "lesson": "L017"}):
             with self.assertRaises(ValueError):
@@ -129,3 +154,13 @@ class RouteTest(OutlineFixture):
         self.assertEqual(code, 200, raw)
         self.assertTrue(json.loads(raw)["status"].startswith("approved by aria"))
         self.assertTrue(json.loads(self.request("/api/lesson-outlines")[1])["outlines"][0]["approved"])
+
+    def test_the_list_api_carries_every_field_the_row_shows(self):
+        row = json.loads(self.request("/api/lesson-outlines")[1])["outlines"][0]
+        for key in ("product", "lesson", "status", "decision", "proposed", "value", "queued"):
+            self.assertIn(key, row)
+
+    def test_the_page_renders_the_decision_the_value_and_the_queued_state(self):
+        script = (pathlib.Path(__file__).resolve().parents[1] / "client/phone/outlines.js").read_text()
+        for token in ("proposed", "queued for the factory", "row.value", "row.decision", "approve-row"):
+            self.assertIn(token, script)
