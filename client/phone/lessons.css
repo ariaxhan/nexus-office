@@ -22,3 +22,11 @@ input,select,textarea { display:block; width:100%; margin-top:6px; } textarea { 
 @media(max-width:600px) { header,main { padding:16px; } header p { flex-basis:100%; margin:0; } .filters { flex-direction:column; } .signals { grid-template-columns:1fr; } .lesson>summary { grid-template-columns:42px 1fr; } .state { grid-column:2; } }
 
 .empty { color:var(--dim); padding:24px 0; }
+
+.outline-card { display:block; width:100%; text-align:left; margin:8px 0; padding:14px; display:grid; grid-template-columns:1fr auto; gap:4px 10px; align-items:center; }
+.outline-card .lesson-id { font-size:16px; } .outline-card .meta { grid-column:1; }
+.badge { font-size:12px; white-space:nowrap; color:var(--amber); } .badge.approved { color:var(--green); }
+.reader { font-size:17px; line-height:1.6; } .reader h1 { font-size:22px; margin:20px 0 8px; } .reader h2 { font-size:19px; margin:24px 0 4px; } .reader h2+h2 { margin-top:0; color:var(--dim); font-weight:400; }
+.reader ul { padding-left:22px; margin:8px 0 16px; } .reader li { margin:6px 0; overflow-wrap:anywhere; } .reader li:nth-child(even) { color:var(--dim); } .reader p { overflow-wrap:anywhere; }
+.reader-head { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:12px 0; } .reader-head button { margin:0; } .reader-head .badge { font-size:14px; }
+.back { display:inline-block; padding:10px 0; min-height:44px; }

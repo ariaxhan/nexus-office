@@ -183,6 +183,7 @@ async function conversation(session){
 async function library(parent){
  intro(parent,'Library','Everything has a place.','Read, listen, browse. Follow a file back to the work that made it.');
  parent.append(link('Lesson previews','/lessons'));
+ parent.append(link('Lesson outlines','/outlines'));
  const filters=el('div','actions');const view=el('div');parent.append(filters,view);
  const show=async(kind)=>{const content=el('div');view.replaceChildren(content);if(kind==='files')await browse(content);else await mediaList(content,kind);};
  for(const [key,label] of [['files','Files & documents'],['podcast','Podcasts'],['substrate','Substrate']])filters.append(button(label,()=>show(key)));

@@ -59,6 +59,7 @@ import context  # noqa: E402
 import office_api  # noqa: E402
 import live  # noqa: E402
 import lesson_status  # noqa: E402
+import lesson_outlines  # noqa: E402
 import runtime as rt  # noqa: E402
 import search  # noqa: E402
 import sessions  # noqa: E402
@@ -168,7 +169,8 @@ PHONE = HERE / "phone"
 PAGE = {"/": "office.html", "/index.html": "office.html", "/classic": "index.html",
         "/phone.css": "phone.css", "/phone.js": "phone.js",
         "/lessons": "lessons.html", "/lessons.html": "lessons.html",
-        "/lessons.css": "lessons.css", "/lessons.js": "lessons.js"}
+        "/lessons.css": "lessons.css", "/lessons.js": "lessons.js",
+        "/outlines": "outlines.html", "/outlines.html": "outlines.html", "/outlines.js": "outlines.js"}
 PAGE.update({name: name[1:] for name in ['/office.css', '/office.js', '/office-ui.js', '/office-settings.js', '/office-media.js', '/office-files.js', '/office-markdown.js', '/office-tasks.js', '/office-attachments.js', '/office-state.js', '/office-native.js', '/office-sw.js', '/manifest.webmanifest', '/office-icon.svg', '/office-icon-192.png', '/office-icon-512.png']})
 
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -555,6 +557,7 @@ class Handler(BaseHTTPRequestHandler):
                 '/api/world': self._get_world,
                 '/api/lesson-status': self._get_lesson_status,
                 '/api/lesson-report': self._get_lesson_report,
+                '/api/lesson-outlines': self._get_lesson_outlines,
                 '/api/desks': self._get_desks,
                 '/api/pins': self._get_pins,
                 '/api/gate': self._get_gate,
@@ -599,6 +602,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _get_lesson_status(self, query):
         return self._json(lesson_status.build())
+
+    def _get_lesson_outlines(self, query):
+        return self._json(lesson_outlines.build())
 
     def _get_lesson_report(self, query):
         relative = urllib.parse.parse_qs(query).get("path", [""])[0]
@@ -747,6 +753,7 @@ class Handler(BaseHTTPRequestHandler):
             return immediate[path](self._read_json())
         services = {
             '/api/lesson-steering': (lesson_status.steer, WRITE_LIMIT),
+            '/api/lesson-outlines/approve': (lesson_outlines.approve, WRITE_LIMIT),
             '/api/context': (context.write, context.MAX_BYTES + 4096),
             '/api/chat': (self.chatroom.say, CHAT_LIMIT),
             '/api/session/say': (sessions.say, CHAT_LIMIT),
