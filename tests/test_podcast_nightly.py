@@ -43,3 +43,16 @@ class NightlyPodcast(unittest.TestCase):
             (logs/'email-morning-2026-09-07.html').write_text('yesterday')
             result=daily.today_evidence(root,'2026-09-08')
             self.assertIn('today',result);self.assertNotIn('yesterday',result)
+
+    def test_length_repair_keeps_reviewed_draft_and_accepts_measured_words(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            too_long=json.dumps({'chapters':[{'text':'word '*4902}]})
+            fitted=json.dumps({'chapters':[{'text':'word '*4300}]})
+            (root/'editorial-reviewed.json').write_text(too_long)
+            with patch.object(daily,'editorial_pass',return_value=fitted) as writer:
+                self.assertEqual(daily.reviewed_editorial(root,'',{},'','2026-09-08'),too_long)
+                writer.assert_not_called()
+                self.assertEqual(daily.fit_editorial(root,too_long,{},''),fitted)
+                writer.assert_called_once()
+            self.assertEqual((root/'editorial-reviewed.json').read_text(),too_long)
