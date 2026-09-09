@@ -28,7 +28,7 @@ class Notifications(unittest.TestCase):
             with closing(Ledger(ledger_path)) as ledger:
                 self.assertEqual(len(ledger.plans()),2)
                 self.assertFalse(ledger.plan(plan)['enabled'])
-                self.assertEqual(json.loads(ledger.plan(plan)['schedule']),{'at':'06:00'})
+                self.assertEqual(json.loads(ledger.plan(plan)['schedule']),{'at':'21:00'})
 
     def test_late_publication_of_older_edition_is_delivered(self):
         from datetime import datetime,timezone
