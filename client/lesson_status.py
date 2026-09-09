@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 PRODUCTS = {"superpowerai": "superkidsai", "mommyai": "mommyai"}
 PREVIEW_ORIGIN = "https://tbs-lesson-previews.vercel.app"
-PUBLICATION_GAP = "Unknown: local prod-probe receipts omit is_published; schema pull reads structure only."
+PUBLICATION_SOURCE = "_meta/receipts/prod-probe/published.json"
 
 
 def root_path():
@@ -32,6 +32,32 @@ def _json(path, default):
         return json.loads(_read(path))
     except (ValueError, OSError):
         return default
+
+
+def _publication(root):
+    data = _json(root / PUBLICATION_SOURCE, {})
+    checked = data.get("checked_at", "") if isinstance(data, dict) else ""
+    try:
+        timestamp = dt.datetime.fromisoformat(checked.replace("Z", "+00:00"))
+        age = (dt.datetime.now(dt.timezone.utc) - timestamp).total_seconds()
+        if age < 0:
+            raise ValueError("future receipt")
+    except (ValueError, TypeError, AttributeError):
+        return {}, {"state": "unknown", "checked_at": "", "source": PUBLICATION_SOURCE,
+                    "detail": "Publication receipt missing or invalid"}
+    stale = age > 13 * 3600
+    return data, {"state": "stale" if stale else "current", "checked_at": checked,
+                  "source": PUBLICATION_SOURCE,
+                  "detail": ("Stale: publication check older than 13 hours" if stale else "Production curriculum catalog") + f"; checked {checked}"}
+
+
+def _published(publication, product, lesson):
+    data, evidence = publication
+    values = data.get(product, {})
+    value = values.get(lesson) if isinstance(values, dict) else None
+    if type(value) is not bool:
+        return {**evidence, "present": None, "state": "unknown", "detail": "Publication lesson missing or invalid"}
+    return {**evidence, "present": value}
 
 
 def _identity(product, lesson):
@@ -159,7 +185,7 @@ def _drafts(folder, lesson):
     return sources
 
 
-def _lesson(root, product, number, previews, main, ledgers):
+def _lesson(root, product, number, previews, main, ledgers, publication=None):
     lesson = f"L{number:03d}"
     folder = root / "proposed/tbs-curriculum" / PRODUCTS[product]
     options = folder / f"{lesson}-OPTIONS.md"
@@ -185,7 +211,7 @@ def _lesson(root, product, number, previews, main, ledgers):
             "drafted": {"present": bool(drafts), "sources": [str(p.relative_to(root)) for p in drafts]},
             "previewed": {"present": bool(preview), "url": preview_url, "checked_at": preview.get("updated", ""), "source": "preview-hub/lessons.json"},
             "on_main": {"present": on_main, "sha": main["sha"], "source": page, "detail": main["error"] or ("No paid route for L001/L002" if not page else "Local origin/main snapshot")},
-            "published": {"present": None, "detail": PUBLICATION_GAP},
+            "published": _published(publication or _publication(root), product, lesson),
             "media": {"present": media.is_file(), "source": str(media.relative_to(root))},
             "continuity": _finding(root, ledgers["continuity"].get((product, lesson), ledgers["continuity"].get((product, "*"))), "continuity"),
             "playthrough": _finding(root, ledgers["playthrough"].get((product, lesson)), "playthrough")}
@@ -197,7 +223,10 @@ def build(root=None):
     for row in _json(root / "preview-hub/lessons.json", []):
         if isinstance(row, dict):
             previews[(row.get("product"), row.get("lesson"))] = row
-    ledgers, gaps = {}, [PUBLICATION_GAP]
+    publication = _publication(root)
+    ledgers, gaps = {}, []
+    if publication[1]["state"] != "current":
+        gaps.append(publication[1]["detail"])
     for kind in ("continuity", "playthrough"):
         ledgers[kind], errors = _ledger(root, kind)
         gaps.extend(errors)
@@ -206,7 +235,7 @@ def build(root=None):
     lessons = []
     for product, repo in [("superpowerai", "tbs-www"), ("mommyai", "tbs-landing")]:
         main = _main(root, repo)
-        lessons.extend(_lesson(root, product, n, previews, main, ledgers) for n in range(1, 97))
+        lessons.extend(_lesson(root, product, n, previews, main, ledgers, publication) for n in range(1, 97))
     return {"state": "ok" if root.is_dir() else "missing", "detail": "Lesson repository unavailable" if not root.is_dir() else "",
             "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "lessons": lessons, "gaps": list(dict.fromkeys(gaps))}

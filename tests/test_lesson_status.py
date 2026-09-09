@@ -46,6 +46,28 @@ class StatusTest(LessonFixture):
         self.assertEqual(row["continuity"]["state"], "unknown")
         self.assertEqual(row["planned"]["decision"], "")
 
+    def test_publication_true_false_and_stale_preserve_check_time(self):
+        for hours, expected in [(0, "current"), (14, "stale")]:
+            checked = (status.dt.datetime.now(status.dt.timezone.utc) - status.dt.timedelta(hours=hours)).isoformat()
+            self.write(status.PUBLICATION_SOURCE, json.dumps({"checked_at": checked,
+                       "superpowerai": {"L001": True, "L014": False}, "mommyai": {"L024": True, "L025": False}}))
+            rows = {(r["product"], r["lesson"]): r["published"] for r in self.build()["lessons"]}
+            for product, lesson, value in [("superpowerai", "L001", True), ("superpowerai", "L014", False),
+                                           ("mommyai", "L024", True), ("mommyai", "L025", False)]:
+                self.assertIs(rows[product, lesson]["present"], value)
+                self.assertEqual(rows[product, lesson]["checked_at"], checked)
+                self.assertEqual(rows[product, lesson]["state"], expected)
+            self.assertIsNone(rows["mommyai", "L096"]["present"])
+
+    def test_invalid_publication_never_becomes_false(self):
+        for receipt in ["broken", "[]", '{"checked_at":"bad"}',
+                        json.dumps({"checked_at": status.dt.datetime.now(status.dt.timezone.utc).isoformat(),
+                                    "superpowerai": {"L001": "false"}})]:
+            self.write(status.PUBLICATION_SOURCE, receipt)
+            value = self.build()["lessons"][0]["published"]
+            self.assertIsNone(value["present"])
+            self.assertEqual(value["state"], "unknown")
+
     def test_independent_signals_and_latest_findings(self):
         base = "proposed/tbs-curriculum/superkidsai/L001"
         self.write(base + "-OPTIONS.md", "decision: keep song\n")
