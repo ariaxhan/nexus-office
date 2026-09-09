@@ -83,7 +83,7 @@ def steer(body, root=None):
         # Reopen the heading at EOF if another section follows the previous one.
         headings = re.findall(r"^##\s+(.+?)\s*$", existing, re.M)
         heading = "" if headings and headings[-1].lower() == "steering" else "\n## steering\n"
-        line = f"- {dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')} — {text}"
+        line = f"- {dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')} - {text}"
         stream.write("\n" + heading + line + "\n")
         stream.flush()
         os.fsync(stream.fileno())

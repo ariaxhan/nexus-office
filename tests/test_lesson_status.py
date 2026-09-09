@@ -102,7 +102,7 @@ class StatusTest(LessonFixture):
         self.assertTrue(content.startswith(initial))
         self.assertEqual(content.count("## steering"), 1)
         self.assertEqual(content.count("\n decision:"), 0)
-        self.assertEqual(content.count(" — note "), 8)
+        self.assertEqual(content.count(" - note "), 8)
         self.assertEqual(status.report(str(path.relative_to(self.root)), self.root), content)
 
     def test_invalid_targets_and_symlinks_cannot_escape(self):
