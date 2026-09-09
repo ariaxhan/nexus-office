@@ -197,7 +197,7 @@ def schedule_nightly_now():
             ledger.conn.execute('UPDATE plans SET schedule=?,enabled=1 WHERE id=?',
                                 (json.dumps({'at':NIGHTLY_TIME}),plan_id))
             ledger._event('plan.schedule_updated',plan_id,{'at':NIGHTLY_TIME,'reason':'Aria requested nightly production'},'office-podcast')
-        key='podcast-nightly-now:'+date
+        key=f'plan:{plan_id}:at:{date}T{NIGHTLY_TIME}'
         existing=ledger.live_task_with_key(key)
         if existing:return existing['id']
         return ledger.add_task(title='Generate tonight’s podcast',origin='user',plan_id=plan_id,

@@ -24,6 +24,9 @@ class NightlyPodcast(unittest.TestCase):
                 self.assertEqual(json.loads(ledger.plan(plan)['schedule']),{'at':'21:00'})
                 self.assertTrue(ledger.plan(plan)['enabled'])
                 self.assertEqual(ledger.task(first)['plan_id'],plan)
+                self.assertTrue(ledger.task(first)['dedupe_key'].startswith('plan:'+plan+':at:'))
+                self.assertTrue(ledger.task(first)['dedupe_key'].endswith('T21:00'))
+                self.assertIsNone(ledger.add_scheduled_task(ledger.plan(plan),ledger.task(first)['dedupe_key'],0))
 
     def test_old_daily_edition_does_not_suppress_nightly_production(self):
         with tempfile.TemporaryDirectory() as temporary:
