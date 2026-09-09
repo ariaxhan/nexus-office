@@ -50,7 +50,7 @@ class NightlyPodcast(unittest.TestCase):
     def test_length_repair_keeps_reviewed_draft_and_accepts_measured_words(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
-            too_long=json.dumps({'chapters':[{'text':'word '*4902}]})
+            too_long=json.dumps({'chapters':[{'text':'word '*4618}]})
             fitted=json.dumps({'chapters':[{'text':'word '*4300}]})
             (root/'editorial-reviewed.json').write_text(too_long)
             with patch.object(daily,'editorial_pass',return_value=fitted) as writer:
