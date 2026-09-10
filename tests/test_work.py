@@ -590,6 +590,21 @@ else:
         self.assertEqual('done', self.run_work()[0]['state'])
         self.assertEqual(1, len(self.led.events(kind='work.executing')))
 
+    def test_authoritative_pending_repair_resumes_same_task(self):
+        review = {'url': 'https://github.com/sample/product/pull/20', 'head': 'old-head'}
+        repairing = dict(state='pending', reason='machine review requests changes',
+                         retry_safe=True, resume_kind='repair', evidence=[review],
+                         idempotency_key='github:sample/product#1')
+        reviewed = dict(state='absent', retry_safe=True, resume_kind='review',
+                        evidence=[{'url': review['url'], 'head': 'new-head'}],
+                        idempotency_key='github:sample/product#1')
+        with patch('nexus.work.proof', side_effect=[repairing, reviewed]):
+            self.assertEqual('pending', self.run_work()[0]['state'])
+        self.assertEqual(1, len(self.calls()))
+        self.assertEqual(1, len(self.led.events(kind='work.executing')))
+        self.assertEqual('review', work.latest(
+            self.led, 'work.pending', self.led.tasks()[0]['id'])['resume_kind'])
+
     def test_future_backoff_does_not_spend_selection_capacity(self):
         self.issues.append(dict(number=2, title='Second', state='open', labels=[{'name': 'ready'}]))
         self.led.event('work.item_attempt', 'sample/product#1', dict(step='review', status='pending', retry_at=10**12), 'conveyor')

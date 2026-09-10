@@ -65,6 +65,22 @@ def cmd_tower_run(args):
     return 0
 
 
+def cmd_work_retry_run(args):
+    led = _ledger(args)
+    flight = led.flight(args.flight)
+    if flight is None or flight['state'] != 'running':
+        return 1
+    task = led.task(flight['task_id'])
+    if task is None or not task['dedupe_key'].startswith('github:'):
+        return 1
+    repo = task['dedupe_key'].removeprefix('github:').rsplit('#', 1)[0]
+    if not led.set_state(flight['id'], 'cancelled', expect='running', source='work-retry'):
+        return 1
+    entries = work.registry(args.registry)
+    result = work.run(led, entries, repo=repo, max_items=1)
+    return int(any(row['state'] in ('failed', 'exhausted') for row in result))
+
+
 def cmd_status(args):
     print(tower.status(_ledger(args)))
     return 0
@@ -244,6 +260,7 @@ def cmd_work(args):
             return 0
         led = _ledger(args)
         try:
+            work.plan(led, args.registry)
             if args.work_command == "run":
                 result = work.run(led, entries, args.repo, budget_s=args.budget_s, max_items=args.max_items)
             elif args.work_command == "claim":
@@ -319,6 +336,11 @@ def build_parser():
     retry_p = subs.add_parser("retry", help="another attempt at the same task")
     retry_p.add_argument("flight")
     retry_p.set_defaults(func=cmd_retry)
+
+    work_retry = subs.add_parser('work-retry-run', help=argparse.SUPPRESS)
+    work_retry.add_argument('--flight', required=True)
+    work_retry.add_argument('--registry', required=True)
+    work_retry.set_defaults(func=cmd_work_retry_run)
 
     plans_p = subs.add_parser("plans", help="standing responsibilities")
     plans_subs = plans_p.add_subparsers(dest="plans_command", required=True)

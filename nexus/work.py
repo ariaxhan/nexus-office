@@ -116,14 +116,23 @@ def latest(led, kind, subject):
     return loads(row[0], {}) if row else {}
 
 
-def plan(led):
+def plan(led, registry_path=None):
     with led.tx() as c:
-        row = c.execute("SELECT id FROM plans WHERE name='github-work'").fetchone()
+        row = c.execute("SELECT id,inputs FROM plans WHERE name='github-work'").fetchone()
         if row:
+            if registry_path:
+                inputs = loads(row['inputs'], {}) or {}
+                resolved = str(Path(registry_path).expanduser().resolve())
+                if inputs.get('registry') != resolved:
+                    inputs['registry'] = resolved
+                    c.execute('UPDATE plans SET inputs=? WHERE id=?',
+                              (json.dumps(inputs), row['id']))
             return row[0]
         pid = new_id("plan")
-        c.execute("INSERT INTO plans(id,name,kind,created_at) VALUES (?,'github-work','work',?)",
-                  (pid, time.time()))
+        inputs = {'registry': str(Path(registry_path).expanduser().resolve())} if registry_path else {}
+        c.execute("INSERT INTO plans(id,name,kind,inputs,created_at)"
+                  " VALUES (?,'github-work','work',?,?)",
+                  (pid, json.dumps(inputs), time.time()))
         led._event("plan.added", pid, {"name": "github-work", "kind": "work"}, "work")
         return pid
 
@@ -376,10 +385,17 @@ def source_evidence(value):
 
 def source_continuation(result, payload):
     """Only an authoritative verifier can attest a resumable source review stage."""
-    return (result['state'] == 'absent' and result.get('retry_safe') is True
+    return (result['state'] in ('absent', 'pending') and result.get('retry_safe') is True
             and result.get('idempotency_key') == payload['idempotency_key']
             and result.get('resume_kind') in ('review', 'repair')
             and source_evidence(result.get('evidence')))
+
+
+def repair_clearance(result, payload):
+    if (result.get('state') == 'pending' and result.get('resume_kind') == 'repair'
+            and source_continuation(result, payload)):
+        return dict(result, state='absent')
+    return result
 
 
 def execute(led, entry, task):
@@ -408,7 +424,7 @@ def execute(led, entry, task):
         if state not in ("ready", "resume") and not uncertain:
             led.set_state(fid, "cancelled", expect="running", source="work")
             return state
-        result = proof(entry, payload, log)
+        result = repair_clearance(proof(entry, payload, log), payload)
         if result["state"] == "delivered":
             finish(led, fid, payload, result)
             return "done"
