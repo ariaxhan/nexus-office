@@ -594,25 +594,9 @@ def _launch(ledger, now, root):
         running[row["plan_id"]] = running.get(row["plan_id"], 0) + 1
     queued = sorted(ledger.flights(states=("queued",)), key=lambda r: r["created_at"])
     for flight in queued:
-        plan = ledger.plan(flight["plan_id"])
-        if plan["kind"] == "work":
-            event = ledger.events(kind='flight.state', subject=flight['id'])[-1]
-            inputs = loads(plan['inputs'], {}) or {}
-            if event['source'] != 'click' or not inputs.get('registry'):
-                continue
-            workspace = fl.workspace_path(root, flight['id'])
-            os.makedirs(workspace, exist_ok=True)
-            if not ledger.set_state(flight['id'], 'running', expect='queued', now=now,
-                                    workspace=workspace, started_at=now):
-                continue
-            pid = _spawn_work_retry(ledger, plan, ledger.flight(flight['id']), workspace)
-            if pid is None:
-                ledger.fail(flight['id'], 'spawn_failed', 'could not start work retry',
-                            expect='running', now=now)
-                continue
-            ledger.set_pid(flight['id'], pid, now=now)
-            launched += 1
+        if ledger.plan(flight["plan_id"])["kind"] == "work":
             continue
+        plan = ledger.plan(flight["plan_id"])
         timeout_s, _, concurrency = _budget(plan)
         if running.get(plan["id"], 0) >= concurrency:
             continue  # this plan is at its cap; another plan's flight may still go
@@ -636,20 +620,6 @@ def _launch(ledger, now, root):
         running[plan["id"]] = running.get(plan["id"], 0) + 1
         launched += 1
     return launched
-
-
-def _spawn_work_retry(ledger, plan, flight, workspace):
-    registry = (loads(plan['inputs'], {}) or {}).get('registry')
-    if not registry:
-        return None
-    package_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    argv = [sys.executable, '-m', 'nexus', '--ledger', os.path.abspath(ledger.path),
-            'work-retry-run', '--flight', flight['id'], '--registry', registry]
-    env = dict(os.environ)
-    env['NEXUS_LEDGER'] = os.path.abspath(ledger.path)
-    env['OFFICE_NEXUS_LEDGER'] = os.path.abspath(ledger.path)
-    env['PYTHONPATH'] = package_parent + os.pathsep + env.get('PYTHONPATH', '')
-    return _detach_runner(workspace, package_parent, argv, env)
 
 
 def _spawn(ledger, plan, flight_id, workspace, timeout_s):

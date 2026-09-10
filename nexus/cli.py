@@ -65,26 +65,6 @@ def cmd_tower_run(args):
     return 0
 
 
-def cmd_work_retry_run(args):
-    led = _ledger(args)
-    flight = led.flight(args.flight)
-    if flight is None or flight['state'] != 'running':
-        return 1
-    task = led.task(flight['task_id'])
-    if task is None or not task['dedupe_key'].startswith('github:'):
-        return 1
-    repo = task['dedupe_key'].removeprefix('github:').rsplit('#', 1)[0]
-    if not led.set_state(flight['id'], 'cancelled', expect='running', source='work-retry'):
-        return 1
-    entries = work.registry(args.registry)
-    entry = next((row for row in entries if row['repo'] == repo), None)
-    if entry is None:
-        return 1
-    work.discover(led, entry)
-    state = work.execute(led, entry, led.task(task['id']))
-    return int(state in ('failed', 'exhausted'))
-
-
 def cmd_status(args):
     print(tower.status(_ledger(args)))
     return 0
@@ -126,6 +106,10 @@ def cmd_retry(args):
         if task and task["state"] in ("abandoned",):
             print(f"task {task_id} is abandoned; add a new one", file=sys.stderr)
             return 1
+    if led.plan(flight["plan_id"])["kind"] == "work":
+        led.event("work.pending", task_id, {"next_retry": 0, "reason": "operator retry"}, "click")
+        print(task_id)
+        return 0
     new = led.create_flight(flight["plan_id"], task_id=task_id,
                             attempt=flight["attempt"] + 1, source="click",
                             unique_for_task=True)
@@ -264,7 +248,6 @@ def cmd_work(args):
             return 0
         led = _ledger(args)
         try:
-            work.plan(led, args.registry)
             if args.work_command == "run":
                 result = work.run(led, entries, args.repo, budget_s=args.budget_s, max_items=args.max_items)
             elif args.work_command == "claim":
@@ -340,11 +323,6 @@ def build_parser():
     retry_p = subs.add_parser("retry", help="another attempt at the same task")
     retry_p.add_argument("flight")
     retry_p.set_defaults(func=cmd_retry)
-
-    work_retry = subs.add_parser('work-retry-run', help=argparse.SUPPRESS)
-    work_retry.add_argument('--flight', required=True)
-    work_retry.add_argument('--registry', required=True)
-    work_retry.set_defaults(func=cmd_work_retry_run)
 
     plans_p = subs.add_parser("plans", help="standing responsibilities")
     plans_subs = plans_p.add_subparsers(dest="plans_command", required=True)

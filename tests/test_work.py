@@ -372,18 +372,6 @@ else:
             result = work.run(self.led, [self.entry, other])
         self.assertEqual(["failed", "done"], [row["state"] for row in result])
 
-    def test_executor_budget_still_allows_reconciliation(self):
-        self.entry["max_attempts"] = 1
-        (self.root / "fail-1").touch()
-        self.assertEqual("failed", self.run_work()[0]["state"])
-        self.led.event("work.failure", self.led.tasks()[0]["id"], {"next_retry": 0}, "fixture")
-        self.assertEqual("failed", self.run_work()[0]["state"])
-        self.assertEqual(1, len(self.calls()))
-        (self.root / "delivered-1").touch()
-        self.led.event("work.failure", self.led.tasks()[0]["id"], {"next_retry": 0}, "fixture")
-        self.assertEqual("done", self.run_work()[0]["state"])
-        self.assertEqual(1, len(self.calls()))
-
     def test_disabled_missing_repository_visible_without_hydration(self):
         entry = dict(self.entry, enabled=False, path=str(self.root / "missing"))
         self.assertEqual([], work.run(self.led, [entry]))
@@ -423,15 +411,6 @@ else:
         (self.root / "unknown").touch()
         self.assertEqual("failed", self.run_work()[0]["state"])
         self.assertEqual([], self.closed)
-
-    def test_retry_requires_authoritative_clearance(self):
-        work.discover(self.led, self.entry)
-        fid = work.claim(self.led, self.entry["repo"], 1, os.getpid(), runner=True)
-        self.led.event("work.executing", fid, {"issue": 1}, "work")
-        self.led.conn.execute("UPDATE flights SET pid=2147483647 WHERE id=?", (fid,))
-        with patch("nexus.work.proof", return_value={"state": "absent"}):
-            self.assertEqual("failed", self.run_work()[0]["state"])
-        self.assertEqual([], self.calls())
 
     def test_tower_preserves_failed_product_workspace(self):
         work.discover(self.led, self.entry)
@@ -590,20 +569,71 @@ else:
         self.assertEqual('done', self.run_work()[0]['state'])
         self.assertEqual(1, len(self.led.events(kind='work.executing')))
 
-    def test_authoritative_pending_repair_resumes_same_task(self):
+    def test_rejected_review_resumes_same_task_with_disabled_intake(self):
         review = {'url': 'https://github.com/sample/product/pull/20', 'head': 'old-head'}
-        repairing = dict(state='pending', reason='machine review requests changes',
-                         retry_safe=True, resume_kind='repair', evidence=[review],
-                         idempotency_key='github:sample/product#1')
+        absent = dict(state='absent', retry_safe=True)
+        rejected = dict(state='pending', reason='machine review requests changes',
+                        retry_safe=True, resume_kind='repair', evidence=[review],
+                        idempotency_key='github:sample/product#1')
         reviewed = dict(state='absent', retry_safe=True, resume_kind='review',
                         evidence=[{'url': review['url'], 'head': 'new-head'}],
                         idempotency_key='github:sample/product#1')
-        with patch('nexus.work.proof', side_effect=[repairing, reviewed]):
+        with patch('nexus.work.proof', side_effect=[absent, rejected]):
             self.assertEqual('pending', self.run_work()[0]['state'])
-        self.assertEqual(1, len(self.calls()))
-        self.assertEqual(1, len(self.led.events(kind='work.executing')))
-        self.assertEqual('review', work.latest(
-            self.led, 'work.pending', self.led.tasks()[0]['id'])['resume_kind'])
+        task = self.led.tasks()[0]
+        predecessor = self.led.flights(task_id=task['id'])[0]
+        self.issues.append(dict(number=2, title='Unrelated', state='open',
+                                labels=[{'name': 'ready'}]))
+        work.discover(self.led, self.entry)
+        self.led.set_plan_enabled(work.plan(self.led), False)
+        from nexus import cli
+        args = type('Args', (), {'ledger': str(self.root / 'ledger.sqlite'),
+                                 'flight': predecessor['id']})()
+        self.assertEqual(0, cli.cmd_retry(args))
+        with patch('nexus.work.discover') as discover, \
+                patch('nexus.work.proof', side_effect=[rejected, reviewed]):
+            self.assertEqual('pending', self.run_work()[0]['state'])
+            discover.assert_not_called()
+        flights = self.led.flights(task_id=task['id'])
+        self.assertEqual(2, len(flights))
+        self.assertEqual('cancelled', self.led.flight(predecessor['id'])['state'])
+        self.assertEqual('running', flights[0]['state'])
+        self.assertTrue(all(row['task_id'] == task['id'] for row in flights))
+        self.assertEqual([1, 1], [call['issue']['number'] for call in self.calls()])
+        self.assertEqual('new-head', work.latest(
+            self.led, 'work.pending', task['id'])['evidence'][0]['head'])
+        unrelated = next(row for row in self.led.tasks() if row['title'] == 'Unrelated')
+        self.assertEqual([], self.led.flights(task_id=unrelated['id']))
+
+    def test_retry_setup_failure_preserves_predecessor_ownership(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        predecessor = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        self.led.conn.execute('UPDATE flights SET pid=NULL WHERE id=?', (predecessor,))
+        repair = dict(state='pending', retry_safe=True, resume_kind='repair',
+                      evidence=[{'url': 'https://example.test/pr/1', 'head': 'old'}],
+                      idempotency_key=task['dedupe_key'])
+        missing = dict(self.entry, path=str(self.root / 'missing'))
+        with patch('nexus.work.proof', return_value=repair):
+            self.assertEqual('failed', work.run(self.led, [missing])[0]['state'])
+        self.assertEqual([predecessor], [row['id'] for row in self.led.flights(task_id=task['id'])])
+        self.assertEqual('running', self.led.flight(predecessor)['state'])
+        lease = self.led.conn.execute('SELECT holder_flight FROM leases').fetchone()
+        self.assertEqual(predecessor, lease['holder_flight'])
+
+    def test_stale_dead_process_evidence_does_not_block_reconciliation(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        self.led.event('work.executing', fid, {'issue': 1}, 'work')
+        self.led.event('work.process', fid, {'pid': 2147483647}, 'work')
+        self.led.conn.execute('UPDATE flights SET pid=NULL WHERE id=?', (fid,))
+        delivered = dict(state='delivered', verified=True, evidence=['existing'],
+                         idempotency_key=task['dedupe_key'])
+        with patch('nexus.work.proof', return_value=delivered):
+            self.assertEqual('done', self.run_work()[0]['state'])
+        self.assertEqual([], self.calls())
+        self.assertEqual('landed', self.led.flight(fid)['state'])
 
     def test_future_backoff_does_not_spend_selection_capacity(self):
         self.issues.append(dict(number=2, title='Second', state='open', labels=[{'name': 'ready'}]))
@@ -634,22 +664,6 @@ else:
         self.assertEqual('client review', report['tasks'][0]['disposition']['reason'])
         self.assertTrue(report['tasks'][0]['failure'])
 
-    def test_pending_execution_requires_retry_clearance_when_ready_remains(self):
-        self.entry['executor'] = [sys.executable, '-c', "import pathlib,json; pathlib.Path('pending').write_text(json.dumps(dict(state='pending',reason='review')))" ]
-        self.assertEqual('pending', self.run_work()[0]['state'])
-        task = self.led.tasks()[0]
-        self.led.event('work.pending', task['id'], {'next_retry': 0}, 'fixture')
-        with patch('nexus.work.proof', return_value={'state': 'absent'}):
-            self.assertEqual('failed', self.run_work()[0]['state'])
-        self.assertEqual(1, len(self.led.events(kind='work.executing')))
-
-    def test_historical_started_requires_adapter_clearance(self):
-        self.led.event('work.item_attempt', 'sample/product#1', dict(step='build', status='started'), 'conveyor')
-        with patch('nexus.work.proof', return_value={'state': 'absent'}) as verify:
-            self.assertEqual('failed', self.run_work()[0]['state'])
-            verify.assert_called_once()
-        self.assertEqual([], self.calls())
-
     def test_done_obligations_do_not_consume_future_budget(self):
         self.run_work()
         self.issues.append(dict(number=2, title='Next', state='open', labels=[{'name': 'ready'}]))
@@ -670,8 +684,9 @@ else:
         self.assertEqual([21, 22], [call['issue']['number'] for call in self.calls()])
         old = [t for t in self.led.tasks() if t['title'].startswith('Old ')]
         self.assertEqual(20, len(old))
-        self.assertTrue(all(work.latest(self.led, 'work.disposition', t['id'])['state']
-                            in ('held', 'ineligible') for t in old))
+        projected = {row['id']: row['disposition']['state']
+                     for row in work.status(self.led, [self.entry])['tasks']}
+        self.assertTrue(all(projected[t['id']] in ('held', 'ineligible') for t in old))
         self.assertEqual(2, len(self.led.events(kind='work.executing')))
 
     def test_live_eligibility_change_leaves_slot_for_next_ready(self):

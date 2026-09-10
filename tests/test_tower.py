@@ -155,28 +155,6 @@ class Scheduling(TowerCase):
         in_air = {f["plan_id"] for f in self.led.flights(states=("running",))}
         self.assertEqual({a, b}, in_air)
 
-    def test_explicit_work_retry_launches_while_disabled_plan_stays_unscheduled(self):
-        plan = self.led.add_plan('github-work', kind='work', inputs={
-            'registry': '/reviewed/registry.json'}, schedule={})
-        self.led.set_plan_enabled(plan, False)
-        task = self.led.add_task('repair one issue', origin='github-work', plan_id=plan,
-                                 dedupe_key='github:sample/product#1')
-        self.led.set_task_state(task, 'accepted', expect='candidate')
-        self.led.set_task_state(task, 'running', expect='accepted')
-        retry = self.led.create_flight(plan, task_id=task, source='click')
-        other = self.led.add_task('unrelated', origin='github-work', plan_id=plan,
-                                  dedupe_key='github:sample/other#2')
-        self.led.set_task_state(other, 'accepted', expect='candidate')
-        self.led.set_task_state(other, 'running', expect='accepted')
-        self.led.create_flight(plan, task_id=other)
-        with mock.patch('nexus.tower._spawn_work_retry', return_value=123) as spawn:
-            report = self.tick()
-        self.assertEqual(1, report['launched'])
-        spawn.assert_called_once()
-        self.assertEqual(retry, spawn.call_args.args[2]['id'])
-        self.assertEqual('queued', self.led.flights(task_id=other)[0]['state'])
-
-
 class Acceptance(TowerCase):
     def test_a_duplicate_dedupe_key_is_rejected_not_run_twice(self):
         plan = self.plan()

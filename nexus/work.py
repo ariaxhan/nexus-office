@@ -116,28 +116,19 @@ def latest(led, kind, subject):
     return loads(row[0], {}) if row else {}
 
 
-def plan(led, registry_path=None):
+def plan(led):
     with led.tx() as c:
-        row = c.execute("SELECT id,inputs FROM plans WHERE name='github-work'").fetchone()
+        row = c.execute("SELECT id FROM plans WHERE name='github-work'").fetchone()
         if row:
-            if registry_path:
-                inputs = loads(row['inputs'], {}) or {}
-                resolved = str(Path(registry_path).expanduser().resolve())
-                if inputs.get('registry') != resolved:
-                    inputs['registry'] = resolved
-                    c.execute('UPDATE plans SET inputs=? WHERE id=?',
-                              (json.dumps(inputs), row['id']))
             return row[0]
         pid = new_id("plan")
-        inputs = {'registry': str(Path(registry_path).expanduser().resolve())} if registry_path else {}
-        c.execute("INSERT INTO plans(id,name,kind,inputs,created_at)"
-                  " VALUES (?,'github-work','work',?,?)",
-                  (pid, json.dumps(inputs), time.time()))
+        c.execute("INSERT INTO plans(id,name,kind,created_at) VALUES (?,'github-work','work',?)",
+                  (pid, time.time()))
         led._event("plan.added", pid, {"name": "github-work", "kind": "work"}, "work")
         return pid
 
 
-def claim(led, repo, number, owner_pid, *, runner=False):
+def claim(led, repo, number, owner_pid, *, runner=False, predecessor=None):
     if owner_pid <= 0 or not flights.alive(owner_pid):
         raise WorkError("owner process must be alive")
     repo = repo.lower()
@@ -149,10 +140,10 @@ def claim(led, repo, number, owner_pid, *, runner=False):
             raise WorkError("issue must be captured and unfinished")
         active = c.execute("SELECT * FROM flights WHERE task_id=? AND state NOT IN"
                            " ('landed','failed','cancelled')", (task["id"],)).fetchone()
-        if active:
+        if active and active["id"] != predecessor:
             raise Owned(f"claim retained by {active['id']}; reconcile owner first")
         held = c.execute("SELECT holder_flight FROM leases WHERE resource=?", (key,)).fetchone()
-        if held:
+        if held and held[0] != predecessor:
             raise Owned(f"resource retained by {held[0]}")
         if task["state"] in ("abandoned", "rejected_duplicate", "rejected_policy"):
             if runner or task["state"] != "abandoned":
@@ -172,7 +163,12 @@ def claim(led, repo, number, owner_pid, *, runner=False):
         c.execute("INSERT INTO flights(id,task_id,plan_id,state,pid,created_at,started_at,attempt)"
                   " VALUES (?,?,?,'running',?,?,?,?)", (fid, task["id"], pid, owner_pid,
                                                          time.time(), time.time(), attempt))
-        c.execute("INSERT INTO leases(resource,holder_flight,until) VALUES (?,?,?)",
+        if predecessor:
+            c.execute("UPDATE flights SET state='cancelled',ended_at=?,lease_until=NULL WHERE id=?",
+                      (time.time(), predecessor))
+            led._event("flight.state", predecessor,
+                       {"from": active["state"], "to": "cancelled", "successor": fid}, "work")
+        c.execute("INSERT OR REPLACE INTO leases(resource,holder_flight,until) VALUES (?,?,?)",
                   (key, fid, float('inf')))
         c.execute("UPDATE tasks SET state='running',plan_id=? WHERE id=?", (pid, task["id"]))
         led._event("task.state", task["id"], {"to": "running"}, "work")
@@ -363,7 +359,9 @@ def pending(led, fid, result):
     tid = led.flight(fid)["task_id"]
     led.event("work.pending", tid, dict(result, next_retry=retry), "work")
     item_attempt(led, fid, "pending", retry, result.get("evidence"))
-    led.set_state(fid, "cancelled", expect="running", source="work")
+    with led.tx() as c:
+        c.execute("UPDATE flights SET pid=NULL WHERE id=? AND state='running'", (fid,))
+        led._event("flight.owner_released", fid, {}, "work")
     return "pending"
 
 
@@ -377,10 +375,9 @@ def select_executor(entry, issue):
 
 
 def source_evidence(value):
-    return (isinstance(value, list) and bool(value)
-            and all(isinstance(item, dict)
-                    and all(isinstance(item.get(key), str) and item[key].strip()
-                            for key in ('url', 'head')) for item in value))
+    return (isinstance(value, list) and bool(value) and all(isinstance(item, dict) and all(
+        isinstance(item.get(key), str) and item[key].strip() for key in ('url', 'head'))
+        for item in value))
 
 
 def source_continuation(result, payload):
@@ -391,29 +388,22 @@ def source_continuation(result, payload):
             and source_evidence(result.get('evidence')))
 
 
-def repair_clearance(result, payload):
-    if (result.get('state') == 'pending' and result.get('resume_kind') == 'repair'
-            and source_continuation(result, payload)):
-        return dict(result, state='absent')
-    return result
-
-
 def execute(led, entry, task):
     previous = led.flights(task_id=task["id"])
-    uncertain = any(row["state"] != "cancelled" or latest(led, "work.executing", row["id"]) for row in previous)
+    predecessor = None
     for row in previous:
         if row["state"] in TERMINAL:
             continue
         process = latest(led, "work.process", row["id"])
         if flights.alive(process.get("pid")):
             return "owned"
-        if flights.alive(row["pid"]):
-            return "owned"
-        if not led.events(kind="work.runner", subject=row["id"]) and not latest(led, "work.executing", row["id"]):
+        if (not led.events(kind="work.runner", subject=row["id"])
+                and not latest(led, "work.executing", row["id"])):
             return "owned"  # A dead direct session is not product release authorization.
-        # Delivery may have happened. Never replay until authoritative reconciliation.
-        led.fail(row["id"], "owner_exited", "owner process terminated")
-    fid = claim(led, entry["repo"], latest(led, "work.issue", task["id"])["number"], os.getpid(), runner=True)
+        predecessor = row
+        break
+    fid = predecessor["id"] if predecessor else claim(led, entry["repo"], latest(
+        led, "work.issue", task["id"])["number"], os.getpid(), runner=True)
     log = Path(led.path).resolve().parent / "logs" / f"{fid}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.touch()
@@ -421,29 +411,25 @@ def execute(led, entry, task):
     try:
         payload = context(led, entry, task)
         state = eligibility(payload["issue"])
-        if state not in ("ready", "resume") and not uncertain:
-            led.set_state(fid, "cancelled", expect="running", source="work")
-            return state
-        result = repair_clearance(proof(entry, payload, log), payload)
+        result = proof(entry, payload, log)
+        if result.get("resume_kind") == "repair" and source_continuation(result, payload): result = dict(result, state="absent")
         if result["state"] == "delivered":
             finish(led, fid, payload, result)
             return "done"
         if state not in ("ready", "resume"):
-            led.set_state(fid, "cancelled", expect="running", source="work")
             return state
         if result["state"] == "pending":
             return pending(led, fid, result)
-        if (uncertain or payload["item_attempts"] or payload["mode"] == "resume") and result.get("retry_safe") is not True:
-            raise WorkError("prior execution requires authoritative retry clearance")
-        attempts = sum(bool(latest(led, "work.executing", r["id"])) for r in previous)
-        if attempts >= min(10, entry.get("max_attempts", 3)):
-            raise WorkError("executor attempts exhausted")
         payload["issue"] = issue_now(led, entry, task)
         state = eligibility(payload["issue"])
         if state not in ("ready", "resume"):
-            led.set_state(fid, "cancelled", expect="running", source="work")
             return state
         argv = select_executor(entry, payload["issue"])
+        if not workspace_available(entry):
+            raise WorkError("checkout unavailable; hydrate explicitly through vaults repos")
+        if predecessor:
+            fid = claim(led, entry["repo"], payload["issue"]["number"], os.getpid(),
+                        runner=True, predecessor=predecessor["id"])
         led.event("work.executing", fid, payload, "work")
         item_attempt(led, fid, "started")
         adapter(argv, entry, payload, log,
@@ -459,19 +445,14 @@ def execute(led, entry, task):
         finish(led, fid, payload, result)
         return "done"
     except (OSError, ValueError, KeyError, TypeError, LedgerError, subprocess.SubprocessError) as exc:
-        fail(led, fid, exc)
+        if predecessor and fid == predecessor["id"]:
+            led.event("work.item_failed", task["id"], {"error": str(exc)}, "work")
+        else:
+            fail(led, fid, exc)
         return "failed"
 
 
-def needs_reconciliation(led, task, state):
-    if task["state"] == "done":
-        return True
-    return state == "closed" and any(
-        latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"]))
-
-
-def selection_queue(led, entry):
-    """Fresh intake dispositions do not spend the bounded actionable-work slots."""
+def selection_queue(led, entry, intake=True):
     name = entry["repo"]
     queue, report = [], []
     for task in led.tasks():
@@ -484,25 +465,22 @@ def selection_queue(led, entry):
             continue
         if task["state"] == "done" and latest(led, "work.closed", task["id"]):
             continue
+        if not intake and not led.flights(task_id=task["id"]):
+            continue
         issue = latest(led, "work.issue", task["id"])
         state = eligibility(issue)
-        if state in ("ready", "resume") or needs_reconciliation(led, task, state):
+        reconcile = task["state"] == "done" or (state == "closed" and any(
+            latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"])))
+        if state in ("ready", "resume") or reconcile:
             queue.append(task)
             continue
-        if state == "closed" and latest(led, "work.disposition", task["id"]).get("state") == "closed":
-            continue
         reason = f"{state}: current intake labels " + ", ".join(l["name"] for l in issue.get("labels", []))
-        disposition(led, task, state, reason)
         report.append(dict(repo=name, task=task["id"], state=state))
-    return sorted(queue, key=lambda task: selection_priority(led, task)), report
-
-
-def selection_priority(led, task):
-    issue = latest(led, "work.issue", task["id"])
-    labels = {label["name"].lower() for label in issue.get("labels", [])}
-    bonus = 86400 * (bool(led.flights(task_id=task["id"])) +
-                     bool(labels & {"urgent", "p0", "p1", "in-pr", "in pr"}))
-    return task["created_at"] - bonus
+    def priority(task):
+        labels = {row["name"].lower() for row in latest(led, "work.issue", task["id"]).get("labels", [])}
+        return task["created_at"] - 86400 * (bool(led.flights(task_id=task["id"])) +
+            bool(labels & {"urgent", "p0", "p1", "in-pr", "in pr"}))
+    return sorted(queue, key=priority), report
 
 
 def run(led, entries, repo=None, *, budget_s=300, max_items=20):
@@ -510,7 +488,8 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
         raise WorkError("budget must be 1..3600 seconds; max_items must be 1..100")
     if repo and repo.lower() not in {e["repo"] for e in entries}:
         raise WorkError(f"unknown repository: {repo}")
-    entries = [e for e in entries if e["enabled"] and (not repo or e["repo"] == repo.lower())]
+    entries = [e for e in entries if not repo or e["repo"] == repo.lower()]
+    intake = bool(led.plan(plan(led))["enabled"])
     # Least recently serviced repositories first, using existing ledger receipts.
     entries.sort(key=lambda e: latest(led, "work.serviced", e["repo"]).get("at", 0))
     deadline = time.monotonic() + budget_s
@@ -525,16 +504,15 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
             try:
                 name = entry["repo"]
                 if name not in queues:
-                    discover(led, entry)
-                    queues[name], passive = selection_queue(led, entry)
+                    if intake and entry["enabled"]:
+                        discover(led, entry)
+                    queues[name], passive = selection_queue(led, entry, intake and entry["enabled"])
                     report.extend(passive)
                 queue = queues[name]
                 while (queue and eligibility(latest(led, "work.issue", queue[0]["id"])) in ("ready", "resume")
                        and next_retry(led, queue[0]) > time.time()):
                     task = queue.pop(0)
                     detail = latest(led, "work.pending", task["id"])
-                    disposition(led, task, "backoff", detail.get("reason", "waiting for next check"),
-                                evidence=detail.get("evidence", []), next_retry=next_retry(led, task))
                     report.append(dict(repo=name, task=task["id"], state="backoff"))
                 if not queue:
                     continue
@@ -559,27 +537,9 @@ def next_retry(led, task):
         return 0
     row = led.conn.execute("SELECT payload FROM events WHERE subject=? AND kind IN "
                            "('work.failure','work.pending') ORDER BY id DESC LIMIT 1", (task["id"],)).fetchone()
-    rows = [loads(row[0], {})] if row else []
-    return max([0] + [r.get("next_retry", 0) for r in rows] +
-               [float(r.get("retry_at") or 0) for r in conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))])
-
-
-def disposition(led, task, state, reason, **details):
-    led.event("work.disposition", task["id"], dict(state=state, reason=reason, **details), "work")
-
-
-def run_task(led, entry, task):
-    state = _run_task(led, entry, task)
-    detail = latest(led, "work.pending", task["id"]) if state == "pending" else {}
-    if state == "failed":
-        detail = latest(led, "work.failure", task["id"])
-    issue = latest(led, "work.issue", task["id"])
-    reason = state
-    if state in ("held", "owned", "ineligible"):
-        reason = f"{state}: current issue labels " + ", ".join(l["name"] for l in issue.get("labels", []))
-    disposition(led, task, state, detail.get("reason", detail.get("error", reason)),
-                evidence=detail.get("evidence", []), next_retry=next_retry(led, task))
-    return state
+    detail = loads(row[0], {}) if row else {}
+    return max([detail.get("next_retry", 0)] + [float(r.get("retry_at") or 0) for r in
+        conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))])
 
 
 def conveyor_attempts(led, subject):
@@ -592,7 +552,7 @@ def conveyor_attempts(led, subject):
     return list(steps.values())
 
 
-def _run_task(led, entry, task):
+def run_task(led, entry, task):
     try:
         if task["state"] == "done":
             if not latest(led, "work.closed", task["id"]):
@@ -627,9 +587,20 @@ def workspace_available(entry):
 
 
 def status(led, entries):
+    def task_status(task):
+        row = led.conn.execute("SELECT kind,payload FROM events WHERE subject=? AND kind IN"
+                               " ('work.pending','work.failure') ORDER BY id DESC LIMIT 1",
+                               (task["id"],)).fetchone()
+        if row:
+            detail = loads(row["payload"], {})
+            state = "failed" if row["kind"] == "work.failure" else "backoff" if next_retry(led, task) > time.time() else "pending"
+            return dict(detail, state=state)
+        issue = latest(led, "work.issue", task["id"])
+        state = eligibility(issue) if issue else task["state"]; return {"state": state, "reason": state}
+
     return {"repositories": [dict(repo=e["repo"], path=e["path"], enabled=e["enabled"],
                                   available=workspace_available(e)) for e in entries],
-            "tasks": [dict(t, disposition=latest(led, "work.disposition", t["id"]), failure=latest(led, "work.failure", t["id"]))
+            "tasks": [dict(t, disposition=task_status(t), failure=latest(led, "work.failure", t["id"]))
                       for t in led.tasks() if t["origin"] == "github-work"],
             "attempts": [dict(f) for f in led.flights()
                          if led.plan(f["plan_id"])["kind"] == "work"],
