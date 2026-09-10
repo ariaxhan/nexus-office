@@ -315,14 +315,26 @@ def proof(entry, payload, log):
 
 
 def finish(led, fid, payload, result):
-    led.event("work.proof", fid, result, "work")
-    item_attempt(led, fid, "succeeded", evidence=result["evidence"])
+    if not led.events(kind="work.proof", subject=fid):
+        led.event("work.proof", fid, result, "work")
+        item_attempt(led, fid, "succeeded", evidence=result["evidence"])
     row = led.flight(fid)
-    for state in ("produced", "verified"):
+    path = {"queued": ("running", "produced", "verified"),
+            "running": ("produced", "verified"), "produced": ("verified",),
+            "verifying": ("verified",), "resolving": ("running", "produced", "verified"),
+            "verified": (), "landing": (), "landed": ()}
+    for state in path[row["state"]]:
         led.set_state(fid, state, source="work")
-    landing = led.create_landing(fid, payload["idempotency_key"], state="verified")
-    led.apply_landing(landing, json.dumps(result["evidence"], sort_keys=True))
-    led.set_task_state(row["task_id"], "done", decided_by="work proof")
+    landing = led.conn.execute(
+        "SELECT id FROM landings WHERE flight_id=? ORDER BY created_at DESC LIMIT 1", (fid,)
+    ).fetchone()
+    if row["state"] != "landed":
+        landing = landing["id"] if landing else led.create_landing(
+            fid, payload["idempotency_key"], state="verified")
+        if led.landing(landing)["state"] != "applied":
+            led.apply_landing(landing, json.dumps(result["evidence"], sort_keys=True))
+    if led.task(row["task_id"])["state"] != "done":
+        led.set_task_state(row["task_id"], "done", decided_by="work proof")
     close_issue(led, payload)
 
 
@@ -401,10 +413,10 @@ def source_continuation(result, payload):
 
 def execution_history(led, task):
     previous = led.flights(task_id=task["id"])
-    uncertain = bool(conveyor_attempts(led, task["dedupe_key"].removeprefix("github:")))
+    uncertain = bool(conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))) or any(
+        latest(led, "work.executing", row["id"]) for row in previous)
     predecessor = None
     for row in previous:
-        uncertain |= bool(latest(led, "work.executing", row["id"]))
         if row["state"] in TERMINAL:
             continue
         if live_owner(led, row):
@@ -609,6 +621,16 @@ def workspace_available(entry):
 
 def status(led, entries):
     def task_status(task):
+        if task["state"] == "done":
+            return {"state": "done", "reason": "done"}
+        issue = latest(led, "work.issue", task["id"])
+        current = eligibility(issue) if issue else task["state"]
+        if current not in ("ready", "resume"):
+            return {"state": current, "reason": current}
+        active = next((row for row in led.flights(task_id=task["id"])
+                       if row["state"] not in TERMINAL), None)
+        if active and live_owner(led, active):
+            return {"state": "owned", "reason": "owned"}
         row = led.conn.execute("SELECT kind,payload FROM events WHERE subject=? AND kind IN"
                                " ('work.pending','work.failure') ORDER BY id DESC LIMIT 1",
                                (task["id"],)).fetchone()
@@ -616,8 +638,7 @@ def status(led, entries):
             detail = loads(row["payload"], {})
             state = "failed" if row["kind"] == "work.failure" else "backoff" if next_retry(led, task) > time.time() else "pending"
             return dict(detail, state=state)
-        issue = latest(led, "work.issue", task["id"])
-        state = eligibility(issue) if issue else task["state"]; return {"state": state, "reason": state}
+        return {"state": current, "reason": current}
 
     return {"repositories": [dict(repo=e["repo"], path=e["path"], enabled=e["enabled"],
                                   available=workspace_available(e)) for e in entries],

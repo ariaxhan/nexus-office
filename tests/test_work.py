@@ -471,6 +471,50 @@ else:
         self.assertEqual([], self.calls())
         self.assertEqual(task["id"], self.led.flight(fid)["task_id"])
 
+    def test_older_execution_receipt_requires_clearance_before_new_predecessor(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        old = work.claim(self.led, self.entry["repo"], 1, os.getpid(), runner=True)
+        self.led.event("work.executing", old, {"issue": 1}, "work")
+        self.led.conn.execute("UPDATE flights SET pid=NULL WHERE id=?", (old,))
+        successor = work.claim(self.led, self.entry["repo"], 1, os.getpid(),
+                               runner=True, predecessor=old)
+        self.led.conn.execute("UPDATE flights SET pid=NULL WHERE id=?", (successor,))
+        (self.root / "pending").write_text(json.dumps({"state": "absent", "retry_safe": False}))
+        self.assertEqual("failed", self.run_work()[0]["state"])
+        self.assertEqual([], self.calls())
+        self.assertEqual("running", self.led.flight(successor)["state"])
+
+    def test_delivered_proof_resumes_every_legal_finalization_state(self):
+        for initial in ("queued", "running", "produced", "verifying", "verified", "landing"):
+            with self.subTest(initial=initial):
+                work.discover(self.led, self.entry)
+                task = self.led.tasks()[-1]
+                fid = self.led.create_flight(work.plan(self.led), task_id=task["id"], source="fixture")
+                if initial != "queued":
+                    self.led.set_state(fid, "running", source="fixture")
+                if initial in ("produced", "verifying", "verified", "landing"):
+                    self.led.set_state(fid, "produced", source="fixture")
+                if initial == "verifying":
+                    self.led.set_state(fid, "verifying", source="fixture")
+                if initial in ("verified", "landing"):
+                    self.led.set_state(fid, "verified", source="fixture")
+                if initial == "landing":
+                    landing = self.led.create_landing(fid, task["dedupe_key"], state="verified")
+                    self.led.start_applying(landing, "expected")
+                self.led.acquire_leases(fid, [task["dedupe_key"]], float("inf"))
+                payload = {"task": task["id"], "repo": self.entry["repo"],
+                           "idempotency_key": task["dedupe_key"]}
+                delivered = {"state": "delivered", "verified": True,
+                             "idempotency_key": task["dedupe_key"], "evidence": [initial]}
+                with patch("nexus.work.close_issue"):
+                    work.finish(self.led, fid, payload, delivered)
+                    work.finish(self.led, fid, payload, delivered)
+                self.assertEqual("landed", self.led.flight(fid)["state"])
+                self.assertEqual([], [row for row in self.led.leases()
+                                      if row["holder_flight"] == fid])
+                self.assertEqual(1, len(self.led.events(kind="work.proof", subject=fid)))
+
     def test_in_pr_pending_rechecks_without_executor_or_failure(self):
         self.issues[0]['labels'] = [{'name': 'in-pr'}]
         self.prs = [dict(number=20, state='open')]
@@ -583,6 +627,20 @@ else:
         self.assertEqual('held', report['tasks'][0]['disposition']['state'])
         self.assertNotEqual('done', report['tasks'][0]['state'])
 
+    def test_current_done_hold_and_owner_override_historical_retry_receipts(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        self.led.event('work.failure', task['id'], {'error': 'old', 'next_retry': 10**12}, 'fixture')
+        self.issues[0]['labels'] = [{'name': 'hold'}]
+        work.capture(self.led, self.entry['repo'], self.issues[0])
+        self.assertEqual('held', work.status(self.led, [self.entry])['tasks'][0]['disposition']['state'])
+        self.issues[0]['labels'] = [{'name': 'ready'}]
+        work.capture(self.led, self.entry['repo'], self.issues[0])
+        work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        self.assertEqual('owned', work.status(self.led, [self.entry])['tasks'][0]['disposition']['state'])
+        self.led.set_task_state(task['id'], 'done', decided_by='fixture')
+        self.assertEqual('done', work.status(self.led, [self.entry])['tasks'][0]['disposition']['state'])
+
     def test_executor_pending_is_not_failure_and_later_proof_finishes(self):
         self.entry['executor'] = [sys.executable, '-c', "import pathlib,json; pathlib.Path('pending').write_text(json.dumps(dict(state='pending',reason='capture required',evidence=['source PR'])))"]
         self.assertEqual('pending', self.run_work()[0]['state'])
@@ -597,40 +655,68 @@ else:
 
     def test_public_run_repairs_then_accepts_exact_new_head_with_disabled_discovery(self):
         from nexus import cli
-        lifecycle = self.root / 'lifecycle.py'
-        lifecycle.write_text('''import json, pathlib, sys
-data=json.load(sys.stdin); stage=pathlib.Path('stage'); n=int(stage.read_text()) if stage.exists() else 0
-key=data['idempotency_key']; url='https://github.com/sample/product/pull/20'
-if sys.argv[1]=='execute': stage.write_text(str(n+1))
-elif n==0: print(json.dumps({'state':'absent','retry_safe':True}))
-elif n==1: print(json.dumps({'state':'pending','retry_safe':True,'resume_kind':'repair','idempotency_key':key,'evidence':[{'url':url,'head':'old-head'}]}))
-elif n==2: print(json.dumps({'state':'pending','retry_safe':True,'resume_kind':'review','idempotency_key':key,'evidence':[{'url':url,'head':'new-head'}]}))
-else: print(json.dumps({'state':'delivered','verified':True,'idempotency_key':key,'evidence':[{'url':url,'head':'new-head','approval':'fresh'}]}))
+        product, unrelated = self.root / 'product', self.root / 'unrelated'
+        for repo, content in ((product, 'finding\n'), (unrelated, 'untouched\n')):
+            repo.mkdir()
+            subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=repo, check=True)
+            subprocess.run(['git', 'config', 'user.email', 'fixture@example.test'], cwd=repo, check=True)
+            subprocess.run(['git', 'config', 'user.name', 'Fixture'], cwd=repo, check=True)
+            (repo / 'result.txt').write_text(content)
+            subprocess.run(['git', 'add', 'result.txt'], cwd=repo, check=True)
+            subprocess.run(['git', 'commit', '-q', '-m', 'initial'], cwd=repo, check=True)
+        old_head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=product,
+                                  text=True, capture_output=True, check=True).stdout.strip()
+        unrelated_head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=unrelated,
+                                        text=True, capture_output=True, check=True).stdout.strip()
+        executor = self.root / 'repair.py'
+        executor.write_text('''import json, pathlib, subprocess, sys
+json.load(sys.stdin)
+pathlib.Path('result.txt').write_text('all findings repaired\\n')
+subprocess.run(['git','add','result.txt'],check=True)
+subprocess.run(['git','commit','-q','-m','repair findings'],check=True)
+''')
+        verifier = self.root / 'verify.py'
+        verifier.write_text('''import json, pathlib, subprocess, sys
+head=subprocess.run(['git','rev-parse','HEAD'],text=True,capture_output=True,check=True).stdout.strip()
+approval=pathlib.Path('.approved-head')
+if sys.argv[1]=='approve': approval.write_text(head); raise SystemExit
+data=json.load(sys.stdin); key=data['idempotency_key']; url='https://github.com/sample/product/pull/20'
+evidence=[{'url':url,'head':head}]
+if approval.exists() and approval.read_text()==head:
+ print(json.dumps({'state':'delivered','verified':True,'idempotency_key':key,'evidence':evidence+[{'approval':'independent','url':url,'head':head}]}))
+elif pathlib.Path('result.txt').read_text()=='all findings repaired\\n':
+ print(json.dumps({'state':'pending','retry_safe':True,'resume_kind':'review','idempotency_key':key,'evidence':evidence}))
+else: print(json.dumps({'state':'absent','retry_safe':True}))
 ''')
         registry = self.root / 'registry.json'
-        entry = dict(self.entry, executor=[sys.executable, str(lifecycle), 'execute'],
-                     verify=[sys.executable, str(lifecycle), 'verify'])
+        entry = dict(self.entry, path=str(product),
+                     executor=[sys.executable, str(executor)],
+                     verify=[sys.executable, str(verifier), 'verify'])
         registry.write_text(json.dumps({'repositories': [entry]}))
         argv = ['--ledger', str(self.root / 'ledger.sqlite'), 'work', 'run',
                 '--registry', str(registry), '--repo', self.entry['repo'], '--max-items', '1']
         self.assertEqual(0, cli.main(argv))
         task = self.led.tasks()[0]
-        predecessor = self.led.flights(task_id=task['id'])[0]
+        flight = self.led.flights(task_id=task['id'])[0]
+        new_head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=product,
+                                  text=True, capture_output=True, check=True).stdout.strip()
+        self.assertNotEqual(old_head, new_head)
+        self.assertEqual('all findings repaired\n', (product / 'result.txt').read_text())
+        self.assertEqual(unrelated_head, subprocess.run(
+            ['git', 'rev-parse', 'HEAD'], cwd=unrelated, text=True,
+            capture_output=True, check=True).stdout.strip())
+        self.assertEqual('', subprocess.run(['git', 'status', '--porcelain'], cwd=unrelated,
+                                            text=True, capture_output=True, check=True).stdout)
         self.led.set_plan_enabled(work.plan(self.led), False)
-        args = type('Args', (), {'ledger': str(self.root / 'ledger.sqlite'),
-                                 'flight': predecessor['id']})()
+        self.assertEqual(0, subprocess.run([sys.executable, str(verifier), 'approve'],
+                                          cwd=product).returncode)
+        self.assertEqual(new_head, (product / '.approved-head').read_text())
+        args = type('Args', (), {'ledger': str(self.root / 'ledger.sqlite'), 'flight': flight['id']})()
         self.assertEqual(0, cli.cmd_retry(args))
         self.assertEqual(0, cli.main(argv))
-        flights = self.led.flights(task_id=task['id'])
-        self.assertEqual(2, len(flights))
-        self.assertEqual('cancelled', self.led.flight(predecessor['id'])['state'])
-        self.assertEqual('running', flights[0]['state'])
-        self.assertEqual('new-head', work.latest(
-            self.led, 'work.pending', task['id'])['evidence'][0]['head'])
-        (self.root / 'stage').write_text('3')
-        self.assertEqual(0, cli.cmd_retry(type('Args', (), {
-            'ledger': str(self.root / 'ledger.sqlite'), 'flight': flights[0]['id']})()))
-        self.assertEqual(0, cli.main(argv))
+        self.assertEqual(1, len(self.led.flights(task_id=task['id'])))
+        self.assertEqual('landed', self.led.flight(flight['id'])['state'])
+        self.assertEqual(new_head, work.latest(self.led, 'work.proof', flight['id'])['evidence'][0]['head'])
         self.assertEqual('done', self.led.task(task['id'])['state'])
 
     def test_legacy_queued_click_flight_reconciles_through_normal_run(self):
@@ -660,6 +746,42 @@ else: print(json.dumps({'state':'delivered','verified':True,'idempotency_key':ke
         self.assertEqual('running', self.led.flight(predecessor)['state'])
         lease = self.led.conn.execute('SELECT holder_flight FROM leases').fetchone()
         self.assertEqual(predecessor, lease['holder_flight'])
+
+    def test_interrupted_handoff_rolls_back_successor_and_keeps_predecessor_lease(self):
+        work.discover(self.led, self.entry)
+        predecessor = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        self.led.conn.execute('UPDATE flights SET pid=NULL WHERE id=?', (predecessor,))
+        original = self.led._event
+        def interrupt(kind, subject, payload, source, ts=None):
+            if kind == 'flight.state' and payload.get('successor'):
+                raise RuntimeError('handoff interrupted')
+            return original(kind, subject, payload, source, ts)
+        with patch.object(self.led, '_event', side_effect=interrupt):
+            with self.assertRaisesRegex(RuntimeError, 'handoff interrupted'):
+                work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True,
+                           predecessor=predecessor)
+        self.assertEqual([predecessor], [row['id'] for row in self.led.flights()])
+        self.assertEqual('running', self.led.flight(predecessor)['state'])
+        self.assertEqual(predecessor, self.led.leases()[0]['holder_flight'])
+
+    def test_interrupted_finalization_reuses_landing_and_releases_lease(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        payload = {'task': task['id'], 'repo': self.entry['repo'],
+                   'idempotency_key': task['dedupe_key']}
+        delivered = {'state': 'delivered', 'verified': True,
+                     'idempotency_key': task['dedupe_key'], 'evidence': ['exact-head']}
+        with patch.object(self.led, 'apply_landing', side_effect=RuntimeError('crash')):
+            with self.assertRaisesRegex(RuntimeError, 'crash'):
+                work.finish(self.led, fid, payload, delivered)
+        self.assertEqual('verified', self.led.flight(fid)['state'])
+        self.assertEqual(1, len(self.led.landings()))
+        with patch('nexus.work.close_issue'):
+            work.finish(self.led, fid, payload, delivered)
+        self.assertEqual('landed', self.led.flight(fid)['state'])
+        self.assertEqual(1, len(self.led.landings()))
+        self.assertEqual([], self.led.leases())
 
     def test_stale_dead_process_evidence_does_not_block_reconciliation(self):
         work.discover(self.led, self.entry)
