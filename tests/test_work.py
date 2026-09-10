@@ -105,6 +105,34 @@ else:
         self.assertTrue(work.status(self.led, [self.entry])["gaps"])
         self.assertTrue(all(Path(a["ref"]).exists() for a in self.led.artifacts()))
 
+    def test_work_flight_retry_never_queues_an_unlaunchable_flight(self):
+        (self.root / "fail-1").touch()
+        self.assertEqual("failed", self.run_work()[0]["state"])
+        failed = self.led.flights(states=("failed",))[0]
+        with self.assertRaisesRegex(work.LedgerError, "nexus work run"):
+            self.led.create_flight(failed["plan_id"], task_id=failed["task_id"], attempt=2, source="click")
+        self.assertEqual([], self.led.flights(states=("queued",)))
+        (self.root / "fail-1").unlink()
+        self.led.event("work.failure", failed["task_id"], {"next_retry": 0}, "fixture")
+        self.led.event("work.item_attempt", "sample/product#1", {"step": "nexus-work", "retry_at": 0}, "conveyor")
+        self.assertEqual("done", self.run_work()[0]["state"])
+
+    def test_failure_backoff_counts_consecutive_failures_not_total_passes(self):
+        work.discover(self.led, self.entry)
+        for _ in range(8):
+            fid = work.claim(self.led, self.entry["repo"], 1, os.getpid())
+            self.led.set_state(fid, "cancelled", expect="running", source="fixture")
+        fid = work.claim(self.led, self.entry["repo"], 1, os.getpid())
+        work.fail(self.led, fid, work.WorkError("transient"))
+        delay = self.led.events(kind="work.failure")[-1]["payload"]
+        delay = json.loads(delay) if isinstance(delay, str) else delay
+        self.assertLessEqual(delay["next_retry"] - work.time.time(), 121)
+
+    def test_adapter_survives_zombie_process_group_permission_error(self):
+        with patch("nexus.work.os.killpg", side_effect=PermissionError(1, "Operation not permitted")):
+            output = work.adapter([sys.executable, "-c", "print('{}')"], self.entry, {}, self.root / "adapter.log")
+        self.assertEqual(b"{}\n", output)
+
     def test_open_pr_is_passed_to_executor_for_resume(self):
         self.prs = [dict(number=20, state="open", body="Closes #1", head={"ref": "existing"})]
         self.run_work()
@@ -340,8 +368,7 @@ else:
 
     def test_independent_resource_claim_is_owned(self):
         work.discover(self.led, self.entry)
-        pid = work.plan(self.led)
-        fid = self.led.create_flight(pid)
+        fid = self.led.create_flight(self.led.add_plan("independent-holder"))
         self.led.acquire_leases(fid, ["github:sample/product#1"], 10**12)
         self.assertEqual("owned", self.run_work()[0]["state"])
         self.assertEqual([], self.calls())

@@ -578,8 +578,12 @@ class Ledger:
         if trigger is not None:
             payload["trigger_event_id"] = trigger
         with self.tx():
-            if self.conn.execute("SELECT 1 FROM plans WHERE id=?", (plan_id,)).fetchone() is None:
+            plan = self.conn.execute("SELECT kind FROM plans WHERE id=?", (plan_id,)).fetchone()
+            if plan is None:
                 raise LedgerError(f"no such plan: {plan_id}")
+            if plan["kind"] == "work":
+                # Nothing launches a queued work flight; `nexus work run` claims its own.
+                raise LedgerError("work items retry through `nexus work run`, not a queued flight")
             if unique_for_task and task_id:
                 marks = ",".join("?" * len(TERMINAL))
                 live = self.conn.execute(

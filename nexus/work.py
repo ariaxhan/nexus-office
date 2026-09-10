@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from contextvars import ContextVar
 import math
 import json
@@ -271,15 +272,16 @@ def adapter(argv, entry, payload, log, started=None):
                 started(proc.pid)
             output, _ = proc.communicate(json.dumps(payload).encode(), timeout=remaining(timeout))
         except BaseException:
-            os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
             proc.communicate()
             raise
         finally:
             # A returned parent cannot leave delivery running in its process group.
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            except (ProcessLookupError, PermissionError):
+                pass  # macOS answers EPERM for a group holding only zombies.
         handle.write(output)
         if proc.returncode:
             raise WorkError(f"adapter exit {proc.returncode}")
@@ -337,7 +339,15 @@ def item_attempt(led, fid, status, retry_at=0, evidence=None):
 
 def fail(led, fid, exc):
     row = led.flight(fid)
-    delay = min(86400, 60 * 2 ** min(row["attempt"], 10))
+    # Back off on consecutive failures; review and pending passes are progress, not failures.
+    streak = 1
+    for prior in sorted(led.flights(task_id=row["task_id"]), key=lambda r: r["created_at"], reverse=True):
+        if prior["id"] == fid:
+            continue
+        if prior["state"] != "failed":
+            break
+        streak += 1
+    delay = min(86400, 60 * 2 ** min(streak, 10))
     item_attempt(led, fid, "failed", time.time() + delay, [str(exc)])
     led.event("work.failure", row["task_id"], {"flight": fid, "error": str(exc),
               "next_retry": time.time() + delay, "attempt": row["attempt"]}, "work")
