@@ -77,8 +77,12 @@ def cmd_work_retry_run(args):
     if not led.set_state(flight['id'], 'cancelled', expect='running', source='work-retry'):
         return 1
     entries = work.registry(args.registry)
-    result = work.run(led, entries, repo=repo, max_items=1)
-    return int(any(row['state'] in ('failed', 'exhausted') for row in result))
+    entry = next((row for row in entries if row['repo'] == repo), None)
+    if entry is None:
+        return 1
+    work.discover(led, entry)
+    state = work.execute(led, entry, led.task(task['id']))
+    return int(state in ('failed', 'exhausted'))
 
 
 def cmd_status(args):
