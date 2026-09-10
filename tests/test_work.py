@@ -239,6 +239,13 @@ else:
         self.assertEqual([], self.calls())
         work.release(self.led, fid, os.getpid())
 
+    def test_normal_recovery_never_supersedes_live_runner_before_process_receipt(self):
+        work.discover(self.led, self.entry)
+        fid = work.claim(self.led, self.entry["repo"], 1, os.getpid(), runner=True)
+        self.assertEqual("owned", self.run_work()[0]["state"])
+        self.assertEqual("running", self.led.flight(fid)["state"])
+        self.assertEqual([], self.calls())
+
     def test_delivery_crash_and_api_outage_never_replays(self):
         work.discover(self.led, self.entry)
         fid = work.claim(self.led, self.entry["repo"], 1, os.getpid())
@@ -332,11 +339,11 @@ else:
         with self.assertRaisesRegex(work.WorkError, "unknown repository"):
             work.run(self.led, [self.entry], "missing/repo")
 
-    def test_conveyor_backoff_is_shared(self):
+    def test_historical_conveyor_retry_deadline_is_not_a_scheduler(self):
         self.led.event("work.item_attempt", "sample/product#1",
                        dict(step="build", status="failed", attempt=1, retry_at=10**12, evidence=[]), "conveyor")
-        self.assertEqual("backoff", self.run_work()[0]["state"])
-        self.assertEqual([], self.calls())
+        self.assertEqual("done", self.run_work()[0]["state"])
+        self.assertEqual(1, len(self.calls()))
 
     def test_independent_resource_claim_is_owned(self):
         work.discover(self.led, self.entry)
@@ -353,12 +360,13 @@ else:
         self.assertEqual("owned", self.run_work()[0]["state"])
         self.assertEqual("running", self.led.flight(fid)["state"])
 
-    def test_conveyor_steps_and_case_preserve_backoff(self):
+    def test_conveyor_steps_remain_evidence_without_vetoing_work(self):
         for step, retry in (("build", 10**12), ("review", 0)):
             self.led.event("work.item_attempt", "Sample/Product#1",
                            dict(step=step, status="failed", retry_at=retry), "conveyor")
-        self.assertEqual("backoff", self.run_work()[0]["state"])
-        self.assertEqual(2, len(work.status(self.led, [self.entry])["item_attempts"]))
+        self.assertEqual("done", self.run_work()[0]["state"])
+        attempts = work.status(self.led, [self.entry])["item_attempts"]
+        self.assertEqual(2, len([row for row in attempts if row["source"] == "conveyor"]))
 
     def test_existing_pr_direct_claim_prevents_execution(self):
         self.prs = [dict(number=20, state="open", labels=[{"name": "direct"}])]
@@ -379,6 +387,13 @@ else:
         self.assertFalse(row["enabled"])
         self.assertFalse(row["available"])
         self.assertFalse(Path(entry["path"]).exists())
+
+    def test_disabled_plan_runs_already_admitted_task_without_discovery(self):
+        work.discover(self.led, self.entry)
+        self.led.set_plan_enabled(work.plan(self.led), False)
+        with patch("nexus.work.discover") as discover:
+            self.assertEqual("done", work.run(self.led, [self.entry])[0]["state"])
+        discover.assert_not_called()
 
     def test_hold_added_during_verification_prevents_execution(self):
         original = work.proof
@@ -408,7 +423,7 @@ else:
     def test_conveyor_success_is_not_delivery_proof(self):
         self.led.event("work.item_attempt", "sample/product#1",
                        dict(step="build", status="succeeded", attempt=0, retry_at=0, evidence="log"), "conveyor")
-        (self.root / "unknown").touch()
+        (self.root / "pending").write_text(json.dumps({"state": "absent", "retry_safe": False}))
         self.assertEqual("failed", self.run_work()[0]["state"])
         self.assertEqual([], self.closed)
 
@@ -444,6 +459,17 @@ else:
         self.assertEqual("closed", self.run_work()[0]["state"])
         self.assertNotEqual("done", self.led.tasks()[0]["state"])
         self.assertEqual([], self.calls())
+
+    def test_uncertain_prior_execution_requires_retry_safe_clearance(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        fid = work.claim(self.led, self.entry["repo"], 1, os.getpid(), runner=True)
+        self.led.event("work.executing", fid, {"issue": 1}, "work")
+        self.led.conn.execute("UPDATE flights SET pid=2147483647 WHERE id=?", (fid,))
+        (self.root / "pending").write_text(json.dumps({"state": "absent", "retry_safe": False}))
+        self.assertEqual("failed", self.run_work()[0]["state"])
+        self.assertEqual([], self.calls())
+        self.assertEqual(task["id"], self.led.flight(fid)["task_id"])
 
     def test_in_pr_pending_rechecks_without_executor_or_failure(self):
         self.issues[0]['labels'] = [{'name': 'in-pr'}]
@@ -569,41 +595,55 @@ else:
         self.assertEqual('done', self.run_work()[0]['state'])
         self.assertEqual(1, len(self.led.events(kind='work.executing')))
 
-    def test_rejected_review_resumes_same_task_with_disabled_intake(self):
-        review = {'url': 'https://github.com/sample/product/pull/20', 'head': 'old-head'}
-        absent = dict(state='absent', retry_safe=True)
-        rejected = dict(state='pending', reason='machine review requests changes',
-                        retry_safe=True, resume_kind='repair', evidence=[review],
-                        idempotency_key='github:sample/product#1')
-        reviewed = dict(state='absent', retry_safe=True, resume_kind='review',
-                        evidence=[{'url': review['url'], 'head': 'new-head'}],
-                        idempotency_key='github:sample/product#1')
-        with patch('nexus.work.proof', side_effect=[absent, rejected]):
-            self.assertEqual('pending', self.run_work()[0]['state'])
+    def test_public_run_repairs_then_accepts_exact_new_head_with_disabled_discovery(self):
+        from nexus import cli
+        lifecycle = self.root / 'lifecycle.py'
+        lifecycle.write_text('''import json, pathlib, sys
+data=json.load(sys.stdin); stage=pathlib.Path('stage'); n=int(stage.read_text()) if stage.exists() else 0
+key=data['idempotency_key']; url='https://github.com/sample/product/pull/20'
+if sys.argv[1]=='execute': stage.write_text(str(n+1))
+elif n==0: print(json.dumps({'state':'absent','retry_safe':True}))
+elif n==1: print(json.dumps({'state':'pending','retry_safe':True,'resume_kind':'repair','idempotency_key':key,'evidence':[{'url':url,'head':'old-head'}]}))
+elif n==2: print(json.dumps({'state':'pending','retry_safe':True,'resume_kind':'review','idempotency_key':key,'evidence':[{'url':url,'head':'new-head'}]}))
+else: print(json.dumps({'state':'delivered','verified':True,'idempotency_key':key,'evidence':[{'url':url,'head':'new-head','approval':'fresh'}]}))
+''')
+        registry = self.root / 'registry.json'
+        entry = dict(self.entry, executor=[sys.executable, str(lifecycle), 'execute'],
+                     verify=[sys.executable, str(lifecycle), 'verify'])
+        registry.write_text(json.dumps({'repositories': [entry]}))
+        argv = ['--ledger', str(self.root / 'ledger.sqlite'), 'work', 'run',
+                '--registry', str(registry), '--repo', self.entry['repo'], '--max-items', '1']
+        self.assertEqual(0, cli.main(argv))
         task = self.led.tasks()[0]
         predecessor = self.led.flights(task_id=task['id'])[0]
-        self.issues.append(dict(number=2, title='Unrelated', state='open',
-                                labels=[{'name': 'ready'}]))
-        work.discover(self.led, self.entry)
         self.led.set_plan_enabled(work.plan(self.led), False)
-        from nexus import cli
         args = type('Args', (), {'ledger': str(self.root / 'ledger.sqlite'),
                                  'flight': predecessor['id']})()
         self.assertEqual(0, cli.cmd_retry(args))
-        with patch('nexus.work.discover') as discover, \
-                patch('nexus.work.proof', side_effect=[rejected, reviewed]):
-            self.assertEqual('pending', self.run_work()[0]['state'])
-            discover.assert_not_called()
+        self.assertEqual(0, cli.main(argv))
         flights = self.led.flights(task_id=task['id'])
         self.assertEqual(2, len(flights))
         self.assertEqual('cancelled', self.led.flight(predecessor['id'])['state'])
         self.assertEqual('running', flights[0]['state'])
-        self.assertTrue(all(row['task_id'] == task['id'] for row in flights))
-        self.assertEqual([1, 1], [call['issue']['number'] for call in self.calls()])
         self.assertEqual('new-head', work.latest(
             self.led, 'work.pending', task['id'])['evidence'][0]['head'])
-        unrelated = next(row for row in self.led.tasks() if row['title'] == 'Unrelated')
-        self.assertEqual([], self.led.flights(task_id=unrelated['id']))
+        (self.root / 'stage').write_text('3')
+        self.assertEqual(0, cli.cmd_retry(type('Args', (), {
+            'ledger': str(self.root / 'ledger.sqlite'), 'flight': flights[0]['id']})()))
+        self.assertEqual(0, cli.main(argv))
+        self.assertEqual('done', self.led.task(task['id'])['state'])
+
+    def test_legacy_queued_click_flight_reconciles_through_normal_run(self):
+        from nexus import cli
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        queued = self.led.create_flight(work.plan(self.led), task_id=task['id'], source='click')
+        tower.tick(self.led, root=str(self.root / 'flights'))
+        self.assertEqual('queued', self.led.flight(queued)['state'])
+        args = type('Args', (), {'ledger': str(self.root / 'ledger.sqlite'), 'flight': queued})()
+        self.assertEqual(0, cli.cmd_retry(args))
+        self.assertEqual('done', self.run_work()[0]['state'])
+        self.assertEqual('cancelled', self.led.flight(queued)['state'])
 
     def test_retry_setup_failure_preserves_predecessor_ownership(self):
         work.discover(self.led, self.entry)
@@ -639,8 +679,8 @@ else:
         self.issues.append(dict(number=2, title='Second', state='open', labels=[{'name': 'ready'}]))
         self.led.event('work.item_attempt', 'sample/product#1', dict(step='review', status='pending', retry_at=10**12), 'conveyor')
         report = work.run(self.led, [self.entry], max_items=1)
-        self.assertEqual(['backoff', 'done'], [r['state'] for r in report])
-        self.assertEqual([2], [c['issue']['number'] for c in self.calls()])
+        self.assertEqual(['done'], [r['state'] for r in report])
+        self.assertEqual([1], [c['issue']['number'] for c in self.calls()])
 
     def test_aging_and_urgent_selection(self):
         self.issues.append(dict(number=2, title='Urgent', state='open', labels=[{'name': 'ready'}, {'name': 'urgent'}]))

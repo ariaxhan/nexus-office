@@ -128,6 +128,18 @@ def plan(led):
         return pid
 
 
+def live_owner(led, row):
+    return flights.alive(row["pid"]) or flights.alive(
+        latest(led, "work.process", row["id"]).get("pid"))
+
+
+def retain_claim(led, active, predecessor):
+    if active and active["id"] != predecessor:
+        raise Owned(f"claim retained by {active['id']}; reconcile owner first")
+    if active and live_owner(led, active):
+        raise Owned(f"claim retained by live owner of {active['id']}")
+
+
 def claim(led, repo, number, owner_pid, *, runner=False, predecessor=None):
     if owner_pid <= 0 or not flights.alive(owner_pid):
         raise WorkError("owner process must be alive")
@@ -140,8 +152,7 @@ def claim(led, repo, number, owner_pid, *, runner=False, predecessor=None):
             raise WorkError("issue must be captured and unfinished")
         active = c.execute("SELECT * FROM flights WHERE task_id=? AND state NOT IN"
                            " ('landed','failed','cancelled')", (task["id"],)).fetchone()
-        if active and active["id"] != predecessor:
-            raise Owned(f"claim retained by {active['id']}; reconcile owner first")
+        retain_claim(led, active, predecessor)
         held = c.execute("SELECT holder_flight FROM leases WHERE resource=?", (key,)).fetchone()
         if held and held[0] != predecessor:
             raise Owned(f"resource retained by {held[0]}")
@@ -388,20 +399,29 @@ def source_continuation(result, payload):
             and source_evidence(result.get('evidence')))
 
 
-def execute(led, entry, task):
+def execution_history(led, task):
     previous = led.flights(task_id=task["id"])
+    uncertain = bool(conveyor_attempts(led, task["dedupe_key"].removeprefix("github:")))
     predecessor = None
     for row in previous:
+        uncertain |= bool(latest(led, "work.executing", row["id"]))
         if row["state"] in TERMINAL:
             continue
-        process = latest(led, "work.process", row["id"])
-        if flights.alive(process.get("pid")):
-            return "owned"
-        if (not led.events(kind="work.runner", subject=row["id"])
-                and not latest(led, "work.executing", row["id"])):
-            return "owned"  # A dead direct session is not product release authorization.
+        if live_owner(led, row):
+            raise Owned(f"claim retained by live owner of {row['id']}")
+        if not led.events(kind="work.runner", subject=row["id"]) \
+                and row["state"] != "queued" and not latest(led, "work.executing", row["id"]):
+            raise Owned("a dead direct session requires product release authorization")
         predecessor = row
         break
+    return previous, predecessor, uncertain
+
+
+def execute(led, entry, task):
+    try:
+        previous, predecessor, uncertain = execution_history(led, task)
+    except Owned:
+        return "owned"
     fid = predecessor["id"] if predecessor else claim(led, entry["repo"], latest(
         led, "work.issue", task["id"])["number"], os.getpid(), runner=True)
     log = Path(led.path).resolve().parent / "logs" / f"{fid}.log"
@@ -420,6 +440,11 @@ def execute(led, entry, task):
             return state
         if result["state"] == "pending":
             return pending(led, fid, result)
+        if (uncertain or payload["mode"] == "resume") and result.get("retry_safe") is not True:
+            raise WorkError("prior execution requires authoritative retry clearance")
+        attempts = sum(bool(latest(led, "work.executing", row["id"])) for row in previous)
+        if attempts >= min(10, entry.get("max_attempts", 3)):
+            raise WorkError("executor attempts exhausted")
         payload["issue"] = issue_now(led, entry, task)
         state = eligibility(payload["issue"])
         if state not in ("ready", "resume"):
@@ -452,7 +477,7 @@ def execute(led, entry, task):
         return "failed"
 
 
-def selection_queue(led, entry, intake=True):
+def selection_queue(led, entry):
     name = entry["repo"]
     queue, report = [], []
     for task in led.tasks():
@@ -464,8 +489,6 @@ def selection_queue(led, entry, intake=True):
         if newest[0] != task["id"]:
             continue
         if task["state"] == "done" and latest(led, "work.closed", task["id"]):
-            continue
-        if not intake and not led.flights(task_id=task["id"]):
             continue
         issue = latest(led, "work.issue", task["id"])
         state = eligibility(issue)
@@ -481,6 +504,14 @@ def selection_queue(led, entry, intake=True):
         return task["created_at"] - 86400 * (bool(led.flights(task_id=task["id"])) +
             bool(labels & {"urgent", "p0", "p1", "in-pr", "in pr"}))
     return sorted(queue, key=priority), report
+
+
+def take_due(led, queue, report, repo):
+    while (queue and eligibility(latest(led, "work.issue", queue[0]["id"])) in ("ready", "resume")
+           and next_retry(led, queue[0]) > time.time()):
+        task = queue.pop(0)
+        report.append(dict(repo=repo, task=task["id"], state="backoff"))
+    return queue.pop(0) if queue else None
 
 
 def run(led, entries, repo=None, *, budget_s=300, max_items=20):
@@ -506,17 +537,11 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
                 if name not in queues:
                     if intake and entry["enabled"]:
                         discover(led, entry)
-                    queues[name], passive = selection_queue(led, entry, intake and entry["enabled"])
+                    queues[name], passive = selection_queue(led, entry)
                     report.extend(passive)
-                queue = queues[name]
-                while (queue and eligibility(latest(led, "work.issue", queue[0]["id"])) in ("ready", "resume")
-                       and next_retry(led, queue[0]) > time.time()):
-                    task = queue.pop(0)
-                    detail = latest(led, "work.pending", task["id"])
-                    report.append(dict(repo=name, task=task["id"], state="backoff"))
-                if not queue:
+                task = take_due(led, queues[name], report, name)
+                if task is None:
                     continue
-                task = queue.pop(0)
                 state = run_task(led, entry, task)
                 if state not in ("held", "owned", "ineligible", "closed", "backoff"):
                     count += 1
@@ -538,8 +563,7 @@ def next_retry(led, task):
     row = led.conn.execute("SELECT payload FROM events WHERE subject=? AND kind IN "
                            "('work.failure','work.pending') ORDER BY id DESC LIMIT 1", (task["id"],)).fetchone()
     detail = loads(row[0], {}) if row else {}
-    return max([detail.get("next_retry", 0)] + [float(r.get("retry_at") or 0) for r in
-        conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))])
+    return detail.get("next_retry", 0)
 
 
 def conveyor_attempts(led, subject):
@@ -563,9 +587,6 @@ def run_task(led, entry, task):
             latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"]))
         if state not in ("ready", "resume") and not reconcile:
             return state
-        conveyor = conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))
-        if any(float(row.get("retry_at") or 0) > time.time() for row in conveyor):
-            return "backoff"
         if next_retry(led, task) > time.time():
             return "backoff"
         return execute(led, entry, task)
