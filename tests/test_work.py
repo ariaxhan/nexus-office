@@ -453,6 +453,11 @@ else:
         self.assertEqual([], self.closed)
         self.assertTrue(all(Path(a["ref"]).exists() for a in self.led.artifacts()))
 
+    def test_conveyor_triage_backpressure_does_not_back_off_the_item(self):
+        self.led.event('work.item_attempt', 'sample/product#1',
+                       dict(step='triage', status='failed', attempt=6, retry_at=10**12, evidence='log'), 'conveyor')
+        self.assertEqual('done', self.run_work()[0]['state'])
+
     def test_conveyor_success_is_not_delivery_proof(self):
         self.led.event("work.item_attempt", "sample/product#1",
                        dict(step="build", status="succeeded", attempt=0, retry_at=0, evidence="log"), "conveyor")

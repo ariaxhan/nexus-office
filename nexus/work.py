@@ -578,7 +578,7 @@ def next_retry(led, task):
                            "('work.failure','work.pending') ORDER BY id DESC LIMIT 1", (task["id"],)).fetchone()
     rows = [loads(row[0], {})] if row else []
     return max([0] + [r.get("next_retry", 0) for r in rows] +
-               [float(r.get("retry_at") or 0) for r in conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))])
+               [conveyor_backoff(led, task["dedupe_key"].removeprefix("github:"))])
 
 
 def disposition(led, task, state, reason, **details):
@@ -609,6 +609,15 @@ def conveyor_attempts(led, subject):
     return list(steps.values())
 
 
+def conveyor_backoff(led, subject):
+    """Latest retry_at the conveyor recorded for work on this item. Its triage step is not
+    work on the item: a triage that stands down under repository backpressure records a
+    failed attempt with a 30-minute retry, and honouring that here kept a ready issue out of
+    the tower for as long as the repository had parked PRs (tbs-www#310, 2026-09-11)."""
+    return max([0.0] + [float(row.get("retry_at") or 0) for row in conveyor_attempts(led, subject)
+                        if row.get("step") != "triage"])
+
+
 def _run_task(led, entry, task):
     try:
         if task["state"] == "done":
@@ -620,8 +629,7 @@ def _run_task(led, entry, task):
             latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"]))
         if state not in ("ready", "resume") and not reconcile:
             return state
-        conveyor = conveyor_attempts(led, task["dedupe_key"].removeprefix("github:"))
-        if any(float(row.get("retry_at") or 0) > time.time() for row in conveyor):
+        if conveyor_backoff(led, task["dedupe_key"].removeprefix("github:")) > time.time():
             return "backoff"
         if next_retry(led, task) > time.time():
             return "backoff"
