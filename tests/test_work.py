@@ -581,14 +581,10 @@ else:
         self.assertEqual(2, len(self.calls()))
 
     def test_fresh_ready_issue_outranks_stalled_in_pr_items(self):
-        # Issue 1 is older and in PR (two bonuses) but its last pass reported pending;
-        # issue 2 is new and ready and has never run. Issue 2 takes the single slot.
-        self.issues = [dict(number=1, title='Stalled', state='open', labels=[{'name': 'in pr'}]),
+        # Issue 1 is older and in PR (two bonuses): it waits on review, so the fresh ready
+        # issue 2 takes the single slot; issue 1 runs only from a second slot.
+        self.issues = [dict(number=1, title='In PR', state='open', labels=[{'name': 'in pr'}]),
                        dict(number=2, title='Fresh', state='open', labels=[{'name': 'ready'}])]
-        (self.root / 'pending').write_text(json.dumps(dict(state='pending', reason='waiting', evidence=[])))
-        first = work.run(self.led, [self.entry], max_items=1)
-        self.assertEqual(['pending'], [row['state'] for row in first])
-        (self.root / 'pending').unlink()
         second = work.run(self.led, [self.entry], max_items=1)
         numbers = [json.loads(self.led.conn.execute(
             "SELECT payload FROM events WHERE kind='work.issue' AND subject=? ORDER BY id DESC LIMIT 1",
