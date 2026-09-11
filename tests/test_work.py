@@ -576,20 +576,22 @@ else:
         self.issues += [dict(number=n, title=str(n), state='open', labels=[{'name': 'ready'}]) for n in range(2, 5)]
         (self.root / 'fail-1').touch()
         other = dict(self.entry, repo='sample/other')
-        report = work.run(self.led, [self.entry, other], max_items=2)
+        report = work.run(self.led, [self.entry, other], max_items=1)
         self.assertEqual(['sample/product', 'sample/other'], [r['repo'] for r in report])
         self.assertEqual(2, len(self.calls()))
 
-    def test_single_item_keeps_execution_budget_and_rotates_repositories(self):
-        self.script.write_text('import time; time.sleep(0.6)\n' + self.script.read_text())
-        entries = [self.entry] + [dict(self.entry, repo=f'sample/other-{i}') for i in range(7)]
-        report = work.run(self.led, entries, budget_s=3, max_items=1)
-        self.assertEqual(['done'], [row['state'] for row in report])
-        self.assertEqual('sample/product', report[0]['repo'])
-        self.assertEqual(1, len(self.calls()))
-        following = work.run(self.led, entries, budget_s=3, max_items=1)
-        self.assertEqual('sample/other-0', following[0]['repo'])
-        self.assertEqual('done', following[0]['state'])
+    def test_max_items_bounds_each_repository_not_the_run(self):
+        roots = [self.root / f'other-{i}' for i in range(3)]
+        for root in roots:
+            root.mkdir()
+        entries = [self.entry] + [dict(self.entry, repo=f'sample/other-{i}', path=str(root))
+                                  for i, root in enumerate(roots)]
+        report = work.run(self.led, entries, budget_s=10, max_items=1)
+        self.assertEqual(['sample/product', 'sample/other-0', 'sample/other-1', 'sample/other-2'],
+                         [row['repo'] for row in report])
+        self.assertEqual({'done'}, {row['state'] for row in report})
+        executed = [root / 'calls' for root in [self.root, *roots] if (root / 'calls').exists()]
+        self.assertEqual(4, len(executed))
 
     def test_budget_prevents_launch_and_reserves_other_repository_time(self):
         other = dict(self.entry, repo='sample/other')

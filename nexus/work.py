@@ -509,6 +509,12 @@ def eligible(led, entries, repo):
 
 
 def run(led, entries, repo=None, *, budget_s=300, max_items=20):
+    """One pass over every enabled repository; max_items bounds the work taken PER repository.
+
+    2026-09-11: the bound used to be per run. With ~90 registered repositories and one item
+    per 15-minute tick, a repository whose issue merely reported "pending" consumed the whole
+    tick and tbs-www waited a day for its turn. Now each repository gets its own slots every
+    tick, so a queue in one repository never starves another."""
     if not math.isfinite(budget_s) or not 1 <= budget_s <= 3600 or not 1 <= max_items <= 100:
         raise WorkError("budget must be 1..3600 seconds; max_items must be 1..100")
     if repo and repo.lower() not in {e["repo"] for e in entries}:
@@ -517,21 +523,20 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
     # Least recently serviced repositories first, using existing ledger receipts.
     entries.sort(key=lambda e: latest(led, "work.serviced", e["repo"]).get("at", 0))
     deadline = time.monotonic() + budget_s
-    report, queues = [], {}
-    count = 0
-    while entries and count < max_items and time.monotonic() < deadline:
-        for index, entry in enumerate(entries[:]):
-            if count >= max_items or time.monotonic() >= deadline:
-                break
-            token = _deadline.set(min(deadline, time.monotonic() +
-                                      (deadline - time.monotonic()) / min(len(entries) - index, max_items - count)))
-            try:
-                name = entry["repo"]
-                if name not in queues:
-                    discover(led, entry)
-                    queues[name], passive = selection_queue(led, entry)
-                    report.extend(passive)
-                queue = queues[name]
+    report = []
+    passive = ("held", "owned", "ineligible", "closed", "backoff")
+    for index, entry in enumerate(entries):
+        if time.monotonic() >= deadline:
+            break
+        token = _deadline.set(min(deadline, time.monotonic() +
+                                  (deadline - time.monotonic()) / (len(entries) - index)))
+        try:
+            name = entry["repo"]
+            discover(led, entry)
+            queue, dispositions = selection_queue(led, entry)
+            report.extend(dispositions)
+            taken = 0
+            while queue and taken < max_items and time.monotonic() < deadline:
                 while (queue and eligibility(latest(led, "work.issue", queue[0]["id"])) in ("ready", "resume")
                        and next_retry(led, queue[0]) > time.time()):
                     task = queue.pop(0)
@@ -540,20 +545,18 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
                                 evidence=detail.get("evidence", []), next_retry=next_retry(led, task))
                     report.append(dict(repo=name, task=task["id"], state="backoff"))
                 if not queue:
-                    continue
+                    break
                 task = queue.pop(0)
                 state = run_task(led, entry, task)
-                if state not in ("held", "owned", "ineligible", "closed", "backoff"):
-                    count += 1
+                if state not in passive:
+                    taken += 1
                 report.append(dict(repo=name, task=task["id"], state=state))
-            except (OSError, ValueError, KeyError, TypeError, LedgerError, subprocess.SubprocessError) as exc:
-                led.event("work.discovery_failed", entry["repo"], {"error": str(exc)}, "work")
-                report.append(dict(repo=entry["repo"], state="failed", error=str(exc)))
-                queues[entry["repo"]] = []
-            finally:
-                led.event("work.serviced", entry["repo"], {"at": time.time()}, "work")
-                _deadline.reset(token)
-        entries = [e for e in entries if queues.get(e["repo"])]
+        except (OSError, ValueError, KeyError, TypeError, LedgerError, subprocess.SubprocessError) as exc:
+            led.event("work.discovery_failed", entry["repo"], {"error": str(exc)}, "work")
+            report.append(dict(repo=entry["repo"], state="failed", error=str(exc)))
+        finally:
+            led.event("work.serviced", entry["repo"], {"at": time.time()}, "work")
+            _deadline.reset(token)
     return report
 
 
