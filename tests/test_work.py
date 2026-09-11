@@ -580,6 +580,22 @@ else:
         self.assertEqual(['sample/product', 'sample/other'], [r['repo'] for r in report])
         self.assertEqual(2, len(self.calls()))
 
+    def test_fresh_ready_issue_outranks_stalled_in_pr_items(self):
+        # Issue 1 is older and in PR (two bonuses) but its last pass reported pending;
+        # issue 2 is new and ready and has never run. Issue 2 takes the single slot.
+        self.issues = [dict(number=1, title='Stalled', state='open', labels=[{'name': 'in pr'}]),
+                       dict(number=2, title='Fresh', state='open', labels=[{'name': 'ready'}])]
+        (self.root / 'pending').write_text(json.dumps(dict(state='pending', reason='waiting', evidence=[])))
+        first = work.run(self.led, [self.entry], max_items=1)
+        self.assertEqual(['pending'], [row['state'] for row in first])
+        (self.root / 'pending').unlink()
+        second = work.run(self.led, [self.entry], max_items=1)
+        numbers = [json.loads(self.led.conn.execute(
+            "SELECT payload FROM events WHERE kind='work.issue' AND subject=? ORDER BY id DESC LIMIT 1",
+            (row['task'],)).fetchone()[0])['number'] for row in second if row['state'] != 'backoff']
+        self.assertEqual([2], numbers)
+        self.assertEqual('done', [row for row in second if row['state'] != 'backoff'][0]['state'])
+
     def test_max_items_bounds_each_repository_not_the_run(self):
         roots = [self.root / f'other-{i}' for i in range(3)]
         for root in roots:

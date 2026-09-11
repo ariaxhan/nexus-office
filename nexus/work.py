@@ -492,11 +492,19 @@ def selection_queue(led, entry):
 
 
 def selection_priority(led, task):
+    """Fresh work first, then age with a one-day bonus per signal.
+
+    A task whose last disposition was "pending" is waiting on something outside the tower (a
+    review, a merge, a proof). It has had its slot; it sorts behind every task that has not,
+    so ten stalled in-PR items cannot hold a repository's slot against a new ready issue
+    (Aria, 2026-09-11, tbs-www#310). Stalled items still run once fresh work is exhausted, or
+    from the second slot when max_items allows."""
     issue = latest(led, "work.issue", task["id"])
     labels = {label["name"].lower() for label in issue.get("labels", [])}
     bonus = 86400 * (bool(led.flights(task_id=task["id"])) +
                      bool(labels & {"urgent", "p0", "p1", "in-pr", "in pr"}))
-    return task["created_at"] - bonus
+    stalled = latest(led, "work.disposition", task["id"]).get("state") == "pending"
+    return (stalled, task["created_at"] - bonus)
 
 
 def eligible(led, entries, repo):
