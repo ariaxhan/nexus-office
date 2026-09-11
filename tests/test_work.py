@@ -597,6 +597,20 @@ else:
         self.assertEqual([2], numbers)
         self.assertEqual('done', [row for row in second if row['state'] != 'backoff'][0]['state'])
 
+    def test_pending_item_is_fresh_again_once_its_retry_deadline_passes(self):
+        self.issues = [dict(number=1, title='Older', state='open', labels=[{'name': 'ready'}]),
+                       dict(number=2, title='Newer', state='open', labels=[{'name': 'ready'}])]
+        (self.root / 'pending').write_text(json.dumps(dict(state='pending', reason='waiting', evidence=[])))
+        first = work.run(self.led, [self.entry], max_items=1)
+        self.assertEqual(['pending'], [row['state'] for row in first])
+        older = first[0]['task']
+        # Once the deadline the pending pass recorded has passed, the older item leads again.
+        (self.root / 'pending').unlink()
+        with patch('nexus.work.time.time', return_value=work.time.time() + 10 ** 6):
+            second = work.run(self.led, [self.entry], max_items=1)
+        active = [row for row in second if row['state'] not in ('backoff',)]
+        self.assertEqual([older], [row['task'] for row in active])
+
     def test_max_items_bounds_each_repository_not_the_run(self):
         roots = [self.root / f'other-{i}' for i in range(3)]
         for root in roots:

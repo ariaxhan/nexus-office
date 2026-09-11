@@ -505,7 +505,10 @@ def selection_priority(led, task):
     labels = {label["name"].lower() for label in issue.get("labels", [])}
     bonus = 86400 * (bool(led.flights(task_id=task["id"])) +
                      bool(labels & {"urgent", "p0", "p1", "in-pr", "in pr"}))
-    stalled = latest(led, "work.disposition", task["id"]).get("state") == "pending"
+    # Stalled only while the recorded retry deadline is still ahead; past it the item is as
+    # fresh as any other and competes on age again.
+    stalled = (latest(led, "work.disposition", task["id"]).get("state") == "pending"
+               and next_retry(led, task) > time.time())
     resuming = eligibility(issue) == "resume"      # in PR: waiting on review or merge, not on us
     return (stalled, resuming, task["created_at"] - bonus)
 
