@@ -256,8 +256,8 @@ def cmd_work(args):
                 work.release(led, args.flight, args.pid)
                 result = {"released": args.flight}
             print(json.dumps(result, sort_keys=True))
-            if isinstance(result, list):
-                return int(any(r["state"] in ("failed", "exhausted") for r in result))
+            # Per-item outcomes live in the ledger; a run that serviced its
+            # repositories succeeded, or five failing issues quarantine the plan.
             return 0
         finally:
             led.close()

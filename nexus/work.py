@@ -499,12 +499,21 @@ def selection_priority(led, task):
     return task["created_at"] - bonus
 
 
+def eligible(led, entries, repo):
+    """Enabled repositories, or none: `nexus plans disable github-work` stops every one at once."""
+    entries = [e for e in entries if e["enabled"] and (not repo or e["repo"] == repo.lower())]
+    if led.plan(plan(led))["enabled"]:
+        return entries
+    led.event("work.disabled", "github-work", {"repositories": len(entries)}, "work")
+    return []
+
+
 def run(led, entries, repo=None, *, budget_s=300, max_items=20):
     if not math.isfinite(budget_s) or not 1 <= budget_s <= 3600 or not 1 <= max_items <= 100:
         raise WorkError("budget must be 1..3600 seconds; max_items must be 1..100")
     if repo and repo.lower() not in {e["repo"] for e in entries}:
         raise WorkError(f"unknown repository: {repo}")
-    entries = [e for e in entries if e["enabled"] and (not repo or e["repo"] == repo.lower())]
+    entries = eligible(led, entries, repo)
     # Least recently serviced repositories first, using existing ledger receipts.
     entries.sort(key=lambda e: latest(led, "work.serviced", e["repo"]).get("at", 0))
     deadline = time.monotonic() + budget_s

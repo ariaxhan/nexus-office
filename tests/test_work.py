@@ -356,6 +356,15 @@ else:
         self.assertEqual(5, len(self.led.tasks()))
         self.assertEqual([1], [c["issue"]["number"] for c in self.calls()])
 
+    def test_disabled_plan_is_a_kill_switch(self):
+        self.led.set_plan_enabled(work.plan(self.led), False)
+        self.assertEqual([], self.run_work())
+        self.assertEqual([], self.calls())
+        self.assertTrue(self.led.events(kind="work.disabled"))
+        self.assertEqual([], self.led.flights())
+        self.led.set_plan_enabled(work.plan(self.led), True)
+        self.assertEqual("done", self.run_work()[0]["state"])
+
     def test_unknown_selector_fails(self):
         with self.assertRaisesRegex(work.WorkError, "unknown repository"):
             work.run(self.led, [self.entry], "missing/repo")
