@@ -468,12 +468,21 @@ class Ledger:
             sql += " WHERE enabled=1 AND quarantined_at IS NULL"
         return self.conn.execute(sql + " ORDER BY created_at").fetchall()
 
-    def set_plan_enabled(self, plan_id, enabled, now=None):
+    def set_plan_enabled(self, plan_id, enabled, now=None, reason=None):
         now = now if now is not None else time.time()
         with self.tx():
             self.conn.execute("UPDATE plans SET enabled=? WHERE id=?",
                               (1 if enabled else 0, plan_id))
-            self._event("plan.enabled" if enabled else "plan.disabled", plan_id, {}, "tower", now)
+            payload = {"reason": reason} if reason and not enabled else {}
+            self._event("plan.enabled" if enabled else "plan.disabled", plan_id, payload, "tower", now)
+
+    def plan_disabled_reason(self, plan_id):
+        """The reason given when a disabled plan was last disabled, or None."""
+        row = self.conn.execute(
+            "SELECT payload FROM events WHERE subject=? AND kind='plan.disabled' "
+            "ORDER BY id DESC LIMIT 1", (plan_id,)).fetchone()
+        return json.loads(row["payload"]).get("reason") if row else None
+
 
     def quarantine_plan(self, plan_id, reason, now=None):
         now = now if now is not None else time.time()

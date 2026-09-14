@@ -154,7 +154,9 @@ def cmd_plans_set(args):
     if args.plans_command == "release":
         led.unquarantine_plan(plan["id"])
     else:
-        led.set_plan_enabled(plan["id"], args.plans_command == "enable")
+        led.set_plan_enabled(plan["id"], args.plans_command == "enable",
+                             reason=getattr(args, "reason", None))
+
     print(f"{args.plans_command} {plan['id']} ({plan['name']})")
     return 0
 
@@ -162,8 +164,13 @@ def cmd_plans_set(args):
 def cmd_plans_list(args):
     led = _ledger(args)
     for plan in led.plans():
-        print(f"{plan['id']}  {plan['name']}  {loads(plan['schedule'], {})}"
+        state = "enabled"
+        if not plan["enabled"]:
+            reason = led.plan_disabled_reason(plan["id"])
+            state = f"disabled ({reason})" if reason else "disabled"
+        print(f"{plan['id']}  {plan['name']}  {loads(plan['schedule'], {})}  {state}"
               f"  {'quarantined' if plan['quarantined_at'] else 'ok'}")
+
     return 0
 
 
@@ -344,7 +351,10 @@ def build_parser():
                             ("release", "lift a quarantine")):
         sub = plans_subs.add_parser(name, help=help_text)
         sub.add_argument("plan", help="plan id or name")
+        if name == "disable":
+            sub.add_argument("--reason", help="why; shown by plans list")
         sub.set_defaults(func=cmd_plans_set)
+
 
     run_p = subs.add_parser("flight-run", help=argparse.SUPPRESS)
     run_p.add_argument("--workspace", required=True)
