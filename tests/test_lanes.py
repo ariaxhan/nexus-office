@@ -17,6 +17,7 @@ from nexus import executor, landing, lanes, lease  # noqa: E402
 
 landing.GIT_LOCK = "/nonexistent"
 lease.LANE_LOCK = os.environ["NEXUS_LANE_LOCK"] = ""
+lease.INDEX = os.path.join(tempfile.mkdtemp(prefix="nexus-index-"), "lease-repos.json")  # never the real index
 
 
 def git(cwd, *args):
@@ -31,6 +32,7 @@ class Fake:
 class Lanes(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="nexus-lanes-")
+        lease.INDEX = os.path.join(self.dir, "lease-repos.json")
         self.origin = os.path.join(self.dir, "origin.git")
         self.repo = os.path.join(self.dir, "repo")
         git(self.dir, "init", "-q", "--bare", "-b", "main", self.origin)
@@ -161,6 +163,58 @@ class Lanes(unittest.TestCase):
             json.dump(dict(record, pid=999999), f)
         self.assertEqual("HELD", lease.recover(self.repo, lambda b: "c")["state"])
         self.assertEqual("another session\n", self.read("human.txt"))
+
+    def test_records_carry_host_times_reason_and_paths(self):
+        ws = lanes.acquire(self.repo, "main", "flt_ws", os.getpid(), 600, ["a.txt"])
+        self.assertEqual(("write_set", ["a.txt"]), (ws["reason"], ws["paths"]))
+        for key in ("host", "started_at", "renewed_at", "heartbeat_at"):
+            self.assertIn(key, ws)
+        lanes.release(self.repo, "flt_ws")
+        whole = lease.acquire(self.repo, "main", "flt_w", os.getpid(), 600)
+        self.assertEqual(("whole_repo", None), (whole["reason"], whole["paths"]))
+        self.assertIn(self.repo, lease.indexed())
+
+    def test_stale_rules(self):
+        now = time.time()
+        live = dict(lease.stamp("f", os.getpid(), 99999, "whole_repo", None, now), write_set=None)
+        self.assertFalse(lease.stale(live, now))
+        self.assertTrue(lease.stale(dict(live, pid=999999), now))  # dead pid
+        self.assertTrue(lease.stale(dict(live, heartbeat_at=now - 601), now))  # wedged holder
+        self.assertTrue(lease.stale(dict(live, heartbeat_at=now, renewed_at=now - 1801), now))  # max hold, repo-wide
+        ws = dict(live, write_set=["a.txt"], heartbeat_at=now, renewed_at=now - 1801)
+        self.assertFalse(lease.stale(ws, now))
+        self.assertTrue(lease.stale(dict(ws, renewed_at=now - 3601), now))  # max hold, write set
+        legacy = {"flight": "old", "pid": os.getpid(), "expires": now + 60}
+        self.assertFalse(lease.stale(legacy, now))
+        self.assertTrue(lease.stale(dict(legacy, expires=now - 1), now))
+
+    def test_ticked_live_flight_older_than_max_hold_stays_live_and_dead_one_is_left(self):
+        t0 = time.time() - 4000
+        lease.acquire(self.repo, "main", "flt_long", os.getpid(), 99999)
+        with open(lease.path(self.repo)) as f:
+            record = json.load(f)
+        with open(lease.path(self.repo), "w") as f:
+            json.dump(dict(record, started_at=t0, renewed_at=t0 + 3900, heartbeat_at=t0 + 3900), f)
+        for beat in range(3):
+            lease.heartbeat(t0 + 3930 + 30 * beat)
+        self.assertFalse(lease.stale(lease.read(self.repo), t0 + 4000))
+        self.assertEqual(t0, lease.read(self.repo)["started_at"])
+        dead = dict(lease.read(self.repo), pid=999999)
+        with open(lease.path(self.repo), "w") as f:
+            json.dump(dead, f)
+        before = lease.read(self.repo)["heartbeat_at"]
+        self.assertEqual(0, lease.heartbeat(t0 + 4100))
+        self.assertEqual(before, lease.read(self.repo)["heartbeat_at"])  # a dead holder is never renewed
+
+    def test_legacy_record_is_never_rewritten_by_heartbeat(self):
+        lease.acquire(self.repo, "main", "flt_legacy", os.getpid(), 600)
+        legacy = {k: v for k, v in lease.read(self.repo).items()
+                  if k not in ("host", "started_at", "renewed_at", "heartbeat_at", "reason", "paths")}
+        with open(lease.path(self.repo), "w") as f:
+            json.dump(legacy, f)
+        self.assertEqual(0, lease.heartbeat())
+        self.assertEqual(legacy, lease.read(self.repo))
+        self.assertFalse(lease.stale(legacy))
 
     def test_plan_reads_triage_schema_ts_and_depends_on(self):
         path = os.path.join(self.dir, "plan.json")

@@ -155,11 +155,12 @@ def acquire(repo, branch, flight, pid, ttl_s, write_set, per_repo=PER_REPO):
         dirty_inside = sorted(p for p in baseline if inside(write_set, p))
         if dirty_inside:  # a person's or crashed lane's bytes already sit in these paths
             raise lease.Owned("write_set_dirty:" + ",".join(dirty_inside[:5]))
-        record = {"flight": flight, "pid": pid, "expires": time.time() + ttl_s, "branch": branch,
+        record = {**lease.stamp(flight, pid, ttl_s, "write_set", write_set), "branch": branch,
                   "head": landing._git(repo, "rev-parse", "HEAD").stdout.strip(),
                   "write_set": write_set, "baseline": baseline}
         with open(os.path.join(d, f"{flight}.json"), "w") as f:
             json.dump(record, f)
+    lease._index_add(repo)
     return record
 
 

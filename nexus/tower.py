@@ -89,6 +89,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     }
 
     report["expired"] = len(ledger.expire_leases(now))
+    report["heartbeats"] = _heartbeat(now)
     report["timed_out"] = _enforce_budgets(ledger, now)
     reaped = _reap(ledger, now, root)
     report["produced"] += reaped["produced"]
@@ -110,6 +111,24 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report["accepted"], report["rejected"] = accepted, rejected
     report["launched"] = _launch(ledger, now, root)
     return report
+
+
+_last_heartbeat = [0.0]
+
+
+def _heartbeat(now):
+    """Renew checkout leases of live holders, at most every HEARTBEAT_EVERY_S. Never fails the tick."""
+    from . import lease
+    if now - _last_heartbeat[0] < HEARTBEAT_EVERY_S:
+        return 0
+    _last_heartbeat[0] = now
+    try:
+        return lease.heartbeat(now)
+    except Exception:  # noqa: BLE001 - a heartbeat miss only ages a lease; recovery still preserves work
+        return 0
+
+
+HEARTBEAT_EVERY_S = 30
 
 
 # ---- budgets ---------------------------------------------------------------
