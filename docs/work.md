@@ -10,7 +10,16 @@ The verification adapter runs before execution and again afterward. It must quer
 
 After an uncertain execution, `absent` also requires `retry_safe: true` before another executor may run. This is a destination-backed assurance that no earlier delivery remains active or applied, not an interpretation of a missing local receipt. Adapters must retain idempotency receipts through outages and distinguish inaccessible destinations from absence. Required external authorization must report pending, never delivered. A crash after delivery is reconciled through the same verification adapter. A closure outage retries only closure once proof has made the task done.
 
-`claim --registry PATH --repo OWNER/NAME ISSUE --pid PID` captures issues and acquires an issue resource for a live direct-session process. `release --registry PATH FLIGHT --pid PID` cancels an unused claim belonging to that process. Executed claims require reconciliation. The same claim primitive serves direct sessions and the work runner. Claims do not expire by time; a competing runner checks owner and recorded executor processes. Tower's script lifecycle leaves work flights to this synchronous runner. Configure the existing scheduler to invoke `work run`; this change installs no schedule or service.
+`claim --registry PATH --repo OWNER/NAME ISSUE --pid PID` captures issues and acquires an issue resource for a live direct-session process. `release --registry PATH FLIGHT --pid PID` cancels an unused claim belonging to that process. Executed claims require reconciliation. The same claim primitive serves direct sessions and the work runner. Claims do not expire by time; a competing runner checks owner and recorded executor processes. Tower's script lifecycle leaves work flights to this synchronous runner. The scheduler invokes `work run`: plan `code-work` runs `nexus work run --lane tower-v2` every 900 s.
+
+## Tower-v2 lane
+
+- Takes only issues labeled `tower-v2`; plan `code-work` is its own switch (`github-work` does not gate it).
+- Leases each issue on the canonical checkout (`nexus/lease.py`), sharing the Vaults-wide `tbs lock`, so humans and flights see each other.
+- Lands in place (`nexus/landing.py`): `direct` commits and pushes the flight's paths to the checkout branch; `review` pushes `aria/issue-N`, opens a PR and restores the tree. Collisions hold.
+
+- A review PR gets an independent reviewer flight (`executor.review`): PASS merges, FAIL holds the PR.
+
 
 Each failed attempt keeps a log artifact outside temporary workspaces, structured error, attempt count and exponential next-retry time, capped at one day. Independent issues and repositories continue. Executor attempts are bounded; reconciliation remains possible after the execution budget is spent. SQLite transactions serialize claims and intake. A missing local path appears in coverage and execution fails without automatic hydration.
 
