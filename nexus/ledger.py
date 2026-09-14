@@ -754,7 +754,7 @@ class Ledger:
                         {"landing": landing_id, "expected_sha": expected_sha}, "tower", now)
         return True
 
-    def apply_landing(self, landing_id, applied_sha, now=None):
+    def apply_landing(self, landing_id, applied_sha, now=None, complete_task=None):
         """Idempotent: the landing row and the flight's `landed` state move together.
 
         Calling it twice on the same landing is a no-op returning False, which is
@@ -793,6 +793,17 @@ class Ledger:
             self._event("flight.state", flight["id"],
                         {"from": flight["state"], "to": "landed", "landing": landing_id,
                          "applied_sha": applied_sha}, "tower", now)
+            if complete_task is not None:
+                task = self.conn.execute("SELECT * FROM tasks WHERE id=?", (complete_task,)).fetchone()
+                if task is None:
+                    raise LedgerError(f"no such task: {complete_task}")
+                if task["state"] != "done":
+                    self.conn.execute(
+                        "UPDATE tasks SET state='done',decided_by='work proof',decided_at=? WHERE id=?",
+                        (now, complete_task))
+                    self._event("task.state", complete_task,
+                                {"from": task["state"], "to": "done",
+                                 "decided_by": "work proof", "reason": None}, "work", now)
         return True
 
     def refuse_landing(self, landing_id, reason, now=None):

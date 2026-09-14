@@ -116,14 +116,18 @@ def latest(led, kind, subject):
     return loads(row[0], {}) if row else {}
 
 
-def plan(led):
+def plan(led, registry_path=None):
     with led.tx() as c:
         row = c.execute("SELECT id FROM plans WHERE name='github-work'").fetchone()
         if row:
+            if registry_path:
+                c.execute("UPDATE plans SET inputs=? WHERE id=?",
+                          (json.dumps({"registry": str(Path(registry_path).resolve())}), row[0]))
             return row[0]
         pid = new_id("plan")
-        c.execute("INSERT INTO plans(id,name,kind,created_at) VALUES (?,'github-work','work',?)",
-                  (pid, time.time()))
+        inputs = json.dumps({"registry": str(Path(registry_path).resolve())}) if registry_path else "{}"
+        c.execute("INSERT INTO plans(id,name,kind,inputs,created_at) VALUES (?,'github-work','work',?,?)",
+                  (pid, inputs, time.time()))
         led._event("plan.added", pid, {"name": "github-work", "kind": "work"}, "work")
         return pid
 
@@ -233,6 +237,37 @@ def release(led, fid, owner_pid):
     led.set_state(fid, "cancelled", expect="running", source="work")
 
 
+def queue_retry(led, flight):
+    """Replace one dormant work owner with one queued normal Tower flight."""
+    task = led.task(flight["task_id"])
+    inputs = loads(led.plan(flight["plan_id"])["inputs"], {}) or {}
+    if task is None or task["state"] == "done" or not inputs.get("registry"):
+        raise WorkError("work retry has no configured unfinished task")
+    if flight["state"] not in ("running", "failed", "cancelled") or live_owner(led, flight):
+        raise Owned("work retry requires a dormant owner")
+    fid = new_id("flt")
+    now = time.time()
+    with led.tx() as c:
+        active = c.execute("SELECT * FROM flights WHERE task_id=? AND state NOT IN"
+                           " ('landed','failed','cancelled')", (task["id"],)).fetchone()
+        if active and active["id"] != flight["id"]:
+            raise Owned(f"claim retained by {active['id']}")
+        c.execute("INSERT INTO flights(id,task_id,plan_id,state,created_at,attempt)"
+                  " VALUES (?,?,?,'queued',?,?)",
+                  (fid, task["id"], flight["plan_id"], now, flight["attempt"] + 1))
+        led._event("flight.state", fid, {"plan_id": flight["plan_id"], "task_id": task["id"],
+                   "attempt": flight["attempt"] + 1, "to": "queued"}, "click", now)
+        if active:
+            c.execute("UPDATE flights SET state='cancelled',ended_at=?,lease_until=NULL WHERE id=?",
+                      (now, flight["id"]))
+            led._event("flight.state", flight["id"],
+                       {"from": flight["state"], "to": "cancelled", "successor": fid}, "click", now)
+        c.execute("UPDATE leases SET holder_flight=? WHERE holder_flight=?", (fid, flight["id"]))
+        led._event("work.pending", task["id"],
+                   {"next_retry": 0, "reason": "operator retry", "flight": fid}, "click", now)
+    return fid
+
+
 def issue_now(led, entry, task):
     number = latest(led, "work.issue", task["id"])["number"]
     proc = subprocess.run(["gh", "api", f"repos/{entry['repo']}/issues/{number}"],
@@ -332,9 +367,8 @@ def finish(led, fid, payload, result):
         landing = landing["id"] if landing else led.create_landing(
             fid, payload["idempotency_key"], state="verified")
         if led.landing(landing)["state"] != "applied":
-            led.apply_landing(landing, json.dumps(result["evidence"], sort_keys=True))
-    if led.task(row["task_id"])["state"] != "done":
-        led.set_task_state(row["task_id"], "done", decided_by="work proof")
+            led.apply_landing(landing, json.dumps(result["evidence"], sort_keys=True),
+                              complete_task=row["task_id"])
     close_issue(led, payload)
 
 
@@ -429,13 +463,18 @@ def execution_history(led, task):
     return previous, predecessor, uncertain
 
 
-def execute(led, entry, task):
-    try:
-        previous, predecessor, uncertain = execution_history(led, task)
-    except Owned:
-        return "owned"
-    fid = predecessor["id"] if predecessor else claim(led, entry["repo"], latest(
-        led, "work.issue", task["id"])["number"], os.getpid(), runner=True)
+def execute(led, entry, task, owner_fid=None):
+    if owner_fid:
+        previous, predecessor, uncertain = led.flights(task_id=task["id"]), None, False
+        fid = owner_fid
+        led.event("work.runner", fid, {}, "work")
+    else:
+        try:
+            previous, predecessor, uncertain = execution_history(led, task)
+        except Owned:
+            return "owned"
+        fid = predecessor["id"] if predecessor else claim(led, entry["repo"], latest(
+            led, "work.issue", task["id"])["number"], os.getpid(), runner=True)
     log = Path(led.path).resolve().parent / "logs" / f"{fid}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.touch()
@@ -526,13 +565,14 @@ def take_due(led, queue, report, repo):
     return queue.pop(0) if queue else None
 
 
-def run(led, entries, repo=None, *, budget_s=300, max_items=20):
+def run(led, entries, repo=None, *, budget_s=300, max_items=20, task_id=None,
+        discover_enabled=True, registry_path=None, owner_fid=None):
     if not math.isfinite(budget_s) or not 1 <= budget_s <= 3600 or not 1 <= max_items <= 100:
         raise WorkError("budget must be 1..3600 seconds; max_items must be 1..100")
     if repo and repo.lower() not in {e["repo"] for e in entries}:
         raise WorkError(f"unknown repository: {repo}")
     entries = [e for e in entries if not repo or e["repo"] == repo.lower()]
-    intake = bool(led.plan(plan(led))["enabled"])
+    intake = discover_enabled and bool(led.plan(plan(led, registry_path))["enabled"])
     # Least recently serviced repositories first, using existing ledger receipts.
     entries.sort(key=lambda e: latest(led, "work.serviced", e["repo"]).get("at", 0))
     deadline = time.monotonic() + budget_s
@@ -550,11 +590,13 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20):
                     if intake and entry["enabled"]:
                         discover(led, entry)
                     queues[name], passive = selection_queue(led, entry)
+                    if task_id:
+                        queues[name] = [task for task in queues[name] if task["id"] == task_id]
                     report.extend(passive)
                 task = take_due(led, queues[name], report, name)
                 if task is None:
                     continue
-                state = run_task(led, entry, task)
+                state = execute(led, entry, task, owner_fid=owner_fid) if owner_fid else run_task(led, entry, task)
                 if state not in ("held", "owned", "ineligible", "closed", "backoff"):
                     count += 1
                 report.append(dict(repo=name, task=task["id"], state=state))

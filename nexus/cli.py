@@ -107,8 +107,8 @@ def cmd_retry(args):
             print(f"task {task_id} is abandoned; add a new one", file=sys.stderr)
             return 1
     if led.plan(flight["plan_id"])["kind"] == "work":
-        led.event("work.pending", task_id, {"next_retry": 0, "reason": "operator retry"}, "click")
-        print(task_id)
+        new = work.queue_retry(led, flight)
+        print(new)
         return 0
     new = led.create_flight(flight["plan_id"], task_id=task_id,
                             attempt=flight["attempt"] + 1, source="click",
@@ -249,7 +249,10 @@ def cmd_work(args):
         led = _ledger(args)
         try:
             if args.work_command == "run":
-                result = work.run(led, entries, args.repo, budget_s=args.budget_s, max_items=args.max_items)
+                result = work.run(led, entries, args.repo, budget_s=args.budget_s,
+                                  max_items=args.max_items, task_id=args.task,
+                                  discover_enabled=not args.no_discovery,
+                                  registry_path=args.registry, owner_fid=args.owner_flight)
             elif args.work_command == "claim":
                 entry = next((e for e in entries if e["repo"] == args.repo.lower()), None)
                 if entry is None:
@@ -284,6 +287,9 @@ def build_parser():
         if name == "run":
             sub.add_argument("--budget-s", type=float, default=300)
             sub.add_argument("--max-items", type=int, default=20)
+            sub.add_argument("--task", help=argparse.SUPPRESS)
+            sub.add_argument("--no-discovery", action="store_true", help=argparse.SUPPRESS)
+            sub.add_argument("--owner-flight", help=argparse.SUPPRESS)
         if name == "status":
             sub.add_argument("--json", action="store_true")
         if name in ("run", "claim"):

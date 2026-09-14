@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -594,8 +595,6 @@ def _launch(ledger, now, root):
         running[row["plan_id"]] = running.get(row["plan_id"], 0) + 1
     queued = sorted(ledger.flights(states=("queued",)), key=lambda r: r["created_at"])
     for flight in queued:
-        if ledger.plan(flight["plan_id"])["kind"] == "work":
-            continue
         plan = ledger.plan(flight["plan_id"])
         timeout_s, _, concurrency = _budget(plan)
         if running.get(plan["id"], 0) >= concurrency:
@@ -633,7 +632,13 @@ def _spawn(ledger, plan, flight_id, workspace, timeout_s):
     """
     inputs = loads(plan["inputs"], {}) or {}
     cmd = inputs.get("cmd")
-    if plan["kind"] != "script" or not cmd:
+    if plan["kind"] == "work" and inputs.get("registry"):
+        task = ledger.flight(flight_id)["task_id"]
+        cmd = shlex.join([sys.executable, "-m", "nexus", "--ledger",
+                          os.path.abspath(ledger.path), "work", "run", "--registry",
+                          inputs["registry"], "--task", task, "--no-discovery",
+                          "--owner-flight", flight_id, "--max-items", "1"])
+    if plan["kind"] not in ("script", "work") or not cmd:
         return None
     outputs = loads(plan["outputs"], []) or []
     argv = [sys.executable, "-m", "nexus", "flight-run", "--workspace", workspace,
