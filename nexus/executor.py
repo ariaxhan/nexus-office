@@ -12,7 +12,7 @@ import os
 import re
 import subprocess
 
-from . import landing, lease, risk
+from . import landing, lanes, lease, risk
 
 ROUTER = os.path.expanduser("~/Developer/Vaults/_meta/services/tbs/account-router.sh")
 
@@ -111,19 +111,36 @@ def plan(entry, issue):
     return argv, prompt, name, road.get("risk")
 
 
-def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subprocess.run):
+def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subprocess.run, write_set=None,
+        per_repo=lanes.PER_REPO):
+    """write_set: this lane leases only those paths in the shared checkout; None leases the whole repo."""
     repo, branch = entry["path"], entry.get("default_branch", "main")
     argv, prompt, road, forced = plan(entry, issue)
-    recovered = lease.recover(repo, comment)
-    record = lease.acquire(repo, branch, flight, os.getpid(), timeout_s + 600)
-    env = dict(os.environ, TBS_LANE_OWNER=lease.owner(flight), TBS_LANE_PID=str(os.getpid()), NEXUS_FLIGHT=flight, NEXUS_ROAD=road or "", NEXUS_PROMPT=prompt,
-               ACCOUNT_SCOPE=entry.get("account", ""))
+    write_set = None if road else write_set  # roads (lessons) keep the whole-repo lane
+    recovered = [lease.recover(repo, comment)] + lanes.recover(repo, comment)
+    base = prompt
+    if write_set:
+        record = lanes.acquire(repo, branch, flight, os.getpid(), timeout_s + 600, write_set, per_repo)
+        prompt += (f"\n\nWrite set: edit ONLY {', '.join(write_set)}. Other Tower lanes are editing other files in "
+                   "this same checkout right now. If the change needs any other path, stop; do not edit it.")
+    else:
+        record = lease.acquire(repo, branch, flight, os.getpid(), timeout_s + 600)
+    env = dict(os.environ, TBS_LANE_OWNER=lease.owner(flight), TBS_LANE_PID=str(os.getpid()), NEXUS_FLIGHT=flight,
+               NEXUS_ROAD=road or "", NEXUS_PROMPT=prompt, ACCOUNT_SCOPE=entry.get("account", ""))
+    if write_set:
+        env["NEXUS_WRITE_SET"] = json.dumps(write_set)
+        argv = [prompt if a == base else a for a in argv]
     proc = run(argv, cwd=repo, env=env, input=prompt if road else None, text=True,
                capture_output=True, timeout=timeout_s)
-    result = _land(entry, issue, record, proc, road, forced, pr_create, comment, run)
-    landing.require_terminal(repo, result)
-    lease.release(repo, flight)
-    return dict(result, recovered=recovered, road=road)
+    if write_set:
+        result = lanes.land(entry, issue, record, proc, forced, pr_create, comment, run, risk.classify, _lines)
+        landing.require_terminal(repo, result)
+        lanes.release(repo, flight)
+    else:
+        result = _land(entry, issue, record, proc, road, forced, pr_create, comment, run)
+        landing.require_terminal(repo, result)
+        lease.release(repo, flight)
+    return dict(result, recovered=[r for r in recovered if r], road=road)
 
 
 REVIEW_BAR = ("Bar: correctness, and the change does what the issue asks without breaking callers. "

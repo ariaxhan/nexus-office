@@ -87,7 +87,7 @@ class Case(unittest.TestCase):
         result = lease.recover(self.repo, self.comment)
         self.assertEqual(result["state"], "HELD")
         self.assertEqual(self.remote("aria/held/f6"), [result["sha"]])
-        self.assertFalse(os.path.exists(os.path.join(self.repo, "wip.txt")))
+        self.assertTrue(os.path.exists(os.path.join(self.repo, "wip.txt")))  # captured, never reverted
         self.assertIsNone(lease.read(self.repo))
         self.assertEqual(git(self.repo, "show", f"{result['sha']}:wip.txt"), "half")
 

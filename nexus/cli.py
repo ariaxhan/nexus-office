@@ -252,8 +252,12 @@ def cmd_work(args):
         led = _ledger(args)
         try:
             if args.work_command == "run":
-                result = work.run(led, entries, args.repo, budget_s=args.budget_s, max_items=args.max_items,
-                                  lane=args.lane)
+                token = work._registry.set(args.registry)
+                try:
+                    result = work.run(led, entries, args.repo, budget_s=args.budget_s, max_items=args.max_items,
+                                      lane=args.lane, issue=args.issue, registry_path=args.registry)
+                finally:
+                    work._registry.reset(token)
             elif args.work_command == "claim":
                 entry = next((e for e in entries if e["repo"] == args.repo.lower()), None)
                 if entry is None:
@@ -289,6 +293,7 @@ def build_parser():
             sub.add_argument("--budget-s", type=float, default=300)
             sub.add_argument("--max-items", type=int, default=20)
             sub.add_argument("--lane", default=None, help="tower-v2: in-place landing, labeled issues only")
+            sub.add_argument("--issue", type=int, default=None, help="one lane of a dispatched wave (needs --repo)")
         if name == "status":
             sub.add_argument("--json", action="store_true")
         if name in ("run", "claim"):

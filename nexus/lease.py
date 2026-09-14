@@ -73,13 +73,13 @@ def owner(flight):
     return f"nexus:{flight}"
 
 
-def lane_lock(cmd, repo, flight, pid):
+def lane_lock(cmd, repo, flight, pid, *extra):
     """rc 0 taken/released, 3 held by another live owner. Absent tool: no lock to share."""
     if not os.path.exists(LANE_LOCK):
         return 0, ""
     env = dict(os.environ, TBS_LANE_OWNER=owner(flight), TBS_LANE_PID=str(pid))
     env.pop("TBS_LANE_RUN", None)
-    proc = subprocess.run(["python3", LANE_LOCK, cmd, repo], env=env, capture_output=True, text=True, timeout=30)
+    proc = subprocess.run(["python3", LANE_LOCK, cmd, repo, *extra], env=env, capture_output=True, text=True, timeout=30)
     return proc.returncode, proc.stderr.strip()
 
 
@@ -105,6 +105,12 @@ def acquire(repo, branch, flight, pid, ttl_s):
     existing = read(repo)
     if existing:
         raise Owned(f"stale:{existing['flight']}" if stale(existing) else f"owned:{existing['flight']}")
+    from . import lanes
+    if lanes.records(repo):
+        raise Owned("write_set_lanes:" + ",".join(r["flight"] for r in lanes.records(repo)))
+    rc, err = lane_lock("check", repo, flight, pid, "--write-set")  # no session holds any file
+    if rc:
+        raise Owned(f"lane_lock:{err[:200]}")
     rc, err = lane_lock("acquire", repo, flight, pid)
     if rc:
         raise Owned(f"lane_lock:{err[:200]}")
@@ -148,8 +154,8 @@ def recover(repo, comment=None):
     paths, collisions = flight_paths(repo, record)
     moved = landing._git(repo, "rev-parse", "HEAD").stdout.strip() != record["head"]
     result = {"state": "CLOSED", "reason": "no_change", "flight": record["flight"]}
-    if paths or moved:
-        result = landing.hold(repo, record, paths, collisions, "crashed", comment)
+    if paths or moved:  # capture to a held ref, but restore nothing: the paths may be another session's bytes
+        result = landing.hold(repo, record, paths, list(paths), "crashed", comment)
     if landing.terminal(repo, result):
         release(repo, record["flight"])
     return result

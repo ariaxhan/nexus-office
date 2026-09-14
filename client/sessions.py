@@ -514,22 +514,25 @@ def _launch_env(tool: str, directory: str) -> dict[str, str] | None:
     has already passed ``resolve_dir`` and the account root comes from the
     daemon's trusted runtime root.
 
-    Returning None for every other launch preserves the daemon's environment,
-    including Codex and personal Claude sessions.
+    Every other launch keeps the daemon's environment minus CLAUDE_CONFIG_DIR
+    (None when there is nothing to strip), so Codex and personal Claude never
+    inherit the TBS profile.
     """
+    # The daemon's own CLAUDE_CONFIG_DIR (e.g. started from the TBS silo) never crosses to another desk.
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    fallback = env if "CLAUDE_CONFIG_DIR" in os.environ else None
     if tool != "claude":
-        return None
+        return fallback
     paths = _tbs_account_paths()
     if not paths:
-        return None
+        return fallback
     tbs_root, profile = paths
     try:
         pathlib.Path(directory).resolve().relative_to(tbs_root)
     except (OSError, ValueError):
-        return None
+        return fallback
     if not profile.is_dir():
-        return None
-    env = os.environ.copy()
+        return fallback
     env["CLAUDE_CONFIG_DIR"] = str(profile)
     return env
 

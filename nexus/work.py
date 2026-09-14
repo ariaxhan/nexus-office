@@ -12,6 +12,7 @@ import re
 import signal
 import sqlite3
 import subprocess
+import sys
 import time
 
 from . import flights
@@ -542,12 +543,94 @@ def eligible(led, entries, repo):
     return []
 
 
-def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None):
+def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None, issue=None, registry_path=None,
+        parallel=None):
     token = _lane.set(lane)
     try:
-        return _run(led, entries, repo, budget_s=budget_s, max_items=max_items)
+        if lane == TOWER_LABEL and issue is None and repo is None and registry_path:
+            waved = dispatch_wave(led, entries, registry_path, budget_s, parallel or lanes_caps(registry_path))
+            if waved is not None:
+                return waved
+        return _run(led, entries, repo, budget_s=budget_s, max_items=max_items, issue=issue)
     finally:
         _lane.reset(token)
+
+
+_registry = ContextVar("work_registry", default=None)
+
+
+def lanes_caps(registry_path):
+    from . import lanes
+    try:
+        return lanes.caps(json.loads(Path(registry_path).read_text()).get("tower"))
+    except (OSError, ValueError, TypeError):
+        return lanes.PER_REPO, lanes.GLOBAL
+
+
+def wave_candidates(led, entries, caps):
+    """The first execution-plan wave with runnable items, cut to the caps and to disjoint write sets."""
+    from . import lanes
+    waves = lanes.read_plan()
+    if not waves:
+        return None
+    rows = {e["repo"]: e for e in eligible(led, entries, None)}
+    per_repo, global_cap = caps
+    discovered = set()
+    for wave in waves:
+        picked = []
+        for item in wave:
+            entry = rows.get(item["repo"])
+            if not entry or len(picked) >= global_cap:
+                continue
+            if sum(p["repo"] == item["repo"] for p in picked) >= per_repo:
+                continue
+            if any(p["repo"] == item["repo"] and lanes.overlaps(p["write_set"], item["write_set"]) for p in picked):
+                continue
+            if item["repo"] not in discovered:
+                discover(led, entry)
+                discovered.add(item["repo"])
+            task = led.conn.execute("SELECT * FROM tasks WHERE dedupe_key=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                                    (f"github:{item['repo']}#{item['number']}",)).fetchone()
+            if not task or task["state"] == "done" or next_retry(led, task) > time.time():
+                continue
+            if eligibility(latest(led, "work.issue", task["id"])) not in ("ready", "resume"):
+                continue
+            picked.append(item)
+        if picked:
+            return picked
+    return None
+
+
+def dispatch_wave(led, entries, registry_path, budget_s, caps):
+    """Run one wave's file-disjoint lanes at once, one child `work run --issue` each. None: fall back."""
+    picked = wave_candidates(led, entries, caps)
+    if not picked:
+        return None
+    base = [sys.executable, "-m", "nexus", "--ledger", str(led.path), "work", "run", "--registry", str(registry_path),
+            "--lane", TOWER_LABEL, "--max-items", "1", "--budget-s", str(int(budget_s))]
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]))
+    children = []
+    for item in picked:
+        proc = subprocess.Popen(base + ["--repo", item["repo"], "--issue", str(item["number"])], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        led.event("work.wave_lane", item["repo"], dict(item, pid=proc.pid, started=time.time()), "work")
+        children.append((item, proc))
+    report = []
+    for item, proc in children:
+        try:
+            out, err = proc.communicate(timeout=max(1, budget_s))
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            out, err = proc.communicate()
+        try:
+            rows = json.loads(out or "[]")
+        except ValueError:
+            rows = [dict(repo=item["repo"], state="failed", error=(err or "")[-300:])]
+        led.event("work.wave_lane_done", item["repo"], dict(item, pid=proc.pid, rc=proc.returncode,
+                                                          ended=time.time(), report=rows), "work")
+        report.extend(rows)
+    return report
 
 
 def tower_execute(led, entry, task):
@@ -564,18 +647,29 @@ def tower_execute(led, entry, task):
             raise WorkError(proc.stderr.strip() or "gh failed")
         return proc.stdout.strip()
 
+    from . import lanes
+    write_set = lanes.write_set_for(repo, number)
+    per_repo = lanes_caps(_registry.get())[0] if _registry.get() else lanes.PER_REPO
     try:
-        led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL}, "work")
+        led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL,
+                                          "write_set": write_set, "started": time.time()}, "work")
         result = executor.fly(
             entry, issue, fid, timeout_s=remaining(float(entry.get("timeout_s", 900))),
             pr_create=lambda head, base, body: gh("pr", "create", "-R", repo, "--head", head, "--base", base,
                                                   "--title", issue.get("title", f"#{number}"), "--body", body),
-            comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body))
+            comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body),
+            write_set=write_set, per_repo=per_repo)
+        led.event("work.lane", fid, {"repo": repo, "issue": number, "write_set": write_set, "state": result["state"],
+                                     "sha": result.get("sha"), "ended": time.time()}, "work")
         state = _settle(led, fid, entry, task, issue, result)
         if result.get("reason") == "in_review":
             return tower_review(led, entry, task, result["pr_url"])
         return state
     except Exception as exc:  # noqa: BLE001 - every failure is recorded; the lease stays for recovery
+        from . import lease
+        if isinstance(exc, lease.Owned):  # another lane or a person holds these paths: not a failure
+            led.set_state(fid, "cancelled", expect="running", source="work")
+            return "owned"
         fail(led, fid, exc)
         return "failed"
 
@@ -585,10 +679,10 @@ def _settle(led, fid, entry, task, issue, result):
     repo, number = entry["repo"], issue["number"]
     tower.land_write_flight(led, fid, entry["path"], result)
     if result["state"] == "HELD":
-        if result.get("reason") != "in_review":  # parked for a person; never re-flown on the next tick
+        if result.get("reason") != "in_review" and not result.get("requeue"):  # parked for a person; never re-flown on the next tick
             subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
                             "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
-        retry_s = result.get("retry_s") or (60 if result.get("reason") == "in_review" else 3600)
+        retry_s = result.get("retry_s") or (60 if result.get("reason") == "in_review" or result.get("requeue") else 3600)
         return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + retry_s,
                                   "hold": result.get("hold"), "pr_url"
 : result.get("pr_url"),
@@ -654,7 +748,7 @@ def tower_review(led, entry, task, pr_url):
         return "failed"
 
 
-def _run(led, entries, repo=None, *, budget_s=300, max_items=20):
+def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
     """One pass over every enabled repository; max_items bounds the work taken PER repository.
 
     2026-09-11: the bound used to be per run. With ~90 registered repositories and one item
@@ -682,6 +776,8 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20):
             discover(led, entry)
             queue, dispositions = selection_queue(led, entry)
             report.extend(dispositions)
+            if issue is not None:  # one lane of a dispatched wave
+                queue = [t for t in queue if t["dedupe_key"] == f"github:{name}#{int(issue)}"]
             taken = 0
             while queue and taken < max_items and time.monotonic() < deadline:
                 while (queue and eligibility(latest(led, "work.issue", queue[0]["id"])) in ("ready", "resume")
