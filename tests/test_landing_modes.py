@@ -91,6 +91,53 @@ class Case(unittest.TestCase):
         self.assertIsNone(lease.read(self.repo))
         self.assertEqual(git(self.repo, "show", f"{result['sha']}:wip.txt"), "half")
 
+    def dead_pid(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        return proc.pid
+
+    def test_t6b_tower_reconcile_alone_recovers_vanished_work_flight(self):
+        from unittest import mock
+        from nexus import work
+        led = Ledger(os.path.join(self.dir, "ledger.sqlite"))
+        self.addCleanup(led.close)
+        plan = led.add_plan(name="code-work", kind="work", schedule={}, inputs={}, outputs=[], budget={},
+                            resources=[], resolution_policy={})
+        fid = led.create_flight(plan)
+        pid = self.dead_pid()
+        led.conn.execute("UPDATE flights SET state='running', pid=?, started_at=? WHERE id=?", (pid, time.time(), fid))
+        led.conn.commit()
+        led.event("work.runner", fid, {}, "work")
+        led.event("work.executing", fid, {"repo": "o/r", "issue": 7, "lane": work.TOWER_LABEL, "path": self.repo}, "work")
+        self.write("human.txt", "human before\n")
+        rec = lease.acquire(self.repo, "main", fid, pid, 600)
+        self.write("wip.txt", "half\n")
+        with mock.patch.object(tower, "_issue_comment", lambda repo, number: self.comment):
+            report = tower.tick(led, now=time.time(), root=os.path.join(self.dir, "flights"))
+        self.assertEqual(report["vanished"], 1)
+        self.assertEqual(led.flight(fid)["state"], "failed")
+        self.assertIsNone(lease.read(self.repo))
+        sha = self.remote(f"aria/held/{fid}")[0]
+        self.assertEqual(git(self.repo, "show", f"{sha}:wip.txt"), "half")
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "wip.txt")))
+        self.assertEqual(self.read("human.txt"), "human before\n")
+        self.assertEqual(len(self.comments), 1)
+        self.assertEqual(rec["flight"], fid)
+
+    def test_t6c_edit_after_lease_expiry_is_never_counted_as_flight_work(self):
+        pid = self.dead_pid()
+        rec = lease.acquire(self.repo, "main", "f6c", pid, 600)
+        rec["expires"] = time.time() - 60
+        with open(lease.path(self.repo), "w") as f:
+            import json
+            json.dump(rec, f)
+        self.write("human.txt", "unlocked human edit\n")
+        result = lease.recover(self.repo, self.comment)
+        self.assertEqual(result["state"], "CLOSED")
+        self.assertEqual(self.remote("aria/held/f6c"), [])
+        self.assertEqual(self.read("human.txt"), "unlocked human edit\n")
+        self.assertIsNone(lease.read(self.repo))
+
     def test_t8_review_pushes_branch_before_pr_and_never_switches(self):
         self.write("human.txt", "human edit\n")
         rec = lease.acquire(self.repo, "main", "f8", os.getpid(), 600)

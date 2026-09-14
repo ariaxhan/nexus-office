@@ -205,6 +205,7 @@ def _reconcile_vanished(ledger, now, root):
     gone = 0
     for flight in ledger.flights(states=("running",)):
         if ledger.plan(flight["plan_id"])["kind"] == "work":
+            gone += int(_recover_work(ledger, flight, now))
             continue
         if fl.alive(flight["pid"]):
             continue
@@ -218,6 +219,43 @@ def _reconcile_vanished(ledger, now, root):
             _finish_failed(ledger, flight, now)
             gone += 1
     return gone
+
+
+def _issue_comment(repo, number):
+    def comment(body):
+        proc = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body", body],
+                              capture_output=True, text=True, timeout=120)
+        if proc.returncode:
+            raise ld.LandingError("comment_failed", proc.stderr.strip()[:400])
+        return proc.stdout.strip()
+    return comment
+
+
+def _recover_work(ledger, flight, now):
+    """A tower-v2 runner gone while holding the checkout lease: drive the lease to a proven terminal state.
+
+    Only a runner flight; a direct claim never owns its desktop pid. Unproven recovery keeps the row for the next tick."""
+    from . import lease, work
+    fid = flight["id"]
+    executing = work.latest(ledger, "work.executing", fid)
+    repo = executing.get("path")
+    if (executing.get("lane") != work.TOWER_LABEL or not repo or fl.alive(flight["pid"])
+            or not ledger.events(kind="work.runner", subject=fid)):
+        return False
+    record = lease.read(repo) if os.path.isdir(repo) else None
+    if record and record["flight"] == fid:
+        try:
+            result = lease.recover(repo, _issue_comment(executing["repo"], executing["issue"]))
+        except Exception as exc:  # noqa: BLE001 - recorded; retried next tick
+            ledger.event("work.recovery_failed", fid, {"error": str(exc)[:400]}, "tower", now)
+            return False
+        if lease.read(repo):
+            return False
+        ledger.event("work.recovered", fid, result, "tower", now)
+    if not ledger.fail(fid, "vanished", "runner gone; checkout lease recovered", expect="running", now=now):
+        return False
+    ledger.release_leases(fid, now=now)
+    return True
 
 
 def _finish_failed(ledger, flight, now):

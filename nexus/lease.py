@@ -141,6 +141,9 @@ def recover(repo, comment=None):
     if not record or not stale(record):
         return None
     paths, collisions = flight_paths(repo, record)
+    # A write after the lease expired is not the flight's: a person edited an unlocked tree. Left as is.
+    paths = [p for p in paths if not (os.path.lexists(os.path.join(repo, p))
+                                      and os.lstat(os.path.join(repo, p)).st_mtime > record.get("expires", 0))]
     moved = landing._git(repo, "rev-parse", "HEAD").stdout.strip() != record["head"]
     result = {"state": "CLOSED", "reason": "no_change", "flight": record["flight"]}
     if paths or moved:
