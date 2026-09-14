@@ -22,6 +22,9 @@ _deadline = ContextVar("work_deadline", default=None)
 # Tower v2: `code-work` runs with lane=TOWER_LABEL and takes every ready issue in tower rows;
 # any other run (nexus-work, disabled 2026-09-13) treats `tower-v2` issues as owned.
 TOWER_LABEL = "tower-v2"
+SENSITIVE_WINDOW = os.environ.get("NEXUS_TBS_SENSITIVE_WINDOW", os.path.expanduser(
+    "~/Developer/Vaults/CodingVault/thinking-brain-school/bin/sensitive_window.py"))
+
 _lane = ContextVar("work_lane", default=None)
 
 
@@ -585,9 +588,10 @@ def _settle(led, fid, entry, task, issue, result):
         if result.get("reason") != "in_review":  # parked for a person; never re-flown on the next tick
             subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
                             "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
-        return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + (60 if result.get("reason") == "in_review" else 3600),
-
-                                  "pr_url": result.get("pr_url"),
+        retry_s = result.get("retry_s") or (60 if result.get("reason") == "in_review" else 3600)
+        return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + retry_s,
+                                  "hold": result.get("hold"), "pr_url"
+: result.get("pr_url"),
                                   "evidence": [result.get("pr_url") or result.get("comment_url")]})
     led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower terminal proof")
     if result["state"] == "LANDED":
@@ -595,7 +599,23 @@ def _settle(led, fid, entry, task, issue, result):
     return "done"
 
 
+def _sensitive_hold(entry, pr):
+    """TBS sensitive changes merge only 01:00-08:00 KST; the gate's refusal (exit 3) is the hold message."""
+    if not entry["repo"].lower().startswith("thinking-brain-school/"):
+        return None
+    labels = [arg for l in pr.get("labels") or [] for arg in ("--label", l["name"])]
+    files = [f["path"] for f in pr.get("files") or []]
+    proc = subprocess.run(["python3", SENSITIVE_WINDOW, "check", "--repo", entry["path"], *labels, *files],
+                          capture_output=True, text=True, timeout=remaining(60))
+    if proc.returncode == 3:
+        return proc.stderr.strip() or "sensitive change outside the 01:00-08:00 KST window"
+    if proc.returncode:
+        raise WorkError("sensitive window check failed: " + proc.stderr.strip()[:200])
+    return None
+
+
 def tower_review(led, entry, task, pr_url):
+
     """A separate flight, different identity: PASS merges (LANDED), FAIL comments (HELD)."""
     from . import executor
     entry = dict(entry, path=entry.get("canonical_path") or entry["path"])
@@ -608,8 +628,16 @@ def tower_review(led, entry, task, pr_url):
         verdict, why = executor.review(entry, pr_url, fid, timeout_s=remaining(900))
         led.event("work.review", fid, {"pr": pr_url, "verdict": verdict, "reason": why}, "work")
         gh = lambda *a: subprocess.run(["gh", *a], capture_output=True, text=True, timeout=remaining(120))  # noqa: E731
-        pr = json.loads(gh("pr", "view", pr_url, "--json", "headRefName,headRefOid,baseRefName").stdout)
+        pr = json.loads(gh("pr", "view", pr_url, "--json", "headRefName,headRefOid,baseRefName,labels,files").stdout)
+        held = verdict == "PASS" and _sensitive_hold(entry, pr)
+        if held:  # outside the TBS KST window: stay in review, re-flown after the window opens
+            url = gh("pr", "comment", pr_url, "--body", f"Nexus review flight {fid}: HELD. {held}").stdout.strip()
+            return _settle(led, fid, entry, task, issue,
+                           {"state": "HELD", "flight": fid, "reason": "in_review", "retry_s": 3600, "hold": held[:300],
+                            "pr_url": pr_url, "sha": pr["headRefOid"], "branch": pr["headRefName"],
+                            "comment_url": url or pr_url})
         if verdict == "PASS":
+
             merged = gh("pr", "merge", pr_url, "--squash", "--delete-branch")
             sha = json.loads(gh("pr", "view", pr_url, "--json", "mergeCommit").stdout or "{}").get(
                 "mergeCommit") or {}
