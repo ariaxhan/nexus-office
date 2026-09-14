@@ -54,14 +54,15 @@ def _ledger(args) -> Ledger:
 
 def cmd_tower_once(args):
     led = _ledger(args)
-    report = tower.tick(led)
+    report = tower.tick(led, checkouts=tower.work_checkouts())
     print(json.dumps(report, sort_keys=True))
     return 0
 
 
 def cmd_tower_run(args):
     led = _ledger(args)
-    tower.run(led, interval=args.interval, iterations=args.iterations)
+    tower.run(led, interval=args.interval, iterations=args.iterations, checkouts=tower.work_checkouts)
+
     return 0
 
 
