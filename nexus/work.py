@@ -525,7 +525,7 @@ def eligible(led, entries, repo):
     if _lane.get() == TOWER_LABEL:
         switch = led.plan_by_name("code-work")  # its own switch; github-work does not gate it
         if switch and switch["enabled"]:
-            return entries
+            return [e for e in entries if e.get("risk")]  # tower-adapted rows only
     elif led.plan(plan(led))["enabled"]:
         return entries
     led.event("work.disabled", "github-work", {"repositories": len(entries)}, "work")
@@ -638,8 +638,9 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20):
     for index, entry in enumerate(entries):
         if time.monotonic() >= deadline:
             break
-        token = _deadline.set(min(deadline, time.monotonic() +
-                                  (deadline - time.monotonic()) / (len(entries) - index)))
+        # A tower flight needs the whole budget; queue fairness comes from least-recently-serviced order.
+        share = 1 if _lane.get() == TOWER_LABEL else len(entries) - index
+        token = _deadline.set(min(deadline, time.monotonic() + (deadline - time.monotonic()) / share))
         try:
             name = entry["repo"]
             discover(led, entry)
@@ -724,7 +725,7 @@ def _run_task(led, entry, task):
                 close_issue(led, context(led, entry, task))
             return "done"
         state = eligibility(issue_now(led, entry, task))
-        reconcile = state == "closed" and any(
+        reconcile = state == "closed" and _lane.get() != TOWER_LABEL and any(
             latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"]))
         if state not in ("ready", "resume") and not reconcile:
             return state
