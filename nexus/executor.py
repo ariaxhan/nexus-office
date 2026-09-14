@@ -94,10 +94,26 @@ def issue_prompt(entry, issue):
             f"Product guidance: {entry.get('product_guidance', '')}")
 
 
+ANTIGRAVITY = re.compile(r"antigravity|tbs-agy|copy[- ]authority", re.I)
+
+
+def antigravity_method(issue):
+    """The issue's METHOD line (or a copy-authority label) names Antigravity as the author."""
+    labels = {str(l.get("name", "")).lower() for l in issue.get("labels", [])}
+    if labels & {"copy-authority", "route-antigravity", "antigravity"}:
+        return True
+    return any(ANTIGRAVITY.search(line) for line in (issue.get("body") or "").splitlines()
+               if re.match(r"\W*METHOD\b", line, re.I))
+
+
 def plan(entry, issue):
     """(argv, prompt, road name, mode override). Pure; refuses before any lease."""
     labels = [l["name"] for l in issue.get("labels", [])]
     name, road = road_for(entry, labels)
+    if not road and antigravity_method(issue):
+        prompt = (issue_prompt(entry, issue) + f"\nCheckout (absolute; edit files only here): {entry['path']}\n"
+                  "You are the Antigravity author this issue's METHOD names.")
+        return [ROUTER, "run", "customer-copy-antigravity", "--", "-p", prompt], prompt, None, None
     if not road:
         prompt = issue_prompt(entry, issue)
         return [ROUTER, "run", "code-judgment", "--", "-p", prompt, "--allowedTools",
