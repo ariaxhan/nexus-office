@@ -164,6 +164,43 @@ class Lanes(unittest.TestCase):
         self.assertEqual("HELD", lease.recover(self.repo, lambda b: "c")["state"])
         self.assertEqual("another session\n", self.read("human.txt"))
 
+    def test_held_push_is_idempotent_and_own_stale_branch_moves_with_lease(self):
+        lanes.PUSH_PAUSE_S = 0
+        head = git(self.repo, "rev-parse", "HEAD")
+        self.write("a.txt", "work\n")
+        first = landing.commit_paths(self.repo, head, ["a.txt"], "one")
+        self.assertEqual(first, lanes.push_owned(self.repo, first, "aria/held/flt_x"))
+        again = landing.commit_paths(self.repo, head, ["a.txt"], "two")  # same tree, new commit: the old retry loop
+        self.assertNotEqual(first, again)
+        self.assertEqual(first, lanes.push_owned(self.repo, again, "aria/held/flt_x"))
+        self.write("a.txt", "rebuilt\n")
+        rebuilt = landing.commit_paths(self.repo, head, ["a.txt"], "three")
+        self.assertEqual(first, lanes.push_owned(self.repo, first, "aria/issue-7"))
+        self.assertEqual(rebuilt, lanes.push_owned(self.repo, rebuilt, "aria/issue-7"))  # our PR branch, leased
+        self.assertEqual(rebuilt, git(self.origin, "rev-parse", "aria/issue-7"))
+        git(self.repo, "push", "-q", "origin", f"{first}:refs/heads/person")
+        self.assertIsNone(lanes.push_owned(self.repo, rebuilt, "person"))  # never forced: not ours
+        self.assertEqual(first, git(self.origin, "rev-parse", "person"))
+
+    def test_unpushable_hold_is_a_wait_that_keeps_bytes(self):
+        record = lanes.acquire(self.repo, "main", "flt_np", os.getpid(), 600, ["a.txt"])
+        self.write("a.txt", "keep\n")
+        with unittest.mock.patch.object(lanes, "push_owned", return_value=None):
+            with self.assertRaisesRegex(lease.Owned, "held_push_failed"):
+                lanes.hold(self.repo, record, ["a.txt"], "crashed")
+        self.assertEqual("keep\n", self.read("a.txt"))
+
+    def test_stale_lane_already_held_is_released_not_re_held(self):
+        record = lanes.acquire(self.repo, "main", "flt_done", os.getpid(), 600, ["a.txt"])
+        self.write("a.txt", "held before\n")
+        sha = landing.commit_paths(self.repo, git(self.repo, "rev-parse", "HEAD"), ["a.txt"], "held")
+        git(self.repo, "push", "-q", "origin", f"{sha}:refs/heads/aria/held/flt_done")
+        with open(os.path.join(lanes._dir(self.repo), "flt_done.json"), "w") as f:
+            json.dump(dict(record, pid=999999), f)
+        [result] = lanes.recover(self.repo, lambda b: "c")
+        self.assertEqual(("HELD", "already_held", sha), (result["state"], result["reason"], result["sha"]))
+        self.assertEqual([], lanes.records(self.repo))
+
     def test_records_carry_host_times_reason_and_paths(self):
         ws = lanes.acquire(self.repo, "main", "flt_ws", os.getpid(), 600, ["a.txt"])
         self.assertEqual(("write_set", ["a.txt"]), (ws["reason"], ws["paths"]))
@@ -277,7 +314,7 @@ class Dispatch(unittest.TestCase):
                 unittest.mock.patch.object(work, "discover"), \
                 unittest.mock.patch.object(work, "next_retry", return_value=0), \
                 unittest.mock.patch.object(work, "latest", side_effect=issue):
-            self.assertEqual([4, 3, 2], [p["number"] for p in work.wave_candidates(led, [], (3, 3))])  # wave 2's p0 waits
+            self.assertEqual([4, 9, 3], [p["number"] for p in work.wave_candidates(led, [], (3, 3))])  # wave 2's p0 preempts
             self.assertEqual([4], [p["number"] for p in work.wave_candidates(led, [], (1, 3))])
 
 

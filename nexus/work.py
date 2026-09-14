@@ -372,7 +372,8 @@ def pending(led, fid, result):
         retry = now + 60
     retry = min(now + 86400, max(now + 1, retry))
     tid = led.flight(fid)["task_id"]
-    led.event("work.pending", tid, dict(result, next_retry=retry), "work")
+    rank = priority_rank({l["name"].lower() for l in latest(led, "work.issue", tid).get("labels", [])})
+    led.event("work.pending", tid, dict(result, next_retry=retry, rank=rank), "work")
     item_attempt(led, fid, "pending", retry, result.get("evidence"))
     led.set_state(fid, "cancelled", expect="running", source="work")
     return "pending"
@@ -510,8 +511,9 @@ def selection_priority(led, task):
     (Aria, 2026-09-11, tbs-www#310). Within the unstalled, `ready` work precedes `in pr`
     resumption: an open PR is waiting on review or merge, a ready issue is waiting on us.
     Stalled and resuming items still run once fresh work is exhausted, or from the second
-    slot when max_items allows. Within the unstalled, priority is strict: p0 > p1 > p2 >
-    unlabeled, ahead of resumption and age."""
+    slot when max_items allows. Priority is strict and comes first: p0 > p1 > p2 > unlabeled,
+    ahead of stall, resumption and age (a stalled item is skipped as backoff, so it never holds
+    a slot)."""
     issue = latest(led, "work.issue", task["id"])
     labels = {label["name"].lower() for label in issue.get("labels", [])}
     bonus = 86400 * (bool(led.flights(task_id=task["id"])) +
@@ -521,10 +523,14 @@ def selection_priority(led, task):
     stalled = (latest(led, "work.disposition", task["id"]).get("state") == "pending"
                and next_retry(led, task) > time.time())
     resuming = eligibility(issue) == "resume"      # in PR: waiting on review or merge, not on us
-    return (stalled, priority_rank(labels), resuming, task["created_at"] - bonus)
+    return (priority_rank(labels), stalled, resuming, task["created_at"] - bonus)
 
 
 PRIORITY_LABELS = ("p0", "p1", "p2")
+
+
+def is_p0(led, task):
+    return priority_rank({l["name"].lower() for l in latest(led, "work.issue", task["id"]).get("labels", [])}) == 0
 
 
 def priority_rank(labels):
@@ -580,7 +586,8 @@ def wave_candidates(led, entries, caps):
     """The first execution-plan wave with runnable items, cut to the caps and to disjoint write sets.
 
     Waves gate in plan order; within a wave, runnable items are taken p0 > p1 > p2 > unlabeled
-    (plan order breaks ties) before the caps and write-set cuts apply."""
+    (plan order breaks ties) before the caps and write-set cuts apply. A runnable p0 in a later
+    wave preempts that order at the next tick: dependencies are already enforced by the contract gate."""
     from . import lanes
     waves = lanes.read_plan()
     if not waves:
@@ -588,6 +595,7 @@ def wave_candidates(led, entries, caps):
     rows = {e["repo"]: e for e in eligible(led, entries, None)}
     per_repo, global_cap = caps
     discovered = set()
+    runnable_waves = []
     for wave in waves:
         runnable = []
         for item in wave:
@@ -605,18 +613,19 @@ def wave_candidates(led, entries, caps):
             if eligibility(issue) not in ("ready", "resume") or tower_gate(entry, issue)[1]:
                 continue
             runnable.append((priority_rank({l["name"].lower() for l in issue.get("labels", [])}), item))
-        picked = []
-        for _, item in sorted(runnable, key=lambda pair: pair[0]):
-            if len(picked) >= global_cap:
-                break
-            if sum(p["repo"] == item["repo"] for p in picked) >= per_repo:
-                continue
-            if any(p["repo"] == item["repo"] and lanes.overlaps(p["write_set"], item["write_set"]) for p in picked):
-                continue
-            picked.append(item)
-        if picked:
-            return picked
-    return None
+        runnable_waves.append(runnable)
+    first = next((r for r in runnable_waves if r), [])
+    preempt = [pair for r in runnable_waves if r is not first for pair in r if pair[0] == 0]
+    picked = []
+    for _, item in sorted(first + preempt, key=lambda pair: pair[0]):
+        if len(picked) >= global_cap:
+            break
+        if sum(p["repo"] == item["repo"] for p in picked) >= per_repo:
+            continue
+        if any(p["repo"] == item["repo"] and lanes.overlaps(p["write_set"], item["write_set"]) for p in picked):
+            continue
+        picked.append(item)
+    return picked or None
 
 
 def window_open():
@@ -686,19 +695,52 @@ def dispatch_wave(led, entries, registry_path, budget_s, caps):
     return report
 
 
+MIN_FLIGHT_S = 300   # an executor started with less budget than this only times out (25s runs, 2026-09-14)
+WAIT_S = 120         # a lane lock, a leased path or an unpushable hold: retried after this, never an attempt
+
+
+def open_pr(repo, number):
+    """URL of the open Tower PR for this issue (head aria/issue-<n>), or None."""
+    proc = subprocess.run(["gh", "pr", "list", "-R", repo, "--head", f"aria/issue-{number}", "--state", "open",
+                           "--json", "url", "--jq", ".[0].url // empty"],
+                          capture_output=True, text=True, timeout=remaining(60))
+    return proc.stdout.strip() or None if proc.returncode == 0 else None
+
+
+def wait(led, fid, why):
+    """A contention wait: bounded retry_at, recorded as pending, never counted as a failed attempt."""
+    return pending(led, fid, {"reason": f"wait: {why}"[:300], "retry_at": time.time() + WAIT_S, "evidence": []})
+
+
 def tower_execute(led, entry, task):
     """Tower v2: lease the canonical checkout, run, land in place, prove a terminal state."""
     from . import executor
     entry = dict(entry, path=entry.get("canonical_path") or entry["path"])
+    deadline = _deadline.get()
+    if deadline is not None and deadline - time.monotonic() < MIN_FLIGHT_S:
+        return "backoff"  # no claim, no flight: the next tick has a full budget
     issue = issue_now(led, entry, task)
-    fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
     repo, number = entry["repo"], issue["number"]
+    pr_url = open_pr(repo, number)
+    if pr_url:  # the build already produced a PR: review its head, never rebuild and re-push it
+        return tower_review(led, entry, task, pr_url)
+    fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
 
     def gh(*args):
         proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=remaining(120))
         if proc.returncode:
             raise WorkError(proc.stderr.strip() or "gh failed")
         return proc.stdout.strip()
+
+    def pr_create(head, base, body):
+        try:
+            return gh("pr", "create", "-R", repo, "--head", head, "--base", base,
+                      "--title", issue.get("title", f"#{number}"), "--body", body)
+        except WorkError:
+            existing = open_pr(repo, number)  # the branch moved under an open PR: the PR is the same obligation
+            if existing:
+                return existing
+            raise
 
     from . import lanes
     found, why = tower_gate(entry, issue)
@@ -714,8 +756,7 @@ def tower_execute(led, entry, task):
                                           "write_set": write_set, "started": time.time()}, "work")
         result = executor.fly(
             entry, issue, fid, timeout_s=remaining(float(entry.get("timeout_s", 900))),
-            pr_create=lambda head, base, body: gh("pr", "create", "-R", repo, "--head", head, "--base", base,
-                                                  "--title", issue.get("title", f"#{number}"), "--body", body),
+            pr_create=pr_create,
             comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body),
             write_set=write_set, per_repo=per_repo)
         led.event("work.lane", fid, {"repo": repo, "issue": number, "write_set": write_set, "state": result["state"],
@@ -725,10 +766,11 @@ def tower_execute(led, entry, task):
             return tower_review(led, entry, task, result["pr_url"])
         return state
     except Exception as exc:  # noqa: BLE001 - every failure is recorded; the lease stays for recovery
-        from . import lease
-        if isinstance(exc, lease.Owned):  # another lane or a person holds these paths: not a failure
-            led.set_state(fid, "cancelled", expect="running", source="work")
-            return "owned"
+        from . import landing, lease
+        if isinstance(exc, lease.Owned):  # another lane or a person holds these paths: a wait, not a failure
+            return wait(led, fid, str(exc))
+        if isinstance(exc, landing.LandingError) and exc.code == "held_push_failed":
+            return wait(led, fid, str(exc))  # the lease keeps the bytes; recovery pushes them next tick
         fail(led, fid, exc)
         return "failed"
 
@@ -775,6 +817,15 @@ def _sensitive_hold(entry, pr):
     return None
 
 
+def review_verdict(led, pr_url, head):
+    """The last recorded reviewer verdict for exactly this PR head, or None."""
+    for row in led.conn.execute("SELECT payload FROM events WHERE kind='work.review' ORDER BY id DESC"):
+        payload = loads(row[0], {})
+        if payload.get("pr") == pr_url and head and payload.get("head") == head:
+            return payload
+    return None
+
+
 def tower_review(led, entry, task, pr_url):
 
     """A separate flight, different identity: PASS merges (LANDED), FAIL comments (HELD)."""
@@ -784,12 +835,17 @@ def tower_review(led, entry, task, pr_url):
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
     repo = entry["repo"]
     try:
-        led.event("work.executing", fid, {"repo": repo, "issue": issue["number"], "lane": TOWER_LABEL,
-                                          "review": pr_url}, "work")
-        verdict, why = executor.review(entry, pr_url, fid, timeout_s=remaining(900))
-        led.event("work.review", fid, {"pr": pr_url, "verdict": verdict, "reason": why}, "work")
         gh = lambda *a: subprocess.run(["gh", *a], capture_output=True, text=True, timeout=remaining(120))  # noqa: E731
         pr = json.loads(gh("pr", "view", pr_url, "--json", "headRefName,headRefOid,baseRefName,labels,files").stdout)
+        cached = review_verdict(led, pr_url, pr["headRefOid"])
+        if cached:  # the same head was already judged: never restart review on an unchanged head
+            verdict, why = cached["verdict"], cached["reason"]
+        else:
+            led.event("work.executing", fid, {"repo": repo, "issue": issue["number"], "lane": TOWER_LABEL,
+                                              "review": pr_url, "head": pr["headRefOid"]}, "work")
+            verdict, why = executor.review(entry, pr_url, fid, timeout_s=remaining(900))
+        led.event("work.review", fid, {"pr": pr_url, "head": pr["headRefOid"], "verdict": verdict, "reason": why,
+                                       "cached": bool(cached)}, "work")
         held = verdict == "PASS" and _sensitive_hold(entry, pr)
         if held:  # outside the TBS KST window: stay in review, re-flown after the window opens
             url = gh("pr", "comment", pr_url, "--body", f"Nexus review flight {fid}: HELD. {held}").stdout.strip()
@@ -829,7 +885,7 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
         raise WorkError(f"unknown repository: {repo}")
     entries = eligible(led, entries, repo)
     # Least recently serviced repositories first, using existing ledger receipts.
-    entries.sort(key=lambda e: latest(led, "work.serviced", e["repo"]).get("at", 0))
+    entries.sort(key=lambda e: (not has_p0(led, e["repo"]), latest(led, "work.serviced", e["repo"]).get("at", 0)))
     deadline = time.monotonic() + budget_s
     report = []
     passive = ("held", "owned", "ineligible", "closed", "backoff", "blocked", "reopened")
@@ -871,12 +927,24 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
     return report
 
 
+def has_p0(led, repo):
+    """A captured, unfinished, ready p0 issue in this repository: it preempts queue order at the next tick."""
+    for task in led.tasks():
+        if str(task["dedupe_key"]).lower().startswith(f"github:{repo}#") and task["state"] != "done":
+            issue = latest(led, "work.issue", task["id"])
+            if eligibility(issue) == "ready" and is_p0(led, task):
+                return True
+    return False
+
+
 def next_retry(led, task):
     if task["state"] == "done":
         return 0
-    row = led.conn.execute("SELECT payload FROM events WHERE subject=? AND kind IN "
+    row = led.conn.execute("SELECT kind, payload FROM events WHERE subject=? AND kind IN "
                            "('work.failure','work.pending') ORDER BY id DESC LIMIT 1", (task["id"],)).fetchone()
-    rows = [loads(row[0], {})] if row else []
+    rows = [loads(row[1], {})] if row else []
+    if row and row[0] == "work.pending" and rows[0].get("rank", 0) != 0 and is_p0(led, task):
+        rows = []  # a p0 preempts at the next tick a wait recorded before it was p0; failure backoff still holds
     return max([0] + [r.get("next_retry", 0) for r in rows] +
                [conveyor_backoff(led, task["dedupe_key"].removeprefix("github:"))])
 

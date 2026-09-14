@@ -188,14 +188,66 @@ def recover(repo, comment=None):
     for record in records(repo):
         if not lease.stale(record):
             continue
+        tip = landing.remote_tip(landing.target_key(repo, landing.HELD_PREFIX + record["flight"]))
+        if tip:  # an earlier attempt already pushed this lane's work: re-holding could only fail non-fast-forward
+            release(repo, record["flight"])
+            results.append({"state": "HELD", "reason": "already_held", "flight": record["flight"], "sha": tip,
+                            "branch": landing.HELD_PREFIX + record["flight"]})
+            continue
         mine, _ = flight_paths(repo, record)
         result = {"state": "CLOSED", "reason": "no_change", "flight": record["flight"]}
         if mine:
-            result = landing.hold(repo, record, mine, [], "crashed", comment)
+            result = hold(repo, record, mine, "crashed", comment)
         if landing.terminal(repo, result):
             release(repo, record["flight"])
         results.append(result)
     return results
+
+
+OWN_BRANCHES = (landing.HELD_PREFIX, "aria/issue-")
+PUSH_TRIES, PUSH_PAUSE_S = 3, 5.0
+
+
+def _tree(repo, sha):
+    return landing._git(repo, "rev-parse", f"{sha}^{{tree}}", check=False).stdout.strip()
+
+
+def push_owned(repo, sha, branch):
+    """Push `sha` to a Tower-owned branch; the sha now on origin, or None.
+
+    A rejection is retried: transient refusals (a pre-push lane check, the network) clear on their own; a
+    branch an earlier attempt already pushed with the same tree is that push; a stale tip of our own
+    unreviewed branch (aria/held/<flight>, aria/issue-<n>) moves only with --force-with-lease on the tip read."""
+    for attempt in range(PUSH_TRIES):
+        if landing.push_ref(repo, sha, branch):
+            return sha
+        tip = landing.remote_tip(landing.target_key(repo, branch))
+        if tip:
+            landing._git(repo, "fetch", "--quiet", "origin", branch, check=False)
+            if _tree(repo, tip) and _tree(repo, tip) == _tree(repo, sha):
+                return tip
+            if branch.startswith(OWN_BRANCHES) and landing._git(
+                    repo, "push", "--quiet", f"--force-with-lease=refs/heads/{branch}:{tip}", "origin",
+                    f"{sha}:refs/heads/{branch}", check=False).returncode == 0:
+                return sha
+        if attempt + 1 < PUSH_TRIES:
+            time.sleep(PUSH_PAUSE_S)
+    return None
+
+
+def hold(repo, record, paths, reason, comment=None):
+    """landing.hold with an idempotent, retried push. An unpushable hold is a wait, never a failure:
+    the lease and the bytes stay, and recovery pushes them on a later tick."""
+    head = landing._git(repo, "rev-parse", "HEAD").stdout.strip()
+    sha = landing.commit_paths(repo, head, paths, f"HELD {reason}\n\nNexus-Flight: {record['flight']}")
+    branch = landing.HELD_PREFIX + record["flight"]
+    pushed = push_owned(repo, sha, branch)
+    if not pushed:
+        raise lease.Owned(f"held_push_failed:{branch}")
+    url = comment(f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {pushed}.") if comment else None
+    landing.restore(repo, paths, head)
+    return {"state": "HELD", "flight": record["flight"], "reason": reason, "sha": pushed, "branch": branch,
+            "comment_url": url, "paths": paths}
 
 
 def note(repo, number, record, paths, reason="needs paths outside write_set"):
@@ -238,23 +290,23 @@ def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, 
     mine, strays = flight_paths(repo, record)
     if strays:  # refused at commit; never committed, never reverted: they may be a person's bytes
         note(entry["repo"], issue["number"], record, strays)
-        held = landing.hold(repo, record, mine, [], "out_of_write_set", comment) if mine else {
+        held = hold(repo, record, mine, "out_of_write_set", comment) if mine else {
             "state": "CLOSED", "flight": record["flight"], "reason": "no_change"}
         return dict(held, requeue="plan", strays=strays[:20])
     if not mine:
         return {"state": "CLOSED", "flight": record["flight"], "reason": "no_change"}
     if proc.returncode:
-        return landing.hold(repo, record, mine, [], f"exit_{proc.returncode}", comment)
+        return hold(repo, record, mine, f"exit_{proc.returncode}", comment)
     labels = [l["name"] for l in issue.get("labels", [])]
     message = f"{entry['repo'].split('/')[-1]}: #{issue['number']} {issue.get('title', '')}".strip()
     for _ in range(3):
         with mutex(repo):
             why = catch_up(repo, record, branch)
             if why:
-                return dict(landing.hold(repo, record, mine, [], why, comment), requeue="plan")
+                return dict(hold(repo, record, mine, why, comment), requeue="plan")
             if entry.get("check") and run(entry["check"], cwd=repo, capture_output=True, text=True,
                                           timeout=1800).returncode:
-                return landing.hold(repo, record, mine, [], "check_failed", comment)
+                return hold(repo, record, mine, "check_failed", comment)
             mode = forced or classify(entry.get("risk"), labels, mine, lines(repo, mine), entry.get("first_road", False))
             head = landing._git(repo, "rev-parse", "HEAD").stdout.strip()
             if mode != "direct":
@@ -264,14 +316,14 @@ def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, 
                 landing._locked(repo, "update-ref", f"refs/heads/{branch}", sha, head)
                 landing._locked(repo, "update-index", "--add", "--remove", "--", *mine)
                 return {"state": "LANDED", "flight": record["flight"], "sha": sha, "branch": branch, "paths": mine}
-    return landing.hold(repo, record, mine, [], "push_rejected", comment)
+    return hold(repo, record, mine, "push_rejected", comment)
 
 
 def _review(repo, record, mine, head, message, issue, pr_create, comment, mode):
     sha = landing.commit_paths(repo, head, mine, f"{message}\n\nNexus-Flight: {record['flight']}")
     pr_branch = f"aria/issue-{issue['number']}"
     if not landing.push_ref(repo, sha, pr_branch):
-        return landing.hold(repo, record, mine, [], "branch_push_rejected", comment)
+        return hold(repo, record, mine, "branch_push_rejected", comment)
     reason = "in_review" if mode == "review" else "human:risk"
     url = pr_create(pr_branch, record["branch"], f"{message}\n\nCloses #{issue['number']}")
     if reason != "in_review" and comment:
