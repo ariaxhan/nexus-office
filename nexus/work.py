@@ -542,7 +542,7 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None):
 
 def tower_execute(led, entry, task):
     """Tower v2: lease the canonical checkout, run, land in place, prove a terminal state."""
-    from . import executor, tower
+    from . import executor
     entry = dict(entry, path=entry.get("canonical_path") or entry["path"])
     issue = issue_now(led, entry, task)
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
@@ -561,15 +561,59 @@ def tower_execute(led, entry, task):
             pr_create=lambda head, base, body: gh("pr", "create", "-R", repo, "--head", head, "--base", base,
                                                   "--title", issue.get("title", f"#{number}"), "--body", body),
             comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body))
-        tower.land_write_flight(led, fid, entry["path"], result)
-        if result["state"] == "HELD":
-            return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + 3600,
-                                      "evidence": [result.get("pr_url") or result.get("comment_url")]})
-        led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower terminal proof")
-        if result["state"] == "LANDED":
-            close_issue(led, {"repo": repo, "task": task["id"], "issue": issue})
-        return "done"
+        state = _settle(led, fid, entry, task, issue, result)
+        if result.get("reason") == "in_review":
+            return tower_review(led, entry, task, result["pr_url"])
+        return state
     except Exception as exc:  # noqa: BLE001 - every failure is recorded; the lease stays for recovery
+        fail(led, fid, exc)
+        return "failed"
+
+
+def _settle(led, fid, entry, task, issue, result):
+    from . import tower
+    repo, number = entry["repo"], issue["number"]
+    tower.land_write_flight(led, fid, entry["path"], result)
+    if result["state"] == "HELD":
+        if result.get("reason") != "in_review":  # parked for a person; never re-flown on the next tick
+            subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
+                            "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
+        return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + 3600,
+                                  "pr_url": result.get("pr_url"),
+                                  "evidence": [result.get("pr_url") or result.get("comment_url")]})
+    led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower terminal proof")
+    if result["state"] == "LANDED":
+        close_issue(led, {"repo": repo, "task": task["id"], "issue": issue})
+    return "done"
+
+
+def tower_review(led, entry, task, pr_url):
+    """A separate flight, different identity: PASS merges (LANDED), FAIL comments (HELD)."""
+    from . import executor
+    entry = dict(entry, path=entry.get("canonical_path") or entry["path"])
+    issue = issue_now(led, entry, task)
+    fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
+    repo = entry["repo"]
+    try:
+        led.event("work.executing", fid, {"repo": repo, "issue": issue["number"], "lane": TOWER_LABEL,
+                                          "review": pr_url}, "work")
+        verdict, why = executor.review(entry, pr_url, fid, timeout_s=remaining(900))
+        led.event("work.review", fid, {"pr": pr_url, "verdict": verdict, "reason": why}, "work")
+        gh = lambda *a: subprocess.run(["gh", *a], capture_output=True, text=True, timeout=remaining(120))  # noqa: E731
+        pr = json.loads(gh("pr", "view", pr_url, "--json", "headRefName,headRefOid,baseRefName").stdout)
+        if verdict == "PASS":
+            merged = gh("pr", "merge", pr_url, "--squash", "--delete-branch")
+            sha = json.loads(gh("pr", "view", pr_url, "--json", "mergeCommit").stdout or "{}").get(
+                "mergeCommit") or {}
+            if merged.returncode == 0 and sha.get("oid"):
+                return _settle(led, fid, entry, task, issue,
+                               {"state": "LANDED", "flight": fid, "sha": sha["oid"], "branch": pr["baseRefName"]})
+            why = "merge failed: " + (merged.stderr or "").strip()[:200]
+        url = gh("pr", "comment", pr_url, "--body", f"Nexus review flight {fid}: HELD. {why}").stdout.strip()
+        return _settle(led, fid, entry, task, issue,
+                       {"state": "HELD", "flight": fid, "reason": f"review_fail: {why}"[:300],
+                        "sha": pr["headRefOid"], "branch": pr["headRefName"], "comment_url": url or pr_url})
+    except Exception as exc:  # noqa: BLE001
         fail(led, fid, exc)
         return "failed"
 
@@ -689,6 +733,9 @@ def _run_task(led, entry, task):
         if next_retry(led, task) > time.time():
             return "backoff"
         if _lane.get() == TOWER_LABEL:
+            waiting = latest(led, "work.pending", task["id"])
+            if waiting.get("reason") == "in_review" and waiting.get("pr_url"):
+                return tower_review(led, entry, task, waiting["pr_url"])
             return tower_execute(led, entry, task)
         return execute(led, entry, task)
     except Owned:

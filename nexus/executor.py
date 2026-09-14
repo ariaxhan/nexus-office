@@ -116,7 +116,7 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
     argv, prompt, road, forced = plan(entry, issue)
     recovered = lease.recover(repo, comment)
     record = lease.acquire(repo, branch, flight, os.getpid(), timeout_s + 600)
-    env = dict(os.environ, NEXUS_FLIGHT=flight, NEXUS_ROAD=road or "", NEXUS_PROMPT=prompt,
+    env = dict(os.environ, TBS_LANE_OWNER=lease.owner(flight), TBS_LANE_PID=str(os.getpid()), NEXUS_FLIGHT=flight, NEXUS_ROAD=road or "", NEXUS_PROMPT=prompt,
                ACCOUNT_SCOPE=entry.get("account", ""))
     proc = run(argv, cwd=repo, env=env, input=prompt if road else None, text=True,
                capture_output=True, timeout=timeout_s)
@@ -124,6 +124,32 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
     landing.require_terminal(repo, result)
     lease.release(repo, flight)
     return dict(result, recovered=recovered, road=road)
+
+
+REVIEW_BAR = ("Bar: correctness, and the change does what the issue asks without breaking callers. "
+              "The builder flight already ran the repo checks green before opening this PR. Nits, style and "
+              "optional improvements never block.")
+
+
+def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
+    """Independent reviewer: codex (router class `review`), a different identity from the claude builder.
+
+    Read-only by instruction, in a neutral directory, never the canonical checkout. (verdict, text)."""
+    import tempfile
+    prompt = (f"You are an independent reviewer. Review {pr_url} in {entry['repo']}. Use only `gh pr view` and "
+              f"`gh pr diff` (with -R {entry['repo']}); read the linked issue. Do not clone, check out, edit, "
+              f"comment or merge. {REVIEW_BAR}\nEnd with exactly one line: `VERDICT: PASS` or "
+              f"`VERDICT: FAIL <one-line blocking reason>`.")
+    with tempfile.TemporaryDirectory(prefix="nexus-review-") as tmp:
+        out = os.path.join(tmp, "verdict.txt")
+        model = run([ROUTER, "model", "review"], capture_output=True, text=True).stdout.strip()
+        env = dict(os.environ, ACCOUNT_SCOPE=entry.get("account", ""), NEXUS_FLIGHT=flight)
+        run([ROUTER, "run", "review", "--", "exec", "--ephemeral", "--ignore-user-config", "--model", model,
+             "--sandbox", "danger-full-access", "--skip-git-repo-check", "-C", tmp, "-o", out, prompt],
+            cwd=tmp, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout_s)
+        text = open(out).read() if os.path.exists(out) else ""
+    verdict = re.findall(r"VERDICT:\s*(PASS|FAIL)(.*)", text)
+    return (verdict[-1][0], verdict[-1][1].strip() or text[-300:]) if verdict else ("FAIL", "no verdict: " + text[-300:])
 
 
 def _land(entry, issue, record, proc, road, forced, pr_create, comment, run):

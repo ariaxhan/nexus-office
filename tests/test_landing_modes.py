@@ -20,6 +20,7 @@ from nexus import landing, lease, tower  # noqa: E402
 from nexus.ledger import Ledger  # noqa: E402
 
 landing.GIT_LOCK = "/nonexistent"  # fixtures stay out of the vault mutex
+lease.LANE_LOCK = os.environ["NEXUS_LANE_LOCK"] = ""  # and out of the real tbs lane locks
 
 
 def git(cwd, *args):

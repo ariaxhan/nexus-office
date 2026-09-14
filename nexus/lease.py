@@ -10,9 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import time
 
 from . import landing
+
+# The one writer lock Vaults-wide: `tbs lock` (repo@branch). Humans and flights see each other.
+LANE_LOCK = os.environ.get("NEXUS_LANE_LOCK", os.path.expanduser(
+    "~/Developer/Vaults/CodingVault/thinking-brain-school/bin/tbs-lane-lock.py"))
 
 MID_OPS = ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "BISECT_LOG")
 
@@ -64,6 +69,20 @@ def dirty(repo):
     return {p: digest(repo, p) for p in paths}
 
 
+def owner(flight):
+    return f"nexus:{flight}"
+
+
+def lane_lock(cmd, repo, flight, pid):
+    """rc 0 taken/released, 3 held by another live owner. Absent tool: no lock to share."""
+    if not os.path.exists(LANE_LOCK):
+        return 0, ""
+    env = dict(os.environ, TBS_LANE_OWNER=owner(flight), TBS_LANE_PID=str(pid))
+    env.pop("TBS_LANE_RUN", None)
+    proc = subprocess.run(["python3", LANE_LOCK, cmd, repo], env=env, capture_output=True, text=True, timeout=30)
+    return proc.returncode, proc.stderr.strip()
+
+
 def read(repo):
     try:
         with open(path(repo)) as f:
@@ -86,6 +105,9 @@ def acquire(repo, branch, flight, pid, ttl_s):
     existing = read(repo)
     if existing:
         raise Owned(f"stale:{existing['flight']}" if stale(existing) else f"owned:{existing['flight']}")
+    rc, err = lane_lock("acquire", repo, flight, pid)
+    if rc:
+        raise Owned(f"lane_lock:{err[:200]}")
     landing._git(repo, "fetch", "--quiet", "origin", branch, check=False)
     clean = not landing._git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip()
     behind = landing._git(repo, "merge-base", "--is-ancestor", "HEAD", f"origin/{branch}", check=False)
@@ -93,11 +115,7 @@ def acquire(repo, branch, flight, pid, ttl_s):
         landing._git(repo, "merge", "--ff-only", "--quiet", f"origin/{branch}", check=False)
     record = {"flight": flight, "pid": pid, "expires": time.time() + ttl_s, "branch": branch,
               "head": landing._git(repo, "rev-parse", "HEAD").stdout.strip(), "baseline": dirty(repo)}
-    try:
-        fd = os.open(path(repo), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        raise Owned("owned") from None
-    with os.fdopen(fd, "w") as f:
+    with open(path(repo), "w") as f:
         json.dump(record, f)
     return record
 
@@ -106,6 +124,7 @@ def release(repo, flight):
     record = read(repo)
     if record and record["flight"] == flight:
         os.remove(path(repo))
+        lane_lock("release", repo, flight, record["pid"])
 
 
 def flight_paths(repo, record):
@@ -127,5 +146,5 @@ def recover(repo, comment=None):
     if paths or moved:
         result = landing.hold(repo, record, paths, collisions, "crashed", comment)
     if landing.terminal(repo, result):
-        os.remove(path(repo))
+        release(repo, record["flight"])
     return result
