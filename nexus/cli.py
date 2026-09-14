@@ -245,7 +245,7 @@ def cmd_install(args):
 def cmd_work(args):
     from . import work
     try:
-        entries = work.registry(args.registry)
+        entries = work.registry(args.registry) if args.registry else []
         if args.work_command == "status":
             print(json.dumps(work.read_status(args.ledger, entries), sort_keys=True))
             return 0
@@ -258,6 +258,8 @@ def cmd_work(args):
                                       lane=args.lane, issue=args.issue, registry_path=args.registry)
                 finally:
                     work._registry.reset(token)
+            elif args.work_command == "reopen":
+                result = {"reopened": work.reopen(led, args.task, args.reason)}
             elif args.work_command == "claim":
                 entry = next((e for e in entries if e["repo"] == args.repo.lower()), None)
                 if entry is None:
@@ -285,9 +287,9 @@ def build_parser():
 
     work_p = subs.add_parser("work", help="registry issue delivery")
     work_subs = work_p.add_subparsers(dest="work_command", required=True)
-    for name in ("status", "run", "claim", "release"):
+    for name in ("status", "run", "claim", "release", "reopen"):
         sub = work_subs.add_parser(name)
-        sub.add_argument("--registry", required=True)
+        sub.add_argument("--registry", required=name != "reopen")
         sub.set_defaults(func=cmd_work)
         if name == "run":
             sub.add_argument("--budget-s", type=float, default=300)
@@ -302,6 +304,9 @@ def build_parser():
             sub.add_argument("--pid", type=int, required=True)
         if name == "claim":
             sub.add_argument("issue", type=int)
+        if name == "reopen":
+            sub.add_argument("task")
+            sub.add_argument("--reason", required=True)
         if name == "release":
             sub.add_argument("flight")
 

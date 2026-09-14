@@ -594,10 +594,6 @@ def wave_candidates(led, entries, caps):
             entry = rows.get(item["repo"])
             if not entry:
                 continue
-            if item["window"] != "any" and not window_open(item["window"]):
-                continue
-            if any(not dependency_done(led, dep) for dep in item["depends_on"]):
-                continue
             if item["repo"] not in discovered:
                 discover(led, entry)
                 discovered.add(item["repo"])
@@ -606,7 +602,7 @@ def wave_candidates(led, entries, caps):
             if not task or task["state"] == "done" or next_retry(led, task) > time.time():
                 continue
             issue = latest(led, "work.issue", task["id"])
-            if eligibility(issue) not in ("ready", "resume"):
+            if eligibility(issue) not in ("ready", "resume") or tower_gate(entry, issue)[1]:
                 continue
             runnable.append((priority_rank({l["name"].lower() for l in issue.get("labels", [])}), item))
         picked = []
@@ -623,18 +619,39 @@ def wave_candidates(led, entries, caps):
     return None
 
 
-def window_open(window):
-    """A non-`any` wave runs only while bin/sensitive_window.py allows a sensitive change (exit 0)."""
+def window_open():
+    """bin/sensitive_window.py allows a sensitive change now (exit 0)."""
     proc = subprocess.run(["python3", SENSITIVE_WINDOW, "check", "--label", "sensitive"],
                           capture_output=True, text=True, timeout=60)
     return proc.returncode == 0
 
 
-def dependency_done(led, dep):
-    """`owner/repo#N` is done when its latest captured issue is closed."""
-    task = led.conn.execute("SELECT id FROM tasks WHERE lower(dedupe_key)=? ORDER BY created_at DESC LIMIT 1",
-                            (f"github:{dep}",)).fetchone()
-    return bool(task) and latest(led, "work.issue", task[0]).get("state") == "closed"
+def contract_required(entry):
+    """TBS repositories are triaged: their issues run only with a valid tbs-contract block."""
+    return entry["repo"].startswith("thinking-brain-school/")
+
+
+def tower_gate(entry, issue):
+    """THE eligibility gate for every Tower path (wave, fallback, retry, review resume): (contract, reason|None)."""
+    from . import contract
+    return contract.gate(issue, required=contract_required(entry), window_open=window_open)
+
+
+def reopen(led, task_id, reason):
+    """A done task that was never proven done gets a fresh generation; history stays."""
+    with led.tx() as c:
+        task = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        newest = c.execute("SELECT id FROM tasks WHERE dedupe_key=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                           (task["dedupe_key"],)).fetchone()[0]
+        if newest != task_id or task["state"] not in ("done", "abandoned"):
+            return None
+        tid = new_id("task")
+        c.execute("INSERT INTO tasks(id,origin,title,state,dedupe_key,created_at) VALUES (?,?,?,'accepted',?,?)",
+                  (tid, task["origin"], task["title"], task["dedupe_key"], time.time()))
+        led._event("work.generation", tid, {"previous_task": task_id, "dedupe_key": task["dedupe_key"],
+                                            "reason": reason}, "work")
+        led._event("work.issue", tid, latest(led, "work.issue", task_id), "work")
+    return tid
 
 
 def dispatch_wave(led, entries, registry_path, budget_s, caps):
@@ -684,10 +701,16 @@ def tower_execute(led, entry, task):
         return proc.stdout.strip()
 
     from . import lanes
-    write_set = lanes.write_set_for(repo, number)
+    found, why = tower_gate(entry, issue)
+    if why:  # re-checked at the moment of flight: a dependency may have reopened
+        led.event("work.gated", fid, {"repo": repo, "issue": number, "reason": why}, "work")
+        return pending(led, fid, {"reason": f"gate: {why}", "retry_at": time.time() + 1800, "evidence": []})
+    write_set = (found or {}).get("write_set") or lanes.write_set_for(repo, number)
+    if (found or {}).get("route") == "antigravity":
+        issue = dict(issue, labels=list(issue.get("labels", [])) + [{"name": "route-antigravity"}])
     per_repo = lanes_caps(_registry.get())[0] if _registry.get() else lanes.PER_REPO
     try:
-        led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL,
+        led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL, "open_deps": [],
                                           "write_set": write_set, "started": time.time()}, "work")
         result = executor.fly(
             entry, issue, fid, timeout_s=remaining(float(entry.get("timeout_s", 900))),
@@ -697,7 +720,7 @@ def tower_execute(led, entry, task):
             write_set=write_set, per_repo=per_repo)
         led.event("work.lane", fid, {"repo": repo, "issue": number, "write_set": write_set, "state": result["state"],
                                      "sha": result.get("sha"), "ended": time.time()}, "work")
-        state = _settle(led, fid, entry, task, issue, result)
+        state = _settle(led, fid, entry, task, issue, result, found)
         if result.get("reason") == "in_review":
             return tower_review(led, entry, task, result["pr_url"])
         return state
@@ -710,7 +733,7 @@ def tower_execute(led, entry, task):
         return "failed"
 
 
-def _settle(led, fid, entry, task, issue, result):
+def _settle(led, fid, entry, task, issue, result, contract_=None):
     from . import tower
     repo, number = entry["repo"], issue["number"]
     tower.land_write_flight(led, fid, entry["path"], result)
@@ -723,9 +746,17 @@ def _settle(led, fid, entry, task, issue, result):
                                   "hold": result.get("hold"), "pr_url"
 : result.get("pr_url"),
                                   "evidence": [result.get("pr_url") or result.get("comment_url")]})
-    led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower terminal proof")
-    if result["state"] == "LANDED":
-        close_issue(led, {"repo": repo, "task": task["id"], "issue": issue})
+    from . import contract
+    done, why = contract.done_receipt(result, contract_, entry["path"])
+    if not done:  # an executor exit is never proof: no_change, a failed check or no commit stays open
+        url = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body",
+                              f"Nexus flight {fid}: not done. {why}. Left open for the next attempt."],
+                             capture_output=True, text=True, timeout=remaining(60)).stdout.strip()
+        return pending(led, fid, {"reason": f"not_done: {why}", "retry_at": time.time() + 3600,
+                                  "evidence": [url] if url else []})
+    led.event("work.receipt", task["id"], {"flight": fid, "sha": result["sha"], "receipt": why}, "work")
+    led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower receipt: " + why)
+    close_issue(led, {"repo": repo, "task": task["id"], "issue": issue})
     return "done"
 
 
@@ -773,7 +804,8 @@ def tower_review(led, entry, task, pr_url):
                 "mergeCommit") or {}
             if merged.returncode == 0 and sha.get("oid"):
                 return _settle(led, fid, entry, task, issue,
-                               {"state": "LANDED", "flight": fid, "sha": sha["oid"], "branch": pr["baseRefName"]})
+                               {"state": "LANDED", "flight": fid, "sha": sha["oid"], "branch": pr["baseRefName"]},
+                               tower_gate(entry, issue)[0])
             why = "merge failed: " + (merged.stderr or "").strip()[:200]
         url = gh("pr", "comment", pr_url, "--body", f"Nexus review flight {fid}: HELD. {why}").stdout.strip()
         return _settle(led, fid, entry, task, issue,
@@ -800,7 +832,7 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
     entries.sort(key=lambda e: latest(led, "work.serviced", e["repo"]).get("at", 0))
     deadline = time.monotonic() + budget_s
     report = []
-    passive = ("held", "owned", "ineligible", "closed", "backoff")
+    passive = ("held", "owned", "ineligible", "closed", "backoff", "blocked", "reopened")
     for index, entry in enumerate(entries):
         if time.monotonic() >= deadline:
             break
@@ -889,10 +921,14 @@ def conveyor_backoff(led, subject):
 def _run_task(led, entry, task):
     try:
         if task["state"] == "done":
+            if _lane.get() == TOWER_LABEL and not latest(led, "work.receipt", task["id"]):
+                tid = reopen(led, task["id"], "done without receipt")  # never close an unproven issue
+                return "reopened" if tid else "done"
             if not latest(led, "work.closed", task["id"]):
                 close_issue(led, context(led, entry, task))
             return "done"
-        state = eligibility(issue_now(led, entry, task))
+        current = issue_now(led, entry, task)
+        state = eligibility(current)
         reconcile = state == "closed" and _lane.get() != TOWER_LABEL and any(
             latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"]))
         if state not in ("ready", "resume") and not reconcile:
@@ -902,6 +938,10 @@ def _run_task(led, entry, task):
         if next_retry(led, task) > time.time():
             return "backoff"
         if _lane.get() == TOWER_LABEL:
+            why = tower_gate(entry, current)[1]
+            if why:
+                led.event("work.pending", task["id"], {"reason": f"gate: {why}", "next_retry": time.time() + 1800}, "work")
+                return "blocked"
             waiting = latest(led, "work.pending", task["id"])
             if waiting.get("reason") == "in_review" and waiting.get("pr_url"):
                 return tower_review(led, entry, task, waiting["pr_url"])
