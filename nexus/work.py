@@ -562,7 +562,9 @@ def tower_execute(led, entry, task):
         return proc.stdout.strip()
 
     try:
-        led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL}, "work")
+        led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL,
+                                          "path": entry["path"]}, "work")
+
         result = executor.fly(
             entry, issue, fid, timeout_s=remaining(float(entry.get("timeout_s", 900))),
             pr_create=lambda head, base, body: gh("pr", "create", "-R", repo, "--head", head, "--base", base,

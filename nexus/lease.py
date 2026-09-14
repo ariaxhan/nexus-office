@@ -127,20 +127,31 @@ def release(repo, flight):
         lane_lock("release", repo, flight, record["pid"])
 
 
-def flight_paths(repo, record):
-    """(paths the flight changed, those of them that were already dirty at baseline)."""
+def _touched_after(repo, rel, until):
+    try:
+        return os.lstat(os.path.join(repo, rel)).st_mtime > until
+    except OSError:
+        return False
+
+
+def flight_paths(repo, record, until=None):
+    """(paths the flight changed, those of them that were already dirty at baseline).
+
+    `until`: when the flight was known dead. A path written after it is a person's, never the flight's."""
     now, base = dirty(repo), record["baseline"]
     missing = object()
-    changed = sorted(p for p in set(now) | set(base) if now.get(p, missing) != base.get(p, missing))
+    changed = sorted(p for p in set(now) | set(base) if now.get(p, missing) != base.get(p, missing)
+                     and not (until is not None and _touched_after(repo, p, until)))
     return changed, [p for p in changed if p in base]
 
 
-def recover(repo, comment=None):
+def recover(repo, comment=None, until=None):
     """A stale lease is driven to HELD before any new flight: nothing stays local-only."""
     record = read(repo)
     if not record or not stale(record):
         return None
-    paths, collisions = flight_paths(repo, record)
+    paths, collisions = flight_paths(repo, record, until)
+
     moved = landing._git(repo, "rev-parse", "HEAD").stdout.strip() != record["head"]
     result = {"state": "CLOSED", "reason": "no_change", "flight": record["flight"]}
     if paths or moved:

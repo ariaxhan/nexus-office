@@ -91,7 +91,41 @@ class Case(unittest.TestCase):
         self.assertIsNone(lease.read(self.repo))
         self.assertEqual(git(self.repo, "show", f"{result['sha']}:wip.txt"), "half")
 
+    def test_t6b_tower_reconcile_alone_recovers_vanished_work_flight(self):
+        from nexus import work
+        led = Ledger(os.path.join(self.dir, "ledger.sqlite"))
+        work.capture(led, "a/b", {"number": 7, "title": "t", "labels": []})
+        fid = work.claim(led, "a/b", 7, os.getpid(), runner=True)
+        led.event("work.executing", fid, {"repo": "a/b", "issue": 7, "path": self.repo}, "work")
+        script = ("import os,sys,time; sys.path.insert(0,%r); from nexus import lease, landing;"
+                  "landing.GIT_LOCK='/nonexistent';"
+                  "lease.acquire(%r,'main',%r,os.getpid(),600);"
+                  "open(os.path.join(%r,'wip.txt'),'w').write('half\\n');"
+                  "print('ready',flush=True); time.sleep(60)") % (str(ROOT), self.repo, fid, self.repo)
+        proc = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True)
+        self.assertEqual(proc.stdout.readline().strip(), "ready")
+        led.conn.execute("UPDATE flights SET pid=? WHERE id=?", (proc.pid, fid))
+        led.conn.commit()
+        proc.send_signal(signal.SIGKILL)
+        proc.wait()
+        now = time.time()
+        self.write("human.txt", "unlocked human edit\n")  # after the flight died: never flight work
+        os.utime(os.path.join(self.repo, "human.txt"), (now + 5, now + 5))
+        report = tower.tick(led, now=now, root=os.path.join(self.dir, "flights"),
+                            comment_for=lambda repo, number: self.comment)
+        self.assertEqual(report["vanished"], 1)
+        sha = self.remote(f"aria/held/{fid}")[0]
+        self.assertEqual(git(self.repo, "show", f"{sha}:wip.txt"), "half")
+        self.assertEqual(git(self.repo, "show", f"{sha}:human.txt"), "base")
+        self.assertEqual(self.read("human.txt"), "unlocked human edit\n")
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "wip.txt")))
+        self.assertIsNone(lease.read(self.repo))
+        self.assertEqual(led.flight(fid)["state"], "failed")
+        self.assertEqual(len(self.comments), 1)
+        led.close()
+
     def test_t8_review_pushes_branch_before_pr_and_never_switches(self):
+
         self.write("human.txt", "human edit\n")
         rec = lease.acquire(self.repo, "main", "f8", os.getpid(), 600)
         self.write("src.py", "print(1)\n")

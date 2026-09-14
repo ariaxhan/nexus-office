@@ -78,8 +78,9 @@ def resume(ledger: Ledger, reason="operator"):
 # ---- the tick --------------------------------------------------------------
 
 
-def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
+def tick(ledger: Ledger, now=None, root=None, landing_probe=None, comment_for=None):
     """One pass of the controller. Safe to run twice at once; safe to kill."""
+
     now = now if now is not None else time.time()
     root = root or flights_root(ledger)
     report = {
@@ -93,7 +94,8 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     reaped = _reap(ledger, now, root)
     report["produced"] += reaped["produced"]
     report["failed"] += reaped["failed"]
-    report["vanished"] = _reconcile_vanished(ledger, now, root)
+    report["vanished"] = _reconcile_vanished(ledger, now, root, comment_for or _gh_comment)
+
     report["failed"] += report["timed_out"] + report["vanished"]
     report["retried"] = _retry_exhausted(ledger, now)
     _sweep_workspaces(ledger)
@@ -200,12 +202,48 @@ def land_write_flight(ledger, flight_id, repo, result, now=None):
     return result
 
 
-def _reconcile_vanished(ledger, now, root):
+def _gh_comment(repo, number):
+    def comment(body):
+        proc = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body", body],
+                              capture_output=True, text=True, timeout=120)
+        return proc.stdout.strip() if proc.returncode == 0 else None
+    return comment
+
+
+def _recover_work(ledger, flight, now, comment_for):
+    """A tower work flight whose runner died: recover its checkout lease now, not at the next flight."""
+    from . import lease, work
+    executing = work.latest(ledger, "work.executing", flight["id"])
+    if not executing.get("path") or fl.alive(flight["pid"]):
+        return False
+    seen = work.latest(ledger, "work.vanished", flight["id"]).get("at")
+    if seen is None:
+        seen = now
+        ledger.event("work.vanished", flight["id"], {"at": now}, "tower", now)
+    repo = executing["path"]
+    record = lease.read(repo)
+    if record and record["flight"] == flight["id"]:
+        try:
+            result = lease.recover(repo, comment_for(executing["repo"], executing["issue"]), until=seen)
+        except Exception as exc:  # noqa: BLE001 - lease stays; the next tick retries with the same cutoff
+            ledger.event("work.recovery_failed", flight["id"], {"error": str(exc)}, "tower", now)
+            return False
+        ledger.event("work.recovered", flight["id"], result or {}, "tower", now)
+        if lease.read(repo):
+            return False  # not proven terminal: keep the claim
+    work.fail(ledger, flight["id"], "vanished: runner gone; checkout recovered")
+    ledger.release_leases(flight["id"], now=now)
+    return True
+
+
+def _reconcile_vanished(ledger, now, root, comment_for=_gh_comment):
     """Narrow: only a row whose process is provably gone with nothing to show."""
     gone = 0
     for flight in ledger.flights(states=("running",)):
         if ledger.plan(flight["plan_id"])["kind"] == "work":
+            gone += int(_recover_work(ledger, flight, now, comment_for))
             continue
+
         if fl.alive(flight["pid"]):
             continue
         if flight["pid"] is None and (flight["started_at"] or now) + PID_GRACE_S > now:
