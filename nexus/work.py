@@ -247,7 +247,7 @@ def eligibility(issue):
         return "owned"
     if labels.intersection({"direct", "claimed", "in-progress", "in progress"}):
         return "owned"
-    if labels.intersection({"hold", "on-hold", "blocked", "cancelled", "canceled"}):
+    if labels.intersection({"hold", "on-hold", "blocked", "blocked-needs-look", "cancelled", "canceled"}):
         return "held"
     return "ready" if "ready" in labels else "resume" if labels.intersection({"in-pr", "in pr"}) else "ineligible"
 
@@ -562,11 +562,12 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None, issue
         parallel=None):
     token = _lane.set(lane)
     try:
+        cut = cut_idle(led, [e for e in entries if e["enabled"]]) if lane == TOWER_LABEL and issue is None else []
         if lane == TOWER_LABEL and issue is None and repo is None and registry_path:
             waved = dispatch_wave(led, entries, registry_path, budget_s, parallel or lanes_caps(registry_path))
             if waved is not None:
-                return waved
-        return _run(led, entries, repo, budget_s=budget_s, max_items=max_items, issue=issue)
+                return cut + waved
+        return cut + _run(led, entries, repo, budget_s=budget_s, max_items=max_items, issue=issue)
     finally:
         _lane.reset(token)
 
@@ -710,6 +711,59 @@ def open_pr(repo, number):
 def wait(led, fid, why):
     """A contention wait: bounded retry_at, recorded as pending, never counted as a failed attempt."""
     return pending(led, fid, {"reason": f"wait: {why}"[:300], "retry_at": time.time() + WAIT_S, "evidence": []})
+
+
+IDLE_S = 1200        # a tower lane whose checkout fingerprint has not moved for this long is idle: cut off
+MAX_CUTS = 2         # after this many cut-offs the issue is blocked-needs-look and skipped (Aria, 2026-09-14)
+
+
+def progress(path, fid):
+    """Fingerprint of what a flight has done in its checkout (HEAD + its changed bytes); None: no lease."""
+    from . import landing, lanes, lease
+    rec = next((r for r in [lease.read(path)] + lanes.records(path) if r and r.get("flight") == fid), None)
+    if rec is None:
+        return None
+    head = landing._git(path, "rev-parse", "HEAD").stdout.strip()
+    changed, _ = lease.flight_paths(path, rec)
+    return json.dumps([head, {p: lease.digest(path, p) for p in changed}], sort_keys=True)
+
+
+def cut_idle(led, entries, now=None):
+    """Each tick: a running tower lane with no progress since IDLE_S is stopped, its bytes held, the issue
+    flagged once and requeued; the MAX_CUTS-th cut blocks the issue so no loop re-flies it."""
+    from . import lanes, lease
+    now, paths, cut = now or time.time(), {e["repo"]: e.get("canonical_path") or e["path"] for e in entries}, []
+    for flight in led.flights(states=("running",)) if paths else []:
+        run = latest(led, "work.executing", flight["id"])
+        path = paths.get(run.get("repo"))
+        if run.get("lane") != TOWER_LABEL or not path:
+            continue
+        fp, seen = progress(path, flight["id"]), latest(led, "work.progress", flight["id"])
+        if fp is None:
+            continue
+        if seen.get("fp") != fp:
+            led.event("work.progress", flight["id"], {"fp": fp, "at": now}, "work")
+            continue
+        if now - seen["at"] < IDLE_S or not stop(led, flight):
+            continue
+        with contextlib.suppress(Exception):  # preserve first; a failed hold leaves the stale lease for recovery
+            lease.recover(path)
+            lanes.recover(path)
+        key = led.conn.execute("SELECT dedupe_key FROM tasks WHERE id=?", (flight["task_id"],)).fetchone()[0]
+        cuts = 1 + sum(1 for e in led.events(kind="work.cut") if loads(e["payload"], {}).get("key") == key)
+        led.event("work.cut", flight["task_id"], {"key": key, "flight": flight["id"], "cuts": cuts}, "work")
+        number, blocked = run["issue"], cuts >= MAX_CUTS
+        body = (f"Nexus flight {flight['id']}: idle {int(now - seen['at'])}s, cut off ({cuts}/{MAX_CUTS}). "
+                + ("Blocked: needs a look; Tower skips it." if blocked else "Requeued for a fresh lane."))
+        subprocess.run(["gh", "issue", "comment", str(number), "-R", run["repo"], "--body", body],
+                       capture_output=True, text=True, timeout=60)
+        if blocked:
+            subprocess.run(["gh", "issue", "edit", str(number), "-R", run["repo"], "--remove-label", "ready",
+                            "--add-label", "blocked-needs-look"], capture_output=True, text=True, timeout=60)
+        pending(led, flight["id"], {"reason": f"cut: idle ({cuts}/{MAX_CUTS})", "evidence": [],
+                                    "retry_at": now + (86400 if blocked else 1)})
+        cut.append(dict(repo=run["repo"], issue=number, state="blocked" if blocked else "requeued"))
+    return cut
 
 
 def tower_execute(led, entry, task):
@@ -884,10 +938,10 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
     if repo and repo.lower() not in {e["repo"] for e in entries}:
         raise WorkError(f"unknown repository: {repo}")
     entries = eligible(led, entries, repo)
+    report = []
     # Least recently serviced repositories first, using existing ledger receipts.
     entries.sort(key=lambda e: (not has_p0(led, e["repo"]), latest(led, "work.serviced", e["repo"]).get("at", 0)))
     deadline = time.monotonic() + budget_s
-    report = []
     passive = ("held", "owned", "ineligible", "closed", "backoff", "blocked", "reopened")
     for index, entry in enumerate(entries):
         if time.monotonic() >= deadline:
