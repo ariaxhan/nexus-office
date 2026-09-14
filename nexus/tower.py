@@ -29,7 +29,9 @@ import time
 
 from . import flights as fl
 from . import landing as ld
+from . import lease
 from .ledger import Ledger, loads
+
 
 DEFAULT_CONCURRENCY = 4
 QUARANTINE_AFTER = 5  # consecutive failures before a plan stops
@@ -39,6 +41,8 @@ DEFAULT_MAX_RETRIES = 2
 #: before it is treated as never having started.
 PID_GRACE_S = 5.0
 LEASE_SLACK_S = 60.0
+WORK_REGISTRY = os.path.expanduser("~/Developer/Vaults/_meta/services/nexus-work-registry.json")
+
 
 
 def flights_root(ledger: Ledger) -> str:
@@ -78,8 +82,11 @@ def resume(ledger: Ledger, reason="operator"):
 # ---- the tick --------------------------------------------------------------
 
 
-def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
-    """One pass of the controller. Safe to run twice at once; safe to kill."""
+def tick(ledger: Ledger, now=None, root=None, landing_probe=None, checkouts=()):
+    """One pass of the controller. Safe to run twice at once; safe to kill.
+
+    `checkouts`: canonical repo paths whose stale nexus-lease is recovered, then released."""
+
     now = now if now is not None else time.time()
     root = root or flights_root(ledger)
     report = {
@@ -97,7 +104,9 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report["failed"] += report["timed_out"] + report["vanished"]
     report["retried"] = _retry_exhausted(ledger, now)
     _sweep_workspaces(ledger)
+    report["stale_leases"] = _reconcile_checkout_leases(ledger, now, checkouts)
     report["reconciled_landings"] = _reconcile_landings(ledger, now, landing_probe)
+
     report["landed"] = _land(ledger, now)
     report["quarantined"] = _quarantine(ledger, now)
 
@@ -220,7 +229,41 @@ def _reconcile_vanished(ledger, now, root):
     return gone
 
 
+def work_checkouts(registry=None):
+    """Canonical paths from the work registry; unreadable registry means nothing to scan."""
+    registry = registry or os.environ.get("NEXUS_WORK_REGISTRY", WORK_REGISTRY)
+    try:
+        with open(registry) as f:
+            rows = json.load(f)["repositories"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    return sorted({os.path.expanduser(r["path"]) for r in rows if isinstance(r.get("path"), str)})
+
+
+def _reconcile_checkout_leases(ledger, now, checkouts):
+    """A stale nexus-lease (dead pid or past expires): crash recovery first, then released."""
+    stale = 0
+    for repo in checkouts or ():
+        if not os.path.exists(os.path.join(repo, ".git", "nexus-lease.json")):
+            continue
+        record = lease.read(repo)
+        if not record or not lease.stale(record, now):
+            continue
+        stale += 1
+        try:
+            result = lease.recover(repo)
+            ledger.event("checkout_lease.recovered", record.get("flight"),
+                         {"repo": repo, "pid": record.get("pid"), "expires": record.get("expires"),
+                          "state": result and result.get("state"), "reason": result and result.get("reason"),
+                          "released": lease.read(repo) is None}, "tower", now)
+        except Exception as exc:  # noqa: BLE001 - the lease stays for the next tick
+            ledger.event("checkout_lease.recover_failed", record.get("flight"),
+                         {"repo": repo, "error": repr(exc)[:300]}, "tower", now)
+    return stale
+
+
 def _finish_failed(ledger, flight, now):
+
     """A failed flight leaves nothing behind but its log: process, leases, workspace go."""
     ledger.release_leases(flight["id"], now=now)
     workspace = flight["workspace"]
@@ -722,11 +765,12 @@ def _detach_runner(workspace,package_parent,argv,env):
 # ---- run loop and views ----------------------------------------------------
 
 
-def run(ledger, interval=5.0, iterations=None, root=None):
+def run(ledger, interval=5.0, iterations=None, root=None, checkouts=list):
     count = 0
     while iterations is None or count < iterations:
         try:
-            tick(ledger, root=root)
+            tick(ledger, root=root, checkouts=checkouts())
+
         except Exception as exc:  # a bad tick must never end the tower
             ledger.event("tower.tick_error", None, {"error": repr(exc)}, "tower")
         count += 1
