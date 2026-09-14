@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 
 HANGAR_DIR = "repo"
 GIT_TIMEOUT_S = 120.0
@@ -26,9 +27,9 @@ class LandingError(Exception):
         self.code, self.detail = code, detail
 
 
-def _git(cwd, *args, check=True, timeout=GIT_TIMEOUT_S):
+def _git(cwd, *args, check=True, timeout=GIT_TIMEOUT_S, env=None):
     proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                          timeout=timeout, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                          timeout=timeout, env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})})
     if check and proc.returncode != 0:
         raise LandingError("git_failed", f"git {' '.join(args)}: {proc.stderr.strip()[:400]}")
     return proc
@@ -121,3 +122,142 @@ def fast_forward(repo: str, branch: str, sha: str) -> str:
         return "not_fast_forward"
     _git(repo, "merge", "--ff-only", "--quiet", sha)
     return "fast_forwarded"
+
+
+# In-place landing on the canonical checkout (Tower v2). No clone, no branch switch:
+# commits are built from a temporary index, so the person's index and HEAD stay theirs.
+
+HELD_PREFIX = "aria/held/"
+GIT_LOCK = os.path.expanduser("~/Developer/Vaults/_meta/services/vault-git-lock.py")
+
+
+def _locked(repo, *args):
+    """A write to the real index or refs goes through the vault git mutex when present."""
+    if os.path.exists(GIT_LOCK):
+        proc = subprocess.run(["python3", GIT_LOCK, repo, "--", "git", *args], cwd=repo,
+                              capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+        if proc.returncode:
+            raise LandingError("git_failed", f"git {' '.join(args)}: {proc.stderr.strip()[:400]}")
+        return proc
+    return _git(repo, *args)
+
+
+def commit_paths(repo, parent, paths, message):
+    """A commit of `parent` plus the working-tree bytes of `paths`, via a temp index."""
+    fd, index = tempfile.mkstemp(prefix="nexus-index-")
+    os.close(fd)
+    os.remove(index)
+    env = {"GIT_INDEX_FILE": index}
+    try:
+        _git(repo, "read-tree", parent, env=env)
+        for p in paths:
+            if os.path.lexists(os.path.join(repo, p)):
+                _git(repo, "update-index", "--add", "--", p, env=env)
+            else:
+                _git(repo, "update-index", "--force-remove", "--", p, env=env)
+        tree = _git(repo, "write-tree", env=env).stdout.strip()
+    finally:
+        if os.path.exists(index):
+            os.remove(index)
+    return _git(repo, "commit-tree", tree, "-p", parent, "-m", message).stdout.strip()
+
+
+def push_ref(repo, sha, branch):
+    return _git(repo, "push", "--quiet", "origin", f"{sha}:refs/heads/{branch}", check=False).returncode == 0
+
+
+def restore(repo, paths, head):
+    """Put only these paths back to `head`; files `head` never had are removed."""
+    for p in paths:
+        if _git(repo, "cat-file", "-e", f"{head}:{p}", check=False).returncode == 0:
+            _git(repo, "restore", f"--source={head}", "--worktree", "--", p)
+        elif os.path.lexists(os.path.join(repo, p)):
+            os.remove(os.path.join(repo, p))
+
+
+def _record(state, record, **extra):
+    return {"state": state, "flight": record["flight"], **extra}
+
+
+def hold(repo, record, paths, collisions, reason, comment=None):
+    """Push the flight's work to aria/held/<flight>, comment, restore non-collision paths.
+
+    Collision paths were dirty before the flight: they may hold a person's bytes and are left."""
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    sha = commit_paths(repo, head, paths, f"HELD {reason}\n\nNexus-Flight: {record['flight']}") if paths else head
+    branch = HELD_PREFIX + record["flight"]
+    if not push_ref(repo, sha, branch):
+        raise LandingError("held_push_failed", branch)
+    url = comment(f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {sha}.") if comment else None
+    restore(repo, [p for p in paths if p not in collisions], head)
+    return _record("HELD", record, reason=reason, sha=sha, branch=branch, comment_url=url, paths=paths)
+
+
+def direct(repo, record, message, comment=None):
+    paths, collisions = _flight_paths(repo, record)
+    if not paths:
+        return _record("CLOSED", record, reason="no_change")
+    if collisions:
+        return hold(repo, record, paths, collisions, "collision", comment)
+    branch = record["branch"]
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    if head != remote_tip(target_key(repo, branch)):
+        return hold(repo, record, paths, collisions, "not_at_origin", comment)
+    sha = commit_paths(repo, head, paths, f"{message}\n\nNexus-Flight: {record['flight']}")
+    if not push_ref(repo, sha, branch):
+        return hold(repo, record, paths, collisions, "push_rejected", comment)
+    _locked(repo, "update-ref", f"refs/heads/{branch}", sha, head)
+    _locked(repo, "update-index", "--add", "--remove", "--", *paths)
+    return _record("LANDED", record, sha=sha, branch=branch, paths=paths)
+
+
+def review(repo, record, message, issue, pr_create, comment=None, reason="in_review"):
+    """Branch on origin first, then the PR, then the tree goes back to its human state."""
+    paths, collisions = _flight_paths(repo, record)
+    if not paths:
+        return _record("CLOSED", record, reason="no_change")
+    if collisions:
+        return hold(repo, record, paths, collisions, "collision", comment)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    sha = commit_paths(repo, head, paths, f"{message}\n\nNexus-Flight: {record['flight']}")
+    branch = f"aria/issue-{issue}"
+    if not push_ref(repo, sha, branch):
+        return hold(repo, record, paths, collisions, "branch_push_rejected", comment)
+    url = pr_create(branch, record["branch"], f"{message}\n\nCloses #{issue}")
+    if reason != "in_review" and comment:
+        comment(f"needs Aria: {reason}. PR {url}")
+    restore(repo, paths, head)
+    return _record("HELD", record, reason=reason, sha=sha, branch=branch, pr_url=url, paths=paths)
+
+
+def _flight_paths(repo, record):
+    from . import lease
+    return lease.flight_paths(repo, record)
+
+
+def terminal(repo, result):
+    """True only when the claimed terminal state is proven against origin."""
+    state, sha, branch = result.get("state"), result.get("sha"), result.get("branch")
+    try:
+        if state == "LANDED" and sha and branch:
+            tip = remote_tip(target_key(repo, branch))
+            if not tip:
+                return False
+            _git(repo, "fetch", "--quiet", "origin", branch, check=False)
+            return _git(repo, "merge-base", "--is-ancestor", sha, tip, check=False).returncode == 0
+        if state == "CLOSED":
+            if result.get("reason") == "no_change":
+                return not sha
+            return bool(branch) and remote_tip(target_key(repo, branch)) is None and bool(result.get("reason"))
+        if state == "HELD" and sha and branch:
+            return (remote_tip(target_key(repo, branch)) == sha
+                    and bool(result.get("comment_url") or result.get("pr_url")))
+    except LandingError:
+        return False
+    return False
+
+
+def require_terminal(repo, result):
+    if not terminal(repo, result):
+        raise LandingError("not_terminal", f"{result.get('state')} unproven for {result.get('flight')}")
+    return result

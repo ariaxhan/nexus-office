@@ -245,7 +245,8 @@ def cmd_work(args):
         led = _ledger(args)
         try:
             if args.work_command == "run":
-                result = work.run(led, entries, args.repo, budget_s=args.budget_s, max_items=args.max_items)
+                result = work.run(led, entries, args.repo, budget_s=args.budget_s, max_items=args.max_items,
+                                  lane=args.lane)
             elif args.work_command == "claim":
                 entry = next((e for e in entries if e["repo"] == args.repo.lower()), None)
                 if entry is None:
@@ -280,6 +281,7 @@ def build_parser():
         if name == "run":
             sub.add_argument("--budget-s", type=float, default=300)
             sub.add_argument("--max-items", type=int, default=20)
+            sub.add_argument("--lane", default=None, help="tower-v2: in-place landing, labeled issues only")
         if name == "status":
             sub.add_argument("--json", action="store_true")
         if name in ("run", "claim"):

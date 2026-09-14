@@ -19,6 +19,10 @@ from .ledger import Ledger, LedgerError, TERMINAL, default_path, loads, new_id
 
 
 _deadline = ContextVar("work_deadline", default=None)
+# Tower v2 label split: `code-work` runs with lane=TOWER_LABEL and takes only labeled issues;
+# every other run (nexus-work) treats those issues as owned.
+TOWER_LABEL = "tower-v2"
+_lane = ContextVar("work_lane", default=None)
 
 
 def remaining(limit):
@@ -235,6 +239,8 @@ def eligibility(issue):
     if issue["state"] == "closed":
         return "closed"
     labels = {label["name"].lower() for label in issue.get("labels", [])}
+    if (TOWER_LABEL in labels) != (_lane.get() == TOWER_LABEL):
+        return "owned" if TOWER_LABEL in labels else "ineligible"
     if labels.intersection({"direct", "claimed", "in-progress", "in progress"}):
         return "owned"
     if labels.intersection({"hold", "on-hold", "blocked", "cancelled", "canceled"}):
@@ -522,7 +528,49 @@ def eligible(led, entries, repo):
     return []
 
 
-def run(led, entries, repo=None, *, budget_s=300, max_items=20):
+def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None):
+    token = _lane.set(lane)
+    try:
+        return _run(led, entries, repo, budget_s=budget_s, max_items=max_items)
+    finally:
+        _lane.reset(token)
+
+
+def tower_execute(led, entry, task):
+    """Tower v2: lease the canonical checkout, run, land in place, prove a terminal state."""
+    from . import executor, tower
+    entry = dict(entry, path=entry.get("canonical_path") or entry["path"])
+    issue = issue_now(led, entry, task)
+    fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
+    repo, number = entry["repo"], issue["number"]
+
+    def gh(*args):
+        proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=remaining(120))
+        if proc.returncode:
+            raise WorkError(proc.stderr.strip() or "gh failed")
+        return proc.stdout.strip()
+
+    try:
+        led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL}, "work")
+        result = executor.fly(
+            entry, issue, fid, timeout_s=remaining(float(entry.get("timeout_s", 900))),
+            pr_create=lambda head, base, body: gh("pr", "create", "-R", repo, "--head", head, "--base", base,
+                                                  "--title", issue.get("title", f"#{number}"), "--body", body),
+            comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body))
+        tower.land_write_flight(led, fid, entry["path"], result)
+        if result["state"] == "HELD":
+            return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + 3600,
+                                      "evidence": [result.get("pr_url") or result.get("comment_url")]})
+        led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower terminal proof")
+        if result["state"] == "LANDED":
+            close_issue(led, {"repo": repo, "task": task["id"], "issue": issue})
+        return "done"
+    except Exception as exc:  # noqa: BLE001 - every failure is recorded; the lease stays for recovery
+        fail(led, fid, exc)
+        return "failed"
+
+
+def _run(led, entries, repo=None, *, budget_s=300, max_items=20):
     """One pass over every enabled repository; max_items bounds the work taken PER repository.
 
     2026-09-11: the bound used to be per run. With ~90 registered repositories and one item
@@ -636,6 +684,8 @@ def _run_task(led, entry, task):
             return "backoff"
         if next_retry(led, task) > time.time():
             return "backoff"
+        if _lane.get() == TOWER_LABEL:
+            return tower_execute(led, entry, task)
         return execute(led, entry, task)
     except Owned:
         return "owned"
