@@ -91,6 +91,19 @@ class Case(unittest.TestCase):
         self.assertIsNone(lease.read(self.repo))
         self.assertEqual(git(self.repo, "show", f"{result['sha']}:wip.txt"), "half")
 
+    def test_t6b_stale_lease_already_held_releases_without_rehold(self):
+        rec = lease.acquire(self.repo, "main", "f6b", os.getpid(), 600)
+        self.write("wip.txt", "half\n")
+        first = landing.hold(self.repo, rec, ["wip.txt"], [], "crashed")  # pushed, then the lease was never released
+        rec["pid"] = 2 ** 22 + 1  # dead holder
+        with open(lease.path(self.repo), "w") as f:
+            import json; json.dump(rec, f)
+        self.write("other-session.txt", "live\n")  # a person's later edit in the shared checkout
+        result = lease.recover(self.repo, self.comment)
+        self.assertEqual((result["state"], result["reason"], result["sha"]), ("HELD", "already_held", first["sha"]))
+        self.assertIsNone(lease.read(self.repo))
+        self.assertEqual(self.read("other-session.txt"), "live\n")
+
     def test_t8_review_pushes_branch_before_pr_and_never_switches(self):
         self.write("human.txt", "human edit\n")
         rec = lease.acquire(self.repo, "main", "f8", os.getpid(), 600)

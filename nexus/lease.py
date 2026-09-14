@@ -140,6 +140,11 @@ def recover(repo, comment=None):
     record = read(repo)
     if not record or not stale(record):
         return None
+    held = landing.HELD_PREFIX + record["flight"]
+    tip = landing.remote_tip(landing.target_key(repo, held))
+    if tip:  # an earlier recovery already pushed this flight's work; re-holding can only fail non-fast-forward
+        release(repo, record["flight"])
+        return {"state": "HELD", "reason": "already_held", "flight": record["flight"], "sha": tip, "branch": held}
     paths, collisions = flight_paths(repo, record)
     moved = landing._git(repo, "rev-parse", "HEAD").stdout.strip() != record["head"]
     result = {"state": "CLOSED", "reason": "no_change", "flight": record["flight"]}
