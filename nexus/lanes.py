@@ -50,7 +50,7 @@ def read_plan(path=None, now=None):
     try:
         with open(path) as f:
             data = json.load(f)
-        made = _stamp(data.get("generated_at"))
+        made = _stamp(data.get("generated_at") or data.get("ts"))
         made = os.path.getmtime(path) if made is None else made
     except (OSError, ValueError, AttributeError):
         return None
@@ -66,7 +66,9 @@ def read_plan(path=None, now=None):
                 continue
             ws = item.get("write_set")
             clean = sorted({str(p).strip().strip("/") for p in ws} - {""}) if isinstance(ws, list) else []
-            rows.append({"repo": item["repo"].lower(), "number": int(number), "write_set": clean or None})
+            rows.append({"repo": item["repo"].lower(), "number": int(number), "write_set": clean or None,
+                         "depends_on": [str(d).lower() for d in item.get("depends_on") or []],
+                         "window": (wave.get("window") if isinstance(wave, dict) else None) or "any"})
         if rows:
             waves.append(rows)
     return waves

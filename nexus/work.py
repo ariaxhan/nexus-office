@@ -586,6 +586,10 @@ def wave_candidates(led, entries, caps):
                 continue
             if any(p["repo"] == item["repo"] and lanes.overlaps(p["write_set"], item["write_set"]) for p in picked):
                 continue
+            if item["window"] != "any" and not window_open(item["window"]):
+                continue
+            if any(not dependency_done(led, dep) for dep in item["depends_on"]):
+                continue
             if item["repo"] not in discovered:
                 discover(led, entry)
                 discovered.add(item["repo"])
@@ -599,6 +603,20 @@ def wave_candidates(led, entries, caps):
         if picked:
             return picked
     return None
+
+
+def window_open(window):
+    """A non-`any` wave runs only while bin/sensitive_window.py allows a sensitive change (exit 0)."""
+    proc = subprocess.run(["python3", SENSITIVE_WINDOW, "check", "--label", "sensitive"],
+                          capture_output=True, text=True, timeout=60)
+    return proc.returncode == 0
+
+
+def dependency_done(led, dep):
+    """`owner/repo#N` is done when its latest captured issue is closed."""
+    task = led.conn.execute("SELECT id FROM tasks WHERE lower(dedupe_key)=? ORDER BY created_at DESC LIMIT 1",
+                            (f"github:{dep}",)).fetchone()
+    return bool(task) and latest(led, "work.issue", task[0]).get("state") == "closed"
 
 
 def dispatch_wave(led, entries, registry_path, budget_s, caps):

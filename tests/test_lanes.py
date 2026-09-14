@@ -162,6 +162,15 @@ class Lanes(unittest.TestCase):
         self.assertEqual("HELD", lease.recover(self.repo, lambda b: "c")["state"])
         self.assertEqual("another session\n", self.read("human.txt"))
 
+    def test_plan_reads_triage_schema_ts_and_depends_on(self):
+        path = os.path.join(self.dir, "plan.json")
+        with open(path, "w") as f:
+            json.dump({"schema": "tbs.execution-plan/v1", "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "waves": [{"index": 0, "window": "sensitive", "issues": [
+                           {"repo": "O/R", "number": 9, "write_set": ["x"], "depends_on": ["O/R#8"]}]}]}, f)
+        [[item]] = lanes.read_plan(path)
+        self.assertEqual((["o/r#8"], "sensitive"), (item["depends_on"], item["window"]))
+
     def test_plan_fresh_stale_and_missing(self):
         path = os.path.join(self.dir, "plan.json")
         now = time.time()
@@ -186,7 +195,7 @@ class Dispatch(unittest.TestCase):
 
     def test_wave_takes_disjoint_items_within_caps(self):
         from nexus import work
-        wave = [{"repo": "o/r", "number": n, "write_set": ws} for n, ws in
+        wave = [{"repo": "o/r", "number": n, "write_set": ws, "depends_on": [], "window": "any"} for n, ws in
                 ((1, ["a"]), (2, ["a/b"]), (3, ["c"]), (4, ["d"]), (5, None))]
         task = {"id": "t", "state": "accepted"}
         led = unittest.mock.Mock()
@@ -197,7 +206,7 @@ class Dispatch(unittest.TestCase):
                 unittest.mock.patch.object(work, "next_retry", return_value=0), \
                 unittest.mock.patch.object(work, "latest", return_value={"labels": [{"name": "ready"}], "state": "open"}):
             picked = work.wave_candidates(led, [], (3, 3))
-            self.assertEqual([1, 3, 4], [p["number"] for p in picked])  # 2 overlaps 1; cap 3 stops 5
+            self.assertEqual([1, 3, 4], [p["number"] for p in picked])  # 2 overlaps 1; 5 (whole repo) overlaps all
             self.assertEqual([1, 3], [p["number"] for p in work.wave_candidates(led, [], (2, 3))])
 
 
