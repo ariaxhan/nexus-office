@@ -705,6 +705,15 @@ else:
         work.run(self.led, [self.entry], max_items=1)
         self.assertEqual([1], [c['issue']['number'] for c in self.calls()])
 
+    def test_strict_priority_p0_over_p1_over_p2(self):
+        self.issues[:] = [dict(number=n, title=f'Issue {n}', state='open', labels=[{'name': 'ready'}] + [{'name': l}] * bool(l))
+                          for n, l in ((1, ''), (2, 'p2'), (3, 'p1'), (4, 'p0'))]
+        work.discover(self.led, self.entry)
+        for age, task in enumerate(sorted(self.led.tasks(), key=lambda t: t['title'])):
+            self.led.conn.execute('UPDATE tasks SET created_at=? WHERE id=?', (age, task['id']))  # unlabeled oldest
+        work.run(self.led, [self.entry], max_items=4)
+        self.assertEqual([4, 3, 2, 1], [c['issue']['number'] for c in self.calls()])
+
     def test_office_pending_reason_replaces_historical_failure(self):
         from sources import flows
         (self.root / 'fail-1').touch()

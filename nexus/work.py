@@ -510,17 +510,26 @@ def selection_priority(led, task):
     (Aria, 2026-09-11, tbs-www#310). Within the unstalled, `ready` work precedes `in pr`
     resumption: an open PR is waiting on review or merge, a ready issue is waiting on us.
     Stalled and resuming items still run once fresh work is exhausted, or from the second
-    slot when max_items allows."""
+    slot when max_items allows. Within the unstalled, priority is strict: p0 > p1 > p2 >
+    unlabeled, ahead of resumption and age."""
     issue = latest(led, "work.issue", task["id"])
     labels = {label["name"].lower() for label in issue.get("labels", [])}
     bonus = 86400 * (bool(led.flights(task_id=task["id"])) +
-                     bool(labels & {"urgent", "p0", "p1", "in-pr", "in pr"}))
+                     bool(labels & {"urgent", "in-pr", "in pr"}))
     # Stalled only while the recorded retry deadline is still ahead; past it the item is as
     # fresh as any other and competes on age again.
     stalled = (latest(led, "work.disposition", task["id"]).get("state") == "pending"
                and next_retry(led, task) > time.time())
     resuming = eligibility(issue) == "resume"      # in PR: waiting on review or merge, not on us
-    return (stalled, resuming, task["created_at"] - bonus)
+    return (stalled, priority_rank(labels), resuming, task["created_at"] - bonus)
+
+
+PRIORITY_LABELS = ("p0", "p1", "p2")
+
+
+def priority_rank(labels):
+    """0 for p0, 1 for p1, 2 for p2, 3 unlabeled; the highest label present wins."""
+    return next((rank for rank, name in enumerate(PRIORITY_LABELS) if name in labels), len(PRIORITY_LABELS))
 
 
 def tower_row(entry):
@@ -568,7 +577,10 @@ def lanes_caps(registry_path):
 
 
 def wave_candidates(led, entries, caps):
-    """The first execution-plan wave with runnable items, cut to the caps and to disjoint write sets."""
+    """The first execution-plan wave with runnable items, cut to the caps and to disjoint write sets.
+
+    Waves gate in plan order; within a wave, runnable items are taken p0 > p1 > p2 > unlabeled
+    (plan order breaks ties) before the caps and write-set cuts apply."""
     from . import lanes
     waves = lanes.read_plan()
     if not waves:
@@ -577,14 +589,10 @@ def wave_candidates(led, entries, caps):
     per_repo, global_cap = caps
     discovered = set()
     for wave in waves:
-        picked = []
+        runnable = []
         for item in wave:
             entry = rows.get(item["repo"])
-            if not entry or len(picked) >= global_cap:
-                continue
-            if sum(p["repo"] == item["repo"] for p in picked) >= per_repo:
-                continue
-            if any(p["repo"] == item["repo"] and lanes.overlaps(p["write_set"], item["write_set"]) for p in picked):
+            if not entry:
                 continue
             if item["window"] != "any" and not window_open(item["window"]):
                 continue
@@ -597,7 +605,17 @@ def wave_candidates(led, entries, caps):
                                     (f"github:{item['repo']}#{item['number']}",)).fetchone()
             if not task or task["state"] == "done" or next_retry(led, task) > time.time():
                 continue
-            if eligibility(latest(led, "work.issue", task["id"])) not in ("ready", "resume"):
+            issue = latest(led, "work.issue", task["id"])
+            if eligibility(issue) not in ("ready", "resume"):
+                continue
+            runnable.append((priority_rank({l["name"].lower() for l in issue.get("labels", [])}), item))
+        picked = []
+        for _, item in sorted(runnable, key=lambda pair: pair[0]):
+            if len(picked) >= global_cap:
+                break
+            if sum(p["repo"] == item["repo"] for p in picked) >= per_repo:
+                continue
+            if any(p["repo"] == item["repo"] and lanes.overlaps(p["write_set"], item["write_set"]) for p in picked):
                 continue
             picked.append(item)
         if picked:

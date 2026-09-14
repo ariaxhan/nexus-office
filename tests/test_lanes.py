@@ -210,6 +210,23 @@ class Dispatch(unittest.TestCase):
             self.assertEqual([1, 3], [p["number"] for p in work.wave_candidates(led, [], (2, 3))])
 
 
+    def test_wave_gates_then_strict_priority_within_wave(self):
+        from nexus import work
+        item = lambda n: {"repo": "o/r", "number": n, "write_set": [str(n)], "depends_on": [], "window": "any"}
+        labels = {1: [], 2: ["p2"], 3: ["p1"], 4: ["p0"], 9: ["p0"]}
+        led = unittest.mock.Mock()
+        led.conn.execute.side_effect = lambda sql, args: unittest.mock.Mock(
+            fetchone=lambda: {"id": int(args[0].rsplit("#", 1)[1]), "state": "accepted"})
+        issue = lambda _led, _kind, n: {"state": "open", "labels": [{"name": l} for l in ["ready"] + labels[n]]}
+        with unittest.mock.patch.object(lanes, "read_plan", return_value=[[item(1), item(2), item(3), item(4)], [item(9)]]), \
+                unittest.mock.patch.object(work, "eligible", return_value=[{"repo": "o/r"}]), \
+                unittest.mock.patch.object(work, "discover"), \
+                unittest.mock.patch.object(work, "next_retry", return_value=0), \
+                unittest.mock.patch.object(work, "latest", side_effect=issue):
+            self.assertEqual([4, 3, 2], [p["number"] for p in work.wave_candidates(led, [], (3, 3))])  # wave 2's p0 waits
+            self.assertEqual([4], [p["number"] for p in work.wave_candidates(led, [], (1, 3))])
+
+
 import unittest.mock  # noqa: E402
 
 if __name__ == "__main__":
