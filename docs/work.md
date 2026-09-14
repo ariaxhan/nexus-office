@@ -17,6 +17,7 @@ After an uncertain execution, `absent` also requires `retry_safe: true` before a
 - Takes only issues labeled `tower-v2`; plan `code-work` is its own switch (`github-work` does not gate it).
 - Leases each issue on the canonical checkout (`nexus/lease.py`), sharing the Vaults-wide `tbs lock`, so humans and flights see each other.
 - Parallel lanes (`nexus/lanes.py`): with a fresh (<3h) `thinking-brain-school/_meta/state/execution-plan.json`, one tick runs the first runnable wave as child `work run --repo R --issue N` processes. Each lane leases only its `write_set` in the same canonical checkout on main; disjoint lanes run together, overlaps serialize. No worktrees, clones or branches. Caps: registry `tower.parallel` (default 3 per repo, 3 global). No plan, stale plan or no runnable item: the serial selection below.
+- `work run --repo R --issue N` runs exactly one issue (used by wave dispatch).
 - A lane without a write_set (or on a road) takes the whole repo (`nexus-lease.json` + `tbs lock`); it waits for write-set lanes and session file locks and blocks them.
 - Landing a write-set lane: paths outside its write_set are never committed or reverted; one row goes to `_meta/state/lease-notes.jsonl` and the issue requeues for triage. Before commit the checkout catches up to origin for clean paths; origin moving inside the write set requeues. Checks re-run, then only own paths commit via a temporary index.
 - Stale-lease recovery holds the lane's own paths to `aria/held/<flight>` and reverts nothing in the shared checkout.
