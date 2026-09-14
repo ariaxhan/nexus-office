@@ -578,7 +578,8 @@ def _settle(led, fid, entry, task, issue, result):
         if result.get("reason") != "in_review":  # parked for a person; never re-flown on the next tick
             subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
                             "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
-        return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + 3600,
+        return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + (60 if result.get("reason") == "in_review" else 3600),
+
                                   "pr_url": result.get("pr_url"),
                                   "evidence": [result.get("pr_url") or result.get("comment_url")]})
     led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower terminal proof")
