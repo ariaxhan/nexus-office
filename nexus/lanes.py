@@ -2,7 +2,9 @@
 
 A lane with a write_set (triage's execution plan) leases only those paths. Disjoint lanes run at
 once in the same checkout; overlapping lanes serialize. A lane without a write_set is a whole-repo
-lane (lease.acquire: nexus-lease.json + `tbs lock`, unchanged). A person holding `tbs lock` on the
+lane (lease.acquire: nexus-lease.json + `tbs lock`, and it also waits until no write-set lane is
+live and no session holds a file lock). A person holding `tbs lock` on the
+
 repository blocks every lane. Landing commits only the lane's own paths through a temporary index,
 so no lane can capture or revert another lane's or a person's files.
 """
