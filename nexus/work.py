@@ -522,7 +522,11 @@ def selection_priority(led, task):
 def eligible(led, entries, repo):
     """Enabled repositories, or none: `nexus plans disable github-work` stops every one at once."""
     entries = [e for e in entries if e["enabled"] and (not repo or e["repo"] == repo.lower())]
-    if led.plan(plan(led))["enabled"]:
+    if _lane.get() == TOWER_LABEL:
+        switch = led.plan_by_name("code-work")  # its own switch; github-work does not gate it
+        if switch and switch["enabled"]:
+            return entries
+    elif led.plan(plan(led))["enabled"]:
         return entries
     led.event("work.disabled", "github-work", {"repositories": len(entries)}, "work")
     return []
