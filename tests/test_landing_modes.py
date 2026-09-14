@@ -21,7 +21,7 @@ from nexus.ledger import Ledger  # noqa: E402
 
 landing.GIT_LOCK = "/nonexistent"  # fixtures stay out of the vault mutex
 lease.LANE_LOCK = os.environ["NEXUS_LANE_LOCK"] = ""  # and out of the real tbs lane locks
-lease.INDEX = os.path.join(tempfile.mkdtemp(prefix="nexus-index-"), "lease-repos.json")  # never the real index
+os.environ["NEXUS_LEASE_INDEX"] = os.path.join(tempfile.mkdtemp(prefix="nexus-index-"), "lease-repos.json")  # never the real index
 
 
 def git(cwd, *args):

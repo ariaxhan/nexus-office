@@ -96,8 +96,11 @@ def read(repo):
 HEARTBEAT_S = 600  # a live holder's heartbeat older than this: the holder is wedged or gone
 MAX_HOLD_S = 1800  # whole-repo: no renewal for this long releases it
 MAX_HOLD_WRITE_SET_S = 3600
-INDEX = os.environ.get("NEXUS_LEASE_INDEX") or os.path.expanduser(
-    "~/Library/Application Support/nexus/lease-repos.json")
+INDEX = os.path.expanduser("~/Library/Application Support/nexus/lease-repos.json")  # NEXUS_LEASE_INDEX overrides
+
+
+def _index():
+    return os.environ.get("NEXUS_LEASE_INDEX") or INDEX
 
 
 def stamp(flight, pid, ttl_s, reason, paths, now=None):
@@ -121,13 +124,13 @@ def _index_add(repo):
     with contextlib.suppress(OSError):
         repos = set(indexed())
         if repo not in repos:
-            os.makedirs(os.path.dirname(INDEX), exist_ok=True)
-            _write(INDEX, sorted(repos | {repo}))
+            os.makedirs(os.path.dirname(_index()), exist_ok=True)
+            _write(_index(), sorted(repos | {repo}))
 
 
 def indexed():
     try:
-        with open(INDEX) as f:
+        with open(_index()) as f:
             return [r for r in json.load(f) if isinstance(r, str)]
     except (OSError, ValueError, TypeError):
         return []
@@ -167,7 +170,7 @@ def heartbeat(now=None):
                     renewed += 1
     if keep != indexed():
         with contextlib.suppress(OSError):
-            _write(INDEX, keep)
+            _write(_index(), keep)
     return renewed
 
 

@@ -17,7 +17,7 @@ from nexus import executor, landing, lanes, lease  # noqa: E402
 
 landing.GIT_LOCK = "/nonexistent"
 lease.LANE_LOCK = os.environ["NEXUS_LANE_LOCK"] = ""
-lease.INDEX = os.path.join(tempfile.mkdtemp(prefix="nexus-index-"), "lease-repos.json")  # never the real index
+os.environ["NEXUS_LEASE_INDEX"] = os.path.join(tempfile.mkdtemp(prefix="nexus-index-"), "lease-repos.json")  # never the real index
 
 
 def git(cwd, *args):
@@ -32,7 +32,7 @@ class Fake:
 class Lanes(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="nexus-lanes-")
-        lease.INDEX = os.path.join(self.dir, "lease-repos.json")
+        os.environ["NEXUS_LEASE_INDEX"] = os.path.join(self.dir, "lease-repos.json")
         self.origin = os.path.join(self.dir, "origin.git")
         self.repo = os.path.join(self.dir, "repo")
         git(self.dir, "init", "-q", "--bare", "-b", "main", self.origin)
