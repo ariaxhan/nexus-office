@@ -168,10 +168,12 @@ def push_ref(repo, sha, branch):
 
 def restore(repo, paths, head):
     """Put only these paths back to `head`; files `head` never had are removed."""
-    for p in paths:
+    for p in paths:  # index too: an executor that ran `git rm`/`git add` must not leave it staged
         if _git(repo, "cat-file", "-e", f"{head}:{p}", check=False).returncode == 0:
-            _git(repo, "restore", f"--source={head}", "--worktree", "--", p)
-        elif os.path.lexists(os.path.join(repo, p)):
+            _git(repo, "restore", f"--source={head}", "--staged", "--worktree", "--", p)
+            continue
+        _git(repo, "rm", "--cached", "--quiet", "--ignore-unmatch", "--", p, check=False)
+        if os.path.lexists(os.path.join(repo, p)):
             os.remove(os.path.join(repo, p))
 
 

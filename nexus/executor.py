@@ -136,9 +136,10 @@ def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
 
     Read-only by instruction, in a neutral directory, never the canonical checkout. (verdict, text)."""
     import tempfile
-    prompt = (f"You are an independent reviewer. Review {pr_url} in {entry['repo']}. Use only `gh pr view` and "
-              f"`gh pr diff` (with -R {entry['repo']}); read the linked issue. Do not clone, check out, edit, "
-              f"comment or merge. {REVIEW_BAR}\nEnd with exactly one line: `VERDICT: PASS` or "
+    prompt = (f"You are an independent reviewer. Review {pr_url} in {entry['repo']}. Read it with `gh pr view`, "
+              f"`gh pr diff` and `gh issue view` (all with -R {entry['repo']}); `gh api` reads are fine. Do not "
+              f"clone, check out, edit, comment or merge. Being unable to read something is not a defect: judge "
+              f"the diff you can see. {REVIEW_BAR}\nEnd with exactly one line: `VERDICT: PASS` or "
               f"`VERDICT: FAIL <one-line blocking reason>`.")
     with tempfile.TemporaryDirectory(prefix="nexus-review-") as tmp:
         out = os.path.join(tmp, "verdict.txt")
