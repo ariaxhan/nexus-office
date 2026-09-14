@@ -19,8 +19,8 @@ from .ledger import Ledger, LedgerError, TERMINAL, default_path, loads, new_id
 
 
 _deadline = ContextVar("work_deadline", default=None)
-# Tower v2 label split: `code-work` runs with lane=TOWER_LABEL and takes only labeled issues;
-# every other run (nexus-work) treats those issues as owned.
+# Tower v2: `code-work` runs with lane=TOWER_LABEL and takes every ready issue in tower rows;
+# any other run (nexus-work, disabled 2026-09-13) treats `tower-v2` issues as owned.
 TOWER_LABEL = "tower-v2"
 _lane = ContextVar("work_lane", default=None)
 
@@ -239,8 +239,8 @@ def eligibility(issue):
     if issue["state"] == "closed":
         return "closed"
     labels = {label["name"].lower() for label in issue.get("labels", [])}
-    if (TOWER_LABEL in labels) != (_lane.get() == TOWER_LABEL):
-        return "owned" if TOWER_LABEL in labels else "ineligible"
+    if TOWER_LABEL in labels and _lane.get() != TOWER_LABEL:
+        return "owned"
     if labels.intersection({"direct", "claimed", "in-progress", "in progress"}):
         return "owned"
     if labels.intersection({"hold", "on-hold", "blocked", "cancelled", "canceled"}):
@@ -519,13 +519,20 @@ def selection_priority(led, task):
     return (stalled, resuming, task["created_at"] - bonus)
 
 
+def tower_row(entry):
+    """Risk rules present, or a personal repo. Client repos without risk data never reach an auto-merge."""
+    checkout = entry.get("canonical_path") or entry.get("path")
+    return bool(checkout and os.path.isdir(checkout)) and (
+        bool(entry.get("risk")) or (entry.get("delivery") or {}).get("kind") == "product-proof")
+
+
 def eligible(led, entries, repo):
     """Enabled repositories, or none: `nexus plans disable github-work` stops every one at once."""
     entries = [e for e in entries if e["enabled"] and (not repo or e["repo"] == repo.lower())]
     if _lane.get() == TOWER_LABEL:
         switch = led.plan_by_name("code-work")  # its own switch; github-work does not gate it
         if switch and switch["enabled"]:
-            return [e for e in entries if e.get("risk")]  # tower-adapted rows only
+            return [e for e in entries if tower_row(e)]
     elif led.plan(plan(led))["enabled"]:
         return entries
     led.event("work.disabled", "github-work", {"repositories": len(entries)}, "work")
