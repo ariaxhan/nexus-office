@@ -106,8 +106,9 @@ export async function coordinator(parent){
  form.addEventListener('submit',async event=>{
   event.preventDefault();if(!input.value.trim())return;
   if(!localStorage.getItem(PENDING))localStorage.setItem(PENDING,JSON.stringify({id:crypto.randomUUID(),text:input.value}));
-  send.disabled=true;try{await deliver();notice('Sent. The coordinator reads it first on its next check.');}catch(error){notice('Not confirmed yet; Send retries the same message. '+error.message);}finally{send.disabled=false;}
+  send.disabled=true;try{await deliver();}catch(error){notice('Not confirmed yet; Send retries the same message. '+error.message);}finally{send.disabled=false;}
  });
+
  input.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))form.requestSubmit();});
  await deliver().catch(()=>{});await refresh();
  const timer=setInterval(()=>{if(!parent.isConnected)clearInterval(timer);else refresh();},3000);
