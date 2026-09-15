@@ -47,6 +47,22 @@ class Owned(WorkError):
     pass
 
 
+def checkout(canonical, workspace):
+    """The one checkout a lane runs in: canonical_path when it exists, else the mapped path, else the
+    nearest ancestor's same-named sibling checkout (repos/tbs-www offloaded -> CodingVault/tbs-www).
+    Never hydrates, never guesses a directory without its own Git metadata."""
+    if workspace is None and canonical is None:
+        return None
+    for raw in (canonical, workspace):
+        if raw and (Path(raw).expanduser() / ".git").exists():
+            return str(Path(raw).expanduser().resolve())
+    mapped = Path(workspace or canonical).expanduser().resolve()
+    for ancestor in mapped.parents:
+        if (ancestor / mapped.name / ".git").exists():
+            return str(ancestor / mapped.name)
+    return str(mapped)
+
+
 def registry(path):
     entries = json.loads(Path(path).read_text())["repositories"]
     result = {}
@@ -59,7 +75,7 @@ def registry(path):
         workspace = row.get("path")
         if workspace is not None and (not isinstance(workspace, str) or not workspace.strip()):
             raise WorkError(f"{name}: path must be a nonempty string or null")
-        row["path"] = str(Path(workspace).expanduser().resolve()) if workspace is not None else None
+        row["path"] = checkout(row.get("canonical_path"), workspace)
         if type(row["enabled"]) is not bool:
             raise WorkError("enabled must be boolean")
         for field in ("executor", "verify"):
@@ -658,7 +674,9 @@ def reopen(led, task_id, reason):
         tid = new_id("task")
         c.execute("INSERT INTO tasks(id,origin,title,state,dedupe_key,created_at) VALUES (?,?,?,'accepted',?,?)",
                   (tid, task["origin"], task["title"], task["dedupe_key"], time.time()))
-        led._event("work.generation", tid, {"previous_task": task_id, "dedupe_key": task["dedupe_key"],
+        led._event("task.state", tid, {"from": None, "to": "accepted", "dedupe_key": task["dedupe_key"]}, "work")
+        led._event("work.generation"
+, tid, {"previous_task": task_id, "dedupe_key": task["dedupe_key"],
                                             "reason": reason}, "work")
         led._event("work.issue", tid, latest(led, "work.issue", task_id), "work")
     return tid
