@@ -1,5 +1,5 @@
-const CACHE='nexus-office-shell-v5';
-const ASSETS=['/','/office.css','/office.js','/office-ui.js','/office-settings.js','/office-media.js','/office-files.js','/office-markdown.js','/office-tasks.js','/office-attachments.js','/office-state.js','/office-native.js','/manifest.webmanifest','/office-icon.svg','/office-icon-192.png','/office-icon-512.png'];
+const CACHE='nexus-office-shell-v6';
+const ASSETS=['/','/office.css','/office.js','/office-ui.js','/office-settings.js','/office-media.js','/office-files.js','/office-markdown.js','/office-tasks.js','/office-coordinator.js','/office-attachments.js','/office-state.js','/office-native.js','/manifest.webmanifest','/office-icon.svg','/office-icon-192.png','/office-icon-512.png'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('nexus-office-shell-')&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',event=>{

@@ -5,6 +5,7 @@ import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
 import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
+import {coordinator} from './office-coordinator.js';
 import {newTask,taskList,permissions,taskDetail,permissionCard} from './office-tasks.js';
 let attention={items:[],errors:[]};
 let snapshot=null,snapshotReadAt=0;
@@ -231,7 +232,7 @@ async function search(cursor=0){
  await guarded(parent,async()=>{const data=await api(`/api/search/all?q=${encodeURIComponent(query)}&cursor=${cursor}&kind=${searchKind}`);parent.append(el('p','muted',`${data.total||0} results · index ${data.coverage.state} · ${data.coverage.count||0} objects · updated ${data.coverage.finished_at?new Date(data.coverage.finished_at*1000).toLocaleTimeString():'never'}`));showSearchCoverage(parent,data.coverage);for(const problem of data.coverage.errors||[])parent.append(el('p','error',`${problem.source}: ${problem.error}`));if(data.coverage.refresh?.state==='indexing')parent.append(button('Index updating · refresh results',()=>search()));for(const item of data.items)parent.append(card(item.title,`${item.project} / ${item.path}\n${item.excerpt}`,()=>openSearchResult(item)));if(data.next_cursor!==null)parent.append(button('More results',()=>search(data.next_cursor)));});
 }
 async function route(){
- const page=location.hash.slice(1)||'today';const views={today,work,library,system};const parent=$('#content');parent.replaceChildren();
+ const page=location.hash.slice(1)||'today';const views={today,work,coordinator,library,system};const parent=$('#content');parent.replaceChildren();
  for(const item of document.querySelectorAll('.tabs a'))item.setAttribute('aria-current',item.hash===`#${page}`?'page':'false');
  const view=el('div');parent.append(view);await guarded(view,()=> (views[page]||today)(view));
 }
@@ -349,6 +350,7 @@ window.addEventListener('popstate',()=>{route();restoreFromURL();});
 document.addEventListener('office-file-task',event=>newTask(event.detail.project,event.detail).catch(error=>notice(error.message)));
 $('#detail').addEventListener('cancel',clearDetail);
 
+document.addEventListener('office-github-detail',event=>githubDetail(event.detail.repo,{number:event.detail.number},'issues').catch(error=>notice(error.message)));
 document.addEventListener('office-flight-detail',event=>flightDetail(event.detail).catch(error=>notice(error.message)));
 
 async function githubCollection(repo,kind,cursor=1,parent=null){const body=parent||sheet(repo+' '+kind);const data=await api(`/api/github/collection?repo=${encodeURIComponent(repo)}&kind=${kind}&cursor=${cursor}`);for(const item of data.items)body.append(card(`#${item.number} ${item.title}`,item.state,()=>githubDetail(repo,item,kind)));if(data.next_cursor)body.append(button('Older items',()=>githubCollection(repo,kind,data.next_cursor,body)));}

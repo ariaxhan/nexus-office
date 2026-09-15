@@ -17,6 +17,7 @@ import office_uploads as uploads
 import office_user_state as user_state
 import office_bot_history as bot_history
 import office_github_actions as github_actions
+import coordinator_chat
 
 
 def arguments(query):
@@ -72,6 +73,8 @@ def get(handler, path, query):
         '/api/search/all': lambda: search.search(q.get('q',''), q.get('cursor',0), q.get('kind',''), q.get('project','')),
         '/api/media': lambda: media.catalog(q.get('kind', 'all'), q.get('cursor', 0)),
         '/api/media/detail': lambda: media.detail(q['id']),
+        '/api/coordinator': coordinator_chat.read,
+        '/api/coordinator/commit': lambda: coordinator_chat.commit(q.get('sha',''),q.get('checkout','')),
     }
     if path == '/api/uploads/content':
         uploads.content(handler,{'id':q['id'],'revision':q['revision']})
@@ -100,6 +103,9 @@ def post(handler, path):
         elif path.endswith('/reconcile'):result=github_actions.reconcile(handler.world,known,body)
         else:result=github_actions.command(handler.world,known,body,handler.github_sync)
         handler._json(result)
+        return True
+    if path == '/api/coordinator/say':
+        handler._json(coordinator_chat.say(handler._read_json(limit=64 * 1024)))
         return True
     routes = {'/api/user-state': user_state.save, '/api/uploads': uploads.upload, '/api/objects/diff': objects.diff, '/api/system/command': system.command, '/api/objects/save': objects.save, '/api/preferences': preferences.save,
               '/api/tasks/start': tasks.start, '/api/tasks/say': tasks.say,
