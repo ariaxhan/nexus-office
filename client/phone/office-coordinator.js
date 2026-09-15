@@ -2,19 +2,25 @@
 // a message is kept on this device until the Mac confirms it, and the Mac drops a repeated id.
 import {api,el,button,sheet,link,notice,restoreDraft,failure} from './office-ui.js';
 import {openFile} from './office-files.js';
+import {markdownView,tokenText} from './office-markdown.js';
 const PENDING='office-coordinator-pending';
 const clock=at=>at?new Date(at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+function token(part){
+ if(part.kind==='url')return link(part.text,part.href);
+ const open={issue:()=>document.dispatchEvent(new CustomEvent('office-github-detail',{detail:{repo:part.repo,number:part.number}})),
+  file:()=>openFile(part.id),sha:()=>commit(part.sha,part.checkout)}[part.kind];
+ const node=el('button','coord-link',part.text);node.type='button';node.dataset.kind=part.kind;
+ node.title={issue:`${part.repo} #${part.number}`,file:part.path,sha:`Commit in ${part.checkout}`}[part.kind];
+ node.addEventListener('click',()=>Promise.resolve(open()).catch(error=>notice(error.message)));return node;
+}
 function segments(parent,list){
- for(const part of list||[]){
-  if(!part.kind){parent.append(document.createTextNode(part.text));continue;}
-  if(part.kind==='url'){parent.append(link(part.text,part.href));continue;}
-  const open={issue:()=>document.dispatchEvent(new CustomEvent('office-github-detail',{detail:{repo:part.repo,number:part.number}})),
-   file:()=>openFile(part.id),sha:()=>commit(part.sha,part.checkout)}[part.kind];
-  const node=el('button','coord-link',part.text);node.type='button';node.dataset.kind=part.kind;
-  node.title={issue:`${part.repo} #${part.number}`,file:part.path,sha:`Commit in ${part.checkout}`}[part.kind];
-  node.addEventListener('click',()=>Promise.resolve(open()).catch(error=>notice(error.message)));parent.append(node);
- }
+ for(const part of list||[])parent.append(part.kind?token(part):document.createTextNode(part.text));
  return parent;
+}
+// Markdown from the whole text; the Mac's link tokens are re-applied inside plain text, never in code.
+function rich(parent,list){
+ const text=(list||[]).map(part=>part.text).join('');
+ parent.append(markdownView(text,{text:tokenText((list||[]).filter(part=>part.kind),token)}));return parent;
 }
 export async function commit(sha,checkout){
  const body=sheet(`Commit ${sha.slice(0,10)}`);
@@ -40,7 +46,7 @@ function runEnd(item){
 function conversation(parent,data){
  for(const item of data.items){
   if(item.kind==='message'){
-   const node=el('article','coord-you');segments(node.appendChild(el('div','coord-text')),item.segments);
+   const node=el('article','coord-you');rich(node.appendChild(el('div','coord-text')),item.segments);
    node.append(el('small','',`You · ${clock(item.at)} · ${item.read_at?'read by the coordinator '+clock(item.read_at):'waiting for the coordinator'}`));
    parent.append(node);continue;
   }
@@ -49,9 +55,9 @@ function conversation(parent,data){
   if(!item.events.length)parent.append(el('p','coord-status',item.live?'Starting…':'This run wrote no output.'));
   for(const event of item.events){
    if(event.kind==='tool'){parent.append(el('p','coord-tool',event.text));continue;}
-   const node=el('article',event.kind==='result'?'coord-say coord-result':'coord-say');segments(node,event.segments);parent.append(node);
+   const node=el('article',event.kind==='result'?'coord-say coord-result':'coord-say');rich(node,event.segments);parent.append(node);
   }
-  for(const hold of item.holds){const node=el('article','coord-say coord-hold');node.append(el('strong','','Hold · '));segments(node,hold.segments);parent.append(node);}
+  for(const hold of item.holds){const node=el('article','coord-say coord-hold');node.append(el('strong','','Hold · '));rich(node,hold.segments);parent.append(node);}
   parent.append(runEnd(item));
  }
  if(!data.items.length)parent.append(el('p','empty','No coordinator runs or messages yet.'));
