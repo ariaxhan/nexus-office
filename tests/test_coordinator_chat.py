@@ -165,6 +165,24 @@ class LinkTest(Fixture):
                                      {"kind": "tool", "text": "Bash: gh issue create -R ariaxhan/thinking-brain-school --title x"}])
         self.assertEqual(issues, [{"action": "close", "repo": "Thinking-Brain-School/tbs-www", "number": 381},
                                   {"action": "create", "repo": "ariaxhan/thinking-brain-school", "number": None}])
+        issues = chat.issue_actions([{"kind": "tool", "text": "Bash: gh -R o/r issue comment 5 --body x"},
+                                     {"kind": "tool", "text": "Bash: gh issue close 7 --repo=o/r"}])
+        self.assertEqual([row["number"] for row in issues], [5, 7])
+
+    def test_changes_keep_only_commits_the_run_log_names(self):
+        window = ("2000-01-01T00:00:00Z", "2090-01-02T00:00:00Z")
+        self.assertEqual(chat.changes(self.root, *window, final=True, shas={"0123abc"})["commits"], [])
+        chat.CHANGES.clear()
+        self.assertEqual(len(chat.changes(self.root, *window, final=True, shas={self.sha[:7]})["commits"]), 1)
+
+    def test_live_run_takes_its_ledger_start_so_holds_attach(self):
+        self.write(chat.RUNS, '{"at":"2026-09-16T17:39:49Z","event":"start","mode":"live"}\n')
+        self.write(chat.HOLDS, '{"run_start":"2026-09-16T17:39:49Z","repo":"o/r","blocker":"x"}\n')
+        self.write(".tbs-out/coordinator-20260916T174013Z-live.log", "working\n")
+        self.write(".tbs-out/coordinator.lock/pid", str(os.getpid()))
+        run = chat.runs(self.root)[-1]
+        self.assertTrue(run["live"])
+        self.assertEqual((run["start"], len(run["holds"])), ("2026-09-16T17:39:49Z", 1))
 
 
 if __name__ == "__main__":

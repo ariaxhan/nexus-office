@@ -91,12 +91,15 @@ export async function coordinator(parent){
   stream.replaceChildren();(view==='chat'?conversation:changes)(stream,data);stream.dataset.drawn='1';
   if(follow)requestAnimationFrame(()=>scrollTo(0,document.body.scrollHeight));
  }
+ let busy=false,idle=false,seen='';
  async function refresh(){
+  if(busy)return;busy=true;
   try{
-   data=await api('/api/coordinator');const live=data.items.some(item=>item.live);
+   data=await api('/api/coordinator');idle=!data.items.some(item=>item.live);const shown=JSON.stringify({...data,as_of:''});const live=data.items.some(item=>item.live);
    const skip=data.last_skip?` · last check ${clock(data.last_skip.at)}: ${data.last_skip.reason}`:'';
-   status.textContent=`${live?'Running now':'Idle'}${data.unread?` · ${data.unread} message${data.unread>1?'s':''} waiting`:''}${live?'':skip}`;draw();
+   status.textContent=`${live?'Running now':'Idle'}${data.unread?` · ${data.unread} message${data.unread>1?'s':''} waiting`:''}${live?'':skip}`;if(shown!==seen){seen=shown;draw();}  // an unchanged poll keeps selection and open panels
   }catch(error){status.textContent='Mac unreachable; showing the last view. '+error.message;}
+  finally{busy=false;}
  }
  async function deliver(){
   const pending=JSON.parse(localStorage.getItem(PENDING)||'null');if(!pending)return;
@@ -111,5 +114,5 @@ export async function coordinator(parent){
 
  input.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))form.requestSubmit();});
  await deliver().catch(()=>{});await refresh();
- const timer=setInterval(()=>{if(!parent.isConnected)clearInterval(timer);else refresh();},3000);
+ let ticks=0;const timer=setInterval(()=>{if(!parent.isConnected)clearInterval(timer);else if(!idle||++ticks%5===0)refresh();},3000);  // 3s while a run is live, 15s idle
 }

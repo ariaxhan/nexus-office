@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import threading
+import time
 
 import lesson_status
 import office_objects
@@ -62,12 +64,7 @@ def say(body, root=None):
         raise ValueError(f"a message is 1-{MAX_TEXT} characters")
     if not isinstance(request, str) or not ID_RE.match(request):
         raise ValueError("a message needs its request id")
-    path = root / INBOX
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "a+", encoding="utf-8") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
+    with _inbox_stream(root) as stream:
         stream.seek(0)
         for line in stream.read().splitlines():
             try:
@@ -77,19 +74,32 @@ def say(body, root=None):
             if isinstance(row, dict) and row.get("id") == request:
                 return {"ok": True, "duplicate": True, "message": row}
         row = {"id": request, "at": now(), "from": "aria", "text": text.strip()}
-        stream.write(json.dumps(row, ensure_ascii=False) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+        _write(stream, [row])
     return {"ok": True, "duplicate": False, "message": row}
+
+
+def _inbox_stream(root):
+    """The inbox's only open: no symlinks, owner-only, exclusively locked until closed."""
+    path = root / INBOX
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    os.fchmod(fd, 0o600)
+    stream = os.fdopen(fd, "a+", encoding="utf-8")
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    return stream
+
+
+def _write(stream, rows):
+    stream.write("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    stream.flush()
+    os.fsync(stream.fileno())
 
 
 def mark_read(ids, run_start, root=None):
     """What a run appends after reading: one row per message id."""
     root = root or root_path()
-    with open(root / INBOX, "a", encoding="utf-8") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        for value in ids:
-            stream.write(json.dumps({"read": value, "at": now(), "run_start": run_start}) + "\n")
+    with _inbox_stream(root) as stream:
+        _write(stream, [{"read": value, "at": now(), "run_start": run_start} for value in ids])
 
 
 def inbox(root):
@@ -180,6 +190,7 @@ def _stamp(path):
 def runs(root):
     ledger = _rows(root / RUNS)
     ends = {os.path.basename(row.get("log") or ""): row for row in ledger if row.get("event") == "end"}
+    starts = sorted(row["at"] for row in ledger if row.get("event") == "start" and isinstance(row.get("at"), str))
     holds = _rows(root / HOLDS)
     logs = sorted(glob.glob(str(root / LOG_GLOB)))[-MAX_RUNS:]
     out = []
@@ -189,9 +200,10 @@ def runs(root):
         if not start:
             continue
         end = ends.get(path.name)
-        start = (end or {}).get("start") or start
+        # the ledger start precedes the log's own stamp; holds are keyed by it, live or not
+        start = (end or {}).get("start") or next((at for at in reversed(starts) if at <= start), start)
         raw, truncated = _read_tail(path)
-        live = end is None and _live(root, start)
+        live = end is None and _live(root, path)
         events = parse_log(raw)
         if not (events or end or live):
             continue  # a launcher that died before claude wrote a byte: nothing to say
@@ -201,12 +213,12 @@ def runs(root):
             stopped = start
         out.append({"stopped": stopped, "start": start, "mode": mode, "log": str(path.relative_to(root)),
                     "live": live, "end": end,
-                    "truncated": truncated, "events": events,
+                    "truncated": truncated, "events": events, "shas": set(HEX.findall(raw)),
                     "holds": [row for row in holds if row.get("run_start") == start]})
     return out
 
 
-def _live(root, start):
+def _live(root, log):
     """The newest log without an end row is live only while the launcher's lock pid is."""
     try:
         pid = int((root / ".tbs-out/coordinator.lock/pid").read_text().strip())
@@ -214,7 +226,7 @@ def _live(root, start):
     except (OSError, ValueError):
         return False
     logs = sorted(glob.glob(str(root / LOG_GLOB)))
-    return bool(logs) and _stamp(Path(logs[-1]))[0] == start
+    return bool(logs) and Path(logs[-1]) == log
 
 
 def last_skip(root):
@@ -253,6 +265,9 @@ def _git(path, *args):
 
 
 REMOTES, SHAS, CHANGES = {}, {}, {}
+SHA_MISS_TTL = 60
+LIVE_TTL = 15  # a live run's commits are re-read at most this often
+READ_LOCK = threading.Lock()  # overlapping polls wait for one build instead of each spawning git
 
 
 def _remote(path):
@@ -264,16 +279,23 @@ def _remote(path):
     return REMOTES[str(path)]
 
 
-def changes(root, start, end, final=False):
-    key = (str(root), start, end)
-    if final and key in CHANGES:
-        return CHANGES[key]
+HEX = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+
+def changes(root, start, end, final=False, shas=None):
+    """Commits in the run's window that its own log names (git output, pushes); others' work stays out."""
+    key = (str(root), start, end if final else "live")
+    cached = CHANGES.get(key)
+    if cached and (final or time.monotonic() - cached[0] < LIVE_TTL):
+        return cached[1]
     commits = []
     for name, path in checkouts(root).items():
         repo = _remote(path)
         for line in _git(path, "log", "--all", f"--since={start}", f"--until={end}",
                          "--format=%H%x09%cI%x09%s", "-n", "40").splitlines():
             sha, at, subject = (line.split("\t", 2) + ["", ""])[:3]
+            if shas is not None and sha[:7] not in {value[:7] for value in shas}:
+                continue
             commits.append({"checkout": name, "repo": repo, "sha": sha, "at": at, "subject": subject})
     publishes = []
     for name in glob.glob(str(root / "_meta/receipts/publish/*/release.json")):
@@ -287,12 +309,12 @@ def changes(root, start, end, final=False):
                               "path": str(Path(name).relative_to(root))})
     result = {"commits": sorted(commits, key=lambda row: row["at"]),
               "publishes": sorted(publishes, key=lambda row: row["at"])}
-    if final:
-        CHANGES[key] = result
+    CHANGES[key] = (time.monotonic(), result)
     return result
 
 
-ISSUE_CMD = re.compile(r"gh issue (create|close|comment|reopen)\b(?:\s+(\d+))?.*?(?:-R|--repo)\s+([\w.-]+/[\w.-]+)")
+ISSUE_CMD = re.compile(r"\bgh\b.*?\bissue (create|close|comment|reopen)\b(?:\s+(\d+))?")
+ISSUE_REPO = re.compile(r"(?:-R|--repo)[\s=]+([\w.-]+/[\w.-]+)")
 
 
 def issue_actions(events):
@@ -300,9 +322,9 @@ def issue_actions(events):
     for event in events:
         if event["kind"] != "tool":
             continue
-        match = ISSUE_CMD.search(event["text"])
-        if match:
-            out.append({"action": match[1], "repo": match[3], "number": int(match[2]) if match[2] else None})
+        match, repo = ISSUE_CMD.search(event["text"]), ISSUE_REPO.search(event["text"])
+        if match and repo:
+            out.append({"action": match[1], "repo": repo[1], "number": int(match[2]) if match[2] else None})
     return out
 
 
@@ -355,9 +377,11 @@ class Linker:
         return office_objects.encode(key, rel) if key else None
 
     def _sha(self, sha):
-        if sha not in SHAS:
-            SHAS[sha] = self._find_sha(sha)
-        return SHAS[sha]
+        checkout, at = SHAS.get(sha, (None, 0))
+        if not checkout and time.monotonic() - at > SHA_MISS_TTL:  # a miss may arrive with the next fetch
+            checkout, at = self._find_sha(sha), time.monotonic()
+            SHAS[sha] = (checkout, at)
+        return checkout
 
     def _find_sha(self, sha):
         for name, path in self.checkouts.items():
@@ -423,7 +447,11 @@ def _linked_changes(linker, found, issues):
 
 
 def read(root=None):
-    root = root or root_path()
+    with READ_LOCK:
+        return _read(root or root_path())
+
+
+def _read(root):
     linker = Linker(root)
     items = []
     for run in runs(root):
@@ -435,10 +463,11 @@ def read(root=None):
                                  for event in run["events"]],
                       "holds": [dict(row, segments=linker.segments(" ".join(str(part) for part in (f"{row.get('repo')}#{row.get('issue')}" if row.get("issue") else row.get("repo"), row.get("blocker"), row.get("next")) if part)))
                                 for row in run["holds"]],
-                      "changes": _linked_changes(linker, changes(root, run["start"], end_at, final=not run["live"]), issues)})
-    for row in inbox(root):
+                      "changes": _linked_changes(linker, changes(root, run["start"], end_at, final=not run["live"], shas=run["shas"]), issues)})
+    messages = inbox(root)
+    for row in messages:
         items.append({"kind": "message", "at": row["at"], "id": row["id"], "read_at": row["read_at"],
                       "segments": linker.segments(row["text"])})
     items.sort(key=lambda item: item["at"])
-    return {"items": items, "last_skip": last_skip(root), "unread": sum(1 for row in inbox(root) if not row["read_at"]),
+    return {"items": items, "last_skip": last_skip(root), "unread": sum(1 for row in messages if not row["read_at"]),
             "as_of": now()}
