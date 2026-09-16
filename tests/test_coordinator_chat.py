@@ -169,3 +169,20 @@ class LinkTest(Fixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_last_skip_is_dropped_once_a_run_starts_after_it(tmp_path):
+    """A skip older than the newest start is not the current status."""
+    ledger = tmp_path / "_meta/ledgers/coordinator-runs.jsonl"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(
+        '{"at":"2026-09-15T23:55:13Z","event":"skip","mode":"live","reason":"daily-cap"}\n'
+        '{"at":"2026-09-16T01:34:07Z","event":"start","mode":"live"}\n'
+    )
+    assert chat.last_skip(tmp_path) is None
+
+    ledger.write_text(
+        '{"at":"2026-09-16T01:34:07Z","event":"start","mode":"live"}\n'
+        '{"at":"2026-09-16T02:10:00Z","event":"skip","mode":"live","reason":"daily-cap"}\n'
+    )
+    assert chat.last_skip(tmp_path)["reason"] == "daily-cap"

@@ -218,8 +218,20 @@ def _live(root, start):
 
 
 def last_skip(root):
-    skips = [row for row in _rows(root / RUNS) if row.get("event") == "skip"]
-    return skips[-1] if skips else None
+    """The newest skip, but only while it is still what the launcher last did.
+
+    A skip older than the newest start describes a tick that has since been superseded;
+    printing it as the current status left the page reading "daily-cap" for 16 hours while
+    four runs came and went.
+    """
+    rows = _rows(root / RUNS)
+    skips = [row for row in rows if row.get("event") == "skip"]
+    starts = [row for row in rows if row.get("event") == "start"]
+    if not skips:
+        return None
+    if starts and (starts[-1].get("at") or "") > (skips[-1].get("at") or ""):
+        return None
+    return skips[-1]
 
 
 # ── changes ──────────────────────────────────────────────────────────────────
