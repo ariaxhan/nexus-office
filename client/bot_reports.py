@@ -25,8 +25,17 @@ def request(base: str, path: str, body: dict | None = None, timeout_s: float = 1
         return json.load(response)
 
 
+# A cold snapshot walks every station, and the walk has grown past the old 90s ceiling: the
+# 2026-09-18 sphinx failures were this socket timeout, reported only as "timed out". The budget is
+# now named, generous, and still well inside the job timeout (600s) alongside the report wait.
+SNAPSHOT_TIMEOUT_S = 240
+
+
 def fresh_evidence(office: str) -> dict:
-    response = request(office, "/api/world?fresh=1", timeout_s=90)
+    try:
+        response = request(office, "/api/world?fresh=1", timeout_s=SNAPSHOT_TIMEOUT_S)
+    except OSError as error:
+        raise TimeoutError(f"Office snapshot did not refresh within {SNAPSHOT_TIMEOUT_S}s: {error}") from error
     world = response.get("world")
     if not isinstance(world, dict) or not world.get("generated"):
         raise ValueError("Office has no completed snapshot")
