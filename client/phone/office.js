@@ -395,9 +395,14 @@ async function attentionList(parent){await refreshAttention();drawAttention(pare
 setInterval(refreshAttention,10000);
 
 function attentionItems(index,value){
- if(index===0)return value.items.map(item=>({kind:'permission',item}));
- if(index===1)return value.gates.map(item=>({kind:'gate',item}));
- const result=[];for(const desk of value.stations||[])for(const item of desk.issues||[])if(item.bot_last===true)result.push({kind:'issue',repo:desk.repo,item});return result;
+ // allSettled only catches a rejected source. /api/world fulfils with a null
+ // world while the server's snapshot is unbuilt, which is its normal state for
+ // the first seconds after a restart, and dereferencing that threw an
+ // unhandled rejection that stopped the ten-second refresh for good. A source
+ // with nothing in it contributes nothing.
+ if(index===0)return (value?.items||[]).map(item=>({kind:'permission',item}));
+ if(index===1)return (value?.gates||[]).map(item=>({kind:'gate',item}));
+ const result=[];for(const desk of value?.stations||[])for(const item of desk.issues||[])if(item.bot_last===true)result.push({kind:'issue',repo:desk.repo,item});return result;
 }
 const layoutObserver=new ResizeObserver(()=>{document.documentElement.style.setProperty('--tabs-height',`${$('.tabs').getBoundingClientRect().height}px`);document.documentElement.style.setProperty('--player-height',`${$('#player').getBoundingClientRect().height}px`);});layoutObserver.observe($('.tabs'));layoutObserver.observe($('#player'));
 
