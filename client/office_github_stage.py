@@ -26,19 +26,42 @@ def connect(target):
 
 def advance(access,known,repo,target,limit=8):
     db,path=connect(target)
+    previous=None
     with closing(db):
         row=db.execute('SELECT body FROM checkpoint WHERE id=1').fetchone()
         state=json.loads(row[0]) if row else batches.initial()
+        if not batches.usable(state):
+            state=batches.initial();db.execute('DELETE FROM records')
         for _ in range(limit):
             if state['stage']=='done':break
             capacity(target,0)
-            rows,state=batches.next_batch(access,known,repo,state)
+            if state['stage']=='pulls' and previous is None:previous=retained(target)
+            rows,state=batches.next_batch(access,known,repo,state,previous)
             commit(db,rows,state)
         count=db.execute('SELECT count(*) FROM records').fetchone()[0]
         result={'state':'fetching','records':count,'stage':state['stage'],'repo':repo}
         if state['stage']=='done':result=publish(db,target,repo,count,state['publication'])
     if result['state']=='ready':path.unlink()
     return result
+
+
+def retained(target):
+    """The published snapshot, grouped by path, for reuse by the pulls stage.
+
+    Read once per collection rather than once per pull, and never fatal: a
+    missing or unreadable snapshot simply means everything is fetched, which is
+    the behaviour this file had before.
+    """
+    index={}
+    try:
+        with target.open() as stream:
+            stream.readline()
+            for line in stream:
+                row=json.loads(line)
+                index.setdefault(row.get('path'),[]).append(row)
+    except (OSError,ValueError,AttributeError):
+        return {}
+    return index
 
 
 def commit(db,rows,state):

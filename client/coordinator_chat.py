@@ -112,6 +112,11 @@ def inbox(root):
     for row in messages:
         seen = read.get(row["id"])
         row["read_at"] = seen.get("at") if seen else None
+        # Another agent's writer can omit `at`. The message is still real, so it
+        # is kept and dated "unknown", which sorts oldest. Reading row["at"]
+        # without this took the whole coordinator endpoint down with a 500.
+        if not isinstance(row.get("at"), str):
+            row["at"] = ""
     return messages
 
 
@@ -151,6 +156,17 @@ def _result_event(row, events):
     return {"kind": "result", "text": text}
 
 
+def _append(events, event):
+    """A deduped result is nothing, not a None in the list.
+
+    `_result_event` compares against `events[-1]`, so a None left in the list
+    made the NEXT result row raise TypeError and took the whole coordinator
+    endpoint down with a 500. Two result rows in one log is enough.
+    """
+    if event:
+        events.append(event)
+
+
 def parse_log(raw):
     """stream-json -> assistant text + one line per tool call; plain text logs pass through."""
     events, plain = [], []
@@ -162,7 +178,7 @@ def parse_log(raw):
         elif row["type"] == "assistant":
             events.extend(_assistant_events(row))
         elif row["type"] == "result":
-            events.append(_result_event(row, events))
+            _append(events, _result_event(row, events))
     if "".join(plain).strip():
         events.insert(0, {"kind": "text", "text": "\n".join(plain).strip()})
     return [event for event in events if event and event["text"]]

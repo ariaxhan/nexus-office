@@ -12,9 +12,9 @@ class Stage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target=Path(directory)/'repo.jsonl';target.write_text('prior snapshot')
             states=[]
-            def batch(access,known,repo,state):
+            def batch(access,known,repo,state,previous=None):
                 index=state.get('index',0);states.append(index)
-                return [{'id':str(index),'body':'data'}],{'stage':'done' if index==2 else 'issues','index':index+1}
+                return [{'id':str(index),'body':'data'}],{'version':stage.batches.VERSION,'stage':'done' if index==2 else 'issues','index':index+1}
             with patch.object(stage.batches,'next_batch',side_effect=batch):
                 first=stage.advance(None,[],'a/b',target,limit=1)
                 self.assertEqual(first['records'],1);self.assertEqual(target.read_text(),'prior snapshot')
@@ -46,7 +46,7 @@ class Stage(unittest.TestCase):
         import json
         with tempfile.TemporaryDirectory() as directory:
             target=Path(directory)/'repo.jsonl'
-            with patch.object(stage.batches,'next_batch',return_value=([{'id':'one'}],{'stage':'done'})),patch.object(stage.time,'time',return_value=100),patch.object(Path,'unlink',side_effect=OSError('crash after replace')):
+            with patch.object(stage.batches,'next_batch',return_value=([{'id':'one'}],{'version':stage.batches.VERSION,'stage':'done'})),patch.object(stage.time,'time',return_value=100),patch.object(Path,'unlink',side_effect=OSError('crash after replace')):
                 with self.assertRaises(OSError):stage.advance(None,[],'a/b',target)
             before=target.read_bytes()
             with patch.object(stage.batches,'next_batch',side_effect=AssertionError('done stage fetched again')),patch.object(stage.time,'time',return_value=9000):
@@ -59,7 +59,7 @@ class Stage(unittest.TestCase):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as directory:
             target=Path(directory)/'repo.jsonl';target.write_text('prior snapshot')
-            with patch.object(stage.batches,'next_batch',return_value=([{'id':'one'}],{'stage':'issues','cursor':'next'})):
+            with patch.object(stage.batches,'next_batch',return_value=([{'id':'one'}],{'version':stage.batches.VERSION,'stage':'issues','cursor':'next'})):
                 stage.advance(None,[],'a/b',target,limit=1)
             before=target.with_suffix('.stage.sqlite').read_bytes()
             with patch.object(stage.shutil,'disk_usage',return_value=SimpleNamespace(free=4*1024**3)),patch.object(stage.batches,'next_batch',side_effect=AssertionError('provider read while storage constrained')):

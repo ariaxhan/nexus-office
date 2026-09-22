@@ -152,6 +152,19 @@ def insert(db, row):
     db.execute('INSERT OR REPLACE INTO signatures VALUES (?,?)',(row['id'],signature))
 
 
+def interval(status):
+    """How long the index may rest: never less often than it takes to build.
+
+    A fixed TTL is only a rate limit while the rebuild is faster than the TTL.
+    Over this vault a full pass runs for minutes, so a 120s TTL meant the next
+    search re-armed it the moment it landed and the server indexed forever at
+    one core. The floor stays TTL; past that the cost of the last pass sets the
+    pace, so a slow index costs proportionally less, not more.
+    """
+    started,finished=status.get('started_at') or 0,status.get('finished_at') or 0
+    return max(TTL,8*(finished-started)) if finished>started else TTL
+
+
 def refresh(extra=()):
     projection.github_cache.refresh(projection.WORLD)
     if not LOCK.acquire(blocking=False):
@@ -183,7 +196,7 @@ def search(query='', cursor=0, kind='', project=''):
         status = coverage(db)
         if os.environ.get('OFFICE_SEARCH_AUTOBUILD','1')=='0':
             status['refresh']={'state':'paused','detail':'Index maintenance in progress; source readers remain available'}
-        elif time.time() - (status.get('finished_at') or 0) > TTL:
+        elif time.time() - (status.get('finished_at') or 0) > interval(status):
             refresh()
         if not query:
             return {'items': [], 'coverage': status, 'next_cursor': None}

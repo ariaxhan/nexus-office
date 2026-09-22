@@ -22,8 +22,34 @@ def record(repo,category,row,number,stamp):
     key=path if category=='issue' else f"{path}:{category}:{row.get('id',number)}"
     identifier='projection:'+hashlib.sha256(('github:'+key).encode()).hexdigest()
     return {'id':identifier,'title':row.get('title') or f'{path} · {category}',
-            'path':path,'project':repo,'kind':'github','body':json.dumps(row,ensure_ascii=False,indent=2),
+            'path':path,'project':repo,'kind':'github','category':category,
+            'body':json.dumps(row,ensure_ascii=False,indent=2),
             'modified':stamp,'coverage':'Full retained GitHub record'}
+
+
+CATEGORIES=('issue','diff','review','comment','inline discussion')
+
+
+def identify(row):
+    """The category of a snapshot record written before records carried one.
+
+    Not a guess: the record's own id is a hash of its category, so every
+    candidate is recomputed and the one that reproduces the id is the answer.
+    A record whose id no candidate reproduces stays unidentified and is
+    refetched, which is exactly the old behaviour.
+    """
+    if row.get('category') in CATEGORIES:return row['category']
+    path=row.get('path')
+    if not isinstance(path,str) or '#' not in path:return None
+    repo,_,number=path.rpartition('#')
+    try:body=json.loads(row.get('body') or '')
+    except ValueError:body=None
+    inner=body.get('id') if isinstance(body,dict) else None
+    for category in CATEGORIES:
+        key=path if category=='issue' else f"{path}:{category}:{inner if inner is not None else number}"
+        if 'projection:'+hashlib.sha256(('github:'+key).encode()).hexdigest()==row.get('id'):
+            return category
+    return None
 
 
 def repository_records(access,known,repo):

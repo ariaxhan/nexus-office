@@ -165,3 +165,15 @@ class Search(unittest.TestCase):
         self.assertEqual(result[0]['indexed'],42)
         self.assertEqual(db.execute.call_count,1)
         self.assertNotIn('GROUP BY',db.execute.call_args.args[0])
+
+
+class RefreshInterval(unittest.TestCase):
+    def test_a_slow_rebuild_rests_proportionally_not_every_ttl(self):
+        self.assertEqual(search.interval({'started_at':0,'finished_at':300}),2400)
+
+    def test_a_fast_rebuild_keeps_the_ttl_floor(self):
+        self.assertEqual(search.interval({'started_at':0,'finished_at':1}),search.TTL)
+
+    def test_an_unbuilt_or_running_index_keeps_the_ttl_floor(self):
+        self.assertEqual(search.interval({}),search.TTL)
+        self.assertEqual(search.interval({'started_at':500,'finished_at':None}),search.TTL)
