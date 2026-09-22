@@ -59,6 +59,7 @@ input,select,textarea{font-size:max(16px,1rem);max-width:100%}select{white-space
 .coord-result{border-color:var(--accent)}.coord-hold{border-style:dashed}
 .coord-you{justify-self:end;max-width:85%;background:color-mix(in srgb,var(--accent) 10%,var(--paper));color:var(--ink);border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line));border-radius:16px 16px 4px 16px;padding:12px 14px}.coord-you .coord-text{overflow-wrap:anywhere}.coord-you small{display:block;margin-top:6px;color:var(--muted)}
 .coord-tool{font:.78rem/1.5 ui-monospace,monospace;color:var(--muted);padding-left:14px;border-left:2px solid var(--line);overflow-wrap:anywhere}
+.coord-time{display:block;margin-top:6px;color:var(--muted)}.coord-tool .coord-time{display:inline;margin-top:0;margin-left:10px;font-family:system-ui}
 .coord-status{font:.8rem/1.5 system-ui;color:var(--muted)}
 .coord-link{display:inline;min-height:0;padding:0;border:0;border-radius:0;background:none;color:var(--accent-text,var(--accent));text-decoration:underline;text-underline-offset:3px;font:inherit;text-align:left;overflow-wrap:anywhere}.coord-link:disabled{color:var(--muted);text-decoration:none;cursor:default;opacity:1}.coord-file{display:block;padding:6px 0}
 .coord-change{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line)}.coord-tag{font:.7rem/1.4 system-ui;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}

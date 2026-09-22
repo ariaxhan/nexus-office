@@ -142,18 +142,21 @@ def _json_line(line):
 
 
 def _assistant_events(row):
+    at = row.get("timestamp") if isinstance(row.get("timestamp"), str) else None
     for block in (row.get("message") or {}).get("content") or []:
         if block.get("type") == "text" and block.get("text", "").strip():
-            yield {"kind": "text", "text": block["text"].strip()}
+            yield {"kind": "text", "text": block["text"].strip(), "at": at}
         elif block.get("type") == "tool_use":
-            yield {"kind": "tool", "text": _tool_line(block)}
+            yield {"kind": "tool", "text": _tool_line(block), "at": at}
 
 
 def _result_event(row, events):
     text = str(row.get("result") or row.get("subtype") or "").strip()
     if events and events[-1]["text"] == text:
         return None  # the result repeats the final assistant text
-    return {"kind": "result", "text": text}
+    # a result row carries no timestamp of its own; the last real one it followed is its time
+    at = events[-1]["at"] if events else None
+    return {"kind": "result", "text": text, "at": at}
 
 
 def _append(events, event):
@@ -180,7 +183,7 @@ def parse_log(raw):
         elif row["type"] == "result":
             _append(events, _result_event(row, events))
     if "".join(plain).strip():
-        events.insert(0, {"kind": "text", "text": "\n".join(plain).strip()})
+        events.insert(0, {"kind": "text", "text": "\n".join(plain).strip(), "at": None})
     return [event for event in events if event and event["text"]]
 
 
@@ -221,6 +224,9 @@ def runs(root):
         raw, truncated = _read_tail(path)
         live = end is None and _live(root, path)
         events = parse_log(raw)
+        for event in events:  # a line with no timestamp of its own dates to when the run began
+            if not event.get("at"):
+                event["at"] = start
         if not (events or end or live):
             continue  # a launcher that died before claude wrote a byte: nothing to say
         try:

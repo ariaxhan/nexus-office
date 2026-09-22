@@ -54,8 +54,8 @@ function conversation(parent,data){
   if(item.truncated)parent.append(el('p','coord-status','Earlier output from this run is in '+item.log));
   if(!item.events.length)parent.append(el('p','coord-status',item.live?'Starting…':'This run wrote no output.'));
   for(const event of item.events){
-   if(event.kind==='tool'){parent.append(el('p','coord-tool',event.text));continue;}
-   const node=el('article',event.kind==='result'?'coord-say coord-result':'coord-say');rich(node,event.segments);parent.append(node);
+   if(event.kind==='tool'){const row=el('p','coord-tool');row.append(document.createTextNode(event.text),el('small','coord-time',clock(event.at)));parent.append(row);continue;}
+   const node=el('article',event.kind==='result'?'coord-say coord-result':'coord-say');rich(node,event.segments);node.append(el('small','coord-time',clock(event.at)));parent.append(node);
   }
   for(const hold of item.holds){const node=el('article','coord-say coord-hold');node.append(el('strong','','Hold · '));rich(node,hold.segments);parent.append(node);}
   parent.append(runEnd(item));

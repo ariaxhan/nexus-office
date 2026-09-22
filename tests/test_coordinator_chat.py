@@ -76,6 +76,20 @@ class StreamTest(Fixture):
         self.assertIn("tbs-www#382", events[-1]["text"])
         self.assertTrue(all("\n" not in event["text"] for event in events if event["kind"] == "tool"))
         self.assertFalse(any("tool_result" in event["text"] for event in events))
+        # each stream-json line carries its own timestamp through to the event
+        self.assertEqual(events[0]["at"], "2026-09-15T01:16:30.202Z")
+        self.assertEqual(events[1]["at"], "2026-09-15T01:16:33.849Z")
+
+    def test_result_row_dates_to_the_last_real_event_it_followed(self):
+        log = ('{"type":"assistant","timestamp":"2026-09-15T01:16:33.849Z",'
+               '"message":{"content":[{"type":"text","text":"landed it"}]}}\n'
+               '{"type":"result","subtype":"success","result":"landed it, and more"}\n')
+        events = chat.parse_log(log)
+        self.assertEqual([event["kind"] for event in events], ["text", "result"])
+        self.assertEqual(events[1]["at"], "2026-09-15T01:16:33.849Z")
+
+    def test_plain_lines_carry_no_timestamp_of_their_own(self):
+        self.assertIsNone(chat.parse_log("old plain log\n")[0]["at"])
 
     def test_plain_and_partial_logs(self):
         self.assertEqual(chat.parse_log(""), [])
@@ -101,6 +115,9 @@ class StreamTest(Fixture):
         self.assertEqual([item["kind"] for item in items], ["run", "message"])  # the empty, unfinished log is dropped
         self.assertEqual(items[0]["end"]["rc"], 0)
         self.assertEqual(len(items[0]["holds"]), 1)
+        # the tool event's own timestamp survives, and the run's start fills any event without one
+        self.assertEqual(items[0]["events"][0]["at"], "2026-09-15T01:16:30.202Z")
+        self.assertTrue(all(event.get("at") for event in items[0]["events"]))
 
 
 class LinkTest(Fixture):
