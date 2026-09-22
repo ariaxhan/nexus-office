@@ -25,7 +25,7 @@ import office_preferences as preferences
 
 LOCK = threading.Lock()
 STATUS = {'state': 'unbuilt', 'started_at': None, 'finished_at': None, 'errors': []}
-TTL = 120
+TTL = 3600  # was 120: with a multi-minute pass that re-armed the index on every search (2026-09-21)
 STORAGE_CHECK_AT = 0
 
 
@@ -98,7 +98,13 @@ def rebuild(extra=()):
                     except (OSError, ValueError) as exc:
                         STATUS['errors'].append({'source': root['name'], 'path': str(candidate), 'error': str(exc)[:200]})
             from itertools import chain
-            for record in chain(archives.records(STATUS['errors']),bot_history.records(STATUS['errors'])):
+            # Full native transcripts are 370k+ records and the whole reason a pass took 30+ min at one
+            # core (2026-09-21, the machine overheating). Aria's own words live in aria-said; agent
+            # learnings in agentdb. Opt back in with OFFICE_INDEX_TRANSCRIPTS=1.
+            history=bot_history.records(STATUS['errors'])
+            if os.environ.get('OFFICE_INDEX_TRANSCRIPTS')=='1':
+                history=chain(archives.records(STATUS['errors']),history)
+            for record in history:
                 count+=index_history(db,record,STATUS['errors'])
                 STATUS.update(count=count,current_source=record['project'])
             for record in media_records(STATUS['errors']):
