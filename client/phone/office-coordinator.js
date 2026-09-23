@@ -83,7 +83,7 @@ const HEALTH={running:'Running',ok:'Healthy',thrashing:'Thrashing',failing:'Last
 export function healthLine(row){
  const end=row.last_end||{};const node=el('span','coord-health');node.dataset.health=row.health;
  const shipped=(row.shipped_recent||[]).join(' · ');
- node.textContent=[HEALTH[row.health]||row.health,row.live?'run live now':`last run ${age(row.age_s)}`,end.rc!=null?`exit ${end.rc}${end.timed_out?' (timed out)':''}`:'',shipped?`shipped per run: ${shipped}`:'',row.unread?`${row.unread} unread`:''].filter(Boolean).join(' · ');
+ node.textContent=[HEALTH[row.health]||row.health,row.live?'run live now':`last run ${age(row.age_s)}`,end.rc!=null?`exit ${end.rc}${end.timed_out?' (timed out)':''}`:'',shipped?`shipped per run: ${shipped}`:'',row.unread?`${row.unread} unread`:'',row.supervisor?`supervisor ${row.supervisor.action} ${clock(row.supervisor.at)}`:''].filter(Boolean).join(' · ');
  return node;
 }
 export async function overview(parent,onPick){

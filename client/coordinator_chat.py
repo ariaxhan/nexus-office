@@ -23,6 +23,7 @@ import office_objects
 INBOX = "_meta/state/coordinator-inbox.jsonl"
 RUNS = "_meta/ledgers/coordinator-runs.jsonl"
 HOLDS = "_meta/ledgers/coordinator-holds.jsonl"
+SUPERVISOR = "_meta/ledgers/coordinator-supervisor.jsonl"  # _meta/services/coordinators/supervise.py
 MAX_RUNS = 12
 MAX_LOG_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 8000
@@ -610,13 +611,14 @@ def summary(row):
     if not live and last_end and last_end.get("rc") not in (0, None):
         health = "failing"
     age = _age((last_end or {}).get("at") or last_start)
-    if not live and (age is None or age > 6 * 3600):
+    if not live and (age is None or age > row.get("stall_s", 6 * 3600)):
         health = "stalled"
     return {"id": row["id"], "name": row["name"], "live": live, "health": health,
             "last_start": last_start, "last_end": last_end, "age_s": age,
             "shipped_recent": shipped, "thrashing": thrashing,
             "working_on": doing, "lanes": lanes, "commits": commits,
             "unread": len(unread(root)), "last_skip": last_skip_row,
+            "supervisor": (_rows(root / SUPERVISOR) or [None])[-1],
             "prompt": row.get("prompt") or "docs/coordinator.md"}
 
 

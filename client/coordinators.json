@@ -1,6 +1,6 @@
 [
   {"id": "tbs", "name": "TBS", "root": "thinking-brain-school", "out": ".tbs-out",
-   "checkouts": "tbs*", "repo": "Thinking-Brain-School/tbs-www"},
+   "checkouts": "tbs*", "repo": "Thinking-Brain-School/tbs-www", "label": "com.aria.tbs-coordinator"},
   {"id": "matra", "name": "Matra", "root": "blinkbuild/matra-suite/matra", "out": ".coordinator-out",
-   "checkouts": "", "repo": "jessstrom/matra"}
+   "checkouts": "", "repo": "jessstrom/matra", "label": "com.aria.matra-coordinator"}
 ]
