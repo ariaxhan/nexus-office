@@ -111,3 +111,20 @@ class BotReportsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LatestTest(unittest.TestCase):
+    def test_newest_reply_to_a_daily_report_per_bot(self):
+        turns = [{"role": "user", "content": "Daily report.\n\n<!-- office-report:a -->", "inference_group_id": "g1"},
+                 {"role": "assistant", "content": "old", "inference_group_id": "g1", "timestamp": "t1", "ok": True},
+                 {"role": "user", "content": "hi", "inference_group_id": "g2"},
+                 {"role": "assistant", "content": "chat", "inference_group_id": "g2", "timestamp": "t2", "ok": True}]
+        rows = bot_reports.latest(lambda bot: (200, {"turns": turns}) if bot == "rune" else (503, {"error": "down"}),
+                                  bots=("rune", "sphinx"))
+        self.assertEqual((rows[0]["text"], rows[0]["at"]), ("old", "t1"))
+        self.assertEqual(rows[1]["error"], "down")
+
+    def test_a_503_is_retried_not_fatal(self):
+        import urllib.error
+        self.assertTrue(bot_reports.transient(urllib.error.HTTPError("u", 503, "x", {}, None)))
+        self.assertFalse(bot_reports.transient(urllib.error.HTTPError("u", 404, "x", {}, None)))

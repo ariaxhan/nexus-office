@@ -23,7 +23,6 @@ import office_objects
 INBOX = "_meta/state/coordinator-inbox.jsonl"
 RUNS = "_meta/ledgers/coordinator-runs.jsonl"
 HOLDS = "_meta/ledgers/coordinator-holds.jsonl"
-LOG_GLOB = ".tbs-out/coordinator-[0-9]*.log"
 MAX_RUNS = 12
 MAX_LOG_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 8000
@@ -32,8 +31,44 @@ ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
-def root_path():
-    return Path(os.environ.get("OFFICE_COORDINATOR_ROOT") or lesson_status.root_path()).resolve()
+CONFIG = Path(__file__).with_name("coordinators.json")
+TBS_DEFAULTS = {"id": "tbs", "name": "TBS", "out": ".tbs-out", "checkouts": "tbs*", "repo": DEFAULT_REPO}
+
+
+def configs():
+    """Every coordinator the Office shows, from one file. The first is the default."""
+    try:
+        rows = json.loads(CONFIG.read_text())
+    except (OSError, ValueError):
+        rows = [dict(TBS_DEFAULTS, root="thinking-brain-school")]
+    out = []
+    for row in rows:
+        row = dict(row)
+        if row["id"] == "tbs":
+            row["path"] = Path(os.environ.get("OFFICE_COORDINATOR_ROOT") or lesson_status.root_path()).resolve()
+        else:
+            row["path"] = (Path(__file__).resolve().parents[2] / row["root"]).resolve()
+        out.append(row)
+    return out
+
+
+def conf(root):
+    for row in configs():
+        if row["path"] == Path(root).resolve():
+            return row
+    return dict(TBS_DEFAULTS, path=Path(root))
+
+
+def root_path(coordinator=None):
+    rows = configs()
+    for row in rows:
+        if row["id"] == (coordinator or rows[0]["id"]):
+            return row["path"]
+    raise FileNotFoundError("unknown coordinator")
+
+
+def log_glob(root):
+    return conf(root)["out"] + "/coordinator-[0-9]*.log"
 
 
 def now():
@@ -58,7 +93,7 @@ def _rows(path):
 
 # ── inbox ────────────────────────────────────────────────────────────────────
 def say(body, root=None):
-    root = root or root_path()
+    root = root or root_path(body.get("coordinator"))
     text, request = body.get("text"), body.get("id")
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
         raise ValueError(f"a message is 1-{MAX_TEXT} characters")
@@ -211,7 +246,7 @@ def runs(root):
     ends = {os.path.basename(row.get("log") or ""): row for row in ledger if row.get("event") == "end"}
     starts = sorted(row["at"] for row in ledger if row.get("event") == "start" and isinstance(row.get("at"), str))
     holds = _rows(root / HOLDS)
-    logs = sorted(glob.glob(str(root / LOG_GLOB)))[-MAX_RUNS:]
+    logs = sorted(glob.glob(str(root / log_glob(root))))[-MAX_RUNS:]
     out = []
     for name in logs:
         path = Path(name)
@@ -243,11 +278,11 @@ def runs(root):
 def _live(root, log):
     """The newest log without an end row is live only while the launcher's lock pid is."""
     try:
-        pid = int((root / ".tbs-out/coordinator.lock/pid").read_text().strip())
+        pid = int((root / conf(root)["out"] / "coordinator.lock/pid").read_text().strip())
         os.kill(pid, 0)
     except (OSError, ValueError):
         return False
-    logs = sorted(glob.glob(str(root / LOG_GLOB)))
+    logs = sorted(glob.glob(str(root / log_glob(root))))
     return bool(logs) and Path(logs[-1]) == log
 
 
@@ -271,8 +306,9 @@ def last_skip(root):
 # ── changes ──────────────────────────────────────────────────────────────────
 def checkouts(root):
     base = root.parent
-    found = {"thinking-brain-school": root}
-    for path in sorted(base.glob("tbs*")):
+    pattern = conf(root)["checkouts"]
+    found = {root.name: root}
+    for path in sorted(base.glob(pattern)) if pattern else []:
         if (path / ".git").exists():
             found[path.name] = path
     return found
@@ -363,6 +399,7 @@ class Linker:
     def __init__(self, root):
         self.root = root
         self.checkouts = checkouts(root)
+        self.default_repo = conf(root).get("repo") or DEFAULT_REPO
         self.repos = {name: _remote(path) for name, path in self.checkouts.items()}
         self.object_roots = None
 
@@ -370,7 +407,7 @@ class Linker:
         if owner and name:
             return f"{owner}/{name}"
         if not name:
-            return DEFAULT_REPO
+            return self.default_repo
         full = self.repos.get(name)
         return full or None
 
@@ -444,8 +481,8 @@ class Linker:
         return None
 
 
-def commit(sha, checkout, root=None):
-    root = root or root_path()
+def commit(sha, checkout, root=None, coordinator=None):
+    root = root or root_path(coordinator)
     if not SHA_RE.match(sha or ""):
         raise ValueError("not a commit sha")
     path = checkouts(root).get(checkout)
@@ -468,9 +505,9 @@ def _linked_changes(linker, found, issues):
             "publishes": [dict(row, id=linker._file("", row["path"])) for row in found["publishes"]]}
 
 
-def read(root=None):
+def read(root=None, coordinator=None):
     with READ_LOCK:
-        return _read(root or root_path())
+        return _read(root or root_path(coordinator))
 
 
 def _read(root):
@@ -493,3 +530,106 @@ def _read(root):
     items.sort(key=lambda item: item["at"])
     return {"items": items, "last_skip": last_skip(root), "unread": sum(1 for row in messages if not row["read_at"]),
             "as_of": now()}
+
+
+# ── the overview: one row per coordinator ───────────────────────────────────
+THRASH_RUNS = 4  # this many ended runs in a row that shipped nothing is thrashing
+OVERVIEW_TTL = 15
+OVERVIEW = {}
+LANE_RE = re.compile(r"^\s*LANE\s+\S+\s*\|.*$", re.M)
+OVERVIEW_LOG_BYTES = 512 * 1024
+
+
+def _age(at):
+    try:
+        then = dt.datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    return int((dt.datetime.now(dt.timezone.utc) - then).total_seconds())
+
+
+def _tail(path, limit):
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as stream:
+            stream.seek(max(0, size - limit))
+            if size > limit:
+                stream.readline()
+            return stream.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _window_commits(root, start, end):
+    """Commits in the coordinator's checkouts inside one run window.
+
+    Scheduled `sync:` snapshot commits land every few hours whatever the coordinator does, so
+    they are not shipping; counting them would hide a coordinator that does nothing.
+    """
+    out = []
+    for name, path in checkouts(root).items():
+        for line in _git(path, "log", "--all", f"--since={start}", f"--until={end}",
+                         "--format=%H%x09%ct%x09%s", "-n", "40").splitlines():
+            sha, at, subject = (line.split("\t", 2) + ["0", ""])[:3]
+            if subject.startswith("sync: "):
+                continue
+            stamp = dt.datetime.fromtimestamp(int(at or 0), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            out.append({"checkout": name, "sha": sha, "at": stamp, "subject": subject})
+    return out
+
+
+def summary(row):
+    root = row["path"]
+    ledger = _rows(root / RUNS)
+    starts = [r for r in ledger if r.get("event") == "start" and isinstance(r.get("at"), str)]
+    ends = [r for r in ledger if r.get("event") == "end" and isinstance(r.get("at"), str)]
+    logs = sorted(glob.glob(str(root / log_glob(root))))
+    latest = Path(logs[-1]) if logs else None
+    live = bool(latest) and not any(os.path.basename(r.get("log") or "") == latest.name for r in ends) and _live(root, latest)
+    last_end = ends[-1] if ends else None
+    recent = ends[-THRASH_RUNS:]
+    windows = [_window_commits(root, r.get("start") or r["at"], r["at"]) for r in recent]
+    shipped = [(r.get("prod_changes") or 0) + len(found) for r, found in zip(recent, windows)]
+    thrashing = len(recent) >= THRASH_RUNS and not any(shipped)
+    doing, lanes = "", []
+    if latest:
+        events = parse_log(_tail(latest, OVERVIEW_LOG_BYTES))
+        texts = [e["text"] for e in events if e["kind"] in ("text", "result")]
+        doing = texts[-1][:600] if texts else ""
+        lanes = [m.strip()[:200] for m in LANE_RE.findall("\n".join(texts))][-12:]
+        if not lanes:
+            lanes = [e["text"] for e in events if e["kind"] == "tool"
+                     and (e["text"].startswith(("Agent", "Task")) or "codex-lane submit" in e["text"])][-12:]
+    found = [c for window in windows for c in window]
+    if live and starts:
+        found += _window_commits(root, starts[-1]["at"], now())
+    commits = sorted({c["sha"]: c for c in found}.values(), key=lambda c: c["at"], reverse=True)[:6]
+    last_start = starts[-1]["at"] if starts else None
+    last_skip_row = last_skip(root)
+    health = "running" if live else "thrashing" if thrashing else "ok"
+    if not live and last_end and last_end.get("rc") not in (0, None):
+        health = "failing"
+    age = _age((last_end or {}).get("at") or last_start)
+    if not live and (age is None or age > 6 * 3600):
+        health = "stalled"
+    return {"id": row["id"], "name": row["name"], "live": live, "health": health,
+            "last_start": last_start, "last_end": last_end, "age_s": age,
+            "shipped_recent": shipped, "thrashing": thrashing,
+            "working_on": doing, "lanes": lanes, "commits": commits,
+            "unread": len(unread(root)), "last_skip": last_skip_row,
+            "prompt": row.get("prompt") or "docs/coordinator.md"}
+
+
+def overview():
+    cached = OVERVIEW.get("rows")
+    if cached and time.monotonic() - cached[0] < OVERVIEW_TTL:
+        return cached[1]
+    rows = []
+    for row in configs():
+        try:
+            rows.append(summary(row))
+        except Exception as exc:  # noqa: BLE001 - one broken tree must not hide the others
+            rows.append({"id": row["id"], "name": row["name"], "health": "error", "error": str(exc)[:200]})
+    result = {"coordinators": rows, "as_of": now()}
+    OVERVIEW["rows"] = (time.monotonic(), result)
+    return result

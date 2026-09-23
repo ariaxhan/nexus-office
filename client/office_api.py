@@ -73,8 +73,9 @@ def get(handler, path, query):
         '/api/search/all': lambda: search.search(q.get('q',''), q.get('cursor',0), q.get('kind',''), q.get('project','')),
         '/api/media': lambda: media.catalog(q.get('kind', 'all'), q.get('cursor', 0)),
         '/api/media/detail': lambda: media.detail(q['id']),
-        '/api/coordinator': coordinator_chat.read,
-        '/api/coordinator/commit': lambda: coordinator_chat.commit(q.get('sha',''),q.get('checkout','')),
+        '/api/coordinator': lambda: coordinator_chat.read(coordinator=q.get('id') or None),
+        '/api/coordinators': coordinator_chat.overview,
+        '/api/coordinator/commit': lambda: coordinator_chat.commit(q.get('sha',''),q.get('checkout',''),coordinator=q.get('id') or None),
     }
     if path == '/api/uploads/content':
         uploads.content(handler,{'id':q['id'],'revision':q['revision']})

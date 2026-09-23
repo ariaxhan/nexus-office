@@ -244,6 +244,8 @@ struct RootView: View {
             // the phone page at `/`, and the only screen that answers "what
             // needs me" without being asked about a particular repo.
             NeedsView(store: store)
+        case .coordinators:
+            CoordinatorsView(store: store)
         case .feed:
             // The whole machine talking at once, across every repo. Not scoped
             // to a desk, because it belongs to none of them.

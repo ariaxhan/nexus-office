@@ -221,3 +221,28 @@ def test_last_skip_is_dropped_once_a_run_starts_after_it(tmp_path):
         '{"at":"2026-09-16T02:10:00Z","event":"skip","mode":"live","reason":"daily-cap"}\n'
     )
     assert chat.last_skip(tmp_path)["reason"] == "daily-cap"
+
+
+class OverviewTest(Fixture):
+    def test_config_lists_tbs_and_matra_and_routes_a_steer_to_the_named_inbox(self):
+        ids = [row["id"] for row in chat.configs()]
+        self.assertEqual(ids[:2], ["tbs", "matra"])
+        matra = self.base / "matra"
+        matra.mkdir()
+        rows = [dict(row, path=matra) if row["id"] == "matra" else dict(row, path=self.root) for row in chat.configs()]
+        with patch.object(chat, "configs", return_value=rows):
+            chat.say({"id": "req-matra-01", "text": "ship voice", "coordinator": "matra"})
+            self.assertTrue((matra / chat.INBOX).exists())
+            self.assertFalse((self.root / chat.INBOX).exists())
+            with self.assertRaises(FileNotFoundError):
+                chat.root_path("nope")
+
+    def test_runs_that_ship_nothing_read_as_thrashing(self):
+        ends = [{"event": "end", "at": f"2099-01-01T0{i}:10:00Z", "start": f"2099-01-01T0{i}:00:00Z",
+                 "rc": 0, "prod_changes": 0, "log": f"x{i}.log"} for i in range(4)]
+        self.write(chat.RUNS, "".join(json.dumps(row) + "\n" for row in ends))
+        with patch.object(chat, "_age", return_value=60):
+            row = chat.summary(dict(chat.TBS_DEFAULTS, path=self.root))
+        self.assertTrue(row["thrashing"])
+        self.assertEqual(row["health"], "thrashing")
+        self.assertEqual(row["shipped_recent"], [0, 0, 0, 0])

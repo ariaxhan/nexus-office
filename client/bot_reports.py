@@ -44,21 +44,69 @@ def fresh_evidence(office: str) -> dict:
     return world
 
 
+# A single 503 or socket timeout while the Mac is under load is not a failed report: the history
+# proxy gives the harness 3s, and at load 29 on 14 cores one poll can miss that (2026-09-23 sphinx
+# failure, "HTTP Error 503" from GET /api/chat while the reply was still being written). Polls are
+# retried until the deadline; only a refusal that cannot heal (4xx) ends the run early.
+def transient(error: Exception) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500
+    return isinstance(error, OSError)
+
+
+def patient(base: str, path: str, deadline: float, body: dict | None = None) -> dict:
+    while True:
+        try:
+            return request(base, path, body)
+        except (OSError, urllib.error.HTTPError) as error:
+            if not transient(error) or time.monotonic() + 3 > deadline:
+                raise
+            time.sleep(3)
+
+
+def latest(history, bots=BOTS) -> list[dict]:
+    """The newest reply to a daily report, per bot, from each bot's chat history."""
+    out = []
+    for bot in bots:
+        code, body = history(bot)
+        row = {"bot": bot, "at": None, "text": None, "ok": None}
+        if code != 200:
+            row["error"] = str((body or {}).get("error") or code)
+            out.append(row)
+            continue
+        turns = body.get("turns") or []
+        groups = {turn.get("inference_group_id") for turn in turns if turn.get("role") == "user"
+                  and str(turn.get("content", turn.get("text")) or "").startswith(REPORT_TRIGGER)}
+        groups.discard(None)
+        for turn in reversed(turns):
+            if turn.get("role") == "assistant" and turn.get("inference_group_id") in groups:
+                row.update(at=turn.get("timestamp"), text=turn.get("content", turn.get("text")),
+                           ok=turn.get("ok"), id=turn.get("id"))
+                break
+        out.append(row)
+    return out
+
+
 def run_report(bot: str, base: str, timeout_s: float = 300) -> dict:
     if bot not in BOTS:
         raise ValueError(f"unknown bot: {bot}")
-    fresh_evidence(base)
+    deadline = time.monotonic() + timeout_s
+    try:
+        fresh_evidence(base)
+    except (TimeoutError, OSError):
+        # A stale snapshot is still evidence; the report says what it was built from.
+        # Failing the whole report because the refresh was slow left sphinx red for a day.
+        pass
     query = "/api/chat?bot=" + urllib.parse.quote(bot)
-    before = {str(turn.get("id") or "") for turn in request(base, query).get("turns", [])}
+    before = {str(turn.get("id") or "") for turn in patient(base, query, deadline).get("turns", [])}
     # The asynchronous Office endpoint cannot return the harness group yet.
     # A unique inert marker binds the later user turn to this exact request.
     message = REPORT_TRIGGER + "\n\n<!-- office-report:" + uuid.uuid4().hex + " -->"
     accepted = request(base, "/api/chat", {"bot": bot, "message": message})
     if accepted.get("ok") is not True:
         raise ValueError(f"{bot} report request was not accepted")
-    deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        turns = request(base, query).get("turns", [])
+        turns = patient(base, query, deadline).get("turns", [])
         origins = [turn for turn in turns if turn.get("role") == "user"
                    and str(turn.get("id") or "") not in before
                    and turn.get("content", turn.get("text")) == message]

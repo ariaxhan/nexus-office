@@ -68,3 +68,11 @@ input,select,textarea{font-size:max(16px,1rem);max-width:100%}select{white-space
 
 .markdown ul,.markdown ol{margin:10px 0;padding-left:1.4em;white-space:normal}.markdown li{white-space:pre-wrap}.markdown blockquote{margin:12px 0;padding:2px 0 2px 12px;border-left:3px solid var(--line);color:var(--muted)}.markdown code{background:color-mix(in srgb,var(--ink) 8%,transparent);padding:1px 4px;border-radius:5px}.markdown pre code{background:none;padding:0}.mdtable{overflow-x:auto;margin:12px 0}.mdtable table{table-layout:auto;min-width:100%}.markdown th,.markdown td{border-bottom:1px solid var(--line);text-align:left}
 .coord-say .markdown,.coord-you .markdown{font-family:inherit;line-height:1.65}.coord-say .markdown>:first-child,.coord-you .markdown>:first-child{margin-top:0}.coord-say .markdown>:last-child,.coord-you .markdown>:last-child{margin-bottom:0}.coord-hold>strong+.markdown{display:inline}.coord-hold>strong+.markdown>p:first-child{display:inline}
+.coord-row{text-align:left}.coord-row[aria-current=true]{border-color:var(--accent)}
+.coord-health{display:block;font-size:.85rem;color:var(--muted)}
+.coord-health[data-health=thrashing],.coord-health[data-health=failing],.coord-health[data-health=stalled],.coord-health[data-health=error]{color:#b3261e;font-weight:600}
+.coord-health[data-health=running]{color:var(--accent)}
+.coord-doing{margin:.3rem 0 0}
+.report summary{cursor:pointer;list-style:none}.report summary::-webkit-details-marker{display:none}
+.report-lead{margin:.35rem 0 0;color:var(--ink)}
+.report[open] .report-lead{display:none}

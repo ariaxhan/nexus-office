@@ -27,6 +27,8 @@ public enum Selection: Hashable {
     /// One thing on the wall, by its source id. A section is not a repo and not
     /// a colleague, so it gets its own case rather than borrowing a desk's.
     case section(String)
+    /// Every coordinator and the bots' daily reports.
+    case coordinators
 }
 
 /// The three halves of a desk: what is open on GitHub, what the checkout on this

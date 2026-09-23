@@ -19,6 +19,8 @@ struct RosterView: View {
 
                     feedRow
 
+                    coordinatorsRow
+
                     bots
 
                     wall
@@ -234,6 +236,35 @@ struct RosterView: View {
     ///
     /// The count is the two kinds that want a person, never the total: a badge
     /// that counts everything is a badge that means nothing within a day.
+    /// The way in to the coordinators and the daily reports.
+    private var coordinatorsRow: some View {
+        Button {
+            store.select(.coordinators)
+        } label: {
+            HStack(spacing: 9) {
+                Circle().fill(Theme.blue).frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("coordinators & reports")
+                        .officeFont(size: 12.5, weight: .medium)
+                        .foregroundStyle(Theme.text)
+                    Text("TBS, Matra, and each bot's daily report")
+                        .officeFont(size: 11)
+                        .foregroundStyle(Theme.dim)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(store.selection == .coordinators ? Theme.selected : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var feedRow: some View {
         let feed = store.feed()
         let wants = feed.asking + feed.blocked

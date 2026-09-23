@@ -60,9 +60,32 @@ public final class Api {
         if let path = flag("--demo", in: arguments) ?? environment["OFFICE_DEMO"], !path.isEmpty {
             return Api(source: .demo(URL(fileURLWithPath: (path as NSString).expandingTildeInPath)))
         }
-        let raw = flag("--url", in: arguments) ?? environment["OFFICE_URL"] ?? "http://127.0.0.1:8790"
-        let url = URL(string: raw) ?? URL(string: "http://127.0.0.1:8790")!
+        let saved = UserDefaults.standard.string(forKey: "officeURL").flatMap { $0.isEmpty ? nil : $0 }
+        let raw = flag("--url", in: arguments) ?? environment["OFFICE_URL"] ?? saved
+            ?? (answers(local) ? local : tailnet)
+        let url = URL(string: raw) ?? URL(string: local)!
         return Api(source: .live(url))
+    }
+
+    static let local = "http://127.0.0.1:8790"
+    /// The Office runs on the Studio. Every other Mac is a window onto it over the
+    /// tailnet, so a machine with nothing on loopback reads the Studio instead of a
+    /// dead port. `defaults write app.nexusoffice.Office officeURL <url>` pins one.
+    static let tailnet = "https://office.tail4f309a.ts.net"
+
+    /// One short health probe at launch; a refused loopback port answers in a millisecond.
+    static func answers(_ raw: String, within seconds: TimeInterval = 1.5) -> Bool {
+        guard let url = URL(string: raw + "/api/health") else { return false }
+        var request = URLRequest(url: url, timeoutInterval: seconds)
+        request.httpMethod = "GET"
+        let done = DispatchSemaphore(value: 0)
+        var ok = false
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            ok = ((response as? HTTPURLResponse)?.statusCode ?? 0) == 200
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + seconds + 0.5)
+        return ok
     }
 
     public static func flag(_ name: String, in arguments: [String]) -> String? {
@@ -76,6 +99,24 @@ public final class Api {
     }
 
     // MARK: - reads
+
+    /// Each bot's newest daily report.
+    public func reports() async throws -> ReportsResponse {
+        if demo != nil { return ReportsResponse(reports: []) }
+        return try await get("/api/reports", as: ReportsResponse.self)
+    }
+
+    /// One row per coordinator: health, what it is doing, what it shipped.
+    public func coordinators() async throws -> CoordinatorsResponse {
+        if demo != nil { return CoordinatorsResponse(coordinators: []) }
+        return try await get("/api/coordinators", as: CoordinatorsResponse.self)
+    }
+
+    /// A line into one coordinator's inbox. The id makes a retried send land once.
+    public func steer(coordinator: String, text: String, id: String) async throws -> Ack {
+        if demo != nil { return Ack(ok: true) }
+        return try await post("/api/coordinator/say", ["coordinator": coordinator, "text": text, "id": id])
+    }
 
     public func bots() async throws -> BotsResponse {
         if let demo { return try demo.bots() }

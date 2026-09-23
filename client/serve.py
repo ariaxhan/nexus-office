@@ -53,6 +53,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import board  # noqa: E402
+import bot_reports  # noqa: E402
 import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import context  # noqa: E402
@@ -166,6 +167,7 @@ NO_PAGE = "the office is at /; there is nothing else here"
 # at request time. An exact map cannot be talked into serving a sibling, so the
 # traversal question never has to be answered correctly under pressure.
 PHONE = HERE / "phone"
+REPORTS = {}  # bot -> the last report that loaded, shown when the harness blinks
 PAGE = {"/": "office.html", "/index.html": "office.html", "/classic": "index.html",
         "/phone.css": "phone.css", "/phone.js": "phone.js",
         "/lessons": "lessons.html", "/lessons.html": "lessons.html",
@@ -564,6 +566,7 @@ class Handler(BaseHTTPRequestHandler):
                 '/api/gates': self._get_gates,
                 '/api/board': self._get_board,
                 '/api/bots': self._get_bots,
+                '/api/reports': self._get_reports,
                 '/api/chat': self._get_chat,
                 '/api/webhook': self._get_webhook,
                 '/api/automation': self._get_automation,
@@ -635,6 +638,23 @@ class Handler(BaseHTTPRequestHandler):
             q=(q.get("q") or [""])[0],
             limit=limit, cursor=(q.get("cursor") or [""])[0],
             since=(q.get("since") or ["0"])[0]))
+
+    def _get_reports(self, query):
+        """Each bot's newest daily report, so nobody has to open five chats to read them.
+
+        Kept per bot: a harness that is slow or down for one poll shows the last report it
+        gave, marked stale, instead of a blank panel.
+        """
+        names = {row["id"]: row.get("name") or row["id"] for row in chat.read_bots()}
+        rows = []
+        for row in bot_reports.latest(self.chatroom.history):
+            good = REPORTS.get(row["bot"])
+            if row.get("text"):
+                REPORTS[row["bot"]] = row
+            elif good:
+                row = dict(good, stale=row.get("error") or True)
+            rows.append(dict(row, name=names.get(row["bot"], row["bot"].title())))
+        return self._json({"reports": rows, "as_of": now_iso()})
 
     def _get_bots(self, query):
         return self._json(self.chatroom.roster())

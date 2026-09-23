@@ -5,7 +5,7 @@ import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
 import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
-import {coordinator} from './office-coordinator.js';
+import {coordinator,healthLine} from './office-coordinator.js';
 import {newTask,taskList,permissions,taskDetail,permissionCard} from './office-tasks.js';
 let attention={items:[],errors:[]};
 let snapshot=null,snapshotReadAt=0;
@@ -14,11 +14,24 @@ async function guarded(parent,work){try{await work();}catch(error){failure(paren
 function subtitle(data){return [data.state,data.detail,data.at].filter(Boolean).join(' · ');}
 async function today(parent){
  intro(parent,'Your office, wherever you are','A little room to think.','The Mac holds the work. Everything you need to see and steer lives here.');
+ const reports=section(parent,'Daily reports');await guarded(reports,()=>dailyReports(reports));
+ const coords=section(parent,'Coordinators');await guarded(coords,async()=>{const data=await api('/api/coordinators');for(const row of data.coordinators){const node=button('',()=>{location.hash='coordinator';},'card coord-row');node.dataset.id=row.id;node.addEventListener('click',()=>{try{localStorage.setItem('office-coordinator-pick',row.id);}catch{}},{capture:true});node.append(el('h3','',row.name),healthLine(row));coords.append(node);}});
  const needs=section(parent,'Needs you');needs.id='needs-list';await guarded(needs,()=>attentionList(needs));
  const active=section(parent,'Running now');await runningNow(active);
  const recent=section(parent,'Since you were here');await guarded(recent,()=>podcastNotifications(recent));await guarded(recent,()=>activitySinceVisit(recent));
  const listen=section(parent,'Something to listen to');await guarded(listen,async()=>{const data=await api('/api/media?kind=podcast');const episode=data.items[0];if(episode)listen.append(card(episode.title,`${Math.round(episode.duration_s/60)} minutes · ${episode.date}`,()=>mediaDetail(episode.id)));else empty(listen,'Your next episode will appear here when published.');});
  const poem=section(parent,'A small interruption');await guarded(poem,async()=>{const data=await api('/api/media?kind=substrate');const item=data.items[0];if(item)poem.append(card(item.title,item.excerpt,()=>mediaDetail(item.id)));else empty(poem,'No Substrate pieces published yet.');});
+}
+// The five daily reports, newest reply each, readable without opening a chat.
+async function dailyReports(parent){
+ const data=await api('/api/reports');
+ for(const row of data.reports){
+  const node=el('details','card report');const summary=el('summary');
+  const when=row.at?new Date(row.at).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'no report yet';
+  summary.append(el('strong','',row.name),el('span','muted',` · ${when}${row.stale?' · showing the last one that loaded':''}${row.ok===false?' · failed':''}`),el('p','report-lead',(row.text||row.error||'').split('\n').find(line=>line.trim())||''));
+  node.append(summary);if(row.text)node.append(markdownView(row.text));
+  parent.append(node);
+ }
 }
 async function work(parent){
  intro(parent,'Work','Pick up the thread.','Projects, conversations, and the files behind them.');

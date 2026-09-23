@@ -74,6 +74,7 @@ targets:
       - path: Office/Model/GateAnswer.swift
       - path: Office/Model/Store.swift
       - path: Office/Model/Api.swift
+      - path: Office/Model/Coordinators.swift
       # The automation page and the session roster: both are pure decoding of
       # what the server measured, and both have states that must never render as
       # each other. Foundation only, so they prove out with no app host.
