@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WebKit
 
 /// The office, on this machine.
 ///
@@ -149,7 +150,13 @@ struct RootView: View {
     @Bindable var store: Store
 
     var body: some View {
-        room
+        Group {
+            if store.api.isDemo {
+                room
+            } else if case .live(let url) = store.api.source {
+                OfficeWebView(url: url)
+            }
+        }
             .officeFont(size: 13)
             .background(Theme.ink)
             .environment(\.typeScale, store.typeScale)
@@ -157,6 +164,7 @@ struct RootView: View {
             .environment(\.themeRevision, store.lightCanvas + store.darkCanvas)
             .preferredColorScheme(store.appearance.colorScheme)
             .task {
+                guard store.api.isDemo else { return }
                 guard store.selection == nil else { return }
                 await store.refreshBots()
                 await store.refreshWorld()
@@ -168,7 +176,7 @@ struct RootView: View {
             }
             // The sheet is presented over whatever is on screen, because a gate is
             // never scoped to the thread you happen to be reading.
-            .sheet(isPresented: .constant(store.showsGateSheet)) {
+            .sheet(isPresented: .constant(store.api.isDemo && store.showsGateSheet)) {
                 GateSheet(store: store)
             }
     }
@@ -254,6 +262,61 @@ struct RootView: View {
             Empty(text: second
                   ? "Drag a desk in here to read it beside the one on the left."
                   : "Pick a bot to talk to it, a desk to work its issues, or a card on the wall to see a flow. A raised hand opens by itself.")
+        }
+    }
+}
+
+/// The Mac keeps its native window and status dot; the work surface is shared
+/// with iPhone so decisions, feed posts, Ask, and deep links have one implementation.
+private struct OfficeWebView: NSViewRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator(home: url) }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let view = WKWebView(frame: .zero)
+        view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
+        view.allowsBackForwardNavigationGestures = true
+        view.load(URLRequest(url: url))
+        return view
+    }
+
+    func updateNSView(_ view: WKWebView, context: Context) {
+        // Store polls update the menu dot. They must never reload the chat or feed.
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        let home: URL
+        init(home: URL) { self.home = home }
+
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let target = action.request.url else {
+                decisionHandler(.cancel)
+                return
+            }
+            if action.targetFrame == nil {
+                decisionHandler(.allow)
+                return
+            }
+            if target.host == home.host && target.port == home.port {
+                decisionHandler(.allow)
+            } else if target.scheme == "https" || target.scheme == "http" {
+                NSWorkspace.shared.open(target)
+                decisionHandler(.cancel)
+            } else {
+                decisionHandler(.cancel)
+            }
+        }
+
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+            if let target = action.request.url,
+               target.scheme == "https" || target.scheme == "http" {
+                NSWorkspace.shared.open(target)
+            }
+            return nil
         }
     }
 }

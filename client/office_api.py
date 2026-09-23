@@ -7,6 +7,7 @@ import office_archives as archives
 import office_objects as objects
 import office_preferences as preferences
 import office_media as media
+import office_digests as digests
 import office_content as content
 import office_search as search
 import office_system as system
@@ -15,6 +16,8 @@ import office_github as github
 import office_jobs as jobs
 import office_uploads as uploads
 import office_user_state as user_state
+import office_feed as feed
+import office_ask as ask
 import office_bot_history as bot_history
 import office_github_actions as github_actions
 import coordinator_chat
@@ -42,6 +45,11 @@ def get(handler, path, query):
         '/api/objects/detail': lambda: objects.read(q['id'], q.get('offset', 0)),
         '/api/preferences': preferences.read,
         '/api/user-state': user_state.read,
+        '/api/feed': lambda: feed.listing(q.get('category','all'),q.get('cursor',0)),
+        '/api/feed/detail': lambda: feed.detail(q['id']),
+        '/api/feed/threads': feed.threads,
+        '/api/ask': ask.read,
+        '/api/ask/models': ask.models,
         '/api/github/collection': lambda: github.collection(handler.world.access(),known,q),
         '/api/github/checks': lambda: github.checks(handler.world.access(),known,q),
         '/api/github/timeline': lambda: github.timeline(handler.world.access(),known,q),
@@ -73,6 +81,8 @@ def get(handler, path, query):
         '/api/search/all': lambda: search.search(q.get('q',''), q.get('cursor',0), q.get('kind',''), q.get('project','')),
         '/api/media': lambda: media.catalog(q.get('kind', 'all'), q.get('cursor', 0)),
         '/api/media/detail': lambda: media.detail(q['id']),
+        '/api/digests': digests.listing,
+        '/api/digests/detail': lambda: digests.detail(q['id']),
         '/api/coordinator': lambda: coordinator_chat.read(coordinator=q.get('id') or None),
         '/api/coordinators': coordinator_chat.overview,
         '/api/coordinator/commit': lambda: coordinator_chat.commit(q.get('sha',''),q.get('checkout',''),coordinator=q.get('id') or None),
@@ -109,6 +119,9 @@ def post(handler, path):
         handler._json(coordinator_chat.say(handler._read_json(limit=64 * 1024)))
         return True
     routes = {'/api/user-state': user_state.save, '/api/uploads': uploads.upload, '/api/objects/diff': objects.diff, '/api/system/command': system.command, '/api/objects/save': objects.save, '/api/preferences': preferences.save,
+              '/api/feed/react': feed.react, '/api/feed/reply': feed.reply,
+              '/api/feed/follow': feed.follow,
+              '/api/ask/send': ask.send, '/api/ask/rate': ask.rate,
               '/api/tasks/start': tasks.start, '/api/tasks/say': tasks.say,
               '/api/tasks/control': tasks.control, '/api/tasks/answer': tasks.answer}
     if path not in routes:

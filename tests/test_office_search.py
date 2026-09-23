@@ -169,7 +169,7 @@ class Search(unittest.TestCase):
 
 class RefreshInterval(unittest.TestCase):
     def test_a_slow_rebuild_rests_proportionally_not_every_ttl(self):
-        self.assertEqual(search.interval({'started_at':0,'finished_at':300}),2400)
+        self.assertEqual(search.interval({'started_at':0,'finished_at':600}),4800)
 
     def test_a_fast_rebuild_keeps_the_ttl_floor(self):
         self.assertEqual(search.interval({'started_at':0,'finished_at':1}),search.TTL)

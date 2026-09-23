@@ -173,7 +173,7 @@ PAGE = {"/": "office.html", "/index.html": "office.html", "/classic": "index.htm
         "/lessons": "lessons.html", "/lessons.html": "lessons.html",
         "/lessons.css": "lessons.css", "/lessons.js": "lessons.js",
         "/outlines": "outlines.html", "/outlines.html": "outlines.html", "/outlines.js": "outlines.js"}
-PAGE.update({name: name[1:] for name in ['/office.css', '/office.js', '/office-ui.js', '/office-settings.js', '/office-media.js', '/office-files.js', '/office-markdown.js', '/office-tasks.js', '/office-coordinator.js', '/office-attachments.js', '/office-state.js', '/office-native.js', '/office-sw.js', '/manifest.webmanifest', '/office-icon.svg', '/office-icon-192.png', '/office-icon-512.png']})
+PAGE.update({name: name[1:] for name in ['/office.css', '/office-v2.css', '/office.js', '/office-ui.js', '/office-settings.js', '/office-media.js', '/office-files.js', '/office-markdown.js', '/office-tasks.js', '/office-coordinator.js', '/office-attachments.js', '/office-state.js', '/office-native.js', '/office-sw.js', '/manifest.webmanifest', '/office-icon.svg', '/office-icon-192.png', '/office-icon-512.png']})
 
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".png": "image/png"}
@@ -182,7 +182,7 @@ TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
 # else. No inline script, no inline style and no external host, which is why the
 # page is three files rather than one: a strict policy is worth two more GETs.
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; "
-       "connect-src 'self'; img-src 'self'; media-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
+       "connect-src 'self'; img-src 'self' https:; media-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
 
 
 def now_iso() -> str:

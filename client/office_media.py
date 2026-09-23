@@ -92,7 +92,9 @@ def catalog(kind='all', cursor=0):
             rows.extend(loader())
         except (OSError, ValueError) as error:
             errors.append({'source': key, 'error': str(error)})
-    errors.extend({'source':row['id'],'error':row['error']} for row in rows if row.get('state')=='unavailable')
+    # The manifest can outlive an episode file. Keep that archival record in
+    # the manifest, but do not put an unplayable card in Office's listening list.
+    rows = [row for row in rows if row.get('state') != 'unavailable']
     rows.sort(key=lambda r: r.get('date', ''), reverse=True)
     start = max(0, int(cursor)); end = start + 40
     return {'items': rows[start:end], 'total': len(rows), 'errors': errors,

@@ -8,8 +8,12 @@ REVISION=$(git -C "$ROOT" rev-parse --verify HEAD)
 DIRTY=$(git -C "$ROOT" diff --name-only HEAD -- app client scripts package.json)
 UNTRACKED=$(git -C "$ROOT" ls-files --others --exclude-standard -- app client scripts package.json)
 if [ -n "$DIRTY$UNTRACKED" ]; then
-  echo "build identity: relevant source is dirty; refusing an unidentifiable app" >&2
-  exit 1
+  if [ "${OFFICE_DEV_DIRTY_BUILD:-0}" = 1 ]; then
+    REVISION="$REVISION-dirty-dev"
+  else
+    echo "build identity: relevant source is dirty; refusing an unidentifiable app" >&2
+    exit 1
+  fi
 fi
 case "$REVISION" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]* ) ;;

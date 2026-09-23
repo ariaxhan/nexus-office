@@ -87,7 +87,9 @@ def readiness(fresh=False):
 
 
 def require(engine,profile):
-    row=next((row for row in readiness(fresh=True) if row['engine']==engine and row['id']==profile),None)
+    if (engine,profile) not in seats():
+        raise PermissionError('Unknown account selection')
+    row=probe((engine,profile))
     if not row or not row['ready']:
         raise PermissionError(row['detail'] if row else 'Unknown account selection')
     return row

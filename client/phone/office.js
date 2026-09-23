@@ -246,10 +246,198 @@ async function search(cursor=0){
  const parent=$('#content');if(cursor===0){parent.replaceChildren();intro(parent,'Everywhere',`“${query}”`,'Names, paths, and contents across your office.');const filters=el('div','actions');for(const [kind,label] of [['','All'],['file','Files'],['conversation','Conversations'],['github','GitHub'],['event','Events'],['log','Logs'],['podcast','Podcasts'],['substrate','Poetry']])filters.append(button(label,()=>{searchKind=kind;search();}));parent.append(filters);}
  await guarded(parent,async()=>{const data=await api(`/api/search/all?q=${encodeURIComponent(query)}&cursor=${cursor}&kind=${searchKind}`);parent.append(el('p','muted',`${data.total||0} results · index ${data.coverage.state} · ${data.coverage.count||0} objects · updated ${data.coverage.finished_at?new Date(data.coverage.finished_at*1000).toLocaleTimeString():'never'}`));showSearchCoverage(parent,data.coverage);for(const problem of data.coverage.errors||[])parent.append(el('p','error',`${problem.source}: ${problem.error}`));if(data.coverage.refresh?.state==='indexing')parent.append(button('Index updating · refresh results',()=>search()));for(const item of data.items)parent.append(card(item.title,`${item.project} / ${item.path}\n${item.excerpt}`,()=>openSearchResult(item)));if(data.next_cursor!==null)parent.append(button('More results',()=>search(data.next_cursor)));});
 }
+let decisionIndex=0,feedCategory='all';
+async function watch(parent){
+ intro(parent,'Watch','What needs you','One decision at a time. Then the work that moved.');
+ const decisions=section(parent,'Needs you');
+ await refreshAttention();
+ const rows=attention.items.filter(entry=>entry.kind==='permission'||entry.kind==='gate');
+ if(rows.length){
+  decisionIndex=Math.max(0,Math.min(decisionIndex,rows.length-1));
+  const stack=el('div','decision-stack');decisions.append(stack);
+  const draw=()=>{
+   const entry=rows[decisionIndex];stack.replaceChildren();
+   stack.append(el('p','decision-count',`${decisionIndex+1} of ${rows.length} decisions`),entry.kind==='permission'?permissionCard(entry.item):attentionCard(entry));
+   const nav=el('div','decision-nav');
+   const previous=button('← Previous',()=>{decisionIndex=(decisionIndex-1+rows.length)%rows.length;draw();});
+   const next=button('Next →',()=>{decisionIndex=(decisionIndex+1)%rows.length;draw();});
+   nav.append(previous,next,button('Full list',()=>{const body=sheet('All decisions');for(const item of rows)body.append(item.kind==='permission'?permissionCard(item.item):attentionCard(item));}));stack.append(nav);
+  };draw();
+ }else empty(decisions,'Nothing waiting for you.');
+ for(const problem of attention.errors)decisions.append(el('p','error',problem));
+  const coords=section(parent,'Coordinators');
+  await guarded(coords,async()=>{const data=await api('/api/coordinators');for(const row of data.coordinators){
+   const item=button('',()=>{localStorage.setItem('office-coordinator-pick',row.id);location.hash='coordinator';},'card watch-coord');
+   const head=el('span','watch-coord-head');const age=row.age_s==null?'':row.age_s<3600?`${Math.max(1,Math.round(row.age_s/60))}m ago`:`${Math.round(row.age_s/3600)}h ago`;
+   head.append(el('strong','',row.name),el('span','coord-health',row.live?'Working now':row.health==='ok'?`Checked ${age}`:`${row.health} · ${age}`));item.append(head);
+   if(row.working_on){const lead=row.working_on.replace(/[*_`#]+/g,'').split(/(?<=[.!?])\s+/)[0].slice(0,145);item.append(el('span','watch-coord-doing',lead));}
+   coords.append(item);
+  }});
+  const manager=section(parent,'Ask Office');manager.classList.add('watch-ask');
+  manager.append(el('p','','Status, blockers, instructions, and follow-through in one conversation.'),
+                 button('What are they doing? →',()=>{location.hash='ask';},'primary'));
+ const questions=attention.items.filter(entry=>entry.kind==='issue');
+ if(questions.length){const waiting=section(parent,'Issues with a recent agent reply');
+  for(const entry of questions.slice(0,3))waiting.append(attentionCard(entry));
+  if(questions.length>3)waiting.append(button(`View all ${questions.length} issues`,()=>{
+   const body=sheet('Issues with agent replies');for(const entry of questions)body.append(attentionCard(entry));
+  }));
+ }
+ const shipped=section(parent,'Since you were here');
+ await guarded(shipped,()=>activitySinceVisit(shipped));
+}
+function feedAction(label,active,fn,glyph){const control=button(glyph,fn,'feed-icon'+(active?' active':''));control.title=label;control.setAttribute('aria-label',label);control.setAttribute('aria-pressed',String(active));return control;}
+async function feedDetail(post){
+ const data=await api('/api/feed/detail?id='+encodeURIComponent(post.id));const body=sheet(data.title);
+ body.append(el('p','muted',`${data.category} · ${new Date(data.published_at*1000).toLocaleString()} · ${data.model}`),el('p','',data.body));
+  const sources=section(body,'Sources');for(const source of data.sources){
+   const issue=source.url.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
+   if(source.url==='/#watch')sources.append(button(source.title,()=>{document.querySelector('#detail').close();location.hash='watch';}));
+   else if(source.url.startsWith('/api/media/detail?id=')){const id=decodeURIComponent(source.url.split('id=')[1]);sources.append(button(source.title,()=>mediaDetail(id)));}
+   else if(issue)sources.append(button(source.title,()=>githubDetail(issue[1],{number:Number(issue[3])},issue[2]==='pull'?'prs':'issues')));
+   else sources.append(link(source.title,source.url));
+  }
+  if(data.media?.length){const media=section(body,'Media');for(const asset of data.media){
+   if(asset.kind==='audio'){const player=el('audio');player.controls=true;player.src=asset.url;media.append(player,button('Episode details',()=>mediaDetail(decodeURIComponent(asset.source_url.split('id=')[1]))));continue;}
+   const image=el('img');image.src=asset.url||asset.source_url;image.alt=asset.alt;media.append(image,link('Original media',asset.source_url));
+  }}
+  const followBox=el('details','find-group');followBox.append(el('summary','','Follow an evolving topic'));
+  const followInput=el('input');followInput.placeholder='e.g. Mercury, local models';followInput.setAttribute('aria-label','Topic to follow');
+  followBox.append(followInput,button('Follow',async()=>{await api('/api/feed/follow',{label:followInput.value,active:true});notice('Following '+followInput.value);feedDetail(post);}));
+  const followed=await api('/api/feed/threads');for(const item of followed.items)followBox.append(button('Following '+item.label+' · remove',async()=>{
+   await api('/api/feed/follow',{label:item.label,active:false});feedDetail(post);
+  }));body.append(followBox);
+ const replies=section(body,'Your replies');for(const reply of data.replies)replies.append(el('p','',reply.body));
+ const fieldNode=field(body,'Reply',el('textarea'));fieldNode.placeholder='What did this miss or make you curious about?';
+ body.append(button('Send reply',async()=>{await api('/api/feed/reply',{id:post.id,body:fieldNode.value});notice('Reply saved');feedDetail(post);},'primary'));
+}
+async function digestDetail(id){
+  const data=await api('/api/digests/detail?id='+encodeURIComponent(id));
+  const body=sheet(data.title+' · '+data.date);
+  body.append(el('p','muted','Your original daily email · saved in Office'),el('div','digest-copy',data.text));
+  if(data.links.length){const sources=el('details','find-group');sources.append(el('summary','',`${data.links.length} links in this email`));
+   for(const item of data.links)sources.append(link(item.title,item.url));body.append(sources);}
+}
+async function dailyDigests(parent){
+  const data=await api('/api/digests');
+  if(!data.items.length)return;
+  const latest=data.items[0].date;
+  const current=data.items.filter(item=>item.date===latest);
+  const box=el('details','digest-strip');box.append(el('summary','',`Daily dispatches · ${latest} · ${current.length} emails`));
+  const list=el('div','digest-list');for(const item of current)list.append(button(item.title,()=>digestDetail(item.id)));
+  box.append(list);parent.append(box);
+}
+function renderFeedPost(parent,post){
+  const article=el('article','feed-post');
+  const kind=post.format==='paper'?' · paper':'';
+  article.append(el('p','feed-eyebrow',`${post.category}${kind} · ${new Date(post.published_at*1000).toLocaleString()}`),
+                 el('h2','',post.title));
+  if(post.media?.length){for(const asset of post.media){
+   if(asset.kind==='audio'){const player=el('audio','feed-audio');player.controls=true;player.src=asset.url;article.append(player);}
+   else if(asset.kind==='image'){const image=el('img','feed-media');image.src=asset.url||asset.source_url;image.alt=asset.alt;article.append(image);}
+  }}
+  article.append(el('p','',post.body));
+  const actions=el('div','feed-actions');article.append(actions);
+  const drawActions=()=>{
+   actions.replaceChildren(button(`${post.sources.length} source${post.sources.length===1?'':'s'} · context →`,()=>feedDetail(post),'feed-source'));
+   for(const [kind,label,glyph] of [['save','Save','♧'],['love','Love','♡'],['dislike','Dislike','↓']]){
+    actions.append(feedAction(label,!!post.feedback?.reactions?.[kind],async()=>{
+     try{const active=!post.feedback?.reactions?.[kind];const result=await api('/api/feed/react',{id:post.id,kind,active});post.feedback=result.feedback;drawActions();}
+     catch(error){notice(error.message);}
+    },glyph));
+   }
+   actions.append(feedAction('Reply',false,()=>feedDetail(post),'↩'));
+  };drawActions();parent.append(article);
+}
+async function feed(parent){
+ intro(parent,'Feed','The world and your work','Small stories worth knowing, seeing, or hearing.');
+ const choices=el('div','feed-filters');parent.append(choices);
+   for(const [key,name] of [['all','For you'],['latest','Latest'],['following','Following'],['world','World'],['politics','Politics'],['ai','AI'],['science','Science'],['culture','Culture'],['history','History'],['business','Business'],['technology','Tech'],['work','Work'],['listen','Listen'],['saved','Saved']]){
+   choices.append(button(name,()=>{feedCategory=key;route();},'feed-filter'+(feedCategory===key?' active':'')));
+  }
+  await guarded(parent,()=>dailyDigests(parent));
+  const stream=el('div','feed-stream');parent.append(stream);
+ await guarded(stream,async()=>{
+  const data=await api('/api/feed?category='+encodeURIComponent(feedCategory));
+  if(!data.items.length)empty(stream,'No published posts in this category yet.');
+   for(const post of data.items)renderFeedPost(stream,post);
+   if(data.next_cursor!==null){const more=button('More posts',async()=>{more.disabled=true;try{await feedMore(stream,data.next_cursor);more.remove();}catch(error){more.disabled=false;notice(error.message);}});stream.append(more);}
+ });
+ const podcasts=section(parent,'Listen');await guarded(podcasts,async()=>{const data=await api('/api/media?kind=podcast');for(const item of data.items.slice(0,2))podcasts.append(card(item.title,`${Math.round(item.duration_s/60)} minutes · ${item.date}`,()=>mediaDetail(item.id)));});
+}
+async function feedMore(parent,cursor){const data=await api(`/api/feed?category=${encodeURIComponent(feedCategory)}&cursor=${cursor}`);for(const post of data.items)renderFeedPost(parent,post);if(data.next_cursor!==null){const more=button('More posts',async()=>{more.disabled=true;try{await feedMore(parent,data.next_cursor);more.remove();}catch(error){more.disabled=false;notice(error.message);}});parent.append(more);}}
+async function ask(parent){
+ intro(parent,'Ask Office','One conversation','Ask what is happening, check the evidence, or give an instruction.');
+ const chat=el('section','ask-page');parent.append(chat);
+ const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');chat.append(picker);
+ const thread=el('div','ask-thread');chat.append(thread);
+ const form=el('form','ask-compose');const input=el('textarea');input.placeholder='Ask a question or give an instruction…';input.setAttribute('aria-label','Ask Office');input.rows=2;
+ const submit=el('button','primary','Send');submit.type='submit';form.append(input,submit);chat.append(form);
+ let current=null;
+ await guarded(chat,async()=>{
+   const data=await api('/api/ask');
+   const initial=el('option','',data.selection||data.model);initial.value=data.selection||data.model;picker.append(initial);
+  const draw=state=>{
+   current=state;thread.replaceChildren();
+   if(!state.messages.length){thread.append(el('p','ask-intro','One chat for status, steering, and follow-through.'));
+    for(const prompt of ['What are the coordinators doing?','What needs me?','Did the last instruction get read?'])
+     thread.append(button(prompt,()=>{input.value=prompt;input.focus();},'ask-prompt'));
+   }
+    const lastAnswer=[...state.messages].reverse().find(row=>row.role==='office'&&row.status==='complete');
+    for(const row of state.messages){const bubble=el('article','ask-bubble '+row.role);
+    bubble.append(el('small','',row.role==='user'?'You':row.role==='office'?'Office · '+(row.model||''):row.text));
+    if(row.role!=='system'){
+     const copy=markdownView(row.text||'Thinking…',{text:officeLinkText});copy.classList.add('ask-copy');
+     copy.addEventListener('click',event=>{const anchor=event.target.closest('a');if(!anchor)return;
+      const match=anchor.href.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
+      if(match){event.preventDefault();githubDetail(match[1],{number:Number(match[3])},match[2]==='pull'?'prs':'issues').catch(error=>notice(error.message));}
+      });bubble.append(copy);
+      if(row.id===lastAnswer?.id){const rating=el('div','ask-rating');rating.append(el('span','muted','Useful?'));
+       for(const [kind,label] of [['helpful','Yes'],['missed','Missed it']])rating.append(button(label,async()=>{
+        await api('/api/ask/rate',{reply_id:row.id,kind});draw(await api('/api/ask'));
+       },'ask-rate'+(row.rating===kind?' active':'')));
+       bubble.append(rating);}
+    }
+    thread.append(bubble);
+   }
+   submit.disabled=state.busy;submit.textContent=state.busy?'Working…':'Send';
+   if(state.busy)thread.scrollTop=thread.scrollHeight;
+   };draw(data);
+   api('/api/ask/models').then(models=>{const chosen=picker.value;picker.replaceChildren();
+    for(const row of models.items){const option=el('option','',row.name);option.value=row.id;picker.append(option);}
+    picker.value=chosen;}).catch(error=>notice('Model list: '+error.message));
+  const timer=setInterval(async()=>{if(!chat.isConnected){clearInterval(timer);return;}if(!current?.busy)return;
+   try{draw(await api('/api/ask'));}catch(error){notice(error.message);}},2500);
+  form.addEventListener('submit',async event=>{event.preventDefault();const text=input.value.trim();if(!text||current?.busy)return;
+   submit.disabled=true;try{await api('/api/ask/send',{text,model:picker.value});input.value='';draw(await api('/api/ask'));}catch(error){notice(error.message);submit.disabled=false;}});
+ });
+}
+function officeLinkText(node,value){
+ const expression=/https:\/\/[^\s<>]+/g;let at=0;
+ for(const match of value.matchAll(expression)){
+  if(match.index>at)node.append(document.createTextNode(value.slice(at,match.index)));
+  const url=match[0].replace(/[.,;!?]+$/,'');node.append(link(url,url));at=match.index+url.length;
+ }
+ if(at<value.length)node.append(document.createTextNode(value.slice(at)));
+}
+async function find(parent){
+ intro(parent,'Find','Everything has a place','Search, read, and follow an object back to the work that made it.');
+ const projects=section(parent,'Projects');await guarded(projects,()=>projectRoster(projects));
+ const libraryBox=el('details','find-group');libraryBox.append(el('summary','','Files, podcasts, and saved items'));parent.append(libraryBox);
+ libraryBox.addEventListener('toggle',()=>{if(libraryBox.open&&libraryBox.childElementCount===1)library(libraryBox).catch(error=>failure(libraryBox,error));});
+ const workBox=el('details','find-group');workBox.append(el('summary','','Tasks and conversations'));parent.append(workBox);
+ workBox.addEventListener('toggle',()=>{if(workBox.open&&workBox.childElementCount===1)work(workBox).catch(error=>failure(workBox,error));});
+ const systemBox=el('details','find-group');systemBox.append(el('summary','','Schedules, runs, and settings'));parent.append(systemBox);
+ systemBox.addEventListener('toggle',()=>{if(systemBox.open&&systemBox.childElementCount===1)system(systemBox).catch(error=>failure(systemBox,error));});
+}
 async function route(){
- const page=location.hash.slice(1)||'today';const views={today,work,coordinator,library,system};const parent=$('#content');parent.replaceChildren();
+  const [pageRaw,parameters]=location.hash.slice(1).split('?');const page=pageRaw||'watch';const params=new URLSearchParams(parameters||'');
+  if(page==='coordinator'&&['tbs','matra'].includes(params.get('id')))localStorage.setItem('office-coordinator-pick',params.get('id'));
+  const views={watch,feed,ask,find,today,work,coordinator,library,system};const parent=$('#content');parent.replaceChildren();
+  document.body.dataset.page=page;
  for(const item of document.querySelectorAll('.tabs a'))item.setAttribute('aria-current',item.hash===`#${page}`?'page':'false');
- const view=el('div');parent.append(view);await guarded(view,()=> (views[page]||today)(view));
+  const view=el('div');parent.append(view);await guarded(view,()=> (views[page]||watch)(view));
+  if(page==='find'&&params.get('q')){$('#global-search').value=params.get('q');await search();}
 }
 $('#settings').addEventListener('click',settings);$('#new-task').addEventListener('click',()=>newTask().catch(error=>notice(error.message)));$('#close-detail').addEventListener('click',backDetail);
 $('#search-go').addEventListener('click',()=>search());$('#global-search').addEventListener('keydown',event=>{if(event.key==='Enter')search();});window.addEventListener('hashchange',route);
@@ -380,8 +568,7 @@ async function refreshAttention(){
  }
  attention={items,errors};
  const badge=$('#detail-attention');badge.title=`${items.length} items need you`;badge.setAttribute('aria-label',`${items.length} items need you${errors.length?'; some sources unavailable':''}`);
- const label=$('.tabs a[href="#today"] span');label.textContent='Today';
- label.parentElement.setAttribute('aria-label','Today');label.parentElement.setAttribute('aria-description',`${items.length} items need you`);
+  const label=$('.tabs a[href="#watch"]');label.setAttribute('aria-label',`Watch, ${items.length} items need you`);
  const node=$('#needs-list');if(node)drawAttention(node);
 }
 function drawAttention(parent){
