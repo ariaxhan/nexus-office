@@ -23,12 +23,14 @@ async function today(parent){
  const poem=section(parent,'A small interruption');await guarded(poem,async()=>{const data=await api('/api/media?kind=substrate');const item=data.items[0];if(item)poem.append(card(item.title,item.excerpt,()=>mediaDetail(item.id)));else empty(poem,'No Substrate pieces published yet.');});
 }
 // The five daily reports, newest reply each, readable without opening a chat.
+// The first real sentence, past the bot's own title line and markdown marks.
+function reportLead(text){const lines=text.split('\n').map(line=>line.replace(/[*_#>|`]/g,'').trim()).filter(Boolean);return lines.find(line=>line.length>40&&line!==line.toUpperCase())||lines[0]||'';}
 async function dailyReports(parent){
  const data=await api('/api/reports');
  for(const row of data.reports){
   const node=el('details','card report');const summary=el('summary');
   const when=row.at?new Date(row.at).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'no report yet';
-  summary.append(el('strong','',row.name),el('span','muted',` · ${when}${row.stale?' · showing the last one that loaded':''}${row.ok===false?' · failed':''}`),el('p','report-lead',(row.text||row.error||'').split('\n').find(line=>line.trim())||''));
+  summary.append(el('strong','',row.name),el('span','muted',` · ${when}${row.stale?' · showing the last one that loaded':''}${row.ok===false?' · failed':''}`),el('p','report-lead',reportLead(row.text||row.error||'')));
   node.append(summary);if(row.text)node.append(markdownView(row.text));
   parent.append(node);
  }
