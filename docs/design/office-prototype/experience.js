@@ -107,8 +107,6 @@ let officeHistory=[];
 try{officeHistory=JSON.parse(localStorage.getItem('officePrototypeChat')||'[]');if(!Array.isArray(officeHistory))officeHistory=[]}catch{officeHistory=[]}
 function saveOfficeHistory(){localStorage.setItem('officePrototypeChat',JSON.stringify(officeHistory.slice(-30)))}
 function askPage(parent){
-  heading(parent,'Ask Office','One conversation to direct work and get an answer.');
-  const note=node('p','watch-note','Prototype conversation · sampled answers only · no messages are sent');parent.append(note);
   const shell=node('section','ask-page');
   const thread=node('div','ask-thread');thread.id='ask-thread';shell.append(thread);
   const form=node('form','ask-compose');form.id='ask-form';
@@ -128,7 +126,7 @@ function officeAnswer(q){
 }
 function drawOfficeThread(){
   const thread=$('#ask-thread');thread.replaceChildren();
-  if(!officeHistory.length){thread.append(node('p','ask-intro','One conversation for status, steering, and follow-through. Ask a question; Office answers from the work record.'));
+  if(!officeHistory.length){thread.append(node('p','ask-intro','Ask Office a question or give an instruction.'));
     const prompts=node('div','ask-prompts');officePrompts.forEach(q=>prompts.append(button(q,()=>{officeHistory.push({role:'you',text:q},{role:'office',...officeAnswer(q)});saveOfficeHistory();drawOfficeThread()},'ask-prompt')));thread.append(prompts)}
   officeHistory.forEach(entry=>{const bubble=node('article','ask-bubble '+entry.role);bubble.append(node('span','ask-role',entry.role==='you'?'You':'Office'),node('p','',entry.text));
     if(entry.source)bubble.append(node('small','ask-source','Source: '+entry.source));

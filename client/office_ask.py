@@ -83,7 +83,8 @@ def connect():
     ''')
     columns = {row['name'] for row in db.execute('PRAGMA table_info(messages)')}
     for name, definition in (('request_id', 'TEXT'), ('parent_id', 'INTEGER'),
-                             ('requested_model', 'TEXT')):
+                             ('requested_model', 'TEXT'), ('provider_turn_id', 'TEXT'),
+                             ('recovering', 'INTEGER NOT NULL DEFAULT 0')):
         if name not in columns:
             db.execute(f'ALTER TABLE messages ADD COLUMN {name} {definition}')
     db.execute("UPDATE messages SET status='completed' WHERE status='complete'")
@@ -367,7 +368,7 @@ def _claim():
 def _finish(turn, answer, status):
     with LOCK, connect() as db:
         now = time.time()
-        db.execute("UPDATE messages SET status=?,completed_at=? WHERE id=? AND status='working'",
+        db.execute("UPDATE messages SET status=?,completed_at=?,recovering=0 WHERE id=? AND status='working'",
                    (status, now, turn['user_id']))
         db.execute("UPDATE messages SET text=?,status=?,completed_at=? WHERE id=? AND status='working'",
                    (answer, status, now, turn['reply_id']))
@@ -399,23 +400,23 @@ def _drain():
 def recover():
     with LOCK, connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        rows = db.execute('''SELECT DISTINCT u.id user_id,o.id reply_id
-                             FROM messages o LEFT JOIN messages u ON u.id=o.parent_id
-                             WHERE o.role='office' AND o.status='working'
-                             UNION
-                             SELECT u.id,NULL FROM messages u
-                             WHERE u.role='user' AND u.status='working'
-                               AND NOT EXISTS (SELECT 1 FROM messages o WHERE o.parent_id=u.id)''').fetchall()
-        now = time.time()
+        rows = db.execute('''SELECT u.id user_id,o.id reply_id
+                             FROM messages u JOIN messages o ON o.parent_id=u.id
+                             WHERE u.role='user' AND o.role='office' AND
+                                   (u.status='working' OR o.status='working' OR
+                                    (o.status='failed' AND o.text=?))
+                             ORDER BY u.id''', (INTERRUPTED,)).fetchall()
         for row in rows:
-            if row['user_id'] is not None:
-                db.execute("UPDATE messages SET status='failed',completed_at=? WHERE id=?", (now, row['user_id']))
-            if row['reply_id'] is not None:
-                db.execute("UPDATE messages SET text=?,status='failed',completed_at=? WHERE id=?",
-                           (INTERRUPTED, now, row['reply_id']))
+            db.execute("UPDATE messages SET status='queued',completed_at=NULL,recovering=1 WHERE id=?",
+                       (row['user_id'],))
+            db.execute("UPDATE messages SET text='',status='queued',completed_at=NULL WHERE id=?",
+                       (row['reply_id'],))
+        db.execute('''UPDATE messages SET status='failed',completed_at=?
+                      WHERE role='user' AND status='working' AND NOT EXISTS
+                      (SELECT 1 FROM messages o WHERE o.parent_id=messages.id)''', (time.time(),))
         db.commit()
     _ensure_worker()
-    return {'interrupted': len(rows)}
+    return {'resuming': len(rows)}
 
 
 def _bridge(db, model, before_id):
@@ -445,6 +446,8 @@ def _claude_answer(message, model, bridge):
     else:
         session_id = str(uuid.uuid4())
         args.extend(['--session-id', session_id])
+        with connect() as db:
+            _set(db, 'claude_session_id', session_id)
     args.append((bridge or '') + message)
     proc = subprocess.run(args, cwd=OFFICE_DIR, env=claude_environment(),
                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1800)
@@ -458,6 +461,40 @@ def _claude_answer(message, model, bridge):
     return result.get('result', '')
 
 
+def _turn_input(turn):
+    return '\n'.join(part.get('text', '') for item in turn.get('items', [])
+                     if item.get('type') == 'userMessage'
+                     for part in item.get('content', []) if part.get('type') == 'text')
+
+
+def _turn_answer(turn):
+    answers = [item.get('text', '') for item in turn.get('items', [])
+               if item.get('type') == 'agentMessage' and item.get('text')]
+    return answers[-1] if answers else ''
+
+
+def _saved_turn(client, thread_id, user_id, message, request_id, provider_turn_id):
+    turns = client.request('thread/read', {'threadId': thread_id, 'includeTurns': True}, 30)['thread'].get('turns', [])
+    if provider_turn_id:
+        exact = next((turn for turn in turns if turn.get('id') == provider_turn_id), None)
+        if exact:
+            return exact
+    marker = f'[Office request: {request_id}]' if request_id else None
+    for turn in reversed(turns):
+        value = _turn_input(turn)
+        if marker and marker in value:
+            return turn
+        if value == message or (not marker and value.endswith('\n' + message)):
+            return turn
+    return None
+
+
+def _record_turn(user_id, turn_id):
+    with connect() as db:
+        db.execute("UPDATE messages SET provider_turn_id=? WHERE id=? AND status='working'",
+                   (turn_id, user_id))
+
+
 def _answer_turn(message, model, reply_id):
     client = None
     answer = ''
@@ -465,8 +502,11 @@ def _answer_turn(message, model, reply_id):
         with connect() as db:
             user_id = db.execute("SELECT parent_id FROM messages WHERE id=?", (reply_id,)).fetchone()['parent_id']
             bridge = _bridge(db, model, user_id)
+            user = db.execute("SELECT request_id,provider_turn_id,recovering FROM messages WHERE id=?", (user_id,)).fetchone()
         if model.startswith('claude:'):
-            answer = _claude_answer(message, model, bridge)
+            resume_note = ('Office restarted while this request was in progress. Inspect the existing session '
+                           'and current external state, continue the unfinished work, and do not repeat completed actions.\n\n') if user['recovering'] else ''
+            answer = _claude_answer(resume_note + message, model, bridge)
             if not answer:
                 raise RuntimeError('Claude Code returned an empty answer')
             return answer
@@ -486,8 +526,34 @@ def _answer_turn(message, model, reply_id):
             thread_id = result['thread']['id']
             with connect() as db:
                 _set(db, 'thread_id', thread_id)
-        client.request('turn/start', {'threadId': thread_id,
-                                      'input': [{'type': 'text', 'text': (bridge or '') + message}], 'model': model}, 30)
+        previous = (_saved_turn(client, thread_id, user_id, message, user['request_id'],
+                                user['provider_turn_id']) if user['recovering'] else None)
+        if previous and previous.get('status') == 'completed':
+            answer = _turn_answer(previous)
+            if answer:
+                return answer
+        if previous and previous.get('status') == 'inProgress':
+            deadline = time.monotonic() + 1800
+            while time.monotonic() < deadline:
+                time.sleep(2)
+                previous = _saved_turn(client, thread_id, user_id, message, user['request_id'],
+                                       previous['id'])
+                if previous and previous.get('status') != 'inProgress':
+                    break
+            if previous and previous.get('status') == 'completed':
+                answer = _turn_answer(previous)
+                if answer:
+                    return answer
+        marker = f'[Office request: {user["request_id"]}]\n' if user['request_id'] else ''
+        if previous:
+            prompt = (marker + 'Office restarted during the preceding turn. Reconcile its recorded work and '
+                      'the current external state before continuing. Do not repeat completed actions. '
+                      'Answer the original request once the outcome is verified.\n\nOriginal request:\n' + message)
+        else:
+            prompt = marker + (bridge or '') + message
+        started = client.request('turn/start', {'threadId': thread_id,
+                                                'input': [{'type': 'text', 'text': prompt}], 'model': model}, 30)
+        _record_turn(user_id, started['turn']['id'])
         deadline = time.monotonic() + 1800
         while time.monotonic() < deadline:
             try:

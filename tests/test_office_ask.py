@@ -79,7 +79,7 @@ class AskQueueTest(unittest.TestCase):
         self.assertEqual([row["model"] for row in users], ["model-a", "model-b", "model-c"])
         self.assertTrue(all(row["status"] == "completed" for row in users + answers))
 
-    def test_restart_and_provider_failure_finalize_then_continue(self):
+    def test_restart_requeues_turn_then_continues_fifo_after_provider_failure(self):
         with patch.object(ask, "_ensure_worker"):
             receipts = [ask.send({"request_id": f"restart-request-{n:02d}", "text": text,
                                   "model": "model-a"})
@@ -95,18 +95,88 @@ class AskQueueTest(unittest.TestCase):
 
         with patch.object(ask, "_answer_turn", side_effect=provider):
             recovered = ask.recover()
-            self.assertEqual(recovered["interrupted"], 1)
+            self.assertEqual(recovered["resuming"], 1)
             self._wait_for(lambda: not ask.read()["busy"])
 
         state = ask.read()
         users = {row["text"]: row for row in state["messages"] if row["role"] == "user"}
         answers = {row["parent_id"]: row for row in state["messages"] if row["role"] == "office"}
         self.assertEqual([users[text]["status"] for text in ("A", "B", "C")],
-                         ["failed", "failed", "completed"])
-        self.assertIn("restarted", answers[users["A"]["id"]]["text"].lower())
+                         ["completed", "failed", "completed"])
+        self.assertEqual(answers[users["A"]["id"]]["text"], "answer A")
         self.assertIn("provider broke", answers[users["B"]["id"]]["text"])
         self.assertEqual(answers[users["C"]["id"]]["text"], "answer C")
         self.assertEqual(state["queue"], {"queued": 0, "working": 0})
+
+    def test_restart_restores_completed_codex_turn_without_starting_it_again(self):
+        body = {"request_id": "recover-request-0001", "text": "Inspect the work", "model": "model-a"}
+        with patch.object(ask, "_ensure_worker"):
+            receipt = ask.send(body)
+        with ask.connect() as db:
+            ask._set(db, "thread_id", "thread-1")
+            db.execute("UPDATE messages SET status='working' WHERE id IN (?,?)",
+                       (receipt["user_id"], receipt["reply_id"]))
+
+        turn = {"id": "turn-1", "status": "completed", "items": [
+            {"type": "userMessage", "content": [{"type": "text", "text": "[Office request: recover-request-0001]\nInspect the work"}]},
+            {"type": "agentMessage", "text": "The verified answer"}]}
+
+        class SavedServer:
+            calls = []
+            def request(self, method, params, timeout=20):
+                self.calls.append(method)
+                if method == "thread/read":
+                    return {"thread": {"turns": [turn]}}
+                return {"thread": {"id": "thread-1"}}
+            def close(self):
+                pass
+
+        fake = SavedServer()
+        with patch.object(ask, "AppServer", return_value=fake):
+            self.assertEqual(ask.recover(), {"resuming": 1})
+            self._wait_for(lambda: not ask.read()["busy"])
+        answer = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(answer["text"], "The verified answer")
+        self.assertEqual(answer["status"], "completed")
+        self.assertNotIn("turn/start", fake.calls)
+
+    def test_restart_continues_interrupted_codex_turn_without_resending_instruction(self):
+        body = {"request_id": "recover-request-0002", "text": "Do the work", "model": "model-a"}
+        with patch.object(ask, "_ensure_worker"):
+            receipt = ask.send(body)
+        with ask.connect() as db:
+            ask._set(db, "thread_id", "thread-1")
+            db.execute("UPDATE messages SET status='working' WHERE id IN (?,?)",
+                       (receipt["user_id"], receipt["reply_id"]))
+
+        turn = {"id": "turn-old", "status": "interrupted", "items": [
+            {"type": "userMessage", "content": [{"type": "text", "text": "[Office request: recover-request-0002]\nDo the work"}]}]}
+
+        class InterruptedServer:
+            prompts = []
+            def request(self, method, params, timeout=20):
+                if method == "thread/read":
+                    return {"thread": {"turns": [turn]}}
+                if method == "turn/start":
+                    self.prompts.append(params["input"][0]["text"])
+                    return {"turn": {"id": "turn-next"}}
+                return {"thread": {"id": "thread-1"}}
+            def receive(self, timeout):
+                if not hasattr(self, "answered"):
+                    self.answered = True
+                    return {"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "Recovered answer"}}}
+                return {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
+            def close(self):
+                pass
+
+        fake = InterruptedServer()
+        with patch.object(ask, "AppServer", return_value=fake):
+            self.assertEqual(ask.recover(), {"resuming": 1})
+            self._wait_for(lambda: not ask.read()["busy"])
+        answer = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(answer["text"], "Recovered answer")
+        self.assertEqual(len(fake.prompts), 1)
+        self.assertIn("Do not repeat completed actions", fake.prompts[0])
 
     def test_request_retry_is_idempotent_and_conflicts_are_rejected(self):
         body = {"request_id": "retry-request-0001", "text": "Keep this", "model": "model-a"}

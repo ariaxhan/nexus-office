@@ -1,7 +1,7 @@
 .bottom-nav{grid-template-columns:repeat(4,1fr)}
-.ask-page{height:min(66dvh,650px);min-height:430px;background:var(--paper);border:1px solid var(--line);border-radius:17px;display:flex;flex-direction:column;max-width:790px;overflow:hidden}
-.ask-page .ask-thread{padding:24px}
-.ask-page .ask-compose{border-top:1px solid var(--line);padding:15px;display:flex;gap:9px}
+.ask-page{height:calc(100dvh - 150px);min-height:430px;display:flex;flex-direction:column;overflow:hidden}
+.ask-page .ask-thread{padding:20px 0}
+.ask-page .ask-compose{border-top:1px solid var(--line);padding:15px 0;display:flex;gap:9px}
 .ask-page .ask-compose input{min-width:0;flex:1;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:13px system-ui}
 .post-actions .post-icon{width:32px;height:32px;display:inline-grid;place-items:center;background:transparent;border:0;border-radius:50%;padding:6px;margin-left:-8px;color:var(--muted)}
 .post-actions .post-icon:hover{background:#efe4d9;color:var(--accent)}
