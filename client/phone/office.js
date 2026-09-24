@@ -325,7 +325,7 @@ function formatAge(milliseconds){
  const hours=Math.floor(minutes/60);if(hours<48)return `${hours}h ago`;
  return `${Math.floor(hours/24)}d ago`;
 }
-function feedAction(label,active,fn,glyph){const control=button(glyph,fn,'feed-icon'+(active?' active':''));control.title=label;control.setAttribute('aria-label',label);control.setAttribute('aria-pressed',String(active));return control;}
+function feedAction(label,active,fn){const control=button(label,fn,'feed-action'+(active?' active':''));control.title=label;control.setAttribute('aria-label',label);control.setAttribute('aria-pressed',String(active));return control;}
 async function feedDetail(post){
  const data=await api('/api/feed/detail?id='+encodeURIComponent(post.id));const body=sheet(data.title);
  body.append(el('p','muted',`${data.category} · ${new Date(data.published_at*1000).toLocaleString()} · ${data.model}`),el('p','',data.body));
@@ -379,13 +379,13 @@ function renderFeedPost(parent,post){
   const actions=el('div','feed-actions');article.append(actions);
   const drawActions=()=>{
    actions.replaceChildren(button(`${post.sources.length} source${post.sources.length===1?'':'s'} · context →`,()=>feedDetail(post),'feed-source'));
-   for(const [kind,label,glyph] of [['save','Save','♧'],['love','Love','♡'],['dislike','Dislike','↓']]){
+   for(const [kind,label] of [['save','Save'],['love','Love'],['dislike','Not for me']]){
     actions.append(feedAction(label,!!post.feedback?.reactions?.[kind],async()=>{
      try{const active=!post.feedback?.reactions?.[kind];const result=await api('/api/feed/react',{id:post.id,kind,active});post.feedback=result.feedback;drawActions();}
      catch(error){notice(error.message);}
-    },glyph));
+    }));
    }
-   actions.append(feedAction('Reply',false,()=>feedDetail(post),'↩'));
+   actions.append(feedAction('Reply',false,()=>feedDetail(post)));
   };drawActions();parent.append(article);
 }
 async function feed(parent){
@@ -406,7 +406,6 @@ async function feed(parent){
 }
 async function feedMore(parent,cursor){const data=await api(`/api/feed?category=${encodeURIComponent(feedCategory)}&cursor=${cursor}`);for(const post of data.items)renderFeedPost(parent,post);if(data.next_cursor!==null){const more=button('More posts',async()=>{more.disabled=true;try{await feedMore(parent,data.next_cursor);more.remove();}catch(error){more.disabled=false;notice(error.message);}});parent.append(more);}}
 async function ask(parent){
-  intro(parent,'Ask Office','Say what you need','Office will find the right system and evidence.');
   const chat=el('section','ask-page');parent.append(chat);
   const advanced=el('details','ask-advanced');advanced.append(el('summary','','Advanced · model choice'));
   const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);chat.append(advanced);

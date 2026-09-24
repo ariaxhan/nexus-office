@@ -12,6 +12,7 @@ struct OfficeMobileApp: App {
                     ConnectionView(connection: connection)
                 } else {
                     OfficeWebView(connection: connection, player: player)
+                        .ignoresSafeArea(.container, edges: .bottom)
                         .overlay(alignment: .top) {
                             if let error = connection.error {
                                 VStack {
