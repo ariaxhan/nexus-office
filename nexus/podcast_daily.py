@@ -68,6 +68,8 @@ def editorial_pass(directory,prompt,env,work):
             result=subprocess.run(['claude','-p',prompt,'--tools','WebSearch,WebFetch',
                                    '--permission-mode','dontAsk'],cwd=work,env=claude_env,
                                   capture_output=True,text=True,timeout=700,check=True)
+            if not result.stdout.strip():
+                raise ValueError('Claude returned an empty editorial pass')
             (directory/'raw.txt').write_text(result.stdout)
     return (directory/'raw.txt').read_text().strip().removeprefix('```json').removesuffix('```').strip()
 
