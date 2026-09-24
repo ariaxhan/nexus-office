@@ -1,4 +1,4 @@
-const CACHE='nexus-office-shell-v13';
+const CACHE='nexus-office-shell-v14';
 const ASSETS=['/','/office.css','/office-v2.css','/office-bundle.js','/office-register-sw.js','/manifest.webmanifest','/office-icon.svg','/office-icon-192.png','/office-icon-512.png'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(CACHE);

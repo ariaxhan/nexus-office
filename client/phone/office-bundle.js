@@ -186,7 +186,12 @@ function failure(parent, error) {
 }
 function link(label, url) {
   const node = el("a", "", label);
-  const parsed = new URL(url, location.origin);
+  let parsed;
+  try {
+    parsed = new URL(url, location.origin);
+  } catch {
+    return el("span", "muted", label);
+  }
   if (!["http:", "https:"].includes(parsed.protocol)) return el("span", "muted", "Unavailable link");
   node.href = parsed.href;
   node.target = "_blank";

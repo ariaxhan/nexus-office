@@ -123,6 +123,13 @@ class AskQueueTest(unittest.TestCase):
         self.assertEqual(len([row for row in state["messages"] if row["role"] == "user"]), 1)
         self.assertEqual(state["queue"], {"queued": 1, "working": 0})
 
+    def test_cached_client_without_request_id_can_send(self):
+        with patch.object(ask, "_ensure_worker"):
+            receipt = ask.send({"text": "From old client", "model": "model-a"})
+        self.assertRegex(receipt["request_id"], r"^[a-f0-9-]{36}$")
+        self.assertEqual([row["text"] for row in ask.read()["messages"] if row["role"] == "user"],
+                         ["From old client"])
+
     def test_read_keeps_newest_messages_and_auto_ignores_nonterminal_answers(self):
         with ask.connect() as db:
             db.executemany("INSERT INTO messages(role,text,status,created_at) VALUES('system',?,'completed',0)",

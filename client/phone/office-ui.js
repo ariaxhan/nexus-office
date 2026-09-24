@@ -24,7 +24,13 @@ export function card(title,detail,action){const node=action?button('',action,'ca
 export function intro(parent,eyebrow,title,description){const node=el('div','intro');node.append(el('div','eyebrow',eyebrow),el('h1','',title));if(description)node.append(el('p','',description));parent.append(node);}
 export function empty(parent,text){parent.append(el('p','empty',text));}
 export function failure(parent,error){parent.append(el('p','error',error.message||error));}
-export function link(label,url){const node=el('a','',label);const parsed=new URL(url,location.origin);if(!['http:','https:'].includes(parsed.protocol))return el('span','muted','Unavailable link');node.href=parsed.href;node.target='_blank';node.rel='noopener noreferrer';return node;}
+export function link(label,url){
+  const node=el('a','',label);
+  let parsed;
+  try{parsed=new URL(url,location.origin);}catch{return el('span','muted',label);}
+  if(!['http:','https:'].includes(parsed.protocol))return el('span','muted','Unavailable link');
+  node.href=parsed.href;node.target='_blank';node.rel='noopener noreferrer';return node;
+}
 export function field(parent,label,node){
  const wrap=el('label','field');node.setAttribute('aria-label',label);wrap.append(el('span','',label),node);
  if(node.tagName==='SELECT'){

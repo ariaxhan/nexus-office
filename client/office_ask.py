@@ -269,6 +269,10 @@ def send(body):
         raise ValueError('Ask needs a message of at most 8000 characters')
     if not isinstance(requested, str):
         raise ValueError('Ask needs a model')
+    # Older cached Office clients send no request ID. Keep those sends working
+    # while preserving strict validation and idempotency for current clients.
+    if request_id is None:
+        request_id = str(uuid.uuid4())
     if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
         raise ValueError('Ask request_id must be 16 to 80 letters, numbers, underscores, or hyphens')
     message = message.strip()
