@@ -248,10 +248,33 @@ async function search(cursor=0){
 }
 let decisionIndex=0,feedCategory='all';
 async function watch(parent){
-  intro(parent,'Watch','Does anything need you?','Work that can move on its own stays quiet until you want to look.');
-  const decisions=section(parent,'Needs you');
   await refreshAttention();
   const rows=attention.items.filter(requiresYou);
+  let coordinatorRows=[];
+  let coordinatorError='';
+  try{const data=await api('/api/coordinators');coordinatorRows=data.coordinators||[];}
+  catch(error){coordinatorError=error.message;}
+
+  const exceptions=coordinatorRows.filter(row=>row.thrashing||['failing','stalled','error'].includes(row.health));
+  const healthy=coordinatorRows.length-exceptions.length;
+  const overview=el('header','watch-overview');
+  overview.append(el('div','eyebrow','Watch'));
+  if(attention.errors.length)overview.append(el('h1','','Checking what needs you'));
+  else if(rows.length)overview.append(el('h1','',rows.length===1?'One thing needs you':`${rows.length} things need you`));
+  else overview.append(el('h1','','Nothing needs you'));
+  if(coordinatorError)overview.append(el('p','watch-summary-muted','I can’t confirm system status right now.'));
+  else{
+   const summary=[];
+   if(healthy)summary.push(`${healthy} ${healthy===1?'system is':'systems are'} working normally`);
+   if(exceptions.length)summary.push(`${exceptions.length} ${exceptions.length===1?'needs':'need'} attention`);
+   if(!summary.length)summary.push('No systems are reporting a problem');
+   overview.append(el('p',exceptions.length?'watch-summary-attention':'watch-summary-normal',summary.join(' · ')));
+  }
+  if(attention.errors.length)overview.append(el('p','watch-summary-muted','The decision checks are unavailable, so I can’t confirm yet.'));
+  parent.append(overview);
+
+  if(rows.length||attention.errors.length){
+  const decisions=section(parent,'Needs you');
   if(rows.length){
   decisionIndex=Math.max(0,Math.min(decisionIndex,rows.length-1));
   const stack=el('div','decision-stack');decisions.append(stack);
@@ -265,57 +288,48 @@ async function watch(parent){
   };draw();
   }else if(attention.errors.length){
    decisions.append(el('p','watch-unconfirmed',"I can't confirm yet. A source for decisions is unavailable."));
-  }else{
-   decisions.append(el('p','watch-clear','Nothing needs you right now.'));
   }
   if(attention.errors.length){
    const source=el('details','watch-source-note');source.append(el('summary','','Check details'));
    for(const problem of attention.errors)source.append(el('p','muted',problem));decisions.append(source);
   }
+  }
 
-  let coordinatorRows=[];
-  await guarded(parent,async()=>{
-   const data=await api('/api/coordinators');
-   coordinatorRows=data.coordinators||[];
-   const current=coordinatorRows.filter(row=>row.live||row.working_on);
-   const working=el('details','watch-state');
-   const summary=el('summary');
-   const updated=coordinatorRows.filter(row=>row.last_end?.at).map(row=>new Date(row.last_end.at).getTime()).filter(Number.isFinite);
-   const latest=updated.length?Math.max(...updated):0;
-   const age=latest?formatAge(Date.now()-latest):'not checked yet';
-   summary.append(el('strong','', 'Working'),el('span','muted',`Last meaningful update ${age}`));
-   working.append(summary);
-   const list=el('div','watch-work-list');
-   for(const row of current){
-    const item=button('',()=>{localStorage.setItem('office-coordinator-pick',row.id);location.hash='coordinator';},'watch-work-item');
-    const last=row.last_end?.at?formatAge(Date.now()-new Date(row.last_end.at).getTime()):'not checked yet';
-    const state=row.live?'Working now':row.health==='ok'?`Last checked ${last}`:`${row.health} · checked ${last}`;
-    item.append(el('strong','',row.name),el('span','muted',state));
-    if(row.working_on)item.append(el('span','watch-coord-doing',row.working_on.replace(/[*_`#]+/g,'').split(/(?<=[.!?])\s+/)[0].slice(0,160)));
-    list.append(item);
+  if(coordinatorRows.length){
+   const systems=el('section','watch-systems');
+   systems.append(el('h2','watch-section-title','Systems'));
+   for(const row of coordinatorRows){
+    const issue=exceptions.includes(row);
+    const names={tbs:'Thinking Brain School',matra:'Matra'};
+    const outcomes={tbs:'Keeping lessons healthy and ready for families.',matra:'Fixing app issues and delivering tested improvements.'};
+    const item=el('article','watch-system'+(issue?' is-attention':''));
+    const head=el('div','watch-system-head');
+    head.append(el('h3','',names[row.id]||row.name),el('span',issue?'watch-system-status is-attention':'watch-system-status',issue?'Needs attention':'Working normally'));
+    item.append(head,el('p','watch-system-outcome',outcomes[row.id]||'Moving its assigned work forward.'),el('p','watch-system-action',issue?'I’m looking into it.':'Nothing needed from you.'));
+    item.append(button('See activity',()=>{localStorage.setItem('office-coordinator-pick',row.id);location.hash='coordinator';},'watch-activity-link'));
+    systems.append(item);
    }
-   if(!current.length)list.append(el('p','muted','Nothing is in progress.'));
-   working.append(list);parent.append(working);
-  });
+   parent.append(systems);
+  }else if(coordinatorError){
+   const systems=section(parent,'Systems');systems.append(el('p','watch-summary-muted','System status is unavailable.'));
+  }
 
   await guarded(parent,async()=>{
    const done=coordinatorRows.flatMap(row=>(row.commits||[]).map(item=>({...item,checkout:item.checkout||row.id})))
     .filter(item=>item.sha&&item.checkout).sort((a,b)=>new Date(b.at||0)-new Date(a.at||0)).slice(0,3);
-   const recent=el('details','watch-state');
-   const summary=el('summary');summary.append(el('strong','', 'Done'),el('span','muted',done.length?'Recent commits':'No recent commit receipts'));
+   const recent=el('details','watch-state watch-recent');
+   const summary=el('summary');summary.append(el('strong','', 'Recent changes'));
    recent.append(summary);
    const list=el('div','watch-done-list');
    for(const item of done){
     const row=button('',()=>openCoordinatorCommit(item.sha,item.checkout),'watch-done-item');
-    row.append(el('strong','',item.subject||'Committed change'),el('span','muted',`${item.checkout} · ${item.sha.slice(0,8)} · ${item.at?formatAge(Date.now()-new Date(item.at).getTime()):'time unavailable'}`));list.append(row);
+    const names={tbs:'Thinking Brain School','thinking-brain-school':'Thinking Brain School',matra:'Matra'};
+    row.append(el('strong','',item.subject||'Committed change'),el('span','muted',`${names[item.checkout]||item.checkout} · ${item.at?formatAge(Date.now()-new Date(item.at).getTime()):'time unavailable'}`));list.append(row);
    }
    if(!done.length)list.append(el('p','muted',coordinatorRows.length?'No recent commit receipts.':'Commit evidence is unavailable right now.'));
    recent.append(list);parent.append(recent);
   });
 
-  const manager=section(parent,'Ask');manager.classList.add('watch-ask');
-  manager.append(el('p','','Ask what happened, why work is waiting, or tell Office what to fix.'),
-                 button('Ask Office',()=>{location.hash='ask';},'primary'));
 }
 function requiresYou(entry){return entry.kind==='permission'||entry.kind==='gate';}
 function formatAge(milliseconds){

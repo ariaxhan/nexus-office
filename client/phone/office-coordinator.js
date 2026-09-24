@@ -77,49 +77,50 @@ function changes(parent,data){
  }
  if(!any)parent.append(el('p','empty','No landed commits, publishes or issue changes in the recorded runs.'));
 }
-const age=s=>s==null?'never':s<90?'just now':s<5400?`${Math.round(s/60)} min ago`:s<172800?`${Math.round(s/3600)} h ago`:`${Math.round(s/86400)} d ago`;
-const HEALTH={running:'Running',ok:'Healthy',thrashing:'Thrashing',failing:'Last run failed',stalled:'Stalled',error:'Unreadable'};
-// One line per coordinator: is it alive, did the last run work, is it shipping anything.
+const SYSTEM_NAME={tbs:'Thinking Brain School',matra:'Matra'};
+const SYSTEM_OUTCOME={tbs:'Keeping lessons healthy and ready for families.',matra:'Fixing app issues and delivering tested improvements.'};
+const needsAttention=row=>row.thrashing||['failing','stalled','error'].includes(row.health);
+const systemName=row=>SYSTEM_NAME[row.id]||row.name;
+const systemOutcome=row=>SYSTEM_OUTCOME[row.id]||'Moving its assigned work forward.';
 export function healthLine(row){
- const end=row.last_end||{};const node=el('span','coord-health');node.dataset.health=row.health;
- const shipped=(row.shipped_recent||[]).join(' · ');
- node.textContent=[HEALTH[row.health]||row.health,row.live?'run live now':`last run ${age(row.age_s)}`,end.rc!=null?`exit ${end.rc}${end.timed_out?' (timed out)':''}`:'',shipped?`shipped per run: ${shipped}`:'',row.unread?`${row.unread} unread`:'',row.supervisor?`supervisor ${row.supervisor.action} ${clock(row.supervisor.at)}`:''].filter(Boolean).join(' · ');
+ const node=el('span','coord-health');node.dataset.health=needsAttention(row)?'error':'ok';
+ node.textContent=needsAttention(row)?'Needs attention':'Working normally';
  return node;
-}
-export async function overview(parent,onPick){
- const data=await api('/api/coordinators');
- for(const row of data.coordinators){
-  const node=button('',()=>onPick(row.id),'card coord-row');if(row.id===(pick||data.coordinators[0].id))node.setAttribute('aria-current','true');
-  node.append(el('h3','',row.name),healthLine(row));if(row.working_on)node.append(el('p','muted coord-doing',row.working_on.split('\n')[0].slice(0,220)));
-  parent.append(node);
- }
- return data;
 }
 function detail(parent,row){
  parent.replaceChildren();if(!row)return;
  if(row.error){parent.append(el('p','error',row.error));return;}
- const doing=section(parent,'Working on');doing.append(row.working_on?markdownView(row.working_on):el('p','empty','No output from the latest run yet.'));
- const lanes=section(parent,'Open lanes');for(const lane of row.lanes||[])lanes.append(el('p','coord-tool',lane));if(!(row.lanes||[]).length)lanes.append(el('p','empty','No lanes named in the latest run.'));
- const shipped=section(parent,'Last shipped');
+ const summary=el('div','coord-outcome');summary.append(el('h1','coord-system-name',systemName(row)),el('p','coord-outcome-title',systemOutcome(row)),healthLine(row),el('p','muted',needsAttention(row)?'I’m checking what needs attention.':'Nothing needed from you.'));parent.append(summary);
+ const evidence=el('details','coord-evidence');evidence.append(el('summary','','Coordinator notes and work'));parent.append(evidence);
+ const doing=section(evidence,'Latest coordinator notes');doing.append(row.working_on?markdownView(row.working_on):el('p','empty','No output from the latest run yet.'));
+ const lanes=section(evidence,'Open lanes');for(const lane of row.lanes||[])lanes.append(el('p','coord-tool',lane));if(!(row.lanes||[]).length)lanes.append(el('p','empty','No lanes named in the latest run.'));
+ const shipped=section(evidence,'Recent changes');
  for(const c of row.commits||[]){const node=el('p','coord-change');node.append(el('span','coord-tag',c.checkout));segments(node,[{kind:'sha',sha:c.sha,checkout:c.checkout,text:c.sha.slice(0,8)},{text:` ${c.subject} · ${clock(c.at)}`}]);shipped.append(node);}
- if(!(row.commits||[]).length)shipped.append(el('p','empty','Nothing shipped in the recent runs.'));
+ if(!(row.commits||[]).length)shipped.append(el('p','empty','No recent changes recorded.'));
 }
 export async function coordinator(parent){
  try{pick=localStorage.getItem(PICK)||pick;}catch{}
- const master=section(parent,'Coordinators');const facts=el('div','coord-facts');
- const head=el('div','coord-head');const status=el('p','muted','Reading the coordinator…');
+ const facts=el('div','coord-facts');
+ const activity=el('details','coord-activity');activity.append(el('summary','','See activity'));
+ const head=el('div','coord-head');const status=el('p','muted','Checking status…');
  const tabs=el('div','coord-switch');let view='chat';let rows=[];
- const name=el('div','eyebrow','Coordinator');
+ const name=el('div','eyebrow','System activity');
  async function drawMaster(){
-  const box=el('div','stack');const data=await overview(box,id=>{pick=id;try{localStorage.setItem(PICK,id);}catch{}parent.replaceChildren();coordinator(parent);});
-  rows=data.coordinators;master.replaceChildren(...box.children);const row=rows.find(r=>r.id===(pick||rows[0].id));
-  name.textContent=`Coordinator · ${row?.name||''}`;detail(facts,row);
+  const data=await api('/api/coordinators');
+  rows=data.coordinators||[];const row=rows.find(r=>r.id===(pick||rows[0]?.id))||rows[0];
+  if(row&&!pick){pick=row.id;try{localStorage.setItem(PICK,pick);}catch{}}
+  name.textContent=row?systemName(row):'System activity';status.textContent=row?(needsAttention(row)?'Needs attention':'Working normally'):'Status unavailable';
+  const evidenceOpen=!!facts.querySelector('.coord-evidence')?.open;detail(facts,row);
+  if(evidenceOpen){const evidence=facts.querySelector('.coord-evidence');if(evidence)evidence.open=true;}
  }
- await drawMaster().catch(error=>failure(master,error));
- head.append(name,status,tabs);parent.append(facts,head);
+ await drawMaster().catch(error=>failure(facts,error));
+ parent.append(facts);
+ head.append(name,status,tabs);activity.append(head);
  const stream=el('div','coord-stream');stream.setAttribute('aria-live','polite');parent.append(stream);
- const form=el('form','coord-compose');const input=el('textarea');input.rows=2;input.placeholder=`Steer ${rows.find(r=>r.id===(pick||rows[0]?.id))?.name||'the coordinator'}`;input.setAttribute('aria-label','Message the coordinator');
- const send=el('button','primary','Send');send.type='submit';form.append(input,send);parent.append(form);
+ activity.append(stream);parent.append(activity);
+ const message=el('details','coord-message');message.append(el('summary','','Message this system'));
+ const form=el('form','coord-compose');const input=el('textarea');input.rows=2;input.placeholder=`Message ${systemName(rows.find(r=>r.id===(pick||rows[0]?.id))||{id:pick,name:'the system'})}`;input.setAttribute('aria-label','Message the coordinator');
+ const send=el('button','primary','Send');send.type='submit';form.append(input,send);message.append(form);parent.insertBefore(message,activity);
  const clearDraft=restoreDraft(input,pick&&pick!=='tbs'?['coordinator',pick]:['coordinator']);
  let signature='',data=null;
  for(const [key,label] of [['chat','Conversation'],['changes','Changes']]){const b=button(label,()=>{view=key;signature='';stream.dataset.drawn=key==='chat'?'':'1';draw();if(key!=='chat')scrollTo(0,0);});b.dataset.view=key;tabs.append(b);}
@@ -135,8 +136,7 @@ export async function coordinator(parent){
   if(busy)return;busy=true;
   try{
    data=await api('/api/coordinator?'+q());idle=!data.items.some(item=>item.live);const shown=JSON.stringify({...data,as_of:''});const live=data.items.some(item=>item.live);
-   const skip=data.last_skip?` · last check ${clock(data.last_skip.at)}: ${data.last_skip.reason}`:'';
-   status.textContent=`${live?'Running now':'Idle'}${data.unread?` · ${data.unread} message${data.unread>1?'s':''} waiting`:''}${live?'':skip}`;if(shown!==seen){seen=shown;draw();}  // an unchanged poll keeps selection and open panels
+   if(shown!==seen){seen=shown;draw();}  // an unchanged poll keeps selection and open panels
   }catch(error){status.textContent='Mac unreachable; showing the last view. '+error.message;}
   finally{busy=false;}
  }
