@@ -67,6 +67,10 @@ public final class Store {
 
     public let api: Api
 
+    /// The latest external file request for the web Office.
+    public var webOpenRequest: OfficeURL?
+    public var webOpenRevision = 0
+
     /// The choices that outlive the launch. In memory unless somebody hands
     /// this store the persisting one, so a test and a shoot cannot write to
     /// the machine they run on.

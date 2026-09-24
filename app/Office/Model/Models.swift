@@ -1121,6 +1121,15 @@ public struct OfficeURL: Equatable {
     public let repo: String
     public let path: String
 
+    public func webDestination(from base: URL) -> URL {
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
+        var query = URLComponents()
+        query.queryItems = [URLQueryItem(name: "repo", value: repo),
+                            URLQueryItem(name: "path", value: path)]
+        components.percentEncodedFragment = "document?" + (query.percentEncodedQuery ?? "")
+        return components.url ?? base
+    }
+
     public static func parse(_ url: URL) -> OfficeURL? {
         guard url.scheme?.lowercased() == "nexus-office",
               url.host?.lowercased() == "open",

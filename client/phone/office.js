@@ -7,7 +7,7 @@ import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
 import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
 import {newTask,taskList,permissions,taskDetail,permissionCard} from './office-tasks.js';
-let attention={items:[],errors:[],failures:[]};
+let attention={items:[],errors:[],failures:[]},buzzFeed={items:[],errors:[],synced_at:null,latest_at:null};
 let snapshot=null,snapshotReadAt=0;
 async function world(){if(!snapshot||Date.now()-snapshotReadAt>15000){const data=await api('/api/world');snapshot=data.world;snapshotReadAt=Date.now();}return snapshot;}
 async function guarded(parent,work){try{await work();}catch(error){failure(parent,error);}}
@@ -16,7 +16,8 @@ async function today(parent){
  intro(parent,'Your office, wherever you are','A little room to think.','The Mac holds the work. Everything you need to see and steer lives here.');
  const reports=section(parent,'Daily reports');await guarded(reports,()=>dailyReports(reports));
  const coords=section(parent,'Coordinators');await guarded(coords,async()=>{const data=await api('/api/coordinators');for(const row of data.coordinators){const node=button('',()=>{location.hash='coordinator';},'card coord-row');node.dataset.id=row.id;node.addEventListener('click',()=>{try{localStorage.setItem('office-coordinator-pick',row.id);}catch{}},{capture:true});node.append(el('h3','',row.name),healthLine(row));coords.append(node);}});
- const needs=section(parent,'Needs you');needs.id='needs-list';await guarded(needs,()=>attentionList(needs));
+  const needs=section(parent,'Needs you');needs.id='needs-list';await guarded(needs,()=>attentionList(needs));
+  const buzz=section(parent,'TBS Buzz');await guarded(buzz,()=>buzzHistory(buzz));
  const active=section(parent,'Running now');await runningNow(active);
  const recent=section(parent,'Since you were here');await guarded(recent,()=>podcastNotifications(recent));await guarded(recent,()=>activitySinceVisit(recent));
  const listen=section(parent,'Something to listen to');await guarded(listen,async()=>{const data=await api('/api/media?kind=podcast');const episode=data.items[0];if(episode)listen.append(card(episode.title,`${Math.round(episode.duration_s/60)} minutes · ${episode.date}`,()=>mediaDetail(episode.id)));else empty(listen,'Your next episode will appear here when published.');});
@@ -37,7 +38,8 @@ async function dailyReports(parent){
 }
 async function work(parent){
  intro(parent,'Work','Pick up the thread.','Projects, conversations, and the files behind them.');
- const active=section(parent,'Running now');await runningNow(active);const history=section(parent,'Office conversations');await guarded(history,()=>taskList(history));
+  const active=section(parent,'Running now');await runningNow(active);const history=section(parent,'Office conversations');await guarded(history,()=>taskList(history));
+  const buzz=section(parent,'TBS Buzz');await guarded(buzz,()=>buzzHistory(buzz));
  const bots=section(parent,'Your office voices');bots.append(button('Open office voices',()=>guarded(bots,async()=>{const data=await api('/api/bots');bots.replaceChildren();for(const bot of data.bots)bots.append(card(bot.name,bot.purpose,()=>botConversation(bot)));})));
  const archive=section(parent,'All retained conversations');archive.append(button('Browse all retained conversations',()=>archives(archive)));
  const projects=section(parent,'Projects');parent.insertBefore(projects.parentElement,active.parentElement);
@@ -318,6 +320,7 @@ async function watch(parent){
    for(const entry of failures)stalled.append(card(`${entry.repo} #${entry.item.number} · ${entry.item.title}`,'Inspect issue history',()=>githubDetail(entry.repo,entry.item,'issues')));
    stalled.append(link('Track the repair', 'https://github.com/ariaxhan/nexus-office/issues/186'));
   }
+  const buzz=section(parent,'TBS Buzz recent messages');await guarded(buzz,()=>buzzHistory(buzz));
 
   if(coordinatorRows.length){
    const systems=el('section','watch-systems');
@@ -355,7 +358,7 @@ async function watch(parent){
   });
 
 }
-function requiresYou(entry){return entry.kind==='permission'||entry.kind==='gate'||entry.kind==='issue';}
+function requiresYou(entry){return entry.kind==='permission'||entry.kind==='gate'||entry.kind==='issue'||entry.kind==='buzz';}
 function formatAge(milliseconds){
  if(!Number.isFinite(milliseconds))return 'not checked yet';
  const minutes=Math.max(0,Math.floor(milliseconds/60000));
@@ -529,10 +532,26 @@ async function find(parent){
  const systemBox=el('details','find-group');systemBox.append(el('summary','','Schedules, runs, and settings'));parent.append(systemBox);
  systemBox.addEventListener('toggle',()=>{if(systemBox.open&&systemBox.childElementCount===1)system(systemBox).catch(error=>failure(systemBox,error));});
 }
+async function documentView(parent){
+ const params=new URLSearchParams(location.hash.split('?').slice(1).join('?'));
+ const repo=params.get('repo'),path=params.get('path');
+ if(!repo||!path){failure(parent,Error('No document was requested.'));return;}
+ intro(parent,repo,path,'Checkout document');
+ const body=section(parent,'Document');
+ try{
+  const data=await api(`/api/context?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+  if(data.path!==path)throw Error('The Office returned a different document.');
+  body.append(el('p','muted',`${repo} / ${data.path}`),markdownView(data.text));
+ }catch(error){failure(body,error);}
+}
 async function route(){
   const [pageRaw,parameters]=location.hash.slice(1).split('?');const page=pageRaw||'watch';const params=new URLSearchParams(parameters||'');
+  if(page==='document'){
+   if($('#detail').open)$('#detail').close();
+   const url=new URL(location.href);if(url.searchParams.has('detail')){url.searchParams.delete('detail');history.replaceState({},'',url);}
+  }
   if(page==='coordinator'&&['tbs','matra'].includes(params.get('id')))localStorage.setItem('office-coordinator-pick',params.get('id'));
-  const views={watch,feed,ask,find,today,work,coordinator,library,system};const parent=$('#content');parent.replaceChildren();
+  const views={watch,feed,ask,find,today,work,coordinator,library,system,document:documentView};const parent=$('#content');parent.replaceChildren();
   document.body.dataset.page=page;
  for(const item of document.querySelectorAll('.tabs a'))item.setAttribute('aria-current',item.hash===`#${page}`?'page':'false');
   const view=el('div');parent.append(view);await guarded(view,()=> (views[page]||watch)(view));
@@ -657,11 +676,12 @@ async function githubCollection(repo,kind,cursor=1,parent=null){const body=paren
 async function githubReviews(repo,number,cursor=1,parent=null,inline=false){const body=parent||sheet(repo+' reviews');const data=await api(`/api/github/reviews?repo=${encodeURIComponent(repo)}&number=${number}&cursor=${cursor}&inline=${inline}`);for(const item of data.items){body.append(commentView(item));if(item.diff_hunk)body.append(el('p','muted',`${item.path} · ${item.commit_id}`),el('pre','',item.diff_hunk));}if(data.next_cursor)body.append(button('More reviews',()=>githubReviews(repo,number,data.next_cursor,body,inline)));if(!parent)body.append(button('Inline comments',()=>githubReviews(repo,number,1,body,true)));}
 
 async function refreshAttention(){
- const results=await Promise.allSettled([api('/api/tasks/permissions'),api('/api/gates'),world()]);
+  const results=await Promise.allSettled([api('/api/tasks/permissions'),api('/api/gates'),world(),api('/api/buzz')]);
  const items=[],errors=[],failures=[];
  for(const [index,result] of results.entries()){
   if(result.status==='rejected'){errors.push(result.reason.message);continue;}
-  for(const entry of attentionItems(index,result.value)){
+   if(index===3){buzzFeed=result.value;errors.push(...(buzzFeed.errors||[]));}
+   for(const entry of attentionItems(index,result.value)){
    (automationFailure(entry)?failures:items).push(entry);
   }
  }
@@ -690,6 +710,7 @@ function reconcileChildren(parent,nodes){
  while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
 }
 function attentionCard(entry){
+  if(entry.kind==='buzz')return buzzCard(entry.item);
  if(entry.kind==='gate'){
   const node=el('article','card attention-choice');node.append(el('h3','','Permission needed'),el('p','attention-question',entry.item.question||entry.item.title||'Pending decision'));
   const choices=el('div','attention-options');
@@ -733,14 +754,35 @@ function attentionItems(index,value){
  // Only requests that require a human decision belong in Needs you.
   if(index===0)return (value?.items||[]).map(item=>({kind:'permission',item}));
   if(index===1)return (value?.gates||[]).map(item=>({kind:'gate',item}));
-  if(index===2){
+   if(index===2){
    const pinned=new Set(value?.pins||[]);
    return (value?.stations||[]).filter(station=>!station.hidden).flatMap(station=>(station.issues||[])
      .filter(issue=>issue.bot_last===true&&issue.decision?.question&&issue.decision?.options?.length)
      .map(issue=>({kind:'issue',repo:station.repo,item:{...issue,id:`${station.repo}#${issue.number}`}})))
      .sort((a,b)=>Number(pinned.has(b.repo))-Number(pinned.has(a.repo))||String(b.item.updatedAt||'').localeCompare(String(a.item.updatedAt||'')));
-  }
- return [];
+   }
+   if(index===3)return (value?.items||[]).filter(row=>row.needs_you).map(item=>({kind:'buzz',item}));
+  return [];
+}
+function buzzCard(row){
+  const node=el('article','card attention-choice');
+  const state=['posted',row.mirrored&&'mirrored',row.coordinator_read&&'coordinator read',row.acted&&'acted on'].filter(Boolean).join(' · ');
+  node.append(el('h3','',`#${row.channel} · ${row.needs_you?'Needs you':'FYI'}`),
+   el('p','muted',`${row.author} · ${new Date(row.at).toLocaleString()} · ${state}${row.issue?` · ${row.issue} ${row.issue_state||''}`:''}`),
+   el('p','',row.text));
+  if(row.reply_to)node.append(el('p','muted',`Reply to ${row.reply_to}`));
+  else if(row.thread!==row.id)node.append(el('p','muted',`Thread ${row.thread}`));
+  node.append(el('p','muted',`Buzz source: ${row.source}`));
+  if(row.issue){const [repo,number]=row.issue.split('#');node.append(link('Open linked issue',`https://github.com/${repo}/issues/${number}`));}
+  if(row.receipt)node.append(el('p','muted',`Local receipt: ${row.receipt}`));
+  return node;
+}
+async function buzzHistory(parent){
+  const data=await api('/api/buzz');
+  parent.append(el('p','muted',`Read-only relay snapshot · checked ${new Date(data.synced_at).toLocaleString()} · newest ${data.latest_at?formatAge(Date.now()-Date.parse(data.latest_at)):'unknown'}${data.errors.length?' · source incomplete':''}`));
+  for(const error of data.errors)parent.append(el('p','error',error));
+  for(const row of data.items.slice(0,30))parent.append(buzzCard(row));
+  if(!data.items.length)empty(parent,data.errors.length?'Buzz history unavailable.':'No recent Buzz messages.');
 }
 function automationFailure(entry){
  return entry.kind==='issue'&&String(entry.item.decision?.question||'').startsWith('The automated pass could not resolve this and did not say what to decide.');
