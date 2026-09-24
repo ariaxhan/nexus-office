@@ -2434,7 +2434,7 @@ async function watch(parent) {
   });
 }
 function requiresYou(entry) {
-  return entry.kind === "permission" || entry.kind === "gate";
+  return entry.kind === "permission" || entry.kind === "gate" || entry.kind === "issue";
 }
 function formatAge(milliseconds) {
   if (!Number.isFinite(milliseconds)) return "not checked yet";
@@ -3063,7 +3063,7 @@ async function githubReviews(repo, number, cursor = 1, parent = null, inline2 = 
   if (!parent) body.append(button("Inline comments", () => githubReviews(repo, number, 1, body, true)));
 }
 async function refreshAttention() {
-  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates")]);
+  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), world()]);
   const items = [], errors = [];
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
@@ -3110,7 +3110,7 @@ function reconcileChildren(parent, nodes) {
 }
 function attentionCard(entry) {
   if (entry.kind === "gate") return card(entry.item.question || entry.item.title || "Pending decision", entry.item.repo, () => gateDetail(entry.item));
-  return card(entry.item.title, entry.repo, () => githubDetail(entry.repo, entry.item, "issues"));
+  return card(entry.item.decision?.question || entry.item.title, `${entry.repo} #${entry.item.number}`, () => githubDetail(entry.repo, entry.item, "issues"));
 }
 async function attentionList(parent) {
   await refreshAttention();
@@ -3120,6 +3120,10 @@ setInterval(refreshAttention, 1e4);
 function attentionItems(index, value3) {
   if (index === 0) return (value3?.items || []).map((item) => ({ kind: "permission", item }));
   if (index === 1) return (value3?.gates || []).map((item) => ({ kind: "gate", item }));
+  if (index === 2) {
+    const pinned = new Set(value3?.pins || []);
+    return (value3?.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision?.question && issue.decision?.options?.length).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updated_at || "").localeCompare(String(a.item.updated_at || "")));
+  }
   return [];
 }
 var layoutObserver = new ResizeObserver(() => {

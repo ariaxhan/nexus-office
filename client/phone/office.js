@@ -331,7 +331,7 @@ async function watch(parent){
   });
 
 }
-function requiresYou(entry){return entry.kind==='permission'||entry.kind==='gate';}
+function requiresYou(entry){return entry.kind==='permission'||entry.kind==='gate'||entry.kind==='issue';}
 function formatAge(milliseconds){
  if(!Number.isFinite(milliseconds))return 'not checked yet';
  const minutes=Math.max(0,Math.floor(milliseconds/60000));
@@ -611,7 +611,7 @@ async function githubCollection(repo,kind,cursor=1,parent=null){const body=paren
 async function githubReviews(repo,number,cursor=1,parent=null,inline=false){const body=parent||sheet(repo+' reviews');const data=await api(`/api/github/reviews?repo=${encodeURIComponent(repo)}&number=${number}&cursor=${cursor}&inline=${inline}`);for(const item of data.items){body.append(commentView(item));if(item.diff_hunk)body.append(el('p','muted',`${item.path} · ${item.commit_id}`),el('pre','',item.diff_hunk));}if(data.next_cursor)body.append(button('More reviews',()=>githubReviews(repo,number,data.next_cursor,body,inline)));if(!parent)body.append(button('Inline comments',()=>githubReviews(repo,number,1,body,true)));}
 
 async function refreshAttention(){
- const results=await Promise.allSettled([api('/api/tasks/permissions'),api('/api/gates')]);
+ const results=await Promise.allSettled([api('/api/tasks/permissions'),api('/api/gates'),world()]);
  const items=[],errors=[];
  for(const [index,result] of results.entries()){
   if(result.status==='rejected'){errors.push(result.reason.message);continue;}
@@ -643,7 +643,7 @@ function reconcileChildren(parent,nodes){
 }
 function attentionCard(entry){
  if(entry.kind==='gate')return card(entry.item.question||entry.item.title||'Pending decision',entry.item.repo,()=>gateDetail(entry.item));
- return card(entry.item.title,entry.repo,()=>githubDetail(entry.repo,entry.item,'issues'));
+ return card(entry.item.decision?.question||entry.item.title,`${entry.repo} #${entry.item.number}`,()=>githubDetail(entry.repo,entry.item,'issues'));
 }
 async function attentionList(parent){await refreshAttention();drawAttention(parent);}
 setInterval(refreshAttention,10000);
@@ -652,6 +652,13 @@ function attentionItems(index,value){
  // Only requests that require a human decision belong in Needs you.
   if(index===0)return (value?.items||[]).map(item=>({kind:'permission',item}));
   if(index===1)return (value?.gates||[]).map(item=>({kind:'gate',item}));
+  if(index===2){
+   const pinned=new Set(value?.pins||[]);
+   return (value?.stations||[]).flatMap(station=>(station.issues||[])
+     .filter(issue=>issue.bot_last===true&&issue.decision?.question&&issue.decision?.options?.length)
+     .map(issue=>({kind:'issue',repo:station.repo,item:{...issue,id:`${station.repo}#${issue.number}`}})))
+     .sort((a,b)=>Number(pinned.has(b.repo))-Number(pinned.has(a.repo))||String(b.item.updated_at||'').localeCompare(String(a.item.updated_at||'')));
+  }
  return [];
 }
 const layoutObserver=new ResizeObserver(()=>{document.documentElement.style.setProperty('--tabs-height',`${$('.tabs').getBoundingClientRect().height}px`);document.documentElement.style.setProperty('--player-height',`${$('#player').getBoundingClientRect().height}px`);});layoutObserver.observe($('.tabs'));layoutObserver.observe($('#player'));
