@@ -5,7 +5,7 @@ import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
 import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
-import {coordinator,healthLine} from './office-coordinator.js';
+import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
 import {newTask,taskList,permissions,taskDetail,permissionCard} from './office-tasks.js';
 let attention={items:[],errors:[]};
 let snapshot=null,snapshotReadAt=0;
@@ -248,11 +248,11 @@ async function search(cursor=0){
 }
 let decisionIndex=0,feedCategory='all';
 async function watch(parent){
- intro(parent,'Watch','What needs you','One decision at a time. Then the work that moved.');
- const decisions=section(parent,'Needs you');
- await refreshAttention();
- const rows=attention.items.filter(entry=>entry.kind==='permission'||entry.kind==='gate');
- if(rows.length){
+  intro(parent,'Watch','Does anything need you?','Work that can move on its own stays quiet until you want to look.');
+  const decisions=section(parent,'Needs you');
+  await refreshAttention();
+  const rows=attention.items.filter(requiresYou);
+  if(rows.length){
   decisionIndex=Math.max(0,Math.min(decisionIndex,rows.length-1));
   const stack=el('div','decision-stack');decisions.append(stack);
   const draw=()=>{
@@ -263,28 +263,67 @@ async function watch(parent){
    const next=button('Next →',()=>{decisionIndex=(decisionIndex+1)%rows.length;draw();});
    nav.append(previous,next,button('Full list',()=>{const body=sheet('All decisions');for(const item of rows)body.append(item.kind==='permission'?permissionCard(item.item):attentionCard(item));}));stack.append(nav);
   };draw();
- }else empty(decisions,'Nothing waiting for you.');
- for(const problem of attention.errors)decisions.append(el('p','error',problem));
-  const coords=section(parent,'Coordinators');
-  await guarded(coords,async()=>{const data=await api('/api/coordinators');for(const row of data.coordinators){
-   const item=button('',()=>{localStorage.setItem('office-coordinator-pick',row.id);location.hash='coordinator';},'card watch-coord');
-   const head=el('span','watch-coord-head');const age=row.age_s==null?'':row.age_s<3600?`${Math.max(1,Math.round(row.age_s/60))}m ago`:`${Math.round(row.age_s/3600)}h ago`;
-   head.append(el('strong','',row.name),el('span','coord-health',row.live?'Working now':row.health==='ok'?`Checked ${age}`:`${row.health} · ${age}`));item.append(head);
-   if(row.working_on){const lead=row.working_on.replace(/[*_`#]+/g,'').split(/(?<=[.!?])\s+/)[0].slice(0,145);item.append(el('span','watch-coord-doing',lead));}
-   coords.append(item);
-  }});
-  const manager=section(parent,'Ask Office');manager.classList.add('watch-ask');
-  manager.append(el('p','','Status, blockers, instructions, and follow-through in one conversation.'),
-                 button('What are they doing? →',()=>{location.hash='ask';},'primary'));
- const questions=attention.items.filter(entry=>entry.kind==='issue');
- if(questions.length){const waiting=section(parent,'Issues with a recent agent reply');
-  for(const entry of questions.slice(0,3))waiting.append(attentionCard(entry));
-  if(questions.length>3)waiting.append(button(`View all ${questions.length} issues`,()=>{
-   const body=sheet('Issues with agent replies');for(const entry of questions)body.append(attentionCard(entry));
-  }));
- }
- const shipped=section(parent,'Since you were here');
- await guarded(shipped,()=>activitySinceVisit(shipped));
+  }else if(attention.errors.length){
+   decisions.append(el('p','watch-unconfirmed',"I can't confirm yet. A source for decisions is unavailable."));
+  }else{
+   decisions.append(el('p','watch-clear','Nothing needs you right now.'));
+  }
+  if(attention.errors.length){
+   const source=el('details','watch-source-note');source.append(el('summary','','Check details'));
+   for(const problem of attention.errors)source.append(el('p','muted',problem));decisions.append(source);
+  }
+
+  let coordinatorRows=[];
+  await guarded(parent,async()=>{
+   const data=await api('/api/coordinators');
+   coordinatorRows=data.coordinators||[];
+   const current=coordinatorRows.filter(row=>row.live||row.working_on);
+   const working=el('details','watch-state');
+   const summary=el('summary');
+   const updated=coordinatorRows.filter(row=>row.last_end?.at).map(row=>new Date(row.last_end.at).getTime()).filter(Number.isFinite);
+   const latest=updated.length?Math.max(...updated):0;
+   const age=latest?formatAge(Date.now()-latest):'not checked yet';
+   summary.append(el('strong','', 'Working'),el('span','muted',`Last meaningful update ${age}`));
+   working.append(summary);
+   const list=el('div','watch-work-list');
+   for(const row of current){
+    const item=button('',()=>{localStorage.setItem('office-coordinator-pick',row.id);location.hash='coordinator';},'watch-work-item');
+    const last=row.last_end?.at?formatAge(Date.now()-new Date(row.last_end.at).getTime()):'not checked yet';
+    const state=row.live?'Working now':row.health==='ok'?`Last checked ${last}`:`${row.health} · checked ${last}`;
+    item.append(el('strong','',row.name),el('span','muted',state));
+    if(row.working_on)item.append(el('span','watch-coord-doing',row.working_on.replace(/[*_`#]+/g,'').split(/(?<=[.!?])\s+/)[0].slice(0,160)));
+    list.append(item);
+   }
+   if(!current.length)list.append(el('p','muted','Nothing is in progress.'));
+   working.append(list);parent.append(working);
+  });
+
+  await guarded(parent,async()=>{
+   const done=coordinatorRows.flatMap(row=>(row.commits||[]).map(item=>({...item,checkout:item.checkout||row.id})))
+    .filter(item=>item.sha&&item.checkout).sort((a,b)=>new Date(b.at||0)-new Date(a.at||0)).slice(0,3);
+   const recent=el('details','watch-state');
+   const summary=el('summary');summary.append(el('strong','', 'Done'),el('span','muted',done.length?'Recent commits':'No recent commit receipts'));
+   recent.append(summary);
+   const list=el('div','watch-done-list');
+   for(const item of done){
+    const row=button('',()=>openCoordinatorCommit(item.sha,item.checkout),'watch-done-item');
+    row.append(el('strong','',item.subject||'Committed change'),el('span','muted',`${item.checkout} · ${item.sha.slice(0,8)} · ${item.at?formatAge(Date.now()-new Date(item.at).getTime()):'time unavailable'}`));list.append(row);
+   }
+   if(!done.length)list.append(el('p','muted',coordinatorRows.length?'No recent commit receipts.':'Commit evidence is unavailable right now.'));
+   recent.append(list);parent.append(recent);
+  });
+
+  const manager=section(parent,'Ask');manager.classList.add('watch-ask');
+  manager.append(el('p','','Ask what happened, why work is waiting, or tell Office what to fix.'),
+                 button('Ask Office',()=>{location.hash='ask';},'primary'));
+}
+function requiresYou(entry){return entry.kind==='permission'||entry.kind==='gate';}
+function formatAge(milliseconds){
+ if(!Number.isFinite(milliseconds))return 'not checked yet';
+ const minutes=Math.max(0,Math.floor(milliseconds/60000));
+ if(minutes<1)return 'just now';if(minutes<60)return `${minutes}m ago`;
+ const hours=Math.floor(minutes/60);if(hours<48)return `${hours}h ago`;
+ return `${Math.floor(hours/24)}d ago`;
 }
 function feedAction(label,active,fn,glyph){const control=button(glyph,fn,'feed-icon'+(active?' active':''));control.title=label;control.setAttribute('aria-label',label);control.setAttribute('aria-pressed',String(active));return control;}
 async function feedDetail(post){
@@ -367,11 +406,12 @@ async function feed(parent){
 }
 async function feedMore(parent,cursor){const data=await api(`/api/feed?category=${encodeURIComponent(feedCategory)}&cursor=${cursor}`);for(const post of data.items)renderFeedPost(parent,post);if(data.next_cursor!==null){const more=button('More posts',async()=>{more.disabled=true;try{await feedMore(parent,data.next_cursor);more.remove();}catch(error){more.disabled=false;notice(error.message);}});parent.append(more);}}
 async function ask(parent){
- intro(parent,'Ask Office','One conversation','Ask what is happening, check the evidence, or give an instruction.');
- const chat=el('section','ask-page');parent.append(chat);
- const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');chat.append(picker);
+  intro(parent,'Ask Office','Say what you need','Office will find the right system and evidence.');
+  const chat=el('section','ask-page');parent.append(chat);
+  const advanced=el('details','ask-advanced');advanced.append(el('summary','','Advanced · model choice'));
+  const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);chat.append(advanced);
  const thread=el('div','ask-thread');chat.append(thread);
- const form=el('form','ask-compose');const input=el('textarea');input.placeholder='Ask a question or give an instruction…';input.setAttribute('aria-label','Ask Office');input.rows=2;
+  const form=el('form','ask-compose');const input=el('textarea');input.placeholder='Ask what happened, why work is waiting, or what to fix…';input.setAttribute('aria-label','Ask Office');input.rows=2;
  const submit=el('button','primary','Send');submit.type='submit';form.append(input,submit);chat.append(form);
  let current=null;
  await guarded(chat,async()=>{
@@ -379,9 +419,9 @@ async function ask(parent){
    const initial=el('option','',data.selection||data.model);initial.value=data.selection||data.model;picker.append(initial);
   const draw=state=>{
    current=state;thread.replaceChildren();
-   if(!state.messages.length){thread.append(el('p','ask-intro','One chat for status, steering, and follow-through.'));
-    for(const prompt of ['What are the coordinators doing?','What needs me?','Did the last instruction get read?'])
-     thread.append(button(prompt,()=>{input.value=prompt;input.focus();},'ask-prompt'));
+    if(!state.messages.length){thread.append(el('p','ask-intro','Ask in your own words. Office will bring back the answer and where it came from.'));
+     for(const prompt of ['Is anything blocked on me?','What happened while I was asleep?','Why isn’t HomeClass moving?'])
+      thread.append(button(prompt,()=>{input.value=prompt;input.focus();},'ask-prompt'));
    }
     const lastAnswer=[...state.messages].reverse().find(row=>row.role==='office'&&row.status==='complete');
     for(const row of state.messages){const bubble=el('article','ask-bubble '+row.role);
@@ -560,15 +600,16 @@ async function githubCollection(repo,kind,cursor=1,parent=null){const body=paren
 async function githubReviews(repo,number,cursor=1,parent=null,inline=false){const body=parent||sheet(repo+' reviews');const data=await api(`/api/github/reviews?repo=${encodeURIComponent(repo)}&number=${number}&cursor=${cursor}&inline=${inline}`);for(const item of data.items){body.append(commentView(item));if(item.diff_hunk)body.append(el('p','muted',`${item.path} · ${item.commit_id}`),el('pre','',item.diff_hunk));}if(data.next_cursor)body.append(button('More reviews',()=>githubReviews(repo,number,data.next_cursor,body,inline)));if(!parent)body.append(button('Inline comments',()=>githubReviews(repo,number,1,body,true)));}
 
 async function refreshAttention(){
- const results=await Promise.allSettled([api('/api/tasks/permissions'),api('/api/gates'),world()]);
+ const results=await Promise.allSettled([api('/api/tasks/permissions'),api('/api/gates')]);
  const items=[],errors=[];
  for(const [index,result] of results.entries()){
   if(result.status==='rejected'){errors.push(result.reason.message);continue;}
   items.push(...attentionItems(index,result.value));
  }
  attention={items,errors};
- const badge=$('#detail-attention');badge.title=`${items.length} items need you`;badge.setAttribute('aria-label',`${items.length} items need you${errors.length?'; some sources unavailable':''}`);
-  const label=$('.tabs a[href="#watch"]');label.setAttribute('aria-label',`Watch, ${items.length} items need you`);
+  const needsYou=items.filter(requiresYou).length;
+  const badge=$('#detail-attention');badge.title=needsYou?`${needsYou} items need you`:'Nothing needs you right now';badge.setAttribute('aria-label',`${needsYou?`${needsYou} items need you`:'Nothing needs you right now'}${errors.length?'; a decision source is unavailable':''}`);
+  const label=$('.tabs a[href="#watch"]');label.setAttribute('aria-label',needsYou?`Watch, ${needsYou} items need you`:'Watch, nothing needs you right now');
  const node=$('#needs-list');if(node)drawAttention(node);
 }
 function drawAttention(parent){
@@ -597,14 +638,10 @@ async function attentionList(parent){await refreshAttention();drawAttention(pare
 setInterval(refreshAttention,10000);
 
 function attentionItems(index,value){
- // allSettled only catches a rejected source. /api/world fulfils with a null
- // world while the server's snapshot is unbuilt, which is its normal state for
- // the first seconds after a restart, and dereferencing that threw an
- // unhandled rejection that stopped the ten-second refresh for good. A source
- // with nothing in it contributes nothing.
- if(index===0)return (value?.items||[]).map(item=>({kind:'permission',item}));
- if(index===1)return (value?.gates||[]).map(item=>({kind:'gate',item}));
- const result=[];for(const desk of value?.stations||[])for(const item of desk.issues||[])if(item.bot_last===true)result.push({kind:'issue',repo:desk.repo,item});return result;
+ // Only requests that require a human decision belong in Needs you.
+  if(index===0)return (value?.items||[]).map(item=>({kind:'permission',item}));
+  if(index===1)return (value?.gates||[]).map(item=>({kind:'gate',item}));
+ return [];
 }
 const layoutObserver=new ResizeObserver(()=>{document.documentElement.style.setProperty('--tabs-height',`${$('.tabs').getBoundingClientRect().height}px`);document.documentElement.style.setProperty('--player-height',`${$('#player').getBoundingClientRect().height}px`);});layoutObserver.observe($('.tabs'));layoutObserver.observe($('#player'));
 
