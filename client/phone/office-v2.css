@@ -14,6 +14,7 @@ main{max-width:850px;margin-inline:auto}
 .section{margin:28px 0}.section-head{font-size:1.35rem;letter-spacing:-.025em}
 .tabs{grid-template-columns:repeat(4,minmax(0,1fr));width:min(100%,1220px);box-shadow:0 -8px 24px #2d29200a}
 .tabs a{font-family:var(--font);font-weight:600;gap:0;padding:6px 4px}
+.tabs a:focus-visible{outline:none;box-shadow:inset 0 -2px var(--accent)}
 .tabs .tab-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px}
 .tabs .tab-icon svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
 .tabs a>span:last-child{font-size:.75rem}
