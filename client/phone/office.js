@@ -423,18 +423,24 @@ async function ask(parent){
   const chat=el('section','ask-page');parent.append(chat);
   const advanced=el('details','ask-advanced');advanced.append(el('summary','','Advanced · model choice'));
   const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);chat.append(advanced);
- const thread=el('div','ask-thread');chat.append(thread);
+ const scrollRegion=el('div','ask-scroll-region');const thread=el('div','ask-thread');
+ const jump=button('↓',()=>{thread.scrollTop=thread.scrollHeight;updateJump();},'ask-jump');jump.setAttribute('aria-label','Jump to latest message');jump.hidden=true;
+ scrollRegion.append(thread,jump);chat.append(scrollRegion);
   const form=el('form','ask-compose');const input=el('textarea');input.placeholder='Ask what happened, why work is waiting, or what to fix…';input.setAttribute('aria-label','Ask Office');input.rows=2;
  const queueStatus=el('p','ask-queue-status');queueStatus.setAttribute('aria-live','polite');
  const submit=el('button','primary','Send');submit.type='submit';form.append(input,submit);chat.append(queueStatus,form);
- let current=null;
+ let current=null,rendered=false;
+ const distanceFromBottom=()=>thread.scrollHeight-thread.scrollTop-thread.clientHeight;
+ const updateJump=()=>{jump.hidden=!rendered||distanceFromBottom()<64;};
+ thread.addEventListener('scroll',updateJump);
  await guarded(chat,async()=>{
    const data=await api('/api/ask');
    const clearDraft=restoreDraft(input,['ask']);const pendingKey='office-ask-pending';
    let pending;try{pending=JSON.parse(localStorage.getItem(pendingKey)||'null');}catch{localStorage.removeItem(pendingKey);}
    if(!pending?.request_id||!pending?.text||!pending?.model)pending=null;
    const initial=el('option','',data.selection||data.model);initial.value=data.selection||data.model;picker.append(initial);
-  const draw=state=>{
+  const draw=(state,toBottom=false)=>{
+   const follow=toBottom||!rendered||distanceFromBottom()<64,previousTop=thread.scrollTop;
    current=state;thread.replaceChildren();
     if(!state.messages.length){thread.append(el('p','ask-intro','Ask in your own words. Office will bring back the answer and where it came from.'));
      for(const prompt of ['Is anything blocked on me?','What happened while I was asleep?','Why isn’t HomeClass moving?'])
@@ -462,7 +468,8 @@ async function ask(parent){
    const queued=state.queue?.queued||0,working=state.queue?.working||0;
    queueStatus.textContent=[working?`${working} working`:'',queued?`${queued} queued`:''].filter(Boolean).join(' · ');
    queueStatus.hidden=!working&&!queued;
-   if(state.busy)thread.scrollTop=thread.scrollHeight;
+   thread.scrollTop=follow?thread.scrollHeight:previousTop;
+   rendered=true;updateJump();
    };draw(data);
    api('/api/ask/models').then(models=>{const chosen=picker.value;picker.replaceChildren();
     for(const row of models.items){const option=el('option','',row.name);option.value=row.id;picker.append(option);}
@@ -471,7 +478,7 @@ async function ask(parent){
    try{draw(await api('/api/ask'));}catch(error){notice(error.message);}},2500);
   async function sendPending(payload){
    submit.disabled=true;
-   try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);draw(await api('/api/ask'));}
+   try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);draw(await api('/api/ask'),true);}
    catch(error){if([400,403,404,409,413,422].includes(error.status)){localStorage.removeItem(pendingKey);pending=null;}notice(error.message);}
    finally{submit.disabled=false;}
   }

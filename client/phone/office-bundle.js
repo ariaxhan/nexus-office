@@ -2647,8 +2647,16 @@ async function ask(parent) {
   picker.setAttribute("aria-label", "Office model");
   advanced.append(picker);
   chat.append(advanced);
+  const scrollRegion = el("div", "ask-scroll-region");
   const thread = el("div", "ask-thread");
-  chat.append(thread);
+  const jump = button("\u2193", () => {
+    thread.scrollTop = thread.scrollHeight;
+    updateJump();
+  }, "ask-jump");
+  jump.setAttribute("aria-label", "Jump to latest message");
+  jump.hidden = true;
+  scrollRegion.append(thread, jump);
+  chat.append(scrollRegion);
   const form = el("form", "ask-compose");
   const input = el("textarea");
   input.placeholder = "Ask what happened, why work is waiting, or what to fix\u2026";
@@ -2660,7 +2668,12 @@ async function ask(parent) {
   submit.type = "submit";
   form.append(input, submit);
   chat.append(queueStatus, form);
-  let current2 = null;
+  let current2 = null, rendered = false;
+  const distanceFromBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+  const updateJump = () => {
+    jump.hidden = !rendered || distanceFromBottom() < 64;
+  };
+  thread.addEventListener("scroll", updateJump);
   await guarded(chat, async () => {
     const data = await api("/api/ask");
     const clearDraft = restoreDraft(input, ["ask"]);
@@ -2675,7 +2688,8 @@ async function ask(parent) {
     const initial = el("option", "", data.selection || data.model);
     initial.value = data.selection || data.model;
     picker.append(initial);
-    const draw = (state) => {
+    const draw = (state, toBottom = false) => {
+      const follow = toBottom || !rendered || distanceFromBottom() < 64, previousTop = thread.scrollTop;
       current2 = state;
       thread.replaceChildren();
       if (!state.messages.length) {
@@ -2722,7 +2736,9 @@ async function ask(parent) {
       const queued = state.queue?.queued || 0, working = state.queue?.working || 0;
       queueStatus.textContent = [working ? `${working} working` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(" \xB7 ");
       queueStatus.hidden = !working && !queued;
-      if (state.busy) thread.scrollTop = thread.scrollHeight;
+      thread.scrollTop = follow ? thread.scrollHeight : previousTop;
+      rendered = true;
+      updateJump();
     };
     draw(data);
     api("/api/ask/models").then((models) => {
@@ -2756,7 +2772,7 @@ async function ask(parent) {
           pending2 = null;
         }
         clearDraft(payload.text);
-        draw(await api("/api/ask"));
+        draw(await api("/api/ask"), true);
       } catch (error) {
         if ([400, 403, 404, 409, 413, 422].includes(error.status)) {
           localStorage.removeItem(pendingKey2);
