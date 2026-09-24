@@ -425,10 +425,14 @@ async function ask(parent){
   const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);chat.append(advanced);
  const thread=el('div','ask-thread');chat.append(thread);
   const form=el('form','ask-compose');const input=el('textarea');input.placeholder='Ask what happened, why work is waiting, or what to fix…';input.setAttribute('aria-label','Ask Office');input.rows=2;
- const submit=el('button','primary','Send');submit.type='submit';form.append(input,submit);chat.append(form);
+ const queueStatus=el('p','ask-queue-status');queueStatus.setAttribute('aria-live','polite');
+ const submit=el('button','primary','Send');submit.type='submit';form.append(input,submit);chat.append(queueStatus,form);
  let current=null;
  await guarded(chat,async()=>{
    const data=await api('/api/ask');
+   const clearDraft=restoreDraft(input,['ask']);const pendingKey='office-ask-pending';
+   let pending;try{pending=JSON.parse(localStorage.getItem(pendingKey)||'null');}catch{localStorage.removeItem(pendingKey);}
+   if(!pending?.request_id||!pending?.text||!pending?.model)pending=null;
    const initial=el('option','',data.selection||data.model);initial.value=data.selection||data.model;picker.append(initial);
   const draw=state=>{
    current=state;thread.replaceChildren();
@@ -436,11 +440,13 @@ async function ask(parent){
      for(const prompt of ['Is anything blocked on me?','What happened while I was asleep?','Why isn’t HomeClass moving?'])
       thread.append(button(prompt,()=>{input.value=prompt;input.focus();},'ask-prompt'));
    }
-    const lastAnswer=[...state.messages].reverse().find(row=>row.role==='office'&&row.status==='complete');
+    const lastAnswer=[...state.messages].reverse().find(row=>row.role==='office'&&row.status==='completed');
     for(const row of state.messages){const bubble=el('article','ask-bubble '+row.role);
-    bubble.append(el('small','',row.role==='user'?'You':row.role==='office'?'Office · '+(row.model||''):row.text));
+    const label=row.role==='user'?'You':row.role==='office'?'Office · '+(row.model||''):row.text;
+    const heading=el('small','',label);if(row.role!=='system')heading.append(el('span','ask-status is-'+row.status,row.status));bubble.append(heading);
     if(row.role!=='system'){
-     const copy=markdownView(row.text||'Thinking…',{text:officeLinkText});copy.classList.add('ask-copy');
+     const waiting=row.status==='queued'?'Queued behind earlier messages…':row.status==='working'?'Working…':'';
+     const copy=markdownView(row.text||waiting,{text:officeLinkText});copy.classList.add('ask-copy');
      copy.addEventListener('click',event=>{const anchor=event.target.closest('a');if(!anchor)return;
       const match=anchor.href.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
       if(match){event.preventDefault();githubDetail(match[1],{number:Number(match[3])},match[2]==='pull'?'prs':'issues').catch(error=>notice(error.message));}
@@ -453,7 +459,9 @@ async function ask(parent){
     }
     thread.append(bubble);
    }
-   submit.disabled=state.busy;submit.textContent=state.busy?'Working…':'Send';
+   const queued=state.queue?.queued||0,working=state.queue?.working||0;
+   queueStatus.textContent=[working?`${working} working`:'',queued?`${queued} queued`:''].filter(Boolean).join(' · ');
+   queueStatus.hidden=!working&&!queued;
    if(state.busy)thread.scrollTop=thread.scrollHeight;
    };draw(data);
    api('/api/ask/models').then(models=>{const chosen=picker.value;picker.replaceChildren();
@@ -461,8 +469,15 @@ async function ask(parent){
     picker.value=chosen;}).catch(error=>notice('Model list: '+error.message));
   const timer=setInterval(async()=>{if(!chat.isConnected){clearInterval(timer);return;}if(!current?.busy)return;
    try{draw(await api('/api/ask'));}catch(error){notice(error.message);}},2500);
-  form.addEventListener('submit',async event=>{event.preventDefault();const text=input.value.trim();if(!text||current?.busy)return;
-   submit.disabled=true;try{await api('/api/ask/send',{text,model:picker.value});input.value='';draw(await api('/api/ask'));}catch(error){notice(error.message);submit.disabled=false;}});
+  async function sendPending(payload){
+   submit.disabled=true;
+   try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);draw(await api('/api/ask'));}
+   catch(error){if([400,403,404,409,413,422].includes(error.status)){localStorage.removeItem(pendingKey);pending=null;}notice(error.message);}
+   finally{submit.disabled=false;}
+  }
+  form.addEventListener('submit',event=>{event.preventDefault();if(pending){void sendPending(pending);return;}const text=input.value.trim();if(!text)return;
+   input.value=text;input.dispatchEvent(new Event('input'));pending={request_id:crypto.randomUUID(),text,model:picker.value};localStorage.setItem(pendingKey,JSON.stringify(pending));void sendPending(pending);});
+  if(pending)void sendPending(pending);
  });
 }
 function officeLinkText(node,value){

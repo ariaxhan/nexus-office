@@ -97,6 +97,7 @@ function migrateLegacy() {
 var CACHE, PENDING, cache, pending, clockOffset, running;
 var init_office_state = __esm({
   "client/phone/office-state.js"() {
+    "use strict";
     CACHE = "office-object-cache";
     PENDING = "office-object-pending";
     cache = read(CACHE);
@@ -327,6 +328,7 @@ function restoreDraft(input, identity) {
 var $, rememberObjects;
 var init_office_ui = __esm({
   "client/phone/office-ui.js"() {
+    "use strict";
     init_office_state();
     $ = (selector) => document.querySelector(selector);
     rememberObjects = true;
@@ -350,6 +352,7 @@ function audioTransport(fallback) {
 var NativeAudio;
 var init_office_native = __esm({
   "client/phone/office-native.js"() {
+    "use strict";
     NativeAudio = class extends EventTarget {
       constructor() {
         super();
@@ -542,6 +545,7 @@ function applyContrast(body) {
 var prefs, revision, dark;
 var init_office_settings = __esm({
   "client/phone/office-settings.js"() {
+    "use strict";
     init_office_native();
     init_office_ui();
     prefs = { theme: "auto", background: "", accent: "#b9573c", font: "classic", reading: "bookish", size: 100, density: "comfortable", touch: false, haptics: true, motion: false, remember: true, mini: true, speed: 1 };
@@ -677,6 +681,7 @@ function tokenText(tokens, render) {
 var plain, TABLE_ROW, LIST_ITEM, cells, TOKEN;
 var init_office_markdown = __esm({
   "client/phone/office-markdown.js"() {
+    "use strict";
     plain = (node, value3) => node.append(document.createTextNode(value3));
     TABLE_ROW = /^\s*\|.*\|\s*$/;
     LIST_ITEM = /^\s*([-*+]|\d+[.)])\s+(.*)$/;
@@ -868,6 +873,7 @@ async function checkoutDetails(parent, id) {
 }
 var init_office_files = __esm({
   "client/phone/office-files.js"() {
+    "use strict";
     init_office_state();
     init_office_ui();
     init_office_markdown();
@@ -2649,13 +2655,24 @@ async function ask(parent) {
   input.placeholder = "Ask what happened, why work is waiting, or what to fix\u2026";
   input.setAttribute("aria-label", "Ask Office");
   input.rows = 2;
+  const queueStatus = el("p", "ask-queue-status");
+  queueStatus.setAttribute("aria-live", "polite");
   const submit = el("button", "primary", "Send");
   submit.type = "submit";
   form.append(input, submit);
-  chat.append(form);
+  chat.append(queueStatus, form);
   let current2 = null;
   await guarded(chat, async () => {
     const data = await api("/api/ask");
+    const clearDraft = restoreDraft(input, ["ask"]);
+    const pendingKey2 = "office-ask-pending";
+    let pending2;
+    try {
+      pending2 = JSON.parse(localStorage.getItem(pendingKey2) || "null");
+    } catch {
+      localStorage.removeItem(pendingKey2);
+    }
+    if (!pending2?.request_id || !pending2?.text || !pending2?.model) pending2 = null;
     const initial = el("option", "", data.selection || data.model);
     initial.value = data.selection || data.model;
     picker.append(initial);
@@ -2670,12 +2687,16 @@ async function ask(parent) {
             input.focus();
           }, "ask-prompt"));
       }
-      const lastAnswer = [...state.messages].reverse().find((row) => row.role === "office" && row.status === "complete");
+      const lastAnswer = [...state.messages].reverse().find((row) => row.role === "office" && row.status === "completed");
       for (const row of state.messages) {
         const bubble = el("article", "ask-bubble " + row.role);
-        bubble.append(el("small", "", row.role === "user" ? "You" : row.role === "office" ? "Office \xB7 " + (row.model || "") : row.text));
+        const label = row.role === "user" ? "You" : row.role === "office" ? "Office \xB7 " + (row.model || "") : row.text;
+        const heading = el("small", "", label);
+        if (row.role !== "system") heading.append(el("span", "ask-status is-" + row.status, row.status));
+        bubble.append(heading);
         if (row.role !== "system") {
-          const copy = markdownView(row.text || "Thinking\u2026", { text: officeLinkText });
+          const waiting = row.status === "queued" ? "Queued behind earlier messages\u2026" : row.status === "working" ? "Working\u2026" : "";
+          const copy = markdownView(row.text || waiting, { text: officeLinkText });
           copy.classList.add("ask-copy");
           copy.addEventListener("click", (event) => {
             const anchor2 = event.target.closest("a");
@@ -2690,7 +2711,7 @@ async function ask(parent) {
           if (row.id === lastAnswer?.id) {
             const rating = el("div", "ask-rating");
             rating.append(el("span", "muted", "Useful?"));
-            for (const [kind, label] of [["helpful", "Yes"], ["missed", "Missed it"]]) rating.append(button(label, async () => {
+            for (const [kind, label2] of [["helpful", "Yes"], ["missed", "Missed it"]]) rating.append(button(label2, async () => {
               await api("/api/ask/rate", { reply_id: row.id, kind });
               draw(await api("/api/ask"));
             }, "ask-rate" + (row.rating === kind ? " active" : "")));
@@ -2699,8 +2720,9 @@ async function ask(parent) {
         }
         thread.append(bubble);
       }
-      submit.disabled = state.busy;
-      submit.textContent = state.busy ? "Working\u2026" : "Send";
+      const queued = state.queue?.queued || 0, working = state.queue?.working || 0;
+      queueStatus.textContent = [working ? `${working} working` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(" \xB7 ");
+      queueStatus.hidden = !working && !queued;
       if (state.busy) thread.scrollTop = thread.scrollHeight;
     };
     draw(data);
@@ -2726,20 +2748,41 @@ async function ask(parent) {
         notice(error.message);
       }
     }, 2500);
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const text = input.value.trim();
-      if (!text || current2?.busy) return;
+    async function sendPending(payload) {
       submit.disabled = true;
       try {
-        await api("/api/ask/send", { text, model: picker.value });
-        input.value = "";
+        await api("/api/ask/send", payload);
+        if (JSON.parse(localStorage.getItem(pendingKey2) || "null")?.request_id === payload.request_id) {
+          localStorage.removeItem(pendingKey2);
+          pending2 = null;
+        }
+        clearDraft(payload.text);
         draw(await api("/api/ask"));
       } catch (error) {
+        if ([400, 403, 404, 409, 413, 422].includes(error.status)) {
+          localStorage.removeItem(pendingKey2);
+          pending2 = null;
+        }
         notice(error.message);
+      } finally {
         submit.disabled = false;
       }
+    }
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (pending2) {
+        void sendPending(pending2);
+        return;
+      }
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = text;
+      input.dispatchEvent(new Event("input"));
+      pending2 = { request_id: crypto.randomUUID(), text, model: picker.value };
+      localStorage.setItem(pendingKey2, JSON.stringify(pending2));
+      void sendPending(pending2);
     });
+    if (pending2) void sendPending(pending2);
   });
 }
 function officeLinkText(node, value3) {
