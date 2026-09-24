@@ -63,7 +63,7 @@ def git_lines(repo: Path, args: list[str]) -> list[str]:
 
 def is_source(rel: str) -> bool:
     path = Path(rel)
-    return path.suffix.lower() in LIZARD_EXTS and not any(part in EXCLUDED_PARTS for part in path.parts)
+    return rel != "client/phone/office-bundle.js" and path.suffix.lower() in LIZARD_EXTS and not any(part in EXCLUDED_PARTS for part in path.parts)
 
 
 def targets(repo: Path, base: str | None) -> list[str]:

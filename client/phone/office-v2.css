@@ -8,6 +8,8 @@
 .searchbar{margin-top:18px}
 body:not([data-page=find])>.shell>.searchbar{display:none}
 main{max-width:850px;margin-inline:auto}
+.startup-failure{max-width:32rem;padding:24px;background:var(--paper);border:1px solid var(--line);border-radius:18px}
+.startup-failure p{margin:12px 0 18px;color:var(--muted)}
 .intro{margin-bottom:32px}.intro .eyebrow{font-weight:650;letter-spacing:.16em}
 .intro h1{font-size:clamp(2rem,5vw,3.3rem);letter-spacing:-.055em}
 .intro p{max-width:44rem;font-size:1rem}
