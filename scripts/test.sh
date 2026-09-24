@@ -10,7 +10,18 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-python3 -m unittest discover -s tests -p 'test_*.py'
+# Tests use Python 3.12 syntax; Python 3.14 changed process/fork behavior in
+# the flight tests. Pin the gate interpreter instead of following Homebrew's
+# rolling `python3`. The installed service has its own runtime.
+PYTHON=${OFFICE_TEST_PYTHON:-python3.12}
+# Several suites replace process-global environment or module state. Give each
+# file a fresh interpreter so one fixture cannot corrupt later flight tests.
+for test_file in $(find tests -type f -name 'test_*.py' | sort); do
+  # Shared fixture module; it contains no unittest cases.
+  [ "$test_file" = tests/test_ledger_fixture.py ] && continue
+  PYTHONPATH="$PWD/client:$PWD${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PYTHON" -m unittest discover -s "$(dirname "$test_file")" -p "$(basename "$test_file")"
+done
 node --test tests/pwa_probe.test.mjs tests/markdown.test.mjs
 
 if [ ! -d app/Office.xcodeproj ]; then

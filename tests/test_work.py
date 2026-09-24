@@ -493,14 +493,19 @@ else:
 
         patch("nexus.work.subprocess.run", side_effect=fake).start()
         patch("nexus.executor.review", return_value=("PASS", "ok")).start()
-        patch("nexus.tower.land_write_flight").start()
-        with patch.dict(os.environ, TBS_NOW="2026-09-14T10:00:00+09:00"):
+        def fake_landing(ledger, flight_id, repo, result):
+            if result["state"] == "LANDED":
+                ledger.set_state(flight_id, "produced")
+                ledger.set_state(flight_id, "verified")
+            return result
+        patch("nexus.tower.land_write_flight", side_effect=fake_landing).start()
+        with patch.dict(os.environ, TBS_NOW="2026-09-14T10:00:00+09:00", TBS_SENSITIVE_WINDOW_TEST_CLOCK="1"):
             self.assertEqual("pending", work.tower_review(self.led, self.entry, task, "https://pr/1"))
         self.assertEqual([], merges)
         hold = work.latest(self.led, "work.pending", task["id"])
         self.assertEqual("in_review", hold["reason"])
         self.assertIn("next window 2026-09-15 01:00 KST", hold["hold"])
-        with patch.dict(os.environ, TBS_NOW="2026-09-14T02:00:00+09:00"):
+        with patch.dict(os.environ, TBS_NOW="2026-09-14T02:00:00+09:00", TBS_SENSITIVE_WINDOW_TEST_CLOCK="1"):
             self.assertEqual("done", work.tower_review(self.led, self.entry, task, "https://pr/1"))
         self.assertEqual(1, len(merges))
 

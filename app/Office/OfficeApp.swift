@@ -79,7 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls {
             guard let ask = OfficeURL.parse(url) else { continue }
             showOffice()
-            Task { await Store.shared.open(repo: ask.repo, path: ask.path) }
+            if Store.shared.api.isDemo {
+                Task { await Store.shared.open(repo: ask.repo, path: ask.path) }
+            } else {
+                Store.shared.webOpenRequest = ask
+                Store.shared.webOpenRevision += 1
+            }
         }
     }
 
@@ -154,7 +159,8 @@ struct RootView: View {
             if store.api.isDemo {
                 room
             } else if case .live(let url) = store.api.source {
-                OfficeWebView(url: url)
+                OfficeWebView(url: url, openRequest: store.webOpenRequest,
+                              openRevision: store.webOpenRevision)
             }
         }
             .officeFont(size: 13)
@@ -270,6 +276,12 @@ struct RootView: View {
 /// with iPhone so decisions, feed posts, Ask, and deep links have one implementation.
 private struct OfficeWebView: NSViewRepresentable {
     let url: URL
+    let openRequest: OfficeURL?
+    let openRevision: Int
+
+    private var destination: URL {
+        openRequest?.webDestination(from: url) ?? url
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(home: url) }
 
@@ -278,16 +290,20 @@ private struct OfficeWebView: NSViewRepresentable {
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
-        view.load(URLRequest(url: url))
+        context.coordinator.openRevision = openRevision
+        view.load(URLRequest(url: destination))
         return view
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
-        // Store polls update the menu dot. They must never reload the chat or feed.
+        guard openRevision != context.coordinator.openRevision else { return }
+        context.coordinator.openRevision = openRevision
+        view.load(URLRequest(url: destination))
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         let home: URL
+        var openRevision = 0
         init(home: URL) { self.home = home }
 
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,

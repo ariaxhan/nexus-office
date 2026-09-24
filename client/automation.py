@@ -158,6 +158,20 @@ def _row(receipt: dict, issues: dict, now_iso: str) -> dict:
     }
 
 
+def _activity_rows(by_repo: dict) -> list:
+    rows = []
+    for repo_receipts in (by_repo or {}).values():
+        for receipt in repo_receipts or []:
+            if not isinstance(receipt, dict):
+                continue
+            if not str(receipt.get("issue") or "").strip():
+                continue
+            if str(receipt.get("outcome") or "") in PER_REPO:
+                continue
+            rows.append(receipt)
+    return sorted(rows, key=lambda r: str(r.get("at") or ""), reverse=True)
+
+
 def build(by_repo: dict, stations: list, sections: dict, counts: dict,
           now_iso: str = "", board: dict | None = None, work: dict | None = None,
           tower: dict | None = None) -> dict:
@@ -176,17 +190,7 @@ def build(by_repo: dict, stations: list, sections: dict, counts: dict,
     webhook = (sections or {}).get("webhook") or {}
     issues = _issue_index(stations)
 
-    rows = []
-    for repo_receipts in (by_repo or {}).values():
-        for receipt in repo_receipts or []:
-            if not isinstance(receipt, dict):
-                continue
-            if not str(receipt.get("issue") or "").strip():
-                continue
-            if str(receipt.get("outcome") or "") in PER_REPO:
-                continue
-            rows.append(receipt)
-    rows.sort(key=lambda r: str(r.get("at") or ""), reverse=True)
+    rows = _activity_rows(by_repo)
     dropped = max(0, len(rows) - MAX_ACTIVITY)
     activity = [_row(r, issues, now_iso) for r in rows[:MAX_ACTIVITY]]
 

@@ -87,6 +87,23 @@ def latest(history, bots=BOTS) -> list[dict]:
     return out
 
 
+def _reply_for_report(turns: list, before: set, message: str, bot: str) -> dict | None:
+    origins = [turn for turn in turns if turn.get("role") == "user"
+               and str(turn.get("id") or "") not in before
+               and turn.get("content", turn.get("text")) == message]
+    if len(origins) > 1:
+        raise ValueError(f"{bot} report request has ambiguous provenance")
+    group = origins[0].get("inference_group_id") if origins else None
+    if group:
+        for turn in reversed(turns):
+            if (turn.get("role") == "assistant" and str(turn.get("id") or "") not in before
+                    and turn.get("inference_group_id") == group):
+                if turn.get("ok") is not True:
+                    raise ValueError(f"{bot} report inference did not succeed")
+                return turn
+    return None
+
+
 def run_report(bot: str, base: str, timeout_s: float = 300) -> dict:
     if bot not in BOTS:
         raise ValueError(f"unknown bot: {bot}")
@@ -107,19 +124,9 @@ def run_report(bot: str, base: str, timeout_s: float = 300) -> dict:
         raise ValueError(f"{bot} report request was not accepted")
     while time.monotonic() < deadline:
         turns = patient(base, query, deadline).get("turns", [])
-        origins = [turn for turn in turns if turn.get("role") == "user"
-                   and str(turn.get("id") or "") not in before
-                   and turn.get("content", turn.get("text")) == message]
-        if len(origins) > 1:
-            raise ValueError(f"{bot} report request has ambiguous provenance")
-        group = origins[0].get("inference_group_id") if origins else None
-        if group:
-            for turn in reversed(turns):
-                if (turn.get("role") == "assistant" and str(turn.get("id") or "") not in before
-                        and turn.get("inference_group_id") == group):
-                    if turn.get("ok") is not True:
-                        raise ValueError(f"{bot} report inference did not succeed")
-                    return turn
+        reply = _reply_for_report(turns, before, message, bot)
+        if reply is not None:
+            return reply
         time.sleep(min(2, max(0, deadline - time.monotonic())))
     raise TimeoutError(f"{bot} did not answer within {timeout_s:g}s")
 
