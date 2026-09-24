@@ -55,6 +55,18 @@ async function projectRoster(parent){
   if(matches.length>limit)rows.append(button(`Show all ${matches.length} projects`,()=>{limit=matches.length;draw();}));
  }
  filter.addEventListener('input',draw);draw();
+ const inactive=(data.stations||[]).filter(desk=>desk.hidden);
+ if(inactive.length){
+  const away=el('details','find-group');away.append(el('summary','',`Inactive desks (${inactive.length})`));
+  for(const desk of inactive)away.append(button(`Bring back ${desk.repo}`,()=>setDeskHidden(desk.repo,false)));
+  parent.append(away);
+ }
+}
+async function setDeskHidden(repo,hidden){
+ const result=await api('/api/desks',{repo,hidden});if(!result.ok)throw Error('Desk change was not saved');
+ snapshot=null;snapshotReadAt=0;
+ if($('#detail').open)$('#detail').close();
+ notice(hidden?`${repo} put away`:`${repo} is active again`);await route();
 }
 function projectDesks(data,local){
  const stations=data.stations||[];
@@ -66,6 +78,7 @@ function projectDesks(data,local){
 async function project(desk){
  rememberDetail('project',JSON.stringify({repo:desk.repo,root:desk.root}));
  const body=sheet(desk.repo);body.append(el('p','muted',desk.label||desk.detail||''));
+ if(desk.hidden===false)body.append(button('Put away from active desks',()=>setDeskHidden(desk.repo,true)));
  if(desk.root&&desk.taskCapable)body.append(button('New task in this checkout',()=>newTask(desk.root),'primary'));
  if(desk.root&&!desk.taskCapable)body.append(el('p','muted','This is a file collection. New tasks require a Git checkout so their work can run in an isolated clone.'));
  const nav=el('div','actions');const view=el('div');body.append(nav,view);
