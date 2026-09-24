@@ -593,6 +593,7 @@ def _bot_last_word(node) -> dict:
 # unparsed park still gets its comment box, so nothing is ever hidden.
 
 DECISION_MARK = "❓"
+UNEXPLAINED_PASS = "The automated pass could not resolve this and did not say what to decide."
 DECISION_MIN, DECISION_MAX = 2, 4
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 OPTION_RE = re.compile(r"^\s*[-*]\s*\[[ xX]?\]\s*\*\*(\d+)\.\*\*\s*(\S.*?)\s*$")
@@ -614,7 +615,7 @@ def parse_decision(text):
     if not lines or not lines[0].startswith(DECISION_MARK):
         return None
     question = lines[0][len(DECISION_MARK):].strip()
-    if not question:
+    if not question or question.startswith(UNEXPLAINED_PASS):
         return None
 
     options = []
@@ -652,6 +653,7 @@ def _issue_row(i) -> dict:
     # Parsed from the WHOLE comment, never from the 1500-character copy below:
     # a block that fell off the end of a trim is a question with no buttons.
     decision = parse_decision(full)
+    automation_failure = full.lstrip().startswith(DECISION_MARK + " " + UNEXPLAINED_PASS)
     landed_pr = parse_landed_pr(full)
     return {
         "number": i.get("number"),
@@ -671,6 +673,7 @@ def _issue_row(i) -> dict:
         # Present only when the comment really is one, so "has a decision" is a
         # key test on the phone and not a truthiness dance over an empty shape.
         **({"decision": decision} if decision else {}),
+        **({"automation_failure": "missing_decision"} if automation_failure else {}),
         **({"landed_pr": landed_pr} if landed_pr else {}),
     }
 
