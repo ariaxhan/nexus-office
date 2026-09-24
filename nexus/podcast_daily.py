@@ -53,10 +53,22 @@ def today_evidence(root,date):
 
 def editorial_pass(directory,prompt,env,work):
     with (directory/'writer.log').open('a') as log:
-        subprocess.run(['codex','exec','--ignore-user-config','--ephemeral','--skip-git-repo-check',
-                        '--sandbox','read-only','-C',work,'-m','gpt-5.6-sol','-c','web_search="live"',
-                        '-o',str(directory/'raw.txt'),'-'],input=prompt,text=True,env=env,
-                       stdout=log,stderr=log,timeout=1800,check=True)
+        try:
+            subprocess.run(['codex','exec','--ignore-user-config','--ephemeral','--skip-git-repo-check',
+                            '--sandbox','read-only','-C',work,'-m','gpt-5.6-sol','-c','web_search="live"',
+                            '-o',str(directory/'raw.txt'),'-'],input=prompt,text=True,env=env,
+                           stdout=log,stderr=log,timeout=1100,check=True)
+            if not (directory/'raw.txt').read_text().strip():
+                raise ValueError('Codex returned an empty editorial pass')
+        except (OSError,subprocess.SubprocessError,ValueError) as exc:
+            log.write(f'Codex editorial pass failed ({type(exc).__name__}); continuing on Claude\n')
+            sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'client'))
+            import office_profiles
+            claude_env=office_profiles.environment('claude','personal')
+            result=subprocess.run(['claude','-p',prompt,'--tools','WebSearch,WebFetch',
+                                   '--permission-mode','dontAsk'],cwd=work,env=claude_env,
+                                  capture_output=True,text=True,timeout=700,check=True)
+            (directory/'raw.txt').write_text(result.stdout)
     return (directory/'raw.txt').read_text().strip().removeprefix('```json').removesuffix('```').strip()
 
 

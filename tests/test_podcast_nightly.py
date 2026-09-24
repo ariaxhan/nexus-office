@@ -1,7 +1,9 @@
 from contextlib import closing
 import json
+import subprocess
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from nexus import podcast_daily as daily
@@ -9,6 +11,20 @@ from nexus.ledger import Ledger
 
 
 class NightlyPodcast(unittest.TestCase):
+    def test_editorial_writer_continues_on_claude_when_codex_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            calls=[]
+            def run(argv,**kwargs):
+                calls.append(argv)
+                if argv[0]=='codex':
+                    raise subprocess.CalledProcessError(1,argv)
+                return subprocess.CompletedProcess(argv,0,'{"title":"continued"}','')
+            with patch.object(daily.subprocess,'run',side_effect=run), \
+                 patch.dict('sys.modules',{'office_profiles':SimpleNamespace(environment=lambda *_:{})}):
+                self.assertEqual(daily.editorial_pass(root,'Write JSON',{},temporary),'{"title":"continued"}')
+            self.assertEqual([argv[0] for argv in calls],['codex','claude'])
+
     def test_now_changes_existing_morning_schedule_and_queues_once(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); database=str(root/'ledger.sqlite')
