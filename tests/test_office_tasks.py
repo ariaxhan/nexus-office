@@ -112,6 +112,18 @@ class AccountIsolation(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):office_profiles.environment('codex','tbs')
 
 class PersistentConversation(unittest.TestCase):
+    def test_failed_turn_requires_provider_continuation(self):
+        from types import SimpleNamespace
+        from nexus.office_agent import Conversation,ProviderFailure
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            ledger=SimpleNamespace(event=lambda *args,**kwargs:None)
+            conversation=Conversation(ledger,{'id':'flight','task_id':'task'},root,root,{'engine':'codex'})
+            with self.assertRaises(ProviderFailure):
+                conversation.provider({'method':'turn/failed','params':{'error':'limit'}})
+            with self.assertRaises(ProviderFailure):
+                conversation.provider({'method':'claude/ResultMessage','params':{'is_error':True}})
+
     def test_failed_codex_session_opens_claude_and_reconciles_pending_work(self):
         import io
         import json

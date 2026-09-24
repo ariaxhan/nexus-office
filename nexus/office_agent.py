@@ -170,6 +170,8 @@ class Conversation:
         if 'id' in message and 'method' in message:
             return self.provider_request(message)
         self.emit('office.provider',message)
+        if method in ('turn/failed','error') or (method=='claude/ResultMessage' and message.get('params',{}).get('is_error')):
+            raise ProviderFailure(f'{method}: provider reported a failed turn')
         text=assistant_text(method,message.get('params',{}))
         if text:
             self.output.append(text)
