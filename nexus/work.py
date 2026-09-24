@@ -579,9 +579,9 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None, issue
         parallel=None):
     token = _lane.set(lane)
     try:
-        if lane == TOWER_LABEL:
+        if lane == TOWER_LABEL and led is not None:
             recover_terminal(led)
-        cut = cut_idle(led, [e for e in entries if e["enabled"]]) if lane == TOWER_LABEL and issue is None else []
+        cut = cut_idle(led, [e for e in entries if e["enabled"]]) if lane == TOWER_LABEL and issue is None and led is not None else []
         if lane == TOWER_LABEL and issue is None and repo is None and registry_path:
             waved = dispatch_wave(led, entries, registry_path, budget_s, parallel or lanes_caps(registry_path))
             if waved is not None:
