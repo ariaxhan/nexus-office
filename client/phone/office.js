@@ -720,7 +720,9 @@ function attentionCard(entry){
   control.append(el('strong','',option.label),el('span','',option.consequence||'Record this choice'));
   choices.append(control);
  }
- head.append(button('Outdated · close',()=>decide({kind:'close',body:'Closing as outdated at Aria’s direction from Office Watch.'}),'attention-close'));
+ const actions=el('div','attention-head-actions');
+ actions.append(button('Outdated · close issue',()=>decide({kind:'close',body:'Closing as outdated at Aria’s direction from Office Watch.'}),'attention-close'),button('Put away repo',()=>setDeskHidden(entry.repo,true),'attention-hide'));
+ head.append(actions);
  node.append(choices,button('Open issue details',()=>githubDetail(entry.repo,issue,'issues'),'attention-details'));
  return node;
 }
