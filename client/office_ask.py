@@ -607,6 +607,17 @@ def _answer_turn(message, model, reply_id):
             try:
                 item = client.receive(min(30, max(.1, deadline - time.monotonic())))
             except TimeoutError:
+                # Notifications can be lost while the provider's durable turn has finished.
+                # Read the recorded turn before waiting again, so one finished answer
+                # cannot hold every later Ask message until the 30-minute timeout.
+                saved = _saved_turn(client, thread_id, user_id, message,
+                                    user['request_id'], started['turn']['id'])
+                if saved and saved.get('status') == 'completed':
+                    answer = _turn_answer(saved) or answer
+                    if answer:
+                        return answer
+                if saved and saved.get('status') in ('failed', 'interrupted', 'cancelled'):
+                    raise RuntimeError('Codex turn ' + saved['status'])
                 continue
             if item.get('method') == 'item/completed':
                 output = item.get('params', {}).get('item', {})

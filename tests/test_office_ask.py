@@ -193,6 +193,31 @@ class AskQueueTest(unittest.TestCase):
         self.assertEqual(answer["status"], "completed")
         self.assertNotIn("turn/start", fake.calls)
 
+    def test_lost_completion_notification_reads_finished_turn_and_unblocks_queue(self):
+        with patch.object(ask, "_ensure_worker"):
+            receipt = ask.send({"request_id": "lost-event-request-001", "text": "Check the work",
+                                "model": "model-a"})
+        turn = {"id": "turn-1", "status": "completed", "items": [
+            {"type": "agentMessage", "text": "Saved answer"}]}
+
+        class SilentServer:
+            def request(self, method, params, timeout=20):
+                if method == "thread/start":
+                    return {"thread": {"id": "thread-1"}}
+                if method == "turn/start":
+                    return {"turn": {"id": "turn-1"}}
+                if method == "thread/read":
+                    return {"thread": {"turns": [turn]}}
+                return {}
+            def receive(self, timeout):
+                raise TimeoutError("completion notification lost")
+            def close(self):
+                pass
+
+        with patch.object(ask, "AppServer", return_value=SilentServer()):
+            self.assertEqual(ask._answer_turn("Check the work", "model-a", receipt["reply_id"]),
+                             "Saved answer")
+
     def test_restart_continues_interrupted_codex_turn_without_resending_instruction(self):
         body = {"request_id": "recover-request-0002", "text": "Do the work", "model": "model-a"}
         with patch.object(ask, "_ensure_worker"):
