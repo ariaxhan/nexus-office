@@ -1677,6 +1677,7 @@ function renderEvent(turns, live, state, event, taskId) {
       }
     },
     "office.delivery": () => turns.insertBefore(el("p", "muted", `Message ${payload.message_id}: ${payload.state}${payload.consumption === "unknown" ? " \xB7 provider acknowledged; consumption unconfirmed" : ""}`), live),
+    "office.policy": () => turns.insertBefore(el("p", "muted", `Codex policy \xB7 ${payload.profile} seat \xB7 approval ${payload.approvalPolicy} \xB7 sandbox ${payload.sandbox}`), live),
     "office.permission_closed": () => {
       const node = turns.querySelector(`[data-permission-id="${payload.permission_id}"]`);
       if (node) node.replaceChildren(el("p", "muted", "Permission answered"));

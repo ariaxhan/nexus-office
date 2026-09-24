@@ -3,7 +3,9 @@ import json
 import queue
 import subprocess
 import threading
+import tomllib
 import uuid
+from pathlib import Path
 
 
 class Transport:
@@ -69,10 +71,18 @@ class Transport:
 
 class Codex:
     def __init__(self,env,cwd,stderr,resume=None):
+        seat=Path(env['CODEX_HOME'])
+        config=tomllib.loads((seat/'config.toml').read_text())
+        approval=config.get('approval_policy','on-request')
+        if approval not in ('never','on-request','on-failure','untrusted'):
+            raise ValueError('Unsupported Codex seat approval policy')
+        # Office tasks run in disposable clones. Their focused tests and visual
+        # checks may use /private/tmp and other paths outside seat writable roots.
+        self.policy={'approvalPolicy':approval,'sandbox':'danger-full-access'}
         self.rpc=Transport(['codex','app-server','--listen','stdio://'],env,cwd,stderr)
         self.rpc.call('initialize',{'clientInfo':{'name':'nexus_office','title':'Nexus Office','version':'1.0.0'},'capabilities':{}})
         self.rpc.send({'method':'initialized'})
-        params={'cwd':str(cwd),'approvalPolicy':'on-request','sandbox':'workspace-write'}
+        params={'cwd':str(cwd),**self.policy}
         method='thread/start'
         if resume:
             method='thread/resume';params['threadId']=resume

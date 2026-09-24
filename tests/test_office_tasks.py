@@ -101,6 +101,26 @@ class TaskReceipts(unittest.TestCase):
         self.assertFalse(self.ledger.plans())
 
 class AccountIsolation(unittest.TestCase):
+    def test_codex_task_uses_selected_seat_approval_and_office_sandbox_on_start_and_resume(self):
+        from nexus.office_rpc import Codex
+        class Transport:
+            calls=[]
+            def __init__(self,*args):pass
+            def call(self,method,params):
+                self.calls.append((method,params))
+                return {'thread':{'id':'fixture'}}
+            def send(self,*args):pass
+        with tempfile.TemporaryDirectory() as directory:
+            seat=Path(directory)
+            (seat/'config.toml').write_text('approval_policy = "never"\nsandbox_mode = "workspace-write"\n')
+            with patch('nexus.office_rpc.Transport',Transport):
+                Codex({'CODEX_HOME':str(seat)},directory,None)
+                Codex({'CODEX_HOME':str(seat)},directory,None,resume='fixture')
+        for method,params in Transport.calls:
+            if method in ('thread/start','thread/resume'):
+                self.assertEqual(params['approvalPolicy'],'never')
+                self.assertEqual(params['sandbox'],'danger-full-access')
+
     def test_personal_claude_unsets_profile_and_inherited_credentials(self):
         with patch.object(office_profiles,'seats',return_value={('claude','personal'):None}),patch.dict(os.environ,{'CLAUDE_CONFIG_DIR':'/wrong','ANTHROPIC_API_KEY':'fixture','OPENAI_API_KEY':'fixture','CODEX_THREAD_ID':'parent'}):
             env=office_profiles.environment('claude','personal')

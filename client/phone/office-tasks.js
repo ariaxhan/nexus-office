@@ -142,6 +142,7 @@ function renderEvent(turns,live,state,event,taskId){
   'office.phase':()=>state.textContent=payload.state,
   'office.message':()=>{if(!payload.initial){const node=card('You',payload.text);showAttachments(node,payload.attachments);turns.insertBefore(node,live);}},
   'office.delivery':()=>turns.insertBefore(el('p','muted',`Message ${payload.message_id}: ${payload.state}${payload.consumption==='unknown'?' · provider acknowledged; consumption unconfirmed':''}`),live),
+  'office.policy':()=>turns.insertBefore(el('p','muted',`Codex policy · ${payload.profile} seat · approval ${payload.approvalPolicy} · sandbox ${payload.sandbox}`),live),
   'office.permission_closed':()=>{const node=turns.querySelector(`[data-permission-id="${payload.permission_id}"]`);if(node)node.replaceChildren(el('p','muted','Permission answered'));},
   'office.permission':()=>turns.insertBefore(permissionCard({id:event.id,task_id:taskId,payload}),live),
   'office.provider':()=>provider(turns,live,payload),
