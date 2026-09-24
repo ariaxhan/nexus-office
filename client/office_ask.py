@@ -19,6 +19,16 @@ DEFAULT_MODEL = 'gpt-6-sol'
 LOCK = threading.RLock()
 CATALOG = (0, [])
 AUTO_CHOICE = {'engine': 'office', 'id': 'auto', 'name': 'Auto · learns from feedback'}
+REQUEST_ID_RE = re.compile(r'[A-Za-z0-9_-]{16,80}\Z', re.ASCII)
+INTERRUPTED = 'Office restarted before this answer finished.'
+
+
+class Connection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
 
 
 def claude_binary():
@@ -56,7 +66,7 @@ def path():
 def connect():
     target = path()
     private_state.ensure_dir(target.parent)
-    db = sqlite3.connect(target, timeout=10)
+    db = sqlite3.connect(target, timeout=10, factory=Connection)
     target.chmod(0o600)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA journal_mode=WAL')
@@ -71,6 +81,20 @@ def connect():
             reply_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, updated_at REAL NOT NULL
         );
     ''')
+    columns = {row['name'] for row in db.execute('PRAGMA table_info(messages)')}
+    for name, definition in (('request_id', 'TEXT'), ('parent_id', 'INTEGER'),
+                             ('requested_model', 'TEXT')):
+        if name not in columns:
+            db.execute(f'ALTER TABLE messages ADD COLUMN {name} {definition}')
+    db.execute("UPDATE messages SET status='completed' WHERE status='complete'")
+    db.execute("UPDATE messages SET status='working' WHERE status='running'")
+    db.execute("UPDATE messages SET requested_model=model WHERE role='user' AND requested_model IS NULL")
+    db.execute('''UPDATE messages SET parent_id=(
+                    SELECT MAX(u.id) FROM messages u WHERE u.role='user' AND u.id < messages.id
+                  ) WHERE role='office' AND parent_id IS NULL''')
+    db.execute('''CREATE UNIQUE INDEX IF NOT EXISTS messages_request_id
+                  ON messages(request_id) WHERE request_id IS NOT NULL''')
+    db.commit()
     return db
 
 
@@ -86,18 +110,22 @@ def _set(db, key, value):
 
 def read():
     with connect() as db:
-        if not WORKER or not WORKER.is_alive():
-            db.execute("UPDATE messages SET status='failed',text='Office restarted before this answer finished.',completed_at=? WHERE status='running'", (time.time(),))
-        messages = [dict(row) for row in db.execute('''SELECT id,role,text,model,status,created_at,completed_at
-                                                     FROM messages ORDER BY id LIMIT 500''')]
+        messages = [dict(row) for row in db.execute('''SELECT * FROM (
+                                                       SELECT id,role,text,model,status,created_at,completed_at,
+                                                              request_id,parent_id
+                                                       FROM messages ORDER BY id DESC LIMIT 500
+                                                     ) ORDER BY id''')]
         ratings = {row['reply_id']: row['kind'] for row in db.execute('SELECT reply_id,kind FROM ratings')}
         for message in messages:
             if message['id'] in ratings:
                 message['rating'] = ratings[message['id']]
-        pending = next((row for row in messages if row['status'] == 'running'), None)
+        counts = {row['status']: row['count'] for row in db.execute(
+            "SELECT status,COUNT(*) count FROM messages WHERE role='user' GROUP BY status")}
+        queue = {'queued': counts.get('queued', 0), 'working': counts.get('working', 0)}
         return {'messages': messages, 'model': _state(db, 'model', DEFAULT_MODEL),
                 'selection': _state(db, 'selection', _state(db, 'model', DEFAULT_MODEL)),
-                'busy': pending is not None, 'thread_id': _state(db, 'thread_id'),
+                'busy': queue['working'] > 0 or queue['queued'] > 0, 'queue': queue,
+                'thread_id': _state(db, 'thread_id'),
                 'checked_at': time.time()}
 
 
@@ -107,11 +135,11 @@ def auto_model(db, available):
     if not candidates:
         raise ValueError('No model is available for Auto')
     scores = {name: [1, 1, 0] for name in candidates}
-    for row in db.execute("SELECT model,status FROM messages WHERE role='office'"):
+    for row in db.execute("SELECT model,status FROM messages WHERE role='office' AND status IN ('completed','failed')"):
         if row['model'] in scores:
             score = scores[row['model']]
             score[2] += 1
-            score[0 if row['status'] == 'complete' else 1] += 1
+            score[0 if row['status'] == 'completed' else 1] += 1
     for row in db.execute('''SELECT m.model,r.kind FROM ratings r
                              JOIN messages m ON m.id=r.reply_id'''):
         if row['model'] in scores:
@@ -127,7 +155,7 @@ def rate(body):
     if type(reply_id) is not int or kind not in ('helpful', 'missed'):
         raise ValueError('Choose Helpful or Missed for an Office answer')
     with connect() as db:
-        row = db.execute("SELECT 1 FROM messages WHERE id=? AND role='office' AND status='complete'", (reply_id,)).fetchone()
+        row = db.execute("SELECT 1 FROM messages WHERE id=? AND role='office' AND status='completed'", (reply_id,)).fetchone()
         if not row:
             raise FileNotFoundError('Office answer is unavailable')
         db.execute('''INSERT INTO ratings(reply_id,kind,updated_at) VALUES(?,?,?)
@@ -234,39 +262,163 @@ def models(fresh=False):
 
 
 def send(body):
-    global WORKER
     message = body.get('text')
     requested = body.get('model', DEFAULT_MODEL)
+    request_id = body.get('request_id')
     if not isinstance(message, str) or not 1 <= len(message.strip()) <= 8000:
         raise ValueError('Ask needs a message of at most 8000 characters')
+    if not isinstance(requested, str):
+        raise ValueError('Ask needs a model')
+    if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
+        raise ValueError('Ask request_id must be 16 to 80 letters, numbers, underscores, or hyphens')
+    message = message.strip()
+    with LOCK, connect() as db:
+        existing = db.execute("SELECT * FROM messages WHERE role='user' AND request_id=?",
+                              (request_id,)).fetchone()
+        if existing:
+            return _retry_receipt(db, existing, message, requested)
     available = {row['id'] for row in models()['items']}
     if requested not in available and requested != 'auto':
         raise ValueError('That model is not currently available in the selected personal account')
     with LOCK, connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        existing = db.execute("SELECT * FROM messages WHERE role='user' AND request_id=?",
+                              (request_id,)).fetchone()
+        if existing:
+            receipt = _retry_receipt(db, existing, message, requested)
+            db.commit()
+            return receipt
         model = auto_model(db, available) if requested == 'auto' else requested
-        if not WORKER or not WORKER.is_alive():
-            db.execute("UPDATE messages SET status='failed',text='Office restarted before this answer finished.',completed_at=? WHERE status='running'", (time.time(),))
-        if db.execute("SELECT 1 FROM messages WHERE status='running' LIMIT 1").fetchone():
-            raise ValueError('Office is finishing the previous answer')
         previous = _state(db, 'model', DEFAULT_MODEL)
         if previous != model:
             db.execute('INSERT INTO messages(role,text,model,status,created_at) VALUES(?,?,?,?,?)',
-                       ('system', f'Model changed from {previous} to {model}', model, 'complete', time.time()))
+                       ('system', f'Model changed from {previous} to {model}', model, 'completed', time.time()))
         _set(db, 'model', model)
         _set(db, 'selection', requested)
-        db.execute('INSERT INTO messages(role,text,model,status,created_at) VALUES(?,?,?,?,?)',
-                   ('user', message.strip(), model, 'complete', time.time()))
-        cursor = db.execute('INSERT INTO messages(role,text,model,status,created_at) VALUES(?,?,?,?,?)',
-                            ('office', '', model, 'running', time.time()))
+        cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,request_id,requested_model)
+                               VALUES(?,?,?,?,?,?,?)''',
+                            ('user', message, model, 'queued', time.time(), request_id, requested))
+        user_id = cursor.lastrowid
+        cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,parent_id)
+                               VALUES(?,?,?,?,?,?)''',
+                            ('office', '', model, 'queued', time.time(), user_id))
         reply_id = cursor.lastrowid
-        WORKER = threading.Thread(target=_answer, args=(reply_id, message.strip(), model), daemon=True)
+        receipt = _receipt(request_id, user_id, reply_id, model)
+        db.commit()
+    _ensure_worker()
+    return receipt
+
+
+def _receipt(request_id, user_id, reply_id, model):
+    return {'accepted': True, 'request_id': request_id, 'user_id': user_id,
+            'reply_id': reply_id, 'model': model}
+
+
+def _retry_receipt(db, row, message, requested):
+    if row['text'] != message or (row['requested_model'] or row['model']) != requested:
+        raise ValueError('That request_id was already used for a different Ask message')
+    reply = db.execute("SELECT id FROM messages WHERE role='office' AND parent_id=?", (row['id'],)).fetchone()
+    if not reply:
+        raise RuntimeError('Ask receipt is missing its answer row')
+    return _receipt(row['request_id'], row['id'], reply['id'], row['model'])
+
+
+def _ensure_worker():
+    global WORKER
+    with LOCK:
+        if WORKER and WORKER.is_alive():
+            return
+        with connect() as db:
+            queued = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='queued' LIMIT 1").fetchone()
+            working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
+        if not queued or working:
+            return
+        WORKER = threading.Thread(target=_drain, name='office-ask', daemon=True)
         WORKER.start()
-    return {'accepted': True, 'reply_id': reply_id, 'model': model}
 
 
-def _bridge(db, model):
-    rows = db.execute('''SELECT role,text,model FROM messages WHERE status='complete' AND role IN ('user','office')
-                         ORDER BY id DESC LIMIT 20''').fetchall()
+def _claim():
+    with LOCK, connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        changed = db.execute('''UPDATE messages SET status='working' WHERE id=(
+                                  SELECT id FROM messages WHERE role='user' AND status='queued'
+                                  ORDER BY id LIMIT 1
+                                ) AND NOT EXISTS (
+                                  SELECT 1 FROM messages WHERE role='user' AND status='working'
+                                )''').rowcount
+        if changed != 1:
+            db.commit()
+            return None
+        row = db.execute("SELECT id,text,model FROM messages WHERE role='user' AND status='working' ORDER BY id LIMIT 1").fetchone()
+        reply = db.execute("SELECT id FROM messages WHERE role='office' AND parent_id=?", (row['id'],)).fetchone()
+        if not reply:
+            db.execute("UPDATE messages SET status='failed',completed_at=? WHERE id=?", (time.time(), row['id']))
+            db.commit()
+            return None
+        db.execute("UPDATE messages SET status='working' WHERE id=? AND status='queued'", (reply['id'],))
+        db.commit()
+        return {'user_id': row['id'], 'reply_id': reply['id'], 'text': row['text'], 'model': row['model']}
+
+
+def _finish(turn, answer, status):
+    with LOCK, connect() as db:
+        now = time.time()
+        db.execute("UPDATE messages SET status=?,completed_at=? WHERE id=? AND status='working'",
+                   (status, now, turn['user_id']))
+        db.execute("UPDATE messages SET text=?,status=?,completed_at=? WHERE id=? AND status='working'",
+                   (answer, status, now, turn['reply_id']))
+
+
+def _drain():
+    global WORKER
+    while True:
+        turn = _claim()
+        if turn:
+            try:
+                answer = _answer_turn(turn['text'], turn['model'], turn['reply_id'])
+                _finish(turn, answer, 'completed')
+            except Exception as exc:
+                error = f'Office could not finish this answer: {type(exc).__name__}: {exc}'[:1000]
+                _finish(turn, error, 'failed')
+            continue
+        with LOCK:
+            with connect() as db:
+                queued = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='queued' LIMIT 1").fetchone()
+                working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
+            if queued and not working:
+                continue
+            if WORKER is threading.current_thread():
+                WORKER = None
+            return
+
+
+def recover():
+    with LOCK, connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        rows = db.execute('''SELECT DISTINCT u.id user_id,o.id reply_id
+                             FROM messages o LEFT JOIN messages u ON u.id=o.parent_id
+                             WHERE o.role='office' AND o.status='working'
+                             UNION
+                             SELECT u.id,NULL FROM messages u
+                             WHERE u.role='user' AND u.status='working'
+                               AND NOT EXISTS (SELECT 1 FROM messages o WHERE o.parent_id=u.id)''').fetchall()
+        now = time.time()
+        for row in rows:
+            if row['user_id'] is not None:
+                db.execute("UPDATE messages SET status='failed',completed_at=? WHERE id=?", (now, row['user_id']))
+            if row['reply_id'] is not None:
+                db.execute("UPDATE messages SET text=?,status='failed',completed_at=? WHERE id=?",
+                           (INTERRUPTED, now, row['reply_id']))
+        db.commit()
+    _ensure_worker()
+    return {'interrupted': len(rows)}
+
+
+def _bridge(db, model, before_id):
+    rows = db.execute('''SELECT role,text,model FROM messages
+                         WHERE id < ? AND ((role='user' AND status IN ('completed','failed'))
+                                           OR (role='office' AND status='completed'))
+                         ORDER BY id DESC LIMIT 20''', (before_id,)).fetchall()
     earlier = list(reversed(rows))
     last_office = next((row for row in reversed(earlier) if row['role'] == 'office'), None)
     if not last_office or last_office['model'].startswith('claude:') == model.startswith('claude:'):
@@ -302,18 +454,18 @@ def _claude_answer(message, model, bridge):
     return result.get('result', '')
 
 
-def _answer(reply_id, message, model):
+def _answer_turn(message, model, reply_id):
     client = None
     answer = ''
-    status = 'complete'
     try:
         with connect() as db:
-            bridge = _bridge(db, model)
+            user_id = db.execute("SELECT parent_id FROM messages WHERE id=?", (reply_id,)).fetchone()['parent_id']
+            bridge = _bridge(db, model, user_id)
         if model.startswith('claude:'):
             answer = _claude_answer(message, model, bridge)
             if not answer:
                 raise RuntimeError('Claude Code returned an empty answer')
-            return
+            return answer
         client = AppServer()
         with connect() as db:
             thread_id = _state(db, 'thread_id')
@@ -343,7 +495,7 @@ def _answer(reply_id, message, model):
                 if output.get('type') == 'agentMessage':
                     answer = output.get('text', '')
                     with connect() as db:
-                        db.execute('UPDATE messages SET text=? WHERE id=?', (answer, reply_id))
+                        db.execute("UPDATE messages SET text=? WHERE id=? AND status='working'", (answer, reply_id))
             if item.get('method') == 'turn/completed':
                 turn = item.get('params', {}).get('turn', {})
                 if turn.get('status') != 'completed':
@@ -356,12 +508,7 @@ def _answer(reply_id, message, model):
             raise TimeoutError('Ask turn exceeded 30 minutes')
         if not answer:
             raise RuntimeError('Codex completed without an answer')
-    except Exception as exc:
-        answer = f'Office could not finish this answer: {type(exc).__name__}: {exc}'[:1000]
-        status = 'failed'
+        return answer
     finally:
         if client:
             client.close()
-        with connect() as db:
-            db.execute('UPDATE messages SET text=?,status=?,completed_at=? WHERE id=?',
-                       (answer, status, time.time(), reply_id))
