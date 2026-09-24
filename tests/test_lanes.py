@@ -90,6 +90,36 @@ class Lanes(unittest.TestCase):
         self.assertEqual("main", git(self.repo, "rev-parse", "--abbrev-ref", "HEAD"))
         self.assertEqual([], lanes.records(self.repo))
 
+    def test_failed_claude_lane_continues_on_codex_in_same_checkout(self):
+        seen = []
+        def run(argv, cwd=None, **kw):
+            if cwd == self.repo and kw.get("timeout") != 1800:
+                seen.append(argv)
+                if argv[1] == "run":
+                    return Fake(1)
+                self.write("a.txt", "continued\n")
+            return Fake()
+        issue = {"number": 1, "title": "fix", "labels": []}
+        with unittest.mock.patch("nexus.risk.classify", return_value="direct"):
+            result = executor.fly(self.entry, issue, "flt_fallback", pr_create=None,
+                                  comment=lambda b: "c", run=run, write_set=["a.txt"])
+        self.assertEqual(result["state"], "LANDED")
+        self.assertEqual([argv[1] for argv in seen], ["run", "run-provider"])
+        self.assertEqual("continued", self.origin_file("a.txt"))
+
+    def test_both_provider_failures_requeue_retained_edits(self):
+        def run(argv, cwd=None, **kw):
+            if cwd == self.repo and kw.get("timeout") != 1800:
+                self.write("a.txt", "unfinished\n")
+                return Fake(1)
+            return Fake()
+        issue = {"number": 1, "title": "fix", "labels": []}
+        result = executor.fly(self.entry, issue, "flt_both_failed", pr_create=None,
+                              comment=lambda b: "c", run=run, write_set=["a.txt"])
+        self.assertEqual(result["state"], "HELD")
+        self.assertTrue(result["requeue"])
+        self.assertEqual("unfinished", git(self.origin, "show", f"{result['branch']}:a.txt"))
+
     def test_overlapping_write_sets_serialize(self):
         lanes.acquire(self.repo, "main", "flt_a", os.getpid(), 600, ["src"])
         with self.assertRaisesRegex(lease.Owned, "write_set:flt_a"):

@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
+import time
 
 from . import landing, lanes, lease, risk
 
@@ -89,7 +91,9 @@ def road_prompt(repo, road, extra=""):
 def issue_prompt(entry, issue):
     return (f"Resolve {entry['repo']} issue #{issue['number']}: {issue.get('title', '')}\n\n"
             f"{issue.get('body') or ''}\n\nEdit files in place in this checkout on "
-            f"{entry.get('default_branch', 'main')}. Do not commit, push, branch, clone, stash or "
+            f"{entry.get('default_branch', 'main')}. Read the latest issue comments first. "
+            "If Tower retained work on an aria/held branch, inspect and reuse it before editing. "
+            "Do not commit, push, branch, clone, stash or "
             f"open PRs; Nexus lands the change. Run the project's own checks.\n"
             f"Product guidance: {entry.get('product_guidance', '')}")
 
@@ -127,6 +131,47 @@ def plan(entry, issue):
     return argv, prompt, name, road.get("risk")
 
 
+def provider_fallback(argv, prompt, repo):
+    """Translate the routed CLI invocation, preserving the issue's copy authority."""
+    if len(argv) < 4 or argv[0] != ROUTER or argv[1] != "run":
+        return None
+    kind = argv[2]
+    if kind in ("customer-copy", "customer-copy-antigravity", "astra", "lesson"):
+        return None
+    note = ("The previous provider failed. Inspect current files and external state first. "
+            "Continue unfinished work; do not repeat completed sends, publishes, merges, "
+            "payments, or other external actions.\n\n" + prompt)
+    if kind == "code-judgment":
+        return [ROUTER, "run-provider", kind, "codex", "--", "exec", "--json", "--ephemeral",
+                "--model", "gpt-6-sol", "--sandbox", "danger-full-access",
+                "--skip-git-repo-check", "-C", repo, note]
+    return [ROUTER, "run-provider", kind, "claude", "--", "-p", note,
+            "--allowedTools", "Bash,Read,Edit,Write,Glob,Grep,Skill",
+            "--dangerously-skip-permissions"]
+
+
+def invoke(argv, *, cwd, env, input, timeout, run):
+    """Bound the whole provider process group before starting its replacement."""
+    if run is not subprocess.run:
+        try:
+            return run(argv, cwd=cwd, env=env, input=input, text=True,
+                       capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(argv, 124, "", "provider timeout")
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input else subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = proc.communicate(input, timeout=timeout)
+        return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        return subprocess.CompletedProcess(argv, 124, "", "provider timeout")
+
+
 def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subprocess.run, write_set=None,
         per_repo=lanes.PER_REPO):
     """write_set: this lane leases only those paths in the shared checkout; None leases the whole repo."""
@@ -146,8 +191,13 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
     if write_set:
         env["NEXUS_WRITE_SET"] = json.dumps(write_set)
         argv = [prompt if a == base else a for a in argv]
-    proc = run(argv, cwd=repo, env=env, input=prompt if road else None, text=True,
-               capture_output=True, timeout=timeout_s)
+    started = time.monotonic()
+    proc = invoke(argv, cwd=repo, env=env, input=prompt if road else None,
+                  timeout=max(1, timeout_s * .65), run=run)
+    fallback = provider_fallback(argv, prompt, repo) if proc.returncode else None
+    if fallback:
+        proc = invoke(fallback, cwd=repo, env=env, input=None,
+                      timeout=max(1, timeout_s - (time.monotonic() - started) - 5), run=run)
     if write_set:
         result = lanes.land(entry, issue, record, proc, forced, pr_create, comment, run, risk.classify, _lines)
         landing.require_terminal(repo, result)
@@ -156,6 +206,8 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
         result = _land(entry, issue, record, proc, road, forced, pr_create, comment, run)
         landing.require_terminal(repo, result)
         lease.release(repo, flight)
+    if fallback and proc.returncode and result["state"] == "HELD":
+        result = dict(result, requeue=True, retry_s=3600)
     return dict(result, recovered=[r for r in recovered if r], road=road)
 
 
@@ -178,12 +230,24 @@ def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
         out = os.path.join(tmp, "verdict.txt")
         model = run([ROUTER, "model", "review"], capture_output=True, text=True).stdout.strip()
         env = dict(os.environ, ACCOUNT_SCOPE=entry.get("account", ""), NEXUS_FLIGHT=flight)
-        run([ROUTER, "run", "review", "--", "exec", "--ephemeral", "--ignore-user-config", "--model", model,
-             "--sandbox", "danger-full-access", "--skip-git-repo-check", "-C", tmp, "-o", out, prompt],
-            cwd=tmp, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout_s)
+        started = time.monotonic()
+        primary = [ROUTER, "run", "review", "--", "exec", "--ephemeral", "--ignore-user-config",
+                   "--model", model, "--sandbox", "danger-full-access", "--skip-git-repo-check",
+                   "-C", tmp, "-o", out, prompt]
+        proc = invoke(primary, cwd=tmp, env=env, input=None, timeout=max(1, timeout_s * .65), run=run)
         text = open(out).read() if os.path.exists(out) else ""
+        if proc.returncode or not text.strip():
+            fallback = [ROUTER, "run-provider", "review", "claude", "--", "-p",
+                        "Codex review failed. Read the live PR and issue, then give only the requested verdict. "
+                        "Do not edit, comment, merge or publish.\n\n" + prompt,
+                        "--tools", "Bash,Read,Glob,Grep"]
+            proc = invoke(fallback, cwd=tmp, env=env, input=None,
+                          timeout=max(1, timeout_s - (time.monotonic() - started) - 5), run=run)
+            text = proc.stdout if not proc.returncode else ""
     verdict = re.findall(r"VERDICT:\s*(PASS|FAIL)(.*)", text)
-    return (verdict[-1][0], verdict[-1][1].strip() or text[-300:]) if verdict else ("FAIL", "no verdict: " + text[-300:])
+    if not verdict:
+        raise RoadError("review providers returned no verdict: " + text[-300:])
+    return verdict[-1][0], verdict[-1][1].strip() or text[-300:]
 
 
 def _land(entry, issue, record, proc, road, forced, pr_create, comment, run):
