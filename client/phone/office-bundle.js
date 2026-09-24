@@ -1815,7 +1815,7 @@ function sourceCurrent(controls, project2, token2) {
 }
 
 // client/phone/office.js
-var attention = { items: [], errors: [] };
+var attention = { items: [], errors: [], failures: [] };
 var snapshot = null;
 var snapshotReadAt = 0;
 async function world() {
@@ -2337,6 +2337,7 @@ var feedCategory = "all";
 async function watch(parent) {
   await refreshAttention();
   const rows = attention.items.filter(requiresYou);
+  const failures = attention.failures;
   let coordinatorRows = [];
   let coordinatorError = "";
   try {
@@ -2397,6 +2398,12 @@ async function watch(parent) {
       for (const problem of attention.errors) source.append(el("p", "muted", problem));
       decisions.append(source);
     }
+  }
+  if (failures.length) {
+    const stalled = section(parent, "Automation needs repair");
+    stalled.append(el("p", "muted", `${failures.length} automated ${failures.length === 1 ? "pass stopped" : "passes stopped"} without explaining why. These are not decisions for you. Open an issue to inspect its history or add guidance.`));
+    for (const entry of failures) stalled.append(card(`${entry.repo} #${entry.item.number} \xB7 ${entry.item.title}`, "Inspect issue history", () => githubDetail(entry.repo, entry.item, "issues")));
+    stalled.append(link("Track the repair", "https://github.com/ariaxhan/nexus-office/issues/186"));
   }
   if (coordinatorRows.length) {
     const systems = el("section", "watch-systems");
@@ -3122,15 +3129,17 @@ async function githubReviews(repo, number, cursor = 1, parent = null, inline2 = 
 }
 async function refreshAttention() {
   const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), world()]);
-  const items = [], errors = [];
+  const items = [], errors = [], failures = [];
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
       errors.push(result.reason.message);
       continue;
     }
-    items.push(...attentionItems(index, result.value));
+    for (const entry of attentionItems(index, result.value)) {
+      (automationFailure(entry) ? failures : items).push(entry);
+    }
   }
-  attention = { items, errors };
+  attention = { items, errors, failures };
   const needsYou = items.filter(requiresYou).length;
   const badge = $("#detail-attention");
   badge.title = needsYou ? `${needsYou} items need you` : "Nothing needs you right now";
@@ -3183,6 +3192,9 @@ function attentionItems(index, value3) {
     return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision?.question && issue.decision?.options?.length).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updated_at || "").localeCompare(String(a.item.updated_at || "")));
   }
   return [];
+}
+function automationFailure(entry) {
+  return entry.kind === "issue" && String(entry.item.decision?.question || "").startsWith("The automated pass could not resolve this and did not say what to decide.");
 }
 var layoutObserver = new ResizeObserver(() => {
   document.documentElement.style.setProperty("--tabs-height", `${$(".tabs").getBoundingClientRect().height}px`);
