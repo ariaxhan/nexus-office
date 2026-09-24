@@ -43,6 +43,7 @@ def claude_environment():
                'SSH_AUTH_SOCK', 'XDG_CONFIG_HOME')
     return {name: selected[name] for name in allowed if name in selected}
 WORKER = None
+RETRY_TIMER = None
 OFFICE_DIR = Path(__file__).resolve().parents[1]
 MANAGER_INSTRUCTIONS = (
     'You are the user\'s Office manager in one continuous chat. Primarily answer questions about '
@@ -84,7 +85,9 @@ def connect():
     columns = {row['name'] for row in db.execute('PRAGMA table_info(messages)')}
     for name, definition in (('request_id', 'TEXT'), ('parent_id', 'INTEGER'),
                              ('requested_model', 'TEXT'), ('provider_turn_id', 'TEXT'),
-                             ('recovering', 'INTEGER NOT NULL DEFAULT 0')):
+                             ('recovering', 'INTEGER NOT NULL DEFAULT 0'),
+                             ('next_attempt_at', 'REAL NOT NULL DEFAULT 0'),
+                             ('failure_count', 'INTEGER NOT NULL DEFAULT 0')):
         if name not in columns:
             db.execute(f'ALTER TABLE messages ADD COLUMN {name} {definition}')
     db.execute("UPDATE messages SET status='completed' WHERE status='complete'")
@@ -334,23 +337,36 @@ def _ensure_worker():
         if WORKER and WORKER.is_alive():
             return
         with connect() as db:
-            queued = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='queued' LIMIT 1").fetchone()
+            queued = db.execute("SELECT MIN(next_attempt_at) due FROM messages WHERE role='user' AND status='queued'").fetchone()['due']
             working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
-        if not queued or working:
+        if queued is None or working:
+            return
+        if queued > time.time():
+            _schedule_retry(queued - time.time())
             return
         WORKER = threading.Thread(target=_drain, name='office-ask', daemon=True)
         WORKER.start()
+
+
+def _schedule_retry(delay):
+    global RETRY_TIMER
+    if RETRY_TIMER:
+        RETRY_TIMER.cancel()
+    RETRY_TIMER = threading.Timer(max(.1, delay), _ensure_worker)
+    RETRY_TIMER.daemon = True
+    RETRY_TIMER.start()
 
 
 def _claim():
     with LOCK, connect() as db:
         db.execute('BEGIN IMMEDIATE')
         changed = db.execute('''UPDATE messages SET status='working' WHERE id=(
-                                  SELECT id FROM messages WHERE role='user' AND status='queued'
-                                  ORDER BY id LIMIT 1
+                                   SELECT id FROM messages WHERE role='user' AND status='queued'
+                                   AND next_attempt_at <= ?
+                                   ORDER BY id LIMIT 1
                                 ) AND NOT EXISTS (
                                   SELECT 1 FROM messages WHERE role='user' AND status='working'
-                                )''').rowcount
+                                 )''', (time.time(),)).rowcount
         if changed != 1:
             db.commit()
             return None
@@ -374,6 +390,17 @@ def _finish(turn, answer, status):
                    (answer, status, now, turn['reply_id']))
 
 
+def _retry(turn, error):
+    with LOCK, connect() as db:
+        row = db.execute('SELECT failure_count FROM messages WHERE id=?', (turn['user_id'],)).fetchone()
+        failures = (row['failure_count'] if row else 0) + 1
+        due = time.time() + min(3600, 60 * 3 ** min(failures - 1, 4))
+        db.execute("UPDATE messages SET status='queued',recovering=1,failure_count=?,next_attempt_at=? "
+                   "WHERE id=? AND status='working'", (failures, due, turn['user_id']))
+        db.execute("UPDATE messages SET text=?,status='queued',completed_at=NULL WHERE id=? AND status='working'",
+                   (f'Both providers failed; Office will retry automatically. {error}'[:1000], turn['reply_id']))
+
+
 def _drain():
     global WORKER
     while True:
@@ -383,17 +410,38 @@ def _drain():
                 answer = _answer_turn(turn['text'], turn['model'], turn['reply_id'])
                 _finish(turn, answer, 'completed')
             except Exception as exc:
+                alternate = ('gpt-6-sol' if turn['model'].startswith('claude:') else
+                             'claude:sonnet' if turn['model'].startswith('gpt-') else None)
+                if alternate:
+                    try:
+                        continuation = (
+                            f'The {turn["model"]} provider failed while handling this request. '
+                            'Inspect its recorded work and current external state before acting. '
+                            'Continue only unfinished work; do not repeat a completed send, publish, '
+                            'merge, or payment. Verify the outcome before answering.\n\n'
+                            f'Original request:\n{turn["text"]}')
+                        answer = _answer_turn(continuation, alternate, turn['reply_id'])
+                        with connect() as db:
+                            db.execute('UPDATE messages SET model=? WHERE id IN (?,?)',
+                                       (alternate, turn['user_id'], turn['reply_id']))
+                        _finish(turn, answer, 'completed')
+                        continue
+                    except Exception as fallback_exc:
+                        exc = RuntimeError(f'{type(exc).__name__}: {exc}; '
+                                           f'{alternate} also failed: {type(fallback_exc).__name__}: {fallback_exc}')
                 error = f'Office could not finish this answer: {type(exc).__name__}: {exc}'[:1000]
-                _finish(turn, error, 'failed')
+                _retry(turn, error)
             continue
         with LOCK:
             with connect() as db:
-                queued = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='queued' LIMIT 1").fetchone()
+                queued = db.execute("SELECT MIN(next_attempt_at) due FROM messages WHERE role='user' AND status='queued'").fetchone()['due']
                 working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
-            if queued and not working:
+            if queued is not None and queued <= time.time() and not working:
                 continue
             if WORKER is threading.current_thread():
                 WORKER = None
+            if queued is not None and not working:
+                _schedule_retry(queued - time.time())
             return
 
 

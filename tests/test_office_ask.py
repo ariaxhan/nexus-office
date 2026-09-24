@@ -25,9 +25,15 @@ class AskQueueTest(unittest.TestCase):
         self.addCleanup(self.path_patch.stop)
         self.addCleanup(self.models_patch.stop)
         ask.WORKER = None
+        if ask.RETRY_TIMER:
+            ask.RETRY_TIMER.cancel()
+        ask.RETRY_TIMER = None
         self.addCleanup(self._finish_worker)
 
     def _finish_worker(self):
+        if ask.RETRY_TIMER:
+            ask.RETRY_TIMER.cancel()
+            ask.RETRY_TIMER = None
         worker = ask.WORKER
         if worker and worker.is_alive():
             worker.join(3)
@@ -88,25 +94,72 @@ class AskQueueTest(unittest.TestCase):
             db.execute("UPDATE messages SET status='working' WHERE id IN (?,?)",
                        (receipts[0]["user_id"], receipts[0]["reply_id"]))
 
+        failures = [0]
         def provider(text, model, reply_id):
-            if text == "B":
+            if text == "B" and failures[0] == 0:
+                failures[0] += 1
                 raise RuntimeError("provider broke")
             return "answer " + text
 
         with patch.object(ask, "_answer_turn", side_effect=provider):
             recovered = ask.recover()
             self.assertEqual(recovered["resuming"], 1)
+            self._wait_for(lambda: any(row['text'] == 'answer C' for row in ask.read()['messages']))
+            with ask.connect() as db:
+                db.execute("UPDATE messages SET next_attempt_at=0 WHERE role='user' AND text='B'")
+            ask._ensure_worker()
             self._wait_for(lambda: not ask.read()["busy"])
 
         state = ask.read()
         users = {row["text"]: row for row in state["messages"] if row["role"] == "user"}
         answers = {row["parent_id"]: row for row in state["messages"] if row["role"] == "office"}
         self.assertEqual([users[text]["status"] for text in ("A", "B", "C")],
-                         ["completed", "failed", "completed"])
+                         ["completed", "completed", "completed"])
         self.assertEqual(answers[users["A"]["id"]]["text"], "answer A")
-        self.assertIn("provider broke", answers[users["B"]["id"]]["text"])
+        self.assertEqual(answers[users["B"]["id"]]["text"], "answer B")
         self.assertEqual(answers[users["C"]["id"]]["text"], "answer C")
         self.assertEqual(state["queue"], {"queued": 0, "working": 0})
+
+    def test_provider_failure_continues_on_other_provider_without_repeating_actions(self):
+        available = {"items": [{"id": "gpt-6-sol"}, {"id": "claude:sonnet"}], "default": "gpt-6-sol"}
+        for primary, alternate in (("gpt-6-sol", "claude:sonnet"),
+                                   ("claude:sonnet", "gpt-6-sol")):
+            calls = []
+            def provider(text, model, reply_id):
+                calls.append((text, model))
+                if model == primary:
+                    raise RuntimeError("provider unavailable")
+                return "verified continuation"
+            with patch.object(ask, "models", return_value=available), patch.object(ask, "_answer_turn", side_effect=provider):
+                receipt = ask.send({"request_id": f"fallback-{primary.replace(':', '-')}-001",
+                                    "text": "Complete the request", "model": primary})
+                self._wait_for(lambda: not ask.read()["busy"])
+            reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+            self.assertEqual(reply["status"], "completed")
+            self.assertEqual(reply["model"], alternate)
+            self.assertEqual(reply["text"], "verified continuation")
+            self.assertEqual([model for _, model in calls], [primary, alternate])
+            self.assertIn("do not repeat a completed send", calls[1][0])
+
+    def test_both_provider_failures_remain_queued_for_automatic_retry(self):
+        available = {"items": [{"id": "gpt-6-sol"}, {"id": "claude:sonnet"}], "default": "gpt-6-sol"}
+        with patch.object(ask, "models", return_value=available), patch.object(
+                ask, "_answer_turn", side_effect=RuntimeError("provider unavailable")):
+            receipt = ask.send({"request_id": "both-provider-failure-001",
+                                "text": "Keep going", "model": "gpt-6-sol"})
+            self._wait_for(lambda: any(row['id'] == receipt['reply_id'] and 'retry automatically' in row['text']
+                                       for row in ask.read()['messages']))
+        reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(reply["status"], "queued")
+        self.assertIn("retry automatically", reply["text"])
+        with ask.connect() as db:
+            db.execute("UPDATE messages SET next_attempt_at=0 WHERE id=?", (receipt["user_id"],))
+        with patch.object(ask, "_answer_turn", return_value="Recovered answer"):
+            ask._ensure_worker()
+            self._wait_for(lambda: not ask.read()["busy"])
+        reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(reply["status"], "completed")
+        self.assertEqual(reply["text"], "Recovered answer")
 
     def test_restart_restores_completed_codex_turn_without_starting_it_again(self):
         body = {"request_id": "recover-request-0001", "text": "Inspect the work", "model": "model-a"}
