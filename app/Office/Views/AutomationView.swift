@@ -4,6 +4,7 @@ struct AutomationView: View {
     @Bindable var store: Store
     private var board: RunBoard { store.automation.runs }
     private var work: WorkBoard { store.automation.work }
+    private var tower: TowerBoard { store.automation.tower }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,6 +12,7 @@ struct AutomationView: View {
             Divider().overlay(Theme.hairline)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                    towerIssues
                     if work.state != "ok" {
                         notice(work.detail.isEmpty ? "product state is not available" : work.detail,
                                color: Theme.amber)
@@ -32,8 +34,8 @@ struct AutomationView: View {
         HStack(spacing: 9) {
             Circle().fill(board.needs > 0 ? Theme.red : (board.active > 0 ? Theme.blue : Theme.green))
                 .frame(width: 9, height: 9)
-            Text("Work").officeFont(size: 14, weight: .semibold).foregroundStyle(Theme.text)
-            Text("what exists now").officeFont(size: 11).foregroundStyle(Theme.faint)
+            Text("Tower").officeFont(size: 14, weight: .semibold).foregroundStyle(Theme.text)
+            Text("issue work and automation").officeFont(size: 11).foregroundStyle(Theme.faint)
             Spacer()
             Button("close") { store.automationOpen = false }
                 .buttonStyle(.plain).officeFont(size: 11).foregroundStyle(Theme.dim)
@@ -50,6 +52,62 @@ struct AutomationView: View {
             } else {
                 ForEach(work.products) { product in ProductRow(product: product) }
             }
+        }
+    }
+
+    private var towerIssues: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Tower · GitHub issues").officeFont(size: 12, weight: .semibold)
+                    .foregroundStyle(Theme.text)
+                Spacer()
+                if tower.state == "ok" {
+                    Text("\(tower.working) working · \(tower.retrying) retrying")
+                        .officeFont(size: 11).foregroundStyle(Theme.dim)
+                }
+            }
+            if tower.state != "ok" {
+                notice(tower.detail.isEmpty ? "Tower state is unavailable" : tower.detail,
+                       color: Theme.amber)
+            } else if tower.issues.isEmpty {
+                notice("Tower has no open captured issues.", color: Theme.green)
+            } else {
+                ForEach(tower.issues) { issue in
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle().fill(towerColor(issue.state)).frame(width: 7, height: 7)
+                            .padding(.top, 5)
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let url = URL(string: issue.url) {
+                                Link("\(issue.repo)#\(issue.number) · \(issue.title)", destination: url)
+                                    .officeFont(size: 12, weight: .medium).foregroundStyle(Theme.text)
+                            } else {
+                                Text(issue.title).officeFont(size: 12, weight: .medium)
+                            }
+                            Text([issue.state, issue.detail, issue.next].filter { !$0.isEmpty }
+                                .joined(separator: " · "))
+                                .officeFont(size: 11).foregroundStyle(Theme.dim)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(11)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Theme.raised))
+                }
+                if tower.dropped > 0 {
+                    Text("\(tower.dropped) more issues are in the Tower ledger")
+                        .officeFont(size: 11).foregroundStyle(Theme.faint)
+                }
+            }
+        }
+    }
+
+    private func towerColor(_ state: String) -> Color {
+        switch state {
+        case "working": Theme.blue
+        case "ready": Theme.green
+        case "retrying": Theme.amber
+        default: Theme.faint
         }
     }
 

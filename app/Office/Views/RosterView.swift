@@ -319,10 +319,10 @@ struct RosterView: View {
                           : (page.now.running ? Theme.green : Theme.faint))
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("work board")
+                    Text("Tower")
                         .officeFont(size: 12.5, weight: .medium)
                         .foregroundStyle(Theme.text)
-                    Text(workBoardLine(page.work, runs: page.runs))
+                    Text(towerLine(page.tower))
                         .officeFont(size: 11)
                         .foregroundStyle(page.needsSomebody ? Theme.amber.opacity(0.85) : Theme.dim)
                         .lineLimit(2)
@@ -342,13 +342,9 @@ struct RosterView: View {
         .buttonStyle(.plain)
     }
 
-    private func workBoardLine(_ work: WorkBoard, runs: RunBoard) -> String {
-        if work.state != "ok" { return work.detail.isEmpty ? "not read yet" : work.detail }
-        let remaining = work.products.reduce(0) { $0 + $1.remaining }
-        var parts = ["\(remaining) acceptance items remain"]
-        if runs.active > 0 { parts.append("\(runs.active) running") }
-        if runs.needs > 0 { parts.append("\(runs.needs) severe") }
-        return parts.joined(separator: " · ")
+    private func towerLine(_ tower: TowerBoard) -> String {
+        if tower.state != "ok" { return tower.detail.isEmpty ? "issue work unavailable" : tower.detail }
+        return "\(tower.working) working · \(tower.retrying) retrying · \(tower.issues.count) open issues"
     }
 
     private var wallCount: AnyView? {

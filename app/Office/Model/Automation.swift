@@ -28,6 +28,7 @@ public struct Automation: Decodable, Equatable {
     public var activity: [Activity] = []
     public var runs: RunBoard = RunBoard()
     public var work: WorkBoard = WorkBoard()
+    public var tower: TowerBoard = TowerBoard()
     /// How many rows the server left off the end. Drawn, always: a list capped
     /// in silence reads as "that is everything that happened".
     public var activityDropped: Int = 0
@@ -42,7 +43,7 @@ public struct Automation: Decodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case state, headline, how, schedule, now, trigger, reached, activity, runs, work
+        case state, headline, how, schedule, now, trigger, reached, activity, runs, work, tower
         case activityDropped = "activity_dropped"
     }
 
@@ -63,6 +64,7 @@ public struct Automation: Decodable, Equatable {
         activityDropped = c.int(.activityDropped) ?? 0
         runs = ((try? c.decodeIfPresent(RunBoard.self, forKey: .runs)) ?? nil) ?? RunBoard()
         work = ((try? c.decodeIfPresent(WorkBoard.self, forKey: .work)) ?? nil) ?? WorkBoard()
+        tower = ((try? c.decodeIfPresent(TowerBoard.self, forKey: .tower)) ?? nil) ?? TowerBoard()
     }
 
     // MARK: - when it looks
@@ -304,6 +306,28 @@ public struct WorkBoard: Decodable, Equatable {
         public var id: String { "\(label)@\(url)" }
     }
 
+}
+
+public struct TowerBoard: Decodable, Equatable {
+    public var state = "missing"
+    public var detail = ""
+    public var working = 0
+    public var retrying = 0
+    public var dropped = 0
+    public var issues: [Issue] = []
+    public init() {}
+
+    public struct Issue: Decodable, Equatable, Identifiable {
+        public var id = ""
+        public var repo = ""
+        public var number = 0
+        public var title = ""
+        public var url = ""
+        public var state = ""
+        public var detail = ""
+        public var next = ""
+        public var attempt = ""
+    }
 }
 
 public struct RunBoard: Decodable, Equatable {
