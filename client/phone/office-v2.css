@@ -71,6 +71,7 @@ main{max-width:850px;margin-inline:auto}
  main{padding-top:42px}
 }
 @media(max-width:699px){
+ .tabs .tab-icon{display:none}
  body[data-page=ask] .shell{padding:0}
  body[data-page=ask] .topbar,body[data-page=ask] .searchbar{display:none}
  body[data-page=ask] main{position:fixed;inset:env(safe-area-inset-top) 0 var(--tabs-height,74px);z-index:1;max-width:none;min-height:0;margin:0;padding:0;overflow:hidden}
