@@ -1940,8 +1940,9 @@ async function projectRoster(parent) {
 }
 function projectDesks(data, local) {
   const stations = data.stations || [];
-  const rows = local.map((root) => ({ ...stations.find((desk) => desk.repo === root.name), repo: root.name, root: root.id, folder: root.folder_id || btoa(JSON.stringify([root.id, ""])).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, ""), checkoutPath: root.path, taskCapable: root.task_capable !== false, label: root.label }));
-  for (const desk of stations) if (!local.some((root) => root.name === desk.repo)) rows.push(desk);
+  const hidden = new Set(stations.filter((desk) => desk.hidden).map((desk) => desk.repo.toLowerCase()));
+  const rows = local.filter((root) => !hidden.has(root.name.toLowerCase())).map((root) => ({ ...stations.find((desk) => desk.repo === root.name), repo: root.name, root: root.id, folder: root.folder_id || btoa(JSON.stringify([root.id, ""])).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, ""), checkoutPath: root.path, taskCapable: root.task_capable !== false, label: root.label }));
+  for (const desk of stations) if (!desk.hidden && !local.some((root) => root.name === desk.repo)) rows.push(desk);
   return rows;
 }
 async function project(desk) {
@@ -2296,16 +2297,6 @@ function planDetail(plan) {
   body.append(el("p", "", plan.objective || ""), el("p", "muted", `${plan.enabled ? "Enabled" : "Paused"} \xB7 ${plan.kind}`), el("pre", "", plan.schedule));
   for (const action of [plan.enabled ? "pause" : "resume", "run"]) body.append(button(action, () => systemCommand(action, plan.id)));
 }
-function gateDetail(gate) {
-  const body = sheet("Needs you");
-  body.append(markdownView(gate.question || gate.text || JSON.stringify(gate)));
-  for (const [answer, label] of [["allow", "Allow once"], ["deny", "Deny"]]) body.append(button(label, async () => {
-    await api("/api/gate", { question_id: gate.id, answer });
-    notice("Answer recorded");
-    $("#detail").close();
-    route();
-  }));
-}
 var searchKind = "";
 async function search(cursor = 0) {
   const query = $("#global-search").value.trim();
@@ -2365,6 +2356,7 @@ async function watch(parent) {
   parent.append(overview);
   if (rows.length || attention.errors.length) {
     const decisions = section(parent, "Needs you");
+    decisions.parentElement.classList.add("watch-decisions");
     if (rows.length) {
       decisionIndex = Math.max(0, Math.min(decisionIndex, rows.length - 1));
       const stack = el("div", "decision-stack");
@@ -2372,7 +2364,7 @@ async function watch(parent) {
       const draw = () => {
         const entry = rows[decisionIndex];
         stack.replaceChildren();
-        stack.append(el("p", "decision-count", `${decisionIndex + 1} of ${rows.length} decisions`), entry.kind === "permission" ? permissionCard(entry.item) : attentionCard(entry));
+        stack.append(el("p", "decision-count", `${decisionIndex + 1} of ${rows.length} decisions`));
         const nav = el("div", "decision-nav");
         const previous = button("\u2190 Previous", () => {
           decisionIndex = (decisionIndex - 1 + rows.length) % rows.length;
@@ -2386,7 +2378,7 @@ async function watch(parent) {
           const body = sheet("All decisions");
           for (const item of rows) body.append(item.kind === "permission" ? permissionCard(item.item) : attentionCard(item));
         }));
-        stack.append(nav);
+        stack.append(nav, entry.kind === "permission" ? permissionCard(entry.item) : attentionCard(entry));
       };
       draw();
     } else if (attention.errors.length) {
@@ -3176,8 +3168,57 @@ function reconcileChildren(parent, nodes) {
   }
 }
 function attentionCard(entry) {
-  if (entry.kind === "gate") return card(entry.item.question || entry.item.title || "Pending decision", entry.item.repo, () => gateDetail(entry.item));
-  return card(entry.item.decision?.question || entry.item.title, `${entry.repo} #${entry.item.number}`, () => githubDetail(entry.repo, entry.item, "issues"));
+  if (entry.kind === "gate") {
+    const node2 = el("article", "card attention-choice");
+    node2.append(el("h3", "", "Permission needed"), el("p", "attention-question", entry.item.question || entry.item.title || "Pending decision"));
+    const choices2 = el("div", "attention-options");
+    for (const [answer, label] of [["allow", "Allow once"], ["deny", "Deny"]]) choices2.append(button(label, async () => {
+      const result = await api("/api/gate", { question_id: entry.item.id, answer });
+      if (!result.ok) throw Error(result.message || "Answer was not recorded");
+      notice("Answer recorded");
+      if ($("#detail").open) $("#detail").close();
+      await route();
+    }, "attention-option"));
+    node2.append(choices2);
+    return node2;
+  }
+  const issue = entry.item, decision = issue.decision;
+  const node = el("article", "card attention-choice");
+  const askedAt = Date.parse(issue.last_word_at || "");
+  const head = el("div", "attention-head");
+  head.append(el("p", "attention-source", `${entry.repo.split("/")[1]} #${issue.number}${Number.isFinite(askedAt) ? ` \xB7 asked ${formatAge(Date.now() - askedAt)}` : ""}`));
+  node.append(head, el("h3", "", issue.title));
+  const context = reportLead(issue.body || "");
+  if (context && context !== issue.title) node.append(el("p", "attention-context", context.length > 200 ? context.slice(0, 199) + "\u2026" : context));
+  node.append(el("p", "attention-question", decision.question));
+  const choices = el("div", "attention-options");
+  let busy = false;
+  async function decide(payload) {
+    if (busy) return;
+    busy = true;
+    for (const control of choices.querySelectorAll("button")) control.disabled = true;
+    try {
+      const result = await api("/api/decision", { repo: entry.repo, issue: String(issue.number), ...payload });
+      if (!result.ok) throw Error(result.result || "Decision was not applied");
+      snapshot = null;
+      snapshotReadAt = 0;
+      notice(payload.kind === "close" ? "Outdated issue closed" : "Choice recorded");
+      if ($("#detail").open) $("#detail").close();
+      await route();
+    } catch (error) {
+      busy = false;
+      for (const control of choices.querySelectorAll("button")) control.disabled = false;
+      throw error;
+    }
+  }
+  for (const option of [...decision.options].sort((a, b) => Number(b.recommended) - Number(a.recommended) || a.n - b.n)) {
+    const control = button("", () => decide({ kind: "choose", n: option.n, label: option.label }), "attention-option" + (option.recommended ? " is-recommended" : ""));
+    control.append(el("strong", "", option.label), el("span", "", option.consequence || "Record this choice"));
+    choices.append(control);
+  }
+  head.append(button("Outdated \xB7 close", () => decide({ kind: "close", body: "Closing as outdated at Aria\u2019s direction from Office Watch." }), "attention-close"));
+  node.append(choices, button("Open issue details", () => githubDetail(entry.repo, issue, "issues"), "attention-details"));
+  return node;
 }
 async function attentionList(parent) {
   await refreshAttention();
@@ -3189,7 +3230,7 @@ function attentionItems(index, value3) {
   if (index === 1) return (value3?.gates || []).map((item) => ({ kind: "gate", item }));
   if (index === 2) {
     const pinned = new Set(value3?.pins || []);
-    return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision?.question && issue.decision?.options?.length).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updated_at || "").localeCompare(String(a.item.updated_at || "")));
+    return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision?.question && issue.decision?.options?.length).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updatedAt || "").localeCompare(String(a.item.updatedAt || "")));
   }
   return [];
 }
