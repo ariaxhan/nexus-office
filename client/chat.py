@@ -143,13 +143,15 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
     selected = [
         row for row in stations
         if (not selected_owner or str(row.get("repo") or "").startswith(selected_owner + "/"))
-        and (not row.get("hidden") or selected_owner)
+        and not row.get("hidden")
         and (row.get("issues") or row.get("prs"))
     ]
 
     issue_count = waiting_count = in_pr_count = 0
     clean_prs = dirty_prs = 0
     for row in stations:
+        if row.get("hidden"):
+            continue
         repo = str(row.get("repo") or "")
         if selected_owner and not repo.startswith(selected_owner + "/"):
             continue

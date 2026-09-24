@@ -654,7 +654,7 @@ function attentionItems(index,value){
   if(index===1)return (value?.gates||[]).map(item=>({kind:'gate',item}));
   if(index===2){
    const pinned=new Set(value?.pins||[]);
-   return (value?.stations||[]).flatMap(station=>(station.issues||[])
+   return (value?.stations||[]).filter(station=>!station.hidden).flatMap(station=>(station.issues||[])
      .filter(issue=>issue.bot_last===true&&issue.decision?.question&&issue.decision?.options?.length)
      .map(issue=>({kind:'issue',repo:station.repo,item:{...issue,id:`${station.repo}#${issue.number}`}})))
      .sort((a,b)=>Number(pinned.has(b.repo))-Number(pinned.has(a.repo))||String(b.item.updated_at||'').localeCompare(String(a.item.updated_at||'')));
