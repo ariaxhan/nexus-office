@@ -1208,7 +1208,7 @@ function conversation(parent, data) {
     if (item.kind === "message") {
       const node = el("article", "coord-you");
       rich(node.appendChild(el("div", "coord-text")), item.segments);
-      node.append(el("small", "", `You \xB7 ${clock(item.at)} \xB7 ${item.read_at ? "read by the coordinator " + clock(item.read_at) : "waiting for the coordinator"}`));
+      node.append(el("small", "", `You \xB7 ${clock(item.at)} \xB7 ${item.acted_at ? `acted ${clock(item.acted_at)}: ${item.action}` : item.read_at ? "read by the coordinator " + clock(item.read_at) : "queued for the coordinator"}`));
       parent.append(node);
       continue;
     }
@@ -1268,15 +1268,15 @@ function changes(parent, data) {
   }
   if (!any) parent.append(el("p", "empty", "No landed commits, publishes or issue changes in the recorded runs."));
 }
-var SYSTEM_NAME = { tbs: "Thinking Brain School", matra: "Matra" };
-var SYSTEM_OUTCOME = { tbs: "Keeping lessons healthy and ready for families.", matra: "Fixing app issues and delivering tested improvements." };
+var SYSTEM_NAME = { tbs: "Thinking Brain School", matra: "Matra", office: "Office" };
+var SYSTEM_OUTCOME = { tbs: "Keeping lessons healthy and ready for families.", matra: "Fixing app issues and delivering tested improvements.", office: "Moving Office issues, releases, failures and stabilization through Tower." };
 var needsAttention = (row) => row.thrashing || ["failing", "stalled", "error"].includes(row.health);
 var systemName = (row) => SYSTEM_NAME[row.id] || row.name;
 var systemOutcome = (row) => SYSTEM_OUTCOME[row.id] || "Moving its assigned work forward.";
 function healthLine(row) {
   const node = el("span", "coord-health");
   node.dataset.health = needsAttention(row) ? "error" : "ok";
-  node.textContent = needsAttention(row) ? "Needs attention" : "Working normally";
+  node.textContent = needsAttention(row) ? "Needs attention" : row.health === "idle" ? "Idle" : row.health === "running" ? "Working" : "Working normally";
   return node;
 }
 function detail(parent, row) {
@@ -1286,9 +1286,7 @@ function detail(parent, row) {
     parent.append(el("p", "error", row.error));
     return;
   }
-  const summary = el("div", "coord-outcome");
-  summary.append(el("h1", "coord-system-name", systemName(row)), el("p", "coord-outcome-title", systemOutcome(row)), healthLine(row), el("p", "muted", needsAttention(row) ? "I\u2019m checking what needs attention." : "Nothing needed from you."));
-  parent.append(summary);
+  parent.append(coordinatorSummary(row));
   const evidence = el("details", "coord-evidence");
   evidence.append(el("summary", "", "Coordinator notes and work"));
   parent.append(evidence);
@@ -1305,6 +1303,17 @@ function detail(parent, row) {
     shipped.append(node);
   }
   if (!(row.commits || []).length) shipped.append(el("p", "empty", "No recent changes recorded."));
+}
+function coordinatorSummary(row) {
+  const summary = el("div", "coord-outcome");
+  const note = row.id === "office" ? `Last run ${row.age_s == null ? "never" : Math.max(0, Math.floor(row.age_s / 60)) + " min ago"} \xB7 ${row.failures || 0} recent failures \xB7 ${row.changes || 0} recent changes \xB7 ${row.unread || 0} queued messages` : needsAttention(row) ? "I\u2019m checking what needs attention." : "Nothing needed from you.";
+  summary.append(el("h1", "coord-system-name", systemName(row)), el("p", "coord-outcome-title", systemOutcome(row)), healthLine(row), el("p", "muted", note));
+  if (row.id === "office") {
+    const inspect = el("a", "", "Inspect Office");
+    inspect.href = "#system";
+    summary.append(inspect);
+  }
+  return summary;
 }
 async function coordinator(parent) {
   try {
@@ -1816,6 +1825,7 @@ function sourceCurrent(controls, project2, token2) {
 
 // client/phone/office.js
 var attention = { items: [], errors: [], failures: [] };
+var buzzFeed = { items: [], errors: [], synced_at: null, latest_at: null };
 var snapshot = null;
 var snapshotReadAt = 0;
 async function world() {
@@ -1858,6 +1868,8 @@ async function today(parent) {
   const needs = section(parent, "Needs you");
   needs.id = "needs-list";
   await guarded(needs, () => attentionList(needs));
+  const buzz = section(parent, "TBS Buzz");
+  await guarded(buzz, () => buzzHistory(buzz));
   const active = section(parent, "Running now");
   await runningNow(active);
   const recent = section(parent, "Since you were here");
@@ -1900,6 +1912,8 @@ async function work(parent) {
   await runningNow(active);
   const history2 = section(parent, "Office conversations");
   await guarded(history2, () => taskList(history2));
+  const buzz = section(parent, "TBS Buzz");
+  await guarded(buzz, () => buzzHistory(buzz));
   const bots = section(parent, "Your office voices");
   bots.append(button("Open office voices", () => guarded(bots, async () => {
     const data = await api("/api/bots");
@@ -2414,6 +2428,8 @@ async function watch(parent) {
     for (const entry of failures) stalled.append(card(`${entry.repo} #${entry.item.number} \xB7 ${entry.item.title}`, "Inspect issue history", () => githubDetail(entry.repo, entry.item, "issues")));
     stalled.append(link("Track the repair", "https://github.com/ariaxhan/nexus-office/issues/186"));
   }
+  const buzz = section(parent, "TBS Buzz recent messages");
+  await guarded(buzz, () => buzzHistory(buzz));
   if (coordinatorRows.length) {
     const systems = el("section", "watch-systems");
     systems.append(el("h2", "watch-section-title", "Systems"));
@@ -2455,7 +2471,7 @@ async function watch(parent) {
   });
 }
 function requiresYou(entry) {
-  return entry.kind === "permission" || entry.kind === "gate" || entry.kind === "issue";
+  return entry.kind === "permission" || entry.kind === "gate" || entry.kind === "issue" || entry.kind === "buzz";
 }
 function formatAge(milliseconds) {
   if (!Number.isFinite(milliseconds)) return "not checked yet";
@@ -3137,12 +3153,16 @@ async function githubReviews(repo, number, cursor = 1, parent = null, inline2 = 
   if (!parent) body.append(button("Inline comments", () => githubReviews(repo, number, 1, body, true)));
 }
 async function refreshAttention() {
-  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), world()]);
+  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), world(), api("/api/buzz")]);
   const items = [], errors = [], failures = [];
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
       errors.push(result.reason.message);
       continue;
+    }
+    if (index === 3) {
+      buzzFeed = result.value;
+      errors.push(...buzzFeed.errors || []);
     }
     for (const entry of attentionItems(index, result.value)) {
       (automationFailure(entry) ? failures : items).push(entry);
@@ -3185,6 +3205,7 @@ function reconcileChildren(parent, nodes) {
   }
 }
 function attentionCard(entry) {
+  if (entry.kind === "buzz") return buzzCard(entry.item);
   if (entry.kind === "gate") {
     const node2 = el("article", "card attention-choice");
     node2.append(el("h3", "", "Permission needed"), el("p", "attention-question", entry.item.question || entry.item.title || "Pending decision"));
@@ -3251,7 +3272,33 @@ function attentionItems(index, value3) {
     const pinned = new Set(value3?.pins || []);
     return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision?.question && issue.decision?.options?.length).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updatedAt || "").localeCompare(String(a.item.updatedAt || "")));
   }
+  if (index === 3) return (value3?.items || []).filter((row) => row.needs_you).map((item) => ({ kind: "buzz", item }));
   return [];
+}
+function buzzCard(row) {
+  const node = el("article", "card attention-choice");
+  const state = ["posted", row.mirrored && "mirrored", row.coordinator_read && "coordinator read", row.acted && "acted on"].filter(Boolean).join(" \xB7 ");
+  node.append(
+    el("h3", "", `#${row.channel} \xB7 ${row.needs_you ? "Needs you" : "FYI"}`),
+    el("p", "muted", `${row.author} \xB7 ${new Date(row.at).toLocaleString()} \xB7 ${state}${row.issue ? ` \xB7 ${row.issue} ${row.issue_state || ""}` : ""}`),
+    el("p", "", row.text)
+  );
+  if (row.reply_to) node.append(el("p", "muted", `Reply to ${row.reply_to}`));
+  else if (row.thread !== row.id) node.append(el("p", "muted", `Thread ${row.thread}`));
+  node.append(el("p", "muted", `Buzz source: ${row.source}`));
+  if (row.issue) {
+    const [repo, number] = row.issue.split("#");
+    node.append(link("Open linked issue", `https://github.com/${repo}/issues/${number}`));
+  }
+  if (row.receipt) node.append(el("p", "muted", `Local receipt: ${row.receipt}`));
+  return node;
+}
+async function buzzHistory(parent) {
+  const data = await api("/api/buzz");
+  parent.append(el("p", "muted", `Read-only relay snapshot \xB7 checked ${new Date(data.synced_at).toLocaleString()} \xB7 newest ${data.latest_at ? formatAge(Date.now() - Date.parse(data.latest_at)) : "unknown"}${data.errors.length ? " \xB7 source incomplete" : ""}`));
+  for (const error of data.errors) parent.append(el("p", "error", error));
+  for (const row of data.items.slice(0, 30)) parent.append(buzzCard(row));
+  if (!data.items.length) empty(parent, data.errors.length ? "Buzz history unavailable." : "No recent Buzz messages.");
 }
 function automationFailure(entry) {
   return entry.kind === "issue" && String(entry.item.decision?.question || "").startsWith("The automated pass could not resolve this and did not say what to decide.");

@@ -94,6 +94,9 @@ def _rows(path):
 
 # ── inbox ────────────────────────────────────────────────────────────────────
 def say(body, root=None):
+    if body.get('coordinator') == 'office' and root is None:
+        from nexus import office_coordinator
+        return office_coordinator.say(body)
     root = root or root_path(body.get("coordinator"))
     text, request = body.get("text"), body.get("id")
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
@@ -507,6 +510,9 @@ def _linked_changes(linker, found, issues):
 
 
 def read(root=None, coordinator=None):
+    if coordinator == 'office' and root is None:
+        from nexus import office_coordinator
+        return office_coordinator.read()
     with READ_LOCK:
         return _read(root or root_path(coordinator))
 
@@ -629,7 +635,11 @@ def overview():
     rows = []
     for row in configs():
         try:
-            rows.append(summary(row))
+            if row['id'] == 'office':
+                from nexus import office_coordinator
+                rows.append(office_coordinator.overview())
+            else:
+                rows.append(summary(row))
         except Exception as exc:  # noqa: BLE001 - one broken tree must not hide the others
             rows.append({"id": row["id"], "name": row["name"], "health": "error", "error": str(exc)[:200]})
     result = {"coordinators": rows, "as_of": now()}
