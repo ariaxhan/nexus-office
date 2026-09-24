@@ -375,8 +375,25 @@ def pending(led, fid, result):
     rank = priority_rank({l["name"].lower() for l in latest(led, "work.issue", tid).get("labels", [])})
     led.event("work.pending", tid, dict(result, next_retry=retry, rank=rank), "work")
     item_attempt(led, fid, "pending", retry, result.get("evidence"))
-    led.set_state(fid, "cancelled", expect="running", source="work")
+    state = led.flight(fid)["state"]
+    if state not in TERMINAL and not led.set_state(fid, "cancelled", expect=state, source="work"):
+        raise WorkError(f"pending flight {fid} changed state during settlement")
     return "pending"
+
+
+def recover_terminal(led):
+    """Release old Tower claims whose no-change result was recorded before settlement finished."""
+    repaired = []
+    for flight in led.flights(states=("verified",)):
+        if led.plan(flight["plan_id"])["kind"] != "work" or flights.alive(flight["pid"]):
+            continue
+        result = latest(led, "flight.terminal", flight["id"])
+        if result.get("state") != "CLOSED":
+            continue
+        if led.set_state(flight["id"], "cancelled", expect="verified", source="work-recovery"):
+            led.event("work.recovered", flight["id"], {"reason": "stranded_no_change"}, "work")
+            repaired.append(flight["id"])
+    return repaired
 
 
 def select_executor(entry, issue):
@@ -562,6 +579,8 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None, issue
         parallel=None):
     token = _lane.set(lane)
     try:
+        if lane == TOWER_LABEL:
+            recover_terminal(led)
         cut = cut_idle(led, [e for e in entries if e["enabled"]]) if lane == TOWER_LABEL and issue is None else []
         if lane == TOWER_LABEL and issue is None and repo is None and registry_path:
             waved = dispatch_wave(led, entries, registry_path, budget_s, parallel or lanes_caps(registry_path))
@@ -853,6 +872,9 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
     led.event("work.receipt", task["id"], {"flight": fid, "sha": result["sha"], "receipt": why}, "work")
     led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower receipt: " + why)
     close_issue(led, {"repo": repo, "task": task["id"], "issue": issue})
+    if not led.set_state(fid, "landing", expect="verified", source="work"):
+        raise WorkError(f"delivered flight {fid} lost its verified state")
+    led.set_state(fid, "landed", expect="landing", source="work")
     return "done"
 
 
