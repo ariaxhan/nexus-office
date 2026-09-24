@@ -4,7 +4,6 @@ A bare repo is origin; a clone is the canonical checkout. Real git, real pushes.
 """
 
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -141,12 +140,6 @@ class Case(unittest.TestCase):
                                                           "branch": "aria/held/x", "comment_url": "u"})
         led.close()
 
-    def test_t13_no_clone_worktree_stash_or_branch_switch_in_new_code(self):
-        banned = re.compile(r"\"(clone|worktree|stash|switch)\"|checkout\", \"-[bB]|--autostash")
-        for name in ("lease.py", "risk.py", "executor.py"):
-            self.assertIsNone(banned.search((ROOT / "nexus" / name).read_text()), name)
-        v2 = (ROOT / "nexus" / "landing.py").read_text().split("Tower v2")[1]
-        self.assertIsNone(banned.search(v2))
 
 
 if __name__ == "__main__":

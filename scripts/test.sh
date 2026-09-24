@@ -1,10 +1,9 @@
 #!/bin/sh
 #
-# Both suites: the python door and the Swift rules.
+# Routine contracts; pass --release to include native Swift rules.
 #
 # The Xcode project is generated from app/project.yml and is not in the repo, so
-# a fresh clone has no .xcodeproj to test. Generating it here means `npm test`
-# works on the first try instead of failing with a path nobody has seen yet.
+# a fresh clone has no .xcodeproj to test. The release gate generates it.
 
 set -eu
 
@@ -12,6 +11,10 @@ cd "$(dirname "$0")/.."
 
 python3 -m unittest discover -s tests -p 'test_*.py'
 node --test tests/pwa_probe.test.mjs tests/markdown.test.mjs
+
+if [ "${1:-}" != "--release" ]; then
+  exit 0
+fi
 
 if [ ! -d app/Office.xcodeproj ]; then
   command -v xcodegen >/dev/null 2>&1 || {

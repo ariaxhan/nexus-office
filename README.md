@@ -259,7 +259,9 @@ keeps after failure. Journey screenshots land in the flight workspace under
 ## Verify gates
 
 ```sh
-npm test        # the python door + the Swift state rules, headless
+npm test        # routine Python contracts and Node browser probes
+npm run test:release # routine checks plus native Swift rules
+npm run verify # bundle, complexity, and release checks
 npm run shot    # builds the app, photographs 22 framings, then LOOK
 ./scripts/whats-running.sh  # fail unless source, app and door prove one revision
 ```

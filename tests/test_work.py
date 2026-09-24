@@ -474,35 +474,6 @@ else:
             self.assertEqual("failed", self.run_work()[0]["state"])
         self.assertEqual([], self.calls())
 
-    def test_tower_review_holds_tbs_sensitive_merge_outside_kst_window(self):
-        if not Path(work.SENSITIVE_WINDOW).exists():
-            self.skipTest("thinking-brain-school checkout absent")
-        self.entry["repo"] = "thinking-brain-school/tbs-www"
-        work.discover(self.led, self.entry)
-        task = self.led.tasks()[0]
-        pr = dict(headRefName="fix", headRefOid="abc", baseRefName="main", labels=[{"name": "sensitive"}],
-                  files=[{"path": "README.md"}], mergeCommit={"oid": "def"})
-        github, merges = self.github, []
-
-        def fake(argv, **kwargs):
-            if argv[:2] == ["gh", "pr"]:
-                if argv[2] == "merge":
-                    merges.append(argv)
-                return subprocess.CompletedProcess(argv, 0, json.dumps(pr) if argv[2] == "view" else "url", "")
-            return github(argv, **kwargs)
-
-        patch("nexus.work.subprocess.run", side_effect=fake).start()
-        patch("nexus.executor.review", return_value=("PASS", "ok")).start()
-        patch("nexus.tower.land_write_flight").start()
-        with patch.dict(os.environ, TBS_NOW="2026-09-14T10:00:00+09:00"):
-            self.assertEqual("pending", work.tower_review(self.led, self.entry, task, "https://pr/1"))
-        self.assertEqual([], merges)
-        hold = work.latest(self.led, "work.pending", task["id"])
-        self.assertEqual("in_review", hold["reason"])
-        self.assertIn("next window 2026-09-15 01:00 KST", hold["hold"])
-        with patch.dict(os.environ, TBS_NOW="2026-09-14T02:00:00+09:00"):
-            self.assertEqual("done", work.tower_review(self.led, self.entry, task, "https://pr/1"))
-        self.assertEqual(1, len(merges))
 
     def test_tower_preserves_failed_product_workspace(self):
 

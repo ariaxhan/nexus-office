@@ -8,9 +8,10 @@
     "bundle": "esbuild client/phone/office.js --bundle --format=esm --target=safari17 --outfile=client/phone/office-bundle.js",
     "pwa-probe": "node scripts/pwa-probe.mjs",
     "test": "scripts/test.sh",
+    "test:release": "scripts/test.sh --release",
     "shot": "scripts/shoot.sh",
     "complexity": "bash scripts/complexity.sh --check-baseline .complexity-baseline.tsv .",
-    "verify": "npm run bundle && npm run complexity && npm test"
+    "verify": "npm run bundle && npm run complexity && npm run test:release"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
