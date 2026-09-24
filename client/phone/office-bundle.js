@@ -97,7 +97,6 @@ function migrateLegacy() {
 var CACHE, PENDING, cache, pending, clockOffset, running;
 var init_office_state = __esm({
   "client/phone/office-state.js"() {
-    "use strict";
     CACHE = "office-object-cache";
     PENDING = "office-object-pending";
     cache = read(CACHE);
@@ -328,7 +327,6 @@ function restoreDraft(input, identity) {
 var $, rememberObjects;
 var init_office_ui = __esm({
   "client/phone/office-ui.js"() {
-    "use strict";
     init_office_state();
     $ = (selector) => document.querySelector(selector);
     rememberObjects = true;
@@ -352,7 +350,6 @@ function audioTransport(fallback) {
 var NativeAudio;
 var init_office_native = __esm({
   "client/phone/office-native.js"() {
-    "use strict";
     NativeAudio = class extends EventTarget {
       constructor() {
         super();
@@ -545,7 +542,6 @@ function applyContrast(body) {
 var prefs, revision, dark;
 var init_office_settings = __esm({
   "client/phone/office-settings.js"() {
-    "use strict";
     init_office_native();
     init_office_ui();
     prefs = { theme: "auto", background: "", accent: "#b9573c", font: "classic", reading: "bookish", size: 100, density: "comfortable", touch: false, haptics: true, motion: false, remember: true, mini: true, speed: 1 };
@@ -681,7 +677,6 @@ function tokenText(tokens, render) {
 var plain, TABLE_ROW, LIST_ITEM, cells, TOKEN;
 var init_office_markdown = __esm({
   "client/phone/office-markdown.js"() {
-    "use strict";
     plain = (node, value3) => node.append(document.createTextNode(value3));
     TABLE_ROW = /^\s*\|.*\|\s*$/;
     LIST_ITEM = /^\s*([-*+]|\d+[.)])\s+(.*)$/;
@@ -873,7 +868,6 @@ async function checkoutDetails(parent, id) {
 }
 var init_office_files = __esm({
   "client/phone/office-files.js"() {
-    "use strict";
     init_office_state();
     init_office_ui();
     init_office_markdown();
