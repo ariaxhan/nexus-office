@@ -27,13 +27,16 @@ class Route(unittest.TestCase):
         for body in ("fix a bug", "Background: Antigravity wrote this once.\n- METHOD: edit the parser"):
             self.assertEqual("code-judgment", executor.plan(ENTRY, self.issue(body))[0][2], body)
 
-    def test_claude_failure_has_codex_continuation_and_copy_does_not(self):
+    def test_claude_failure_has_codex_continuation_and_copy_has_claude(self):
         argv, prompt, _, _ = executor.plan(ENTRY, self.issue("fix a bug"))
         fallback = executor.provider_fallback(argv, prompt, ENTRY["path"])
         self.assertEqual(fallback[1:4], ["run-provider", "code-judgment", "codex"])
         self.assertIn("do not repeat completed sends", fallback[-1])
-        copy_argv, copy_prompt, _, _ = executor.plan(ENTRY, self.issue("", ["copy-authority"]))
-        self.assertIsNone(executor.provider_fallback(copy_argv, copy_prompt, ENTRY["path"]))
+        copy_argv=[executor.ROUTER,"run","customer-copy","--","exec"]
+        self.assertEqual(executor.provider_fallback(copy_argv, prompt, ENTRY["path"])[1:4],
+                         ["run-provider", "customer-copy", "claude"])
+        antigravity, copy_prompt, _, _ = executor.plan(ENTRY, self.issue("", ["copy-authority"]))
+        self.assertIsNone(executor.provider_fallback(antigravity, copy_prompt, ENTRY["path"]))
 
     def test_codex_reviewer_failure_continues_on_claude(self):
         calls = []

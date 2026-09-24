@@ -136,7 +136,7 @@ def provider_fallback(argv, prompt, repo):
     if len(argv) < 4 or argv[0] != ROUTER or argv[1] != "run":
         return None
     kind = argv[2]
-    if kind in ("customer-copy", "customer-copy-antigravity", "astra", "lesson"):
+    if kind == "customer-copy-antigravity":
         return None
     note = ("The previous provider failed. Inspect current files and external state first. "
             "Continue unfinished work; do not repeat completed sends, publishes, merges, "
