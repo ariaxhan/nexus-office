@@ -484,8 +484,6 @@ $('#settings').disabled=false;$('#new-task').disabled=false;
 async function connection(){try{const data=await api('/api/health');$('#connection').textContent=data.ok?'Mac connected':'Mac needs attention';}catch{$('#connection').textContent='Mac unreachable';}}
 await userState.synchronize();await loadSettings().catch(error=>notice(error.message));await connection();await route();if(new URL(location.href).searchParams.has('detail')&&!$('#detail').open)await restoreFromURL();setInterval(connection,30000);
 
-if('serviceWorker' in navigator)navigator.serviceWorker.register('/office-sw.js').catch(error=>notice('Offline shell unavailable: '+error.message));
-
 async function archives(parent,cursor=0){
  const data=await api(`/api/archives?cursor=${cursor}`);
  for(const row of data.items)parent.append(card(row.title,`${row.profile} · ${row.engine} · ${row.cwd}`,()=>archiveDetail(row.id)));
