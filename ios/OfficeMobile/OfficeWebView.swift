@@ -12,6 +12,10 @@ struct OfficeWebView: UIViewRepresentable {
         config.userContentController.add(context.coordinator, name: "officeNative")
         config.userContentController.addUserScript(WKUserScript(source: "window.officeNativeAvailable=true", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let web = WKWebView(frame: .zero, configuration: config)
+        web.isOpaque = false
+        web.backgroundColor = .clear
+        web.scrollView.backgroundColor = .clear
+        web.underPageBackgroundColor = .clear
         web.navigationDelegate = context.coordinator; web.uiDelegate = context.coordinator
         web.isInspectable = true
         web.scrollView.isDirectionalLockEnabled = true

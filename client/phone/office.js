@@ -325,7 +325,7 @@ function formatAge(milliseconds){
  const hours=Math.floor(minutes/60);if(hours<48)return `${hours}h ago`;
  return `${Math.floor(hours/24)}d ago`;
 }
-function feedAction(label,active,fn){const control=button(label,fn,'feed-action'+(active?' active':''));control.title=label;control.setAttribute('aria-label',label);control.setAttribute('aria-pressed',String(active));return control;}
+function feedAction(label,active,fn,glyph){const control=button('',fn,'feed-icon'+(active?' active':''));control.innerHTML=glyph;control.title=label;control.setAttribute('aria-label',label);control.setAttribute('aria-pressed',String(active));return control;}
 async function feedDetail(post){
  const data=await api('/api/feed/detail?id='+encodeURIComponent(post.id));const body=sheet(data.title);
  body.append(el('p','muted',`${data.category} · ${new Date(data.published_at*1000).toLocaleString()} · ${data.model}`),el('p','',data.body));
@@ -379,13 +379,13 @@ function renderFeedPost(parent,post){
   const actions=el('div','feed-actions');article.append(actions);
   const drawActions=()=>{
    actions.replaceChildren(button(`${post.sources.length} source${post.sources.length===1?'':'s'} · context →`,()=>feedDetail(post),'feed-source'));
-   for(const [kind,label] of [['save','Save'],['love','Love'],['dislike','Not for me']]){
+   for(const [kind,label,glyph] of [['save','Save','<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.75h11A1.75 1.75 0 0 1 19.25 5.5v15L12 16.2l-7.25 4.3v-15A1.75 1.75 0 0 1 6.5 3.75Z"/></svg>'],['love','Love','♡︎'],['dislike','Not for me','↓︎']]){
     actions.append(feedAction(label,!!post.feedback?.reactions?.[kind],async()=>{
      try{const active=!post.feedback?.reactions?.[kind];const result=await api('/api/feed/react',{id:post.id,kind,active});post.feedback=result.feedback;drawActions();}
      catch(error){notice(error.message);}
-    }));
+    },glyph));
    }
-   actions.append(feedAction('Reply',false,()=>feedDetail(post)));
+   actions.append(feedAction('Reply',false,()=>feedDetail(post),'↩︎'));
   };drawActions();parent.append(article);
 }
 async function feed(parent){
