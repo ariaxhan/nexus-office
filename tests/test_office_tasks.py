@@ -112,6 +112,32 @@ class AccountIsolation(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):office_profiles.environment('codex','tbs')
 
 class PersistentConversation(unittest.TestCase):
+    def test_failed_codex_session_opens_claude_and_reconciles_pending_work(self):
+        import io
+        import json
+        from types import SimpleNamespace
+        from nexus.office_agent import Conversation
+        from nexus import office_claude
+        class Claude:
+            session_id='claude-session'
+            prompts=[]
+            def __init__(self,*args,**kwargs):pass
+            def message(self,prompt):self.prompts.append(prompt)
+            def close(self):pass
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            ledger=SimpleNamespace(event=lambda *args,**kwargs:None)
+            spec={'engine':'codex','profile':'personal','source_revision':'fixture'}
+            conversation=Conversation(ledger,{'id':'flight','task_id':'task'},root,root,spec)
+            conversation.reconcile_message='Finish this task'
+            with patch.object(office_profiles,'environment',return_value={}), \
+                 patch('nexus.office_agent.Codex',side_effect=RuntimeError('limit')), \
+                 patch.object(office_claude,'Claude',Claude):
+                conversation.connect(io.StringIO())
+            self.assertEqual(json.loads((root/'session.json').read_text())['engine'],'claude')
+            self.assertIn('Finish this task',Claude.prompts[-1])
+            self.assertIn('without repeating sends',Claude.prompts[-1])
+
     def test_new_message_resumes_same_task_with_one_new_attempt(self):
         from nexus import tower
         with tempfile.TemporaryDirectory() as directory:

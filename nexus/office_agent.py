@@ -3,7 +3,7 @@
 Task output and the disposable checkout outlive flight cleanup. No cloud host,
 PTY injection, or independent scheduler is involved.
 """
-from contextlib import closing
+from contextlib import closing,suppress
 import json
 import base64
 import hashlib
@@ -22,6 +22,10 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'client'))
 import office_profiles
 
 APPROVALS={'item/tool/requestUserInput','item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','claude/requestApproval'}
+
+
+class ProviderFailure(RuntimeError):
+    pass
 
 
 def write(path,data):
@@ -84,6 +88,7 @@ class Conversation:
         self.directory=directory;self.checkout=checkout;self.spec=spec
         self.cursor=0;self.closed=False;self.adapter=None
         self.pending={}
+        self.next_engine=spec.get('engine','codex');self.current_message=None;self.reconcile_message=None
         previous=directory/'response.md'
         self.output=[previous.read_text().strip()] if previous.exists() else []
 
@@ -94,27 +99,63 @@ class Conversation:
             stream.write(json.dumps({'at':time.time(),'kind':kind,'payload':data})+'\n')
 
     def connect(self,stderr):
+        self.stderr=stderr
         previous=self.directory/'session.json'
-        resume=json.loads(previous.read_text()).get('engine_session_id') if previous.exists() else None
-        env=office_profiles.environment(self.spec['engine'],self.spec['profile'])
-        # SDK environment options overlay their parent; clean this dedicated
-        # flight process too, so removed credentials cannot be inherited again.
-        os.environ.clear();os.environ.update(env)
-        engine=Codex
-        if self.spec['engine']=='claude':
-            from .office_claude import Claude
-            engine=Claude
-        self.adapter=engine(env,str(self.checkout),stderr,resume=resume)
-        session={'engine_session_id':self.adapter.session_id,'engine':self.spec['engine'],'profile':self.spec['profile'],'checkout':str(self.checkout),'flight_id':self.flight['id']}
+        session=json.loads(previous.read_text()) if previous.exists() else {}
+        errors=[]
+        for name in (self.next_engine,'claude' if self.next_engine=='codex' else 'codex'):
+            try:
+                env=office_profiles.environment(name,self.spec['profile'])
+                # SDK options overlay their parent; clean the flight process too.
+                os.environ.clear();os.environ.update(env)
+                engine=Codex
+                if name=='claude':
+                    from .office_claude import Claude
+                    engine=Claude
+                resume=session.get('engine_session_id') if session.get('engine')==name else None
+                self.adapter=engine(env,str(self.checkout),stderr,resume=resume)
+                self.next_engine='claude' if name=='codex' else 'codex'
+                break
+            except Exception as exc:
+                errors.append(f'{name}: {type(exc).__name__}: {exc}')
+                self.emit('office.provider_failed',{'engine':name,'error':str(exc)[:300]})
+        else:
+            raise RuntimeError('Both providers unavailable: '+'; '.join(errors))
+        session={'engine_session_id':self.adapter.session_id,'engine':name,'profile':self.spec['profile'],'checkout':str(self.checkout),'flight_id':self.flight['id']}
         write(previous,session);self.emit('office.session',session)
         self.emit('office.phase',{'state':'listening' if resume else 'starting'})
+        if self.reconcile_message is not None:
+            prompt=('The previous provider disconnected or did not acknowledge the message. '
+                    'Inspect the checkout, response.md, and conversation.jsonl before continuing. '
+                    'The last user message may have been consumed. Finish unfinished work without '
+                    'repeating sends, publishes, merges, payments, or other external actions. '
+                    'Last user message:\n'+self.reconcile_message)
+            try:self.adapter.message(prompt)
+            except Exception:
+                with suppress(Exception):self.adapter.close()
+                self.adapter=None
+                raise
+            self.reconcile_message=None
+            self.emit('office.phase',{'state':'working'})
 
     def run(self):
         try:
             while not self.closed:
-                message=self.adapter.event()
-                if message:self.provider(message)
-                self.commands()
+                if self.adapter is None:
+                    try:self.connect(self.stderr)
+                    except Exception as exc:
+                        self.emit('office.phase',{'state':'retrying','error':str(exc)[:300]})
+                        time.sleep(30)
+                        continue
+                try:
+                    message=self.adapter.event()
+                    if message:self.provider(message)
+                    self.commands()
+                except ProviderFailure as exc:
+                    self.emit('office.provider_failed',{'error':str(exc)[:300]})
+                    self.reconcile_message=self.reconcile_message or self.current_message
+                    with suppress(Exception):self.adapter.close()
+                    self.adapter=None
         finally:
             try:
                 if self.adapter:self.adapter.close()
@@ -125,7 +166,7 @@ class Conversation:
     def provider(self,message):
         method=message.get('method','')
         if method=='office/disconnected':
-            raise RuntimeError('Engine disconnected; conversation and checkout retained')
+            raise ProviderFailure('Engine disconnected; conversation and checkout retained')
         if 'id' in message and 'method' in message:
             return self.provider_request(message)
         self.emit('office.provider',message)
@@ -134,6 +175,7 @@ class Conversation:
             self.output.append(text)
             (self.directory/'response.md').write_text('\n\n'.join(self.output)+'\n')
         if method in ('turn/completed','claude/ResultMessage'):
+            self.current_message=None
             self.emit('office.phase',{'state':'listening'})
             self.save_outputs()
 
@@ -168,11 +210,13 @@ class Conversation:
         self.emit('office.delivery',{'message_id':event_id,'state':'attempting'})
         try:
             attach_context(self.checkout,body.get('attachments',[]))
+            self.current_message=body['text']
             self.adapter.message(office_tasks.initial_prompt({'prompt':body['text'],'attachments':body.get('attachments',[])}))
             self.emit('office.delivery',{'message_id':event_id,'state':'submitted','consumption':'unknown'})
             self.emit('office.phase',{'state':'working'})
         except Exception as exc:
             self.emit('office.delivery',{'message_id':event_id,'state':'uncertain','error':str(exc)[:300]})
+            raise ProviderFailure(str(exc)) from exc
 
     def control(self,event_id,body):
         if body.get('flight_id')!=self.flight['id']:return
@@ -236,7 +280,7 @@ def main():
         directory,checkout=prepare(ledger,flight['task_id'],spec)
         conversation=Conversation(ledger,flight,directory,checkout,spec)
         with (directory/'engine.log').open('a') as log:
-            conversation.connect(log)
+            conversation.stderr=log
             conversation.run()
     return 0
 
