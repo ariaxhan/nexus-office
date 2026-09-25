@@ -72,11 +72,11 @@ def read(path=None, now=None):
                 elif pending and (not failure or pending.get('next_retry', 0) >= failure.get('next_retry', 0)):
                     state, detail = 'retrying', pending.get('reason') or 'Waiting for next Tower attempt'
                     next_try = _next(pending.get('next_retry'), now)
+                elif owner_recovered.get('reason') == 'dead_owner_claim_released':
+                    state, detail, next_try = 'retrying', 'Work owner exited; Tower released the claim. Outcome proof is required before another execution.', 'ready to verify'
                 elif failure:
                     state, detail = 'retrying', failure.get('error') or 'Tower attempt failed'
                     next_try = _next(failure.get('next_retry'), now)
-                elif owner_recovered.get('reason') == 'dead_owner_claim_released':
-                    state, detail, next_try = 'retrying', 'Work owner exited; Tower released the claim. Outcome proof is required before another execution.', 'ready to verify'
                 else:
                     state, detail, next_try = 'ready', 'Waiting for Tower', ''
                 issues.append({'id': target, 'repo': repo, 'number': int(number),
