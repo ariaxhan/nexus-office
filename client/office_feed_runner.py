@@ -235,6 +235,13 @@ def buzz_rows():
     return sorted((row for row in records if row), key=lambda row: row['published_at'], reverse=True)
 
 
+def care_metadata(item):
+    if item.get('kind') != 'buzz_development':
+        return {}
+    match = re.search(r'Thread ref:\s*([0-9a-f]{8})', item.get('text', ''), re.I)
+    return {'care_thread_ref': match.group(1)} if match else {}
+
+
 def bundles(items):
     """Conservative pairing for consequential world/politics candidates."""
     used = set()
@@ -552,7 +559,8 @@ async def run(limit=4, dry_run=False, only_category=None, retry=False):
                                     [{'title': x['source'] + ' · ' + x['title'], 'url': x['url'],
                                       'published_at': x.get('published_at')} for x in items],
                          'evidence': quotes,
-                          'source_scope': [x.get('content_scope', 'source excerpt') for x in items]}
+                          'source_scope': [x.get('content_scope', 'source excerpt') for x in items],
+                          **care_metadata(items[0])}
                 if cat == 'work':
                     for issue in set(re.findall(r'#(\d+)', body)):
                         match = re.search(r'https://github\.com/[^\s)]+/(?:issues|pull)/' + issue + r'\b', items[0]['text'])

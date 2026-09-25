@@ -9,6 +9,11 @@ import office_feed_runner as runner
 
 
 class EditorialGateTest(unittest.TestCase):
+    def test_care_buzz_post_retains_private_thread_reference_for_fast_reconciliation(self):
+        item = {'kind': 'buzz_development', 'text': 'Care desk escalation. Thread ref: 0ea2d588 (local ledger only)'}
+        self.assertEqual(runner.care_metadata(item), {'care_thread_ref': '0ea2d588'})
+        self.assertEqual(runner.care_metadata({'kind': 'rss', 'text': item['text']}), {})
+
     def test_buzz_held_state_rejects_false_release_but_accepts_negation(self):
         item = {'kind': 'buzz_development',
                 'text': 'L044 is held, not published. The deployed page differs from the approved copy.'}

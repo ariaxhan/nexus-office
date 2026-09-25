@@ -85,12 +85,10 @@ class FeedTest(unittest.TestCase):
             'rows': [{'thread': 'care-conversation', 'state': 'no-reply-owed',
                       'receipt': '/private/close-ack.json'}]}))
         ref = hashlib.sha1(b'care-conversation').hexdigest()[:8]
-        post = dict(self.post, id='buzz-care', category='work', format='work',
+        post = dict(self.post, id='buzz-care', category='work', format='work', care_thread_ref=ref,
                     title='Care Desk Thread Needs Tim', body='A refusal needs Tim.',
                     sources=[{'title': 'Buzz', 'url': '/api/buzz/detail?id=source1'}])
-        with patch.dict(os.environ, {'OFFICE_RUNTIME_ROOT': str(root)}), patch(
-                'office_buzz.listing', return_value={'items': [{'id': 'source1',
-                                                              'text': 'Thread ref: ' + ref}]}):
+        with patch.dict(os.environ, {'OFFICE_RUNTIME_ROOT': str(root)}):
             current = office_feed._current_care([post])[0]
             self.assertEqual(current['title'], 'Care thread closed: no reply owed')
             self.assertEqual(current['superseded_from']['title'], post['title'])

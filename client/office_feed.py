@@ -200,22 +200,16 @@ def _care_context():
         stamped = datetime.datetime.fromisoformat(queue['generated_at'].replace('Z', '+00:00')).timestamp()
         if time.time() - stamped > 2 * 3600:
             return None
-        import office_buzz
-        buzz = {row['id']: row for row in office_buzz.listing()['items']}
     except (OSError, ValueError, KeyError, RuntimeError):
         return None
     by_ref = {hashlib.sha1(row['thread'].encode()).hexdigest()[:8]: row
               for row in queue.get('rows', []) if row.get('thread')}
-    return queue['generated_at'], buzz, by_ref
+    return queue['generated_at'], by_ref
 
 
-def _care_terminal(post, buzz, by_ref):
-    source_ids = [s['url'].split('id=', 1)[1] for s in post['sources']
-                  if s.get('url', '').startswith('/api/buzz/detail?id=')]
-    refs = [re.search(r'Thread ref:\s*([0-9a-f]{8})', buzz[sid].get('text', ''), re.I)
-            for sid in source_ids if sid in buzz]
-    states = [by_ref[m.group(1)] for m in refs if m and m.group(1) in by_ref]
-    return next((row for row in states if row['state'] in ('answered', 'no-reply-owed')), None)
+def _care_terminal(post, by_ref):
+    row = by_ref.get(post.get('care_thread_ref'))
+    return row if row and row['state'] in ('answered', 'no-reply-owed') else None
 
 
 def _care_revision(post, terminal, queue_at):
@@ -233,17 +227,16 @@ def _care_revision(post, terminal, queue_at):
 
 def _current_care(posts):
     """Overlay later verified Care outcomes while retaining the original published evidence."""
-    candidates = [p for p in posts if 'care' in (p.get('title', '') + ' ' + p.get('body', '')).lower()
-                  and any(s.get('url', '').startswith('/api/buzz/detail?id=') for s in p.get('sources', []))]
+    candidates = [p for p in posts if p.get('care_thread_ref')]
     if not candidates:
         return posts
     context = _care_context()
     if context is None:
         return posts
-    queue_at, buzz, by_ref = context
+    queue_at, by_ref = context
     changed = {id(p): p for p in posts}
     for post in candidates:
-        terminal = _care_terminal(post, buzz, by_ref)
+        terminal = _care_terminal(post, by_ref)
         if terminal:
             changed[id(post)] = _care_revision(post, terminal, queue_at)
     return [changed[id(p)] for p in posts]
