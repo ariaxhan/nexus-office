@@ -409,7 +409,10 @@ def prepare_output(output, items):
     fill_missing_evidence(output, items)
     if (items[0].get('kind') == 'buzz_development'
             and re.search(r'\bL044\b is held', items[0]['text'][:400], re.I)
-            and re.search(r'\bL044\b.{0,80}\b(ready|published|live)\b', str(output.get('body', '')), re.I)):
+            and re.search(r'\bL044\b.{0,80}\b(?:is|now)\s+(?:ready|published|live)\b|\bL044\b.{0,80}\bready to publish\b',
+                          str(output.get('body', '')), re.I)
+            and not re.search(r'\bL044\b.{0,80}\b(?:not|isn.t)\s+(?:ready|published|live)\b',
+                              str(output.get('body', '')), re.I)):
         raise ValueError('Buzz summary contradicts latest L044 release state')
     return output
 

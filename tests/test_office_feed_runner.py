@@ -9,6 +9,15 @@ import office_feed_runner as runner
 
 
 class EditorialGateTest(unittest.TestCase):
+    def test_buzz_held_state_rejects_false_release_but_accepts_negation(self):
+        item = {'kind': 'buzz_development',
+                'text': 'L044 is held, not published. The deployed page differs from the approved copy.'}
+        approved = {'title': 'L044', 'body': 'L044 is currently held and not published.', 'evidence': []}
+        runner.prepare_output(approved, [item])
+        false_release = {'title': 'L044', 'body': 'L044 is published and live.', 'evidence': []}
+        with self.assertRaisesRegex(ValueError, 'contradicts'):
+            runner.prepare_output(false_release, [item])
+
     def test_buzz_is_grouped_before_feed_editorial_review(self):
         stamp = datetime.now(timezone.utc).isoformat()
         def row(ident, channel, text, issue=None):
