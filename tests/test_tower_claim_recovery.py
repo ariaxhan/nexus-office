@@ -37,6 +37,17 @@ class TowerClaimRecovery(unittest.TestCase):
         self.assertEqual(self.led.flight(fid)['state'], 'cancelled')
         self.assertEqual(self.led.conn.execute('SELECT count(*) FROM leases WHERE holder_flight=?', (fid,)).fetchone()[0], 0)
 
+    def test_vanished_work_owner_releases_claim_without_replaying_execution(self):
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        self.led.event('work.executing', fid, {'action': 'may_have_run'}, 'work')
+        with patch.dict(os.environ, {'NEXUS_WORK_REGISTRY': 'fixture'}), \
+             patch('nexus.flights.alive', return_value=False), \
+             patch('nexus.work.registry', return_value=[dict(self.entry, path=None)]):
+            self.assertEqual(tower._reconcile_vanished(self.led, 10000000000, self.entry['path']), 1)
+        self.assertEqual(self.led.flight(fid)['state'], 'failed')
+        self.assertEqual(self.led.conn.execute('SELECT count(*) FROM leases WHERE holder_flight=?', (fid,)).fetchone()[0], 0)
+        self.assertEqual(work.latest(self.led, 'work.recovered', fid)['replay'], False)
+
 
 if __name__ == '__main__':
     unittest.main()

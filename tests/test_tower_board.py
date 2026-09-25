@@ -31,6 +31,27 @@ class TowerBoard(unittest.TestCase):
         self.assertIn('No code landed', issue['detail'])
         self.assertIn('/sample/product/issues/1', issue['url'])
 
+    def test_ambiguous_dead_owner_is_visible_as_held(self):
+        work.discover(self.led, self.entry)
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        self.led.event('work.recovery_ambiguous', fid,
+                       {'reason': 'checkout bytes cannot be attributed to dead flight'}, 'tower')
+        self.led.set_state(fid, 'resolving', expect='running',
+                           resolution_step='checkout_ownership_ambiguous')
+        [issue] = tower_board.read(self.root / 'ledger.sqlite')['issues']
+        self.assertEqual(issue['state'], 'held')
+        self.assertIn('cannot be attributed', issue['detail'])
+
+    def test_dead_owner_without_checkout_is_shown_as_proof_pending(self):
+        work.discover(self.led, self.entry)
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        self.led.fail(fid, 'owner_exited', 'outcome requires proof', expect='running')
+        self.led.event('work.recovered', fid,
+                       {'reason': 'dead_owner_claim_released', 'replay': False}, 'tower')
+        [issue] = tower_board.read(self.root / 'ledger.sqlite')['issues']
+        self.assertEqual(issue['state'], 'retrying')
+        self.assertIn('Outcome proof', issue['detail'])
+
 
 if __name__ == '__main__':
     unittest.main()

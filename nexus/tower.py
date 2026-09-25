@@ -225,6 +225,10 @@ def _reconcile_vanished(ledger, now, root):
     gone = 0
     for flight in ledger.flights(states=("running",)):
         if ledger.plan(flight["plan_id"])["kind"] == "work":
+            try:
+                gone += _reconcile_vanished_work(ledger, flight, now)
+            except (OSError, ValueError, KeyError, ld.LandingError) as exc:
+                ledger.event("work.recovery_error", flight["id"], {"error": str(exc)}, "tower", now)
             continue
         if fl.alive(flight["pid"]):
             continue
@@ -238,6 +242,67 @@ def _reconcile_vanished(ledger, now, root):
             _finish_failed(ledger, flight, now)
             gone += 1
     return gone
+
+
+def _reconcile_vanished_work(ledger, flight, now):
+    """Free dead work claims only after checking the child and checkout ownership."""
+    from . import lease, lanes, work
+
+    if fl.alive(flight["pid"]):
+        return 0
+    if flight["pid"] is None and (flight["started_at"] or now) + PID_GRACE_S > now:
+        return 0
+    if fl.alive(work.latest(ledger, "work.process", flight["id"]).get("pid")):
+        return 0
+    registry = os.environ.get("NEXUS_WORK_REGISTRY")
+    task = ledger.task(flight["task_id"]) if flight["task_id"] else None
+    repo_name = (task["dedupe_key"].removeprefix("github:").split("#", 1)[0]
+                 if task and str(task["dedupe_key"]).startswith("github:") else None)
+    if not registry:
+        ledger.event("work.recovery_unconfigured", flight["id"],
+                     {"reason": "NEXUS_WORK_REGISTRY missing"}, "tower", now)
+        return 0
+    try:
+        entry = next((e for e in work.registry(registry) if e["repo"] == repo_name), None)
+    except (OSError, ValueError, work.WorkError) as exc:
+        ledger.event("work.recovery_unconfigured", flight["id"],
+                     {"reason": str(exc)}, "tower", now)
+        return 0
+    if entry is None:
+        ledger.event("work.recovery_unconfigured", flight["id"],
+                     {"reason": "repository not in work registry", "repo": repo_name}, "tower", now)
+        return 0
+    repo = entry["path"] if entry else None
+    if repo and os.path.isdir(repo):
+        record = lease.read(repo)
+        if record and record.get("flight") == flight["id"]:
+            changed, _ = lease.flight_paths(repo, record)
+            moved = ld._git(repo, "rev-parse", "HEAD").stdout.strip() != record.get("head")
+            if changed or moved:
+                ledger.event("work.recovery_ambiguous", flight["id"],
+                             {"repo": repo, "changed_paths": len(changed), "head_moved": moved,
+                              "reason": "checkout bytes cannot be attributed to dead flight"}, "tower", now)
+                ledger.set_state(flight["id"], "resolving", expect="running", now=now,
+                                 resolution_step="checkout_ownership_ambiguous")
+                return 0
+            lease.release(repo, flight["id"])
+        lane = lanes.read(repo, flight["id"])
+        if lane:
+            mine, _ = lanes.flight_paths(repo, lane)
+            if mine:
+                ledger.event("work.recovery_ambiguous", flight["id"],
+                             {"repo": repo, "changed_paths": len(mine),
+                              "reason": "write-set bytes cannot be attributed to dead flight"}, "tower", now)
+                ledger.set_state(flight["id"], "resolving", expect="running", now=now,
+                                 resolution_step="checkout_ownership_ambiguous")
+                return 0
+            lanes.release(repo, flight["id"])
+    if ledger.fail(flight["id"], "owner_exited", "work owner exited; outcome requires proof before retry",
+                   expect="running", now=now):
+        ledger.event("work.recovered", flight["id"],
+                     {"reason": "dead_owner_claim_released", "replay": False}, "tower", now)
+        return 1
+    return 0
 
 
 def _reconcile_orphan_leases(ledger, now):

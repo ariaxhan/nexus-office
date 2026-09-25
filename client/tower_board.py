@@ -52,12 +52,18 @@ def read(path=None, now=None):
                     continue
                 attempt = db.execute("SELECT id,state,created_at FROM flights WHERE task_id=? "
                                      "ORDER BY created_at DESC LIMIT 1", (task['id'],)).fetchone()
+                recovery = (_payload(db, 'work.recovery_ambiguous', attempt['id']) if attempt else {})
+                recovery_error = (_payload(db, 'work.recovery_unconfigured', attempt['id']) if attempt else {})
+                owner_recovered = (_payload(db, 'work.recovered', attempt['id']) if attempt else {})
                 pending = _payload(db, 'work.pending', task['id'])
                 failure = _payload(db, 'work.failure', task['id'])
                 disposition = _payload(db, 'work.disposition', task['id'])
                 issue = _payload(db, 'work.issue', task['id'])
                 labels = {str(x.get('name', '')).lower() for x in issue.get('labels', [])}
-                if attempt and attempt['state'] in ('running', 'produced', 'verifying', 'verified', 'landing'):
+                if attempt and attempt['state'] == 'resolving':
+                    state, detail, next_try = 'held', (recovery.get('reason') or recovery_error.get('reason')
+                                                        or 'Tower recovery needs checkout inspection'), ''
+                elif attempt and attempt['state'] in ('running', 'produced', 'verifying', 'verified', 'landing'):
                     state, detail, next_try = 'working', 'Tower is working this issue', ''
                 elif labels & {'hold', 'waiting on human', 'blocked-needs-look'}:
                     state, detail, next_try = 'held', disposition.get('reason') or 'Held by issue label', ''
@@ -69,6 +75,8 @@ def read(path=None, now=None):
                 elif failure:
                     state, detail = 'retrying', failure.get('error') or 'Tower attempt failed'
                     next_try = _next(failure.get('next_retry'), now)
+                elif owner_recovered.get('reason') == 'dead_owner_claim_released':
+                    state, detail, next_try = 'retrying', 'Work owner exited; Tower released the claim. Outcome proof is required before another execution.', 'ready to verify'
                 else:
                     state, detail, next_try = 'ready', 'Waiting for Tower', ''
                 issues.append({'id': target, 'repo': repo, 'number': int(number),
