@@ -16,7 +16,8 @@ ISSUE = re.compile(r'https://github\.com/(Thinking-Brain-School/[A-Za-z0-9-]+)/i
 _lock = threading.Lock()
 _cache = None
 _cache_at = 0
-AUTHORS = {'54476ad3864ec1c36e9a63e3be1f582a8e521be90dbd0c11cd890499ff18d219': 'Caleb',
+AUTHORS = {'3ad891d9487437f75799caef446ec3819e4c985fc2357beadf75a2e8e5d198e9': 'TBS agent',
+           '54476ad3864ec1c36e9a63e3be1f582a8e521be90dbd0c11cd890499ff18d219': 'Caleb',
            'cccac9b62d5387f52f17ae7ff6e39980a7797e8524da8b36c91f13684159ae88': 'Aria',
            'd2755ff4e2290e7358fe6c06ff3f6992cae34a4b1aae848d5751c0c565fff5ee': 'Tim'}
 

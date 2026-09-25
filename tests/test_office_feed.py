@@ -44,6 +44,20 @@ class FeedTest(unittest.TestCase):
         with self.assertRaises(Exception):
             office_feed.publish(self.post)
 
+    def test_evolving_buzz_development_updates_one_post(self):
+        first = dict(self.post, id='buzz-probe', source_hash='b' * 64,
+                     title='Probe failing', body='The production probe found defects.')
+        office_feed.publish(first, replace=True)
+        office_feed.react({'id': 'buzz-probe', 'kind': 'save', 'active': True})
+        later = dict(first, source_hash='c' * 64, title='Probe recovered',
+                     body='The production probe passes all checks.')
+        office_feed.publish(later, replace=True)
+        with office_feed.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM posts').fetchone()[0], 1)
+        detail = office_feed.detail('buzz-probe')
+        self.assertEqual(detail['title'], 'Probe recovered')
+        self.assertTrue(detail['feedback']['reactions']['save'])
+
     def test_latest_is_chronological_and_for_you_uses_saved_topic_signal(self):
         older = dict(self.post, published_at=time.time() - 7 * 3600)
         newer = dict(self.post, id='rss-2', source_hash='b' * 64,

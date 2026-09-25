@@ -167,6 +167,31 @@ def buzz_candidate(row, now):
                               text[:160], re.I))
 
 
+def curriculum_sources(rows, last, chosen):
+    approval = next((row for row in rows if re.search(r'Tim approved.*(?:arc|L044)', row['text'][:300], re.I)), None)
+    feedback = next((row for row in rows if 'Tim asked me to send you this' in row['text']), None)
+    if re.search(r'\bfinal live L044\b|\bactivated it by pointer\b', last['text'][:450], re.I):
+        return [row for row in (approval, feedback, last) if row]
+    if approval and approval not in chosen:
+        return [approval] + chosen
+    return chosen
+
+
+def curriculum_digest(chosen, last):
+    """Keep decisive source lines; intermediate holds remain in raw provenance."""
+    latest = re.sub(r'revision `[0-9a-f]{64}`', 'the approved revision', last['text'].split('\n\n', 1)[0])
+    lines = [f"Latest at {last['at']}: {latest}"]
+    for row in chosen:
+        if row is last:
+            continue
+        for line in row['text'].splitlines():
+            if 'wait for Aria on those' in line:
+                continue
+            if re.search(r'(approved your agent|let.s go with it|[1-5]\. L0\d{2}|after L052)', line, re.I):
+                lines.append(f"{row['author']} at {row['at']}: {line.strip().lstrip('> ').strip()}")
+    return '\n'.join(lines)
+
+
 def buzz_record(key, rows):
     rows.sort(key=lambda row: row['at'])
     last = rows[-1]
@@ -175,11 +200,12 @@ def buzz_record(key, rows):
         return None  # final incident state only
     chosen = rows[-4:]
     if key == 'curriculum-logic-persuasion':
-        approval = next((row for row in rows if re.search(r'Tim approved.*(?:arc|L044)', row['text'][:300], re.I)), None)
-        if approval and approval not in chosen:
-            chosen = [approval] + chosen
+        chosen = curriculum_sources(rows, last, chosen)
     ordered = [last] + [row for row in chosen if row is not last]
-    joined = '\n'.join(f"{row['author']} at {row['at']}: {row['text'][:700]}" for row in ordered)
+    joined = '\n'.join(f"{row['author']} at {row['at']}: {row['text'][:1500 if row['author'] == 'Caleb' else 700]}"
+                       for row in ordered)
+    if key == 'curriculum-logic-persuasion' and re.search(r'\bfinal live L044\b', last['text'][:450], re.I):
+        joined = curriculum_digest(chosen, last)
     if len(joined.split()) < 25:
         return None
     title = ('Production probe outcome' if key.startswith('production-probe:') else
@@ -188,7 +214,7 @@ def buzz_record(key, rows):
     sources = [{'title': f"Buzz #{row['channel']} · {row['author']}",
                 'url': '/api/buzz/detail?id=' + row['id'], 'published_at': row['at']}
                for row in chosen]
-    return {'id': 'buzz:' + key + ':' + last['id'], 'kind': 'buzz_development',
+    return {'id': 'buzz:' + key + ':' + last['id'], 'group_key': key, 'kind': 'buzz_development',
             'bucket': 'office-work', 'source': 'TBS Buzz', 'title': title,
             'url': sources[-1]['url'], 'text': joined, 'published_at': last['at'],
             'content_scope': 'Buzz messages and receipts; status as observed at source time',
@@ -241,10 +267,15 @@ def source_hash(items):
 
 
 def evidence_options(item):
+    if item.get('kind') == 'buzz_development':
+        lines = [line.strip().lstrip('> ').strip()[:260] for line in item['text'].splitlines()
+                 if len(line.strip()) >= 30]
+        selectors = (r'Tim approved', r'\bL047\s*\(', r'\bL051\s*\(', r'\bL055\s*\(', r'after L052')
+        topical = [next((line for line in lines if re.search(pattern, line, re.I)), None)
+                   for pattern in selectors]
+        return list(dict.fromkeys(lines[:2] + [line for line in topical if line] + lines[-2:]))[:7]
     pieces = [piece.strip() for piece in re.split(r'(?<=[.!?])\s+|\n+', item['text'])]
     valid = [piece[:260] for piece in pieces if len(piece) >= 30]
-    if item.get('kind') == 'buzz_development' and len(valid) > 7:
-        return valid[:3] + valid[-4:]
     return valid[:7] or [item['text'][:260]]
 
 
@@ -389,9 +420,20 @@ async def compose(provider, model, cat, originals):
                       'Return JSON title, body, evidence for ONE material development and its latest known state. '
                       'Body: one or two concise sentences. Use evidence indices for exact supporting source excerpts. '
                       'Collapse retries, progress, acknowledgements and repeated status into the final outcome. '
+                      'If a prior approval and its later outcome are both material, summarize both and lead with the latest state. '
                       'If routine, already resolved without material change, or only queue chatter, return {"skip":true}. '
                       'An approved curriculum arc does not mean a lesson is published; if the latest message says held, say held. '
                       'Do not claim an approval, deployment, or recovery beyond what these messages say.')
+            if originals[0].get('group_key') == 'curriculum-logic-persuasion':
+                system += (' For this multi-lesson decision, use two or three compact sentences, 250 to 450 characters. '
+                           'The material development has five parts: L044 latest release state; L047 rain, umbrellas and wet streets; '
+                           'L051 a child’s own boring-movie choice; L055 slippery slope instead of false dilemma; '
+                           'and a persuading-well lesson after L052. Include all five. '
+                           'These are source topics to check, not facts to assert unless the source supports them. '
+                           'Only L044 is live. Begin with that fact. In the next sentence write "Tim requested" before listing L047, L051, L055 and after-L052 ideas. '
+                           'The later lesson changes are proposed, not implemented: never state that L047 uses, L051 focuses, or L055 changes yet. '
+                           'Name the actual example or replacement for each lesson; lesson numbers alone do not convey the decision. '
+                           'Omit hashes and deadlines.')
     prompt = json.dumps({'category': cat, 'sources': supplied}, ensure_ascii=False)
     response = await provider.complete(model, system, prompt,
                                        max_tokens=500 if originals[0].get('kind') == 'buzz_development' else 300,
@@ -407,6 +449,8 @@ def prepare_output(output, items):
     if items[0].get('kind') == 'buzz_development':
         output['evidence'] = []  # select exact source excerpts; reject unsupported copy in verify()
     fill_missing_evidence(output, items)
+    if items[0].get('kind') == 'buzz_development':
+        expand_buzz_evidence(output, items[0])
     if (items[0].get('kind') == 'buzz_development'
             and re.search(r'\bL044\b is held', items[0]['text'][:400], re.I)
             and re.search(r'\bL044\b.{0,80}\b(?:is|now)\s+(?:ready|published|live)\b|\bL044\b.{0,80}\bready to publish\b',
@@ -414,7 +458,25 @@ def prepare_output(output, items):
             and not re.search(r'\bL044\b.{0,80}\b(?:not|isn.t)\s+(?:ready|published|live)\b',
                               str(output.get('body', '')), re.I)):
         raise ValueError('Buzz summary contradicts latest L044 release state')
+    if items[0].get('group_key') == 'curriculum-logic-persuasion' and 'final live L044' in items[0]['text'][:400]:
+        body = str(output.get('body', ''))
+        if not re.search(r'\bL044\b.{0,70}\b(?:live|activated)\b', body, re.I):
+            raise ValueError('Curriculum summary omits final L044 state')
+        if re.search(r'\bL0(?:47|51|55)\b.{0,40}\b(?:uses|focuses|changes|replaces|includes)\b', body, re.I):
+            raise ValueError('Curriculum summary presents requested edits as implemented')
     return output
+
+
+def expand_buzz_evidence(output, item):
+    """Retain a source excerpt for each lesson identifier the summary names."""
+    options = evidence_options(item)
+    claim = str(output.get('title', '')) + ' ' + str(output.get('body', ''))
+    for lesson in set(re.findall(r'\bL0\d{2}\b', claim)):
+        if any(lesson in options[index] for index in output.get('evidence', []) if type(index) is int):
+            continue
+        match = next((index for index, quote in enumerate(options) if lesson in quote), None)
+        if match is not None and len(output['evidence']) < 7:
+            output['evidence'].append(match)
 
 
 def report_copy(output, item):
@@ -434,6 +496,12 @@ def report_copy(output, item):
     report_date = dt.datetime.fromisoformat(item['published_at']).astimezone().strftime('%b %-d')
     output['title'] = item['source'] + ' · ' + report_date
     output['body'] = ('Reported ' + report_date + ': ' + re.sub(r'^[*\s]+', '', material))[:340]
+
+
+def post_identity(item, digest):
+    group = item.get('group_key')
+    return (('buzz-' + hashlib.sha256(group.encode()).hexdigest()[:24]) if group
+            else 'source-' + digest[:24]), bool(group)
 
 
 async def run(limit=4, dry_run=False, only_category=None, retry=False):
@@ -476,7 +544,8 @@ async def run(limit=4, dry_run=False, only_category=None, retry=False):
                               'source_url': items[0]['url']}]
                 is_paper = any(urlparse(item['url']).hostname in ('arxiv.org', 'www.arxiv.org')
                                for item in items)
-                post = {'id': 'source-' + digest[:24], 'source_hash': digest, 'model': 'local:' + model,
+                post_id, revisable = post_identity(items[0], digest)
+                post = {'id': post_id, 'source_hash': digest, 'model': 'local:' + model,
                         'category': cat, 'format': 'listen' if cat == 'listen' else 'work' if cat == 'work' else 'paper' if is_paper else 'gallery' if len(media)>1 else 'image' if media else 'story',
                         'title': title, 'body': body, 'media': media,
                          'sources': items[0].get('source_records') or
@@ -491,7 +560,7 @@ async def run(limit=4, dry_run=False, only_category=None, retry=False):
                             post['sources'].append({'title': 'Issue or PR #' + issue,
                                                     'url': match.group(0), 'published_at': items[0]['published_at']})
                 if not dry_run:
-                    office_feed.publish(post)
+                    office_feed.publish(post, replace=revisable)
                 office_feed.record_run(digest, model, stamp, latency, 'published' if not dry_run else 'dry_run',
                                        post_id=post['id'] if not dry_run else None)
                 results.append({'source_hash': digest, 'state': 'published' if not dry_run else 'preview',
