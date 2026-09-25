@@ -1,5 +1,6 @@
 """Independent owner of the durable Office Ask queue."""
 import fcntl
+import os
 import sys
 
 import office_ask
@@ -17,7 +18,8 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 3
-        office_ask.worker_forever()
+        parent = os.getppid()
+        office_ask.worker_forever(stop=lambda: os.getppid() != parent)
     return 0
 
 

@@ -24,20 +24,17 @@ class AskQueueTest(unittest.TestCase):
         self.models_patch.start()
         self.addCleanup(self.path_patch.stop)
         self.addCleanup(self.models_patch.stop)
-        ask.WORKER = None
-        if ask.RETRY_TIMER:
-            ask.RETRY_TIMER.cancel()
-        ask.RETRY_TIMER = None
+        self.workers = []
         self.addCleanup(self._finish_worker)
 
+    def _start_drain(self):
+        worker = threading.Thread(target=ask._drain, daemon=True)
+        self.workers.append(worker)
+        worker.start()
+
     def _finish_worker(self):
-        if ask.RETRY_TIMER:
-            ask.RETRY_TIMER.cancel()
-            ask.RETRY_TIMER = None
-        worker = ask.WORKER
-        if worker and worker.is_alive():
+        for worker in self.workers:
             worker.join(3)
-        ask.WORKER = None
 
     def _wait_for(self, predicate):
         for _ in range(200):
@@ -66,7 +63,7 @@ class AskQueueTest(unittest.TestCase):
 
         with patch.object(ask, "_answer_turn", side_effect=provider):
             ask.send({"request_id": "request-00000001", "text": "A", "model": "model-a"})
-            ask._ensure_worker()
+            self._start_drain()
             self.assertTrue(started["A"].wait(1))
             ask.send({"request_id": "request-00000002", "text": "B", "model": "model-b"})
             ask.send({"request_id": "request-00000003", "text": "C", "model": "model-c"})
@@ -87,7 +84,7 @@ class AskQueueTest(unittest.TestCase):
         self.assertTrue(all(row["status"] == "completed" for row in users + answers))
 
     def test_restart_requeues_turn_then_continues_fifo_after_provider_failure(self):
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipts = [ask.send({"request_id": f"restart-request-{n:02d}", "text": text,
                                   "model": "model-a"})
                         for n, text in enumerate(("A", "B", "C"), 1)]
@@ -105,11 +102,11 @@ class AskQueueTest(unittest.TestCase):
         with patch.object(ask, "_answer_turn", side_effect=provider):
             recovered = ask.recover()
             self.assertEqual(recovered["resuming"], 1)
-            ask._ensure_worker()
+            self._start_drain()
             self._wait_for(lambda: any(row['text'] == 'answer C' for row in ask.read()['messages']))
             with ask.connect() as db:
                 db.execute("UPDATE messages SET next_attempt_at=0 WHERE role='user' AND text='B'")
-            ask._ensure_worker()
+            self._start_drain()
             self._wait_for(lambda: not ask.read()["busy"])
 
         state = ask.read()
@@ -135,7 +132,7 @@ class AskQueueTest(unittest.TestCase):
             with patch.object(ask, "models", return_value=available), patch.object(ask, "_answer_turn", side_effect=provider):
                 receipt = ask.send({"request_id": f"fallback-{primary.replace(':', '-')}-001",
                                     "text": "Complete the request", "model": primary})
-                ask._ensure_worker()
+                self._start_drain()
                 self._wait_for(lambda: not ask.read()["busy"])
             reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
             self.assertEqual(reply["status"], "completed")
@@ -150,7 +147,7 @@ class AskQueueTest(unittest.TestCase):
                 ask, "_answer_turn", side_effect=RuntimeError("provider unavailable")):
             receipt = ask.send({"request_id": "both-provider-failure-001",
                                 "text": "Keep going", "model": "gpt-6-sol"})
-            ask._ensure_worker()
+            self._start_drain()
             self._wait_for(lambda: any(row['id'] == receipt['reply_id'] and 'retry automatically' in row['text']
                                        for row in ask.read()['messages']))
         reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
@@ -159,7 +156,7 @@ class AskQueueTest(unittest.TestCase):
         with ask.connect() as db:
             db.execute("UPDATE messages SET next_attempt_at=0 WHERE id=?", (receipt["user_id"],))
         with patch.object(ask, "_answer_turn", return_value="Recovered answer"):
-            ask._ensure_worker()
+            self._start_drain()
             self._wait_for(lambda: not ask.read()["busy"])
         reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
         self.assertEqual(reply["status"], "completed")
@@ -167,7 +164,7 @@ class AskQueueTest(unittest.TestCase):
 
     def test_restart_restores_completed_codex_turn_without_starting_it_again(self):
         body = {"request_id": "recover-request-0001", "text": "Inspect the work", "model": "model-a"}
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipt = ask.send(body)
         with ask.connect() as db:
             ask._set(db, "thread_id", "thread-1")
@@ -191,7 +188,7 @@ class AskQueueTest(unittest.TestCase):
         fake = SavedServer()
         with patch.object(ask, "AppServer", return_value=fake):
             self.assertEqual(ask.recover(), {"resuming": 1})
-            ask._ensure_worker()
+            self._start_drain()
             self._wait_for(lambda: not ask.read()["busy"])
         answer = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
         self.assertEqual(answer["text"], "The verified answer")
@@ -199,7 +196,7 @@ class AskQueueTest(unittest.TestCase):
         self.assertNotIn("turn/start", fake.calls)
 
     def test_lost_completion_notification_reads_finished_turn_and_unblocks_queue(self):
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipt = ask.send({"request_id": "lost-event-request-001", "text": "Check the work",
                                 "model": "model-a"})
         turn = {"id": "turn-1", "status": "completed", "items": [
@@ -225,7 +222,7 @@ class AskQueueTest(unittest.TestCase):
 
     def test_interrupted_codex_turn_is_not_replayed(self):
         body = {"request_id": "recover-request-0002", "text": "Do the work", "model": "model-a"}
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipt = ask.send(body)
         with ask.connect() as db:
             ask._set(db, "thread_id", "thread-1")
@@ -255,7 +252,7 @@ class AskQueueTest(unittest.TestCase):
         fake = InterruptedServer()
         with patch.object(ask, "AppServer", return_value=fake):
             self.assertEqual(ask.recover(), {"resuming": 1})
-            ask._ensure_worker()
+            self._start_drain()
             self._wait_for(lambda: not ask.read()["busy"])
         answer = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
         self.assertEqual(answer["status"], "failed")
@@ -264,7 +261,7 @@ class AskQueueTest(unittest.TestCase):
 
     def test_request_retry_is_idempotent_and_conflicts_are_rejected(self):
         body = {"request_id": "retry-request-0001", "text": "Keep this", "model": "model-a"}
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             first = ask.send(body)
             self.assertEqual(ask.send(dict(body)), first)
             with self.assertRaisesRegex(ValueError, "request_id"):
@@ -278,7 +275,7 @@ class AskQueueTest(unittest.TestCase):
         self.assertEqual(state["queue"], {"queued": 1, "working": 0})
 
     def test_cached_client_without_request_id_can_send(self):
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipt = ask.send({"text": "From old client", "model": "model-a"})
         self.assertRegex(receipt["request_id"], r"^[a-f0-9-]{36}$")
         self.assertEqual([row["text"] for row in ask.read()["messages"] if row["role"] == "user"],

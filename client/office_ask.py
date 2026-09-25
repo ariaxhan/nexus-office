@@ -47,8 +47,6 @@ def claude_environment():
     allowed = ('HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'SHELL', 'LANG', 'LC_ALL',
                'SSH_AUTH_SOCK', 'XDG_CONFIG_HOME')
     return {name: selected[name] for name in allowed if name in selected}
-WORKER = None
-RETRY_TIMER = None
 OFFICE_DIR = Path(__file__).resolve().parents[1]
 MANAGER_INSTRUCTIONS = (
     'You are the user\'s Office manager in one continuous chat. Primarily answer questions about '
@@ -336,32 +334,6 @@ def _retry_receipt(db, row, message, requested):
     return _receipt(row['request_id'], row['id'], reply['id'], row['model'])
 
 
-def _ensure_worker():
-    global WORKER
-    with LOCK:
-        if WORKER and WORKER.is_alive():
-            return
-        with connect() as db:
-            queued = db.execute("SELECT MIN(next_attempt_at) due FROM messages WHERE role='user' AND status='queued'").fetchone()['due']
-            working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
-        if queued is None or working:
-            return
-        if queued > time.time():
-            _schedule_retry(queued - time.time())
-            return
-        WORKER = threading.Thread(target=_drain, name='office-ask', daemon=True)
-        WORKER.start()
-
-
-def _schedule_retry(delay):
-    global RETRY_TIMER
-    if RETRY_TIMER:
-        RETRY_TIMER.cancel()
-    RETRY_TIMER = threading.Timer(max(.1, delay), _ensure_worker)
-    RETRY_TIMER.daemon = True
-    RETRY_TIMER.start()
-
-
 def _claim():
     with LOCK, connect() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -407,7 +379,6 @@ def _retry(turn, error):
 
 
 def _drain():
-    global WORKER
     while True:
         turn = _claim()
         if turn:
@@ -482,7 +453,7 @@ def worker_health():
     return time.time() - heartbeat < 20 and (oldest is None or time.time() - oldest < 2400)
 
 
-def worker_forever():
+def worker_forever(stop=None):
     """Only the independent Ask job calls this; the HTTP service only reads/enqueues."""
     recover()
     def pulse():
@@ -490,7 +461,7 @@ def worker_forever():
             worker_heartbeat()
             time.sleep(5)
     threading.Thread(target=pulse, name='office-ask-heartbeat', daemon=True).start()
-    while True:
+    while not (stop and stop()):
         _drain()
         time.sleep(.5)
 
