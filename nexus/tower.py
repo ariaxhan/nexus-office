@@ -95,6 +95,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report["produced"] += reaped["produced"]
     report["failed"] += reaped["failed"]
     report["vanished"] = _reconcile_vanished(ledger, now, root)
+    report["orphan_leases"] = _reconcile_orphan_leases(ledger, now)
     report["failed"] += report["timed_out"] + report["vanished"]
     report["retried"] = _retry_exhausted(ledger, now)
     _sweep_workspaces(ledger)
@@ -237,6 +238,40 @@ def _reconcile_vanished(ledger, now, root):
             _finish_failed(ledger, flight, now)
             gone += 1
     return gone
+
+
+def _reconcile_orphan_leases(ledger, now):
+    """Release dead checkout ownership with no ledger flight; never move checkout bytes."""
+    from . import lease, work
+
+    paths = set(lease.indexed())
+    registry = os.environ.get("NEXUS_WORK_REGISTRY")
+    if registry:
+        try:
+            paths.update(row["path"] for row in work.registry(registry) if row["path"])
+        except (OSError, ValueError, work.WorkError) as exc:
+            ledger.event("work.registry_unreadable", None, {"error": str(exc)}, "tower", now)
+    released = 0
+    for repo in sorted(paths):
+        if not os.path.isdir(repo):
+            continue
+        try:
+            record = lease.read(repo)
+            if not record or not lease.stale(record, now) or lease.alive(record.get("pid")):
+                continue
+            if ledger.flight(record["flight"]):
+                continue  # a known flight needs outcome reconciliation before ownership changes
+            changed, _ = lease.flight_paths(repo, record)
+            moved = ld._git(repo, "rev-parse", "HEAD").stdout.strip() != record.get("head")
+            ledger.event("work.orphan_lease", record["flight"],
+                         {"repo": repo, "changed_paths": len(changed), "head_moved": moved,
+                          "outcome": "ownership_released_files_preserved"}, "tower", now)
+            lease.release(repo, record["flight"])
+            released += 1
+        except (OSError, ValueError, KeyError, ld.LandingError) as exc:
+            ledger.event("work.orphan_lease_error", None,
+                         {"repo": repo, "error": str(exc)}, "tower", now)
+    return released
 
 
 def _finish_failed(ledger, flight, now):
