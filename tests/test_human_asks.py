@@ -1,5 +1,6 @@
 """Behavioral proof that a request lives until its source proves a transition."""
 import json
+import importlib.util
 from pathlib import Path
 import sqlite3
 import sys
@@ -133,6 +134,36 @@ class HumanAskTest(unittest.TestCase):
                 row = db.execute("SELECT state,resolution_evidence FROM asks WHERE id='office-permission:8'").fetchone()
                 self.assertEqual(row['state'], 'resolved')
                 self.assertEqual(json.loads(row['resolution_evidence'])['ledger_event'], 9)
+
+    def test_newer_or_incompatible_store_is_refused_without_altering_asks(self):
+        self.read()
+        with sqlite3.connect(self.db) as db:
+            db.execute('PRAGMA user_version=99')
+        with self.assertRaisesRegex(RuntimeError, 'newer'):
+            asks.connect(self.db)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM asks').fetchone()[0], 1)
+            db.execute('PRAGMA user_version=0')
+            db.execute('ALTER TABLE asks RENAME TO old_asks')
+            db.execute('CREATE TABLE asks(id TEXT PRIMARY KEY, state TEXT)')
+        with self.assertRaisesRegex(RuntimeError, 'incompatible'):
+            asks.connect(self.db)
+
+    def test_release_guard_refuses_rollback_that_hides_open_ask(self):
+        guard = Path(__file__).resolve().parents[1] / 'scripts/check_release_compat.py'
+        spec = importlib.util.spec_from_file_location('release_guard', guard)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.read()
+        old_release = Path(self.tmp.name) / 'old-release'
+        old_release.mkdir()
+        with self.assertRaisesRegex(RuntimeError, 'open Aria asks'):
+            module.check(old_release, self.db)
+        module.check(Path(__file__).resolve().parents[1], self.db)
+        with sqlite3.connect(self.db) as db:
+            db.execute('PRAGMA user_version=2')
+        with self.assertRaisesRegex(RuntimeError, 'schema 2'):
+            module.check(Path(__file__).resolve().parents[1], self.db)
 
 
 if __name__ == '__main__':

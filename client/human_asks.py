@@ -15,6 +15,7 @@ DB = Path(os.environ.get('OFFICE_HUMAN_ASKS_DB', Path.home() / '.local/state/nex
 _lock = threading.Lock()
 _last_check = 0.0
 STATES = {'open', 'resolved', 'dismissed', 'reassigned', 'superseded'}
+HUMAN_ASKS_SCHEMA_VERSION = 1
 ASK_MARKER = '<!-- office-human-ask\n'
 OUTCOME_MARKER = '<!-- office-human-ask-outcome\n'
 
@@ -28,6 +29,20 @@ def connect(path=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=10)
     db.row_factory = sqlite3.Row
+    version = db.execute('PRAGMA user_version').fetchone()[0]
+    if version > HUMAN_ASKS_SCHEMA_VERSION:
+        db.close()
+        raise RuntimeError(f'human asks schema {version} is newer than this Office supports')
+    required = {
+        'asks': {'id', 'source', 'source_ref', 'owner', 'action', 'created_at', 'observed_at',
+                 'state', 'resolution_evidence', 'last_source_verification', 'source_stale'},
+        'ask_events': {'id', 'ask_id', 'at', 'state', 'evidence'},
+    }
+    for table, columns in required.items():
+        existing = {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}
+        if (version and not existing) or (existing and not columns <= existing):
+            db.close()
+            raise RuntimeError(f'human asks {table} has an incompatible schema')
     db.execute('PRAGMA journal_mode=WAL')
     db.execute('''CREATE TABLE IF NOT EXISTS asks (
         id TEXT PRIMARY KEY, source TEXT NOT NULL, source_ref TEXT NOT NULL,
@@ -37,6 +52,8 @@ def connect(path=None):
     db.execute('''CREATE TABLE IF NOT EXISTS ask_events (
         id INTEGER PRIMARY KEY, ask_id TEXT NOT NULL, at TEXT NOT NULL,
         state TEXT NOT NULL, evidence TEXT NOT NULL)''')
+    if version < HUMAN_ASKS_SCHEMA_VERSION:
+        db.execute(f'PRAGMA user_version={HUMAN_ASKS_SCHEMA_VERSION}')
     return db
 
 

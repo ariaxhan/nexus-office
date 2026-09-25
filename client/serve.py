@@ -901,9 +901,8 @@ class Handler(BaseHTTPRequestHandler):
         document, it is bytes, and json.loads on it is the first thing an
         attacker gets to choose.
 
-        The 200 goes out BEFORE any work. GitHub gives a delivery ten seconds
-        and retries anything that is not a 2xx, so a door that dispatched first
-        and answered second would be redelivered mid-run and start a second one.
+        Commit the dispatch obligation before 200, then run the slow pipeline
+        asynchronously. GitHub retries a failed commit without a duplicate run.
         """
         n = int(self.headers.get("content-length") or 0)
         if n > WEBHOOK_LIMIT:
@@ -982,19 +981,31 @@ class Handler(BaseHTTPRequestHandler):
                                    "delivery": delivery})
 
             fire = webhook.should_trigger(ev, OUR_LOGINS)
-            self.mailbox.append(ev, trigger=fire)
+            error = self._queue_webhook(ev, fire)
+            if error:
+                return self._json({"error": error}, 503)
             handled = True
             self._json({"ok": True, "delivery": delivery})
-            # Everything past the answer. `notice` drops the event in a mailbox
-            # and returns, so the request thread is never the thing waiting on a
-            # thirty minute lane.
-            if fire and self.trigger is not None:
-                self.trigger.notice(ev)
+            # A stop after acceptance is safe: Trigger reloads the committed obligation.
             log(f"{event}.{ev.action or '-'} {ev.repo}#{ev.number or '-'} by {ev.login or '?'}"
                 f" -> {'queued' if fire else 'noted'}")
             return None
         finally:
             self.mailbox.settle(delivery, handled)
+
+    def _queue_webhook(self, ev, fire):
+        self.mailbox.append(ev, trigger=fire)
+        if not fire:
+            return None
+        if self.trigger is None:
+            return "webhook dispatcher unavailable"
+        try:
+            self.mailbox.accept(ev)
+            self.trigger.notice(ev, accepted=True)
+        except Exception as exc:  # noqa: BLE001 - never acknowledge lost work
+            log(f"delivery {ev.delivery} could not persist dispatch: {exc}")
+            return "webhook dispatch could not be persisted"
+        return None
 
     def _webhook_status(self) -> dict:
         """Is the mailbox alive, in the shape the app and the phone read.
