@@ -3310,7 +3310,7 @@ function automationFailureCard(entry) {
   node.append(actions);
   api(`/api/github/detail?repo=${encodeURIComponent(entry.repo)}&number=${issue.number}&kind=issues`).then((data) => {
     if (!node.isConnected) return;
-    const comments = (data.comments || []).filter((row) => !String(row.body || "").includes("<!-- pipeline-bot -->") && !String(row.body || "").includes("<!-- office-request:"));
+    const comments = (data.comments || []).filter((row) => !String(row.body || "").includes("The automated pass could not resolve this and did not say what to decide.") && !String(row.body || "").includes("<!-- office-request:"));
     const meaningful = comments.at(-1), lead = meaningfulFailureLine(meaningful?.body || "");
     receipt.textContent = lead ? `Last substantive report (${formatAge(Date.now() - Date.parse(meaningful.created_at))}): ${lead.slice(0, 350)}` : "No substantive run receipt found in the available issue comments. Inspect the history before retrying.";
   }).catch((error) => {
