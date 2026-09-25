@@ -23,6 +23,7 @@ import office_github_actions as github_actions
 import coordinator_chat
 import office_buzz
 import human_asks
+import office_timing
 
 
 def arguments(query):
@@ -107,8 +108,14 @@ def get(handler, path, query):
         return True
     if path not in routes:
         return False
-    handler._json(routes[path]())
+    _respond(handler, path, routes[path]())
     return True
+
+
+def _respond(handler, path, result):
+    handler._json(result)
+    if path == '/api/system/runs':
+        office_timing.observe_runs(result, getattr(handler, 'office_revision', ''))
 
 
 def post(handler, path):

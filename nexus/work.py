@@ -116,6 +116,8 @@ def capture(led, repo, issue):
         else:
             tid = task["id"]
         led._event("work.issue", tid, issue, "work")
+    from . import lifecycle_observe
+    lifecycle_observe.recognized(led, repo, tid, issue, eligibility)
     return tid
 
 
@@ -166,6 +168,7 @@ def claim(led, repo, number, owner_pid, *, runner=False):
                                                "reason": "explicit recovery claim"}, "work")
             led._event("work.issue", tid, latest(led, "work.issue", previous), "work")
             task = c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
+        selected_at = time.time()
         fid = new_id("flt")
         attempt = c.execute("SELECT count(*)+1 FROM flights WHERE task_id IN"
                             " (SELECT id FROM tasks WHERE dedupe_key=?)", (key,)).fetchone()[0]
@@ -179,6 +182,8 @@ def claim(led, repo, number, owner_pid, *, runner=False):
         led._event("flight.state", fid, {"to": "running", "pid": owner_pid}, "work")
         if runner:
             led._event("work.runner", fid, {}, "work")
+    from . import lifecycle_observe
+    lifecycle_observe.selected_and_queued(led, fid, key, task, latest, selected_at)
     return fid
 
 
@@ -363,6 +368,12 @@ def fail(led, fid, exc):
               "next_retry": time.time() + delay, "attempt": row["attempt"]}, "work")
     if row["state"] not in TERMINAL:
         led.fail(fid, "work_failed", str(exc), expect=row["state"])
+    from . import lifecycle_observe
+    lifecycle_observe.for_flight(led, fid, "lifecycle.attempt_finished", outcome="failed", finished_at=time.time())
+    lifecycle_observe.for_flight(led, fid, "lifecycle.wait_started",
+                                 transition_key=f"backoff:{fid}", wait_id=f"backoff:{fid}",
+                                 wait_kind="backoff", reason_code="work_failed",
+                                 eligible_at=lambda: latest(led, "work.failure", row["task_id"]).get("next_retry"))
 
 
 def pending(led, fid, result):
@@ -378,6 +389,12 @@ def pending(led, fid, result):
     state = led.flight(fid)["state"]
     if state not in TERMINAL and not led.set_state(fid, "cancelled", expect=state, source="work"):
         raise WorkError(f"pending flight {fid} changed state during settlement")
+    from . import lifecycle_observe
+    lifecycle_observe.for_flight(led, fid, "lifecycle.attempt_finished", outcome="pending", finished_at=time.time())
+    lifecycle_observe.for_flight(led, fid, "lifecycle.wait_started",
+                                 transition_key=f"backoff:{fid}", wait_id=f"backoff:{fid}",
+                                 wait_kind="backoff", reason_code=str(result.get("reason") or "pending")[:80],
+                                 eligible_at=retry)
     return "pending"
 
 
@@ -827,6 +844,9 @@ def tower_execute(led, entry, task):
     try:
         led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL, "open_deps": [],
                                           "write_set": write_set, "started": time.time()}, "work")
+        from . import lifecycle_observe
+        lifecycle_observe.for_flight(led, fid, "lifecycle.execution_started",
+                                     execution_started_at=time.time(), runner_kind="tower", flight_id=fid)
         result = executor.fly(
             entry, issue, fid, timeout_s=remaining(float(entry.get("timeout_s", 900))),
             pr_create=pr_create,
@@ -850,9 +870,17 @@ def tower_execute(led, entry, task):
 
 def _settle(led, fid, entry, task, issue, result, contract_=None):
     from . import tower
+    from . import lifecycle_observe
     repo, number = entry["repo"], issue["number"]
+    verification_id = f"verification:{fid}"
+    lifecycle_observe.for_flight(led, fid, "lifecycle.verification_started",
+                                 verification_id=verification_id, scope="tower terminal and done receipt",
+                                 exact_head=result.get("sha"), proof_kind="work.receipt")
     tower.land_write_flight(led, fid, entry["path"], result)
     if result["state"] == "HELD":
+        lifecycle_observe.for_flight(led, fid, "lifecycle.verification_finished",
+                                     verification_id=verification_id, result="inconclusive",
+                                     exact_head=result.get("sha"), proof_ref=None)
         if result.get("reason") != "in_review" and not result.get("requeue"):  # parked for a person; never re-flown on the next tick
             subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
                             "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
@@ -864,17 +892,30 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
     from . import contract
     done, why = contract.done_receipt(result, contract_, entry["path"])
     if not done:  # an executor exit is never proof: no_change, a failed check or no commit stays open
+        lifecycle_observe.for_flight(led, fid, "lifecycle.verification_finished",
+                                     verification_id=verification_id, result="failed",
+                                     exact_head=result.get("sha"), proof_ref=None)
         url = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body",
                               f"Nexus flight {fid}: not done. {why}. Left open for the next attempt."],
                              capture_output=True, text=True, timeout=remaining(60)).stdout.strip()
         return pending(led, fid, {"reason": f"not_done: {why}", "retry_at": time.time() + 3600,
                                   "evidence": [url] if url else []})
     led.event("work.receipt", task["id"], {"flight": fid, "sha": result["sha"], "receipt": why}, "work")
+    receipt_id = lifecycle_observe.latest_receipt_id(led, task["id"])
+    proof_ref = f"nexus:event:{receipt_id}" if receipt_id else None
+    lifecycle_observe.for_flight(led, fid, "lifecycle.verification_finished",
+                                 verification_id=verification_id, result="passed",
+                                 exact_head=result["sha"], proof_ref=proof_ref,
+                                 evidence_ref=proof_ref)
     led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower receipt: " + why)
     close_issue(led, {"repo": repo, "task": task["id"], "issue": issue})
     if not led.set_state(fid, "landing", expect="verified", source="work"):
         raise WorkError(f"delivered flight {fid} lost its verified state")
     led.set_state(fid, "landed", expect="landing", source="work")
+    lifecycle_observe.for_flight(led, fid, "lifecycle.attempt_finished", outcome="landed", finished_at=time.time())
+    lifecycle_observe.for_flight(led, fid, "lifecycle.verified", verification_id=verification_id,
+                                 verified_at=time.time(), exact_head=result["sha"], proof_ref=proof_ref,
+                                 result_kind="tower receipt", evidence_ref=proof_ref)
     return "done"
 
 
@@ -919,6 +960,9 @@ def tower_review(led, entry, task, pr_url):
         else:
             led.event("work.executing", fid, {"repo": repo, "issue": issue["number"], "lane": TOWER_LABEL,
                                               "review": pr_url, "head": pr["headRefOid"]}, "work")
+            from . import lifecycle_observe
+            lifecycle_observe.for_flight(led, fid, "lifecycle.execution_started",
+                                         execution_started_at=time.time(), runner_kind="tower_review", flight_id=fid)
             verdict, why = executor.review(entry, pr_url, fid, timeout_s=remaining(900))
         led.event("work.review", fid, {"pr": pr_url, "head": pr["headRefOid"], "verdict": verdict, "reason": why,
                                        "cached": bool(cached)}, "work")
@@ -1083,6 +1127,8 @@ def _run_task(led, entry, task):
             return "backoff"
         if _lane.get() == TOWER_LABEL:
             why = tower_gate(entry, current)[1]
+            from . import lifecycle_observe
+            lifecycle_observe.gate_state(led, task, current, why)
             if why:
                 led.event("work.pending", task["id"], {"reason": f"gate: {why}", "next_retry": time.time() + 1800}, "work")
                 return "blocked"
