@@ -1,6 +1,7 @@
 """Behavioral proof that a request lives until its source proves a transition."""
 import json
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -107,6 +108,31 @@ class HumanAskTest(unittest.TestCase):
         # No source declaration or publisher call exists for an automation failure.
         with asks.connect(self.db) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM asks').fetchone()[0], 1)
+
+    def test_permission_survives_flight_stop_until_ledger_closes_it(self):
+        import office_tasks
+        import run_board
+        import runtime
+        ledger_path = Path(self.tmp.name) / 'ledger.sqlite'
+        with sqlite3.connect(ledger_path) as ledger:
+            ledger.execute('CREATE TABLE events(id INTEGER PRIMARY KEY,ts REAL,kind TEXT,subject TEXT,payload TEXT)')
+            ledger.execute("INSERT INTO events VALUES(8,1790000000,'office.permission','task-a',?)",
+                           (json.dumps({'params': {'reason': 'Choose the exact access boundary'}}),))
+        with patch.object(run_board, 'LEDGER', ledger_path), \
+             patch.object(office_tasks, 'permissions', return_value={'items': []}), \
+             patch.object(runtime, 'read_gates', return_value={'state': 'ok', 'gates': []}):
+            with asks.connect(self.db) as db:
+                asks.ingest_runtime_asks(db)
+                row = db.execute("SELECT state,source_stale FROM asks WHERE id='office-permission:8'").fetchone()
+                self.assertEqual((row['state'], row['source_stale']), ('open', 1))
+            with sqlite3.connect(ledger_path) as ledger:
+                ledger.execute("INSERT INTO events VALUES(9,1790000010,'office.permission_closed','task-a',?)",
+                               (json.dumps({'permission_id': 8}),))
+            with asks.connect(self.db) as db:
+                asks.ingest_runtime_asks(db)
+                row = db.execute("SELECT state,resolution_evidence FROM asks WHERE id='office-permission:8'").fetchone()
+                self.assertEqual(row['state'], 'resolved')
+                self.assertEqual(json.loads(row['resolution_evidence'])['ledger_event'], 9)
 
 
 if __name__ == '__main__':

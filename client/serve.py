@@ -58,6 +58,7 @@ import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import context  # noqa: E402
 import office_api  # noqa: E402
+import human_asks  # noqa: E402
 import live  # noqa: E402
 import lesson_status  # noqa: E402
 import lesson_outlines  # noqa: E402
@@ -825,6 +826,8 @@ class Handler(BaseHTTPRequestHandler):
         if root is None:
             return self._json({"ok": False, "message": NO_ROOT}, 409)
         ok, message = rt.answer_gate(root, qid, answer, body.get("always") is True)
+        if ok:
+            human_asks.gate_answered(qid, answer)
         return self._json({"ok": ok, "message": message}, 200 if ok else 409)
 
     def _board(self, body):

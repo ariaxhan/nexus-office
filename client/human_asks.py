@@ -114,6 +114,79 @@ def observe_stations(db, stations):
                              'created_at': entry.get('created_at') or issue.get('updatedAt') or now()})
 
 
+def _permission_event(db, ledger, event, active):
+    ref = f'{event["subject"]}:{event["id"]}'
+    ask_id = f'office-permission:{event["id"]}'
+    params = (json.loads(event['payload']).get('params') or {})
+    action = params.get('title') or params.get('reason') or params.get('question') or 'Answer this exact task request.'
+    observe(db, {'id': ask_id, 'source': 'office-permission', 'source_ref': ref,
+                 'owner': 'aria', 'action': str(action)[:4000],
+                 'created_at': dt.datetime.fromtimestamp(event['ts'], dt.timezone.utc).isoformat()})
+    closure = ledger.execute("""SELECT id,ts FROM events WHERE kind='office.permission_closed'
+        AND subject=? AND json_extract(payload,'$.permission_id')=? ORDER BY id DESC LIMIT 1""",
+        (event['subject'], event['id'])).fetchone()
+    if closure and db.execute('SELECT state FROM asks WHERE id=?', (ask_id,)).fetchone()['state'] == 'open':
+        transition(db, ask_id, 'resolved',
+                   {'source_ref': ref, 'ledger_event': closure['id'], 'closed_at': closure['ts']})
+    elif not closure:
+        db.execute('UPDATE asks SET source_stale=?,last_source_verification=? WHERE id=?',
+                   (0 if event['id'] in active else 1, now(), ask_id))
+
+
+def _ingest_permissions(db):
+    import office_tasks
+    from run_board import LEDGER
+    active = {}
+    try:
+        for request in office_tasks.permissions()['items']:
+            active[int(request['id'])] = request
+    except (OSError, ValueError, sqlite3.Error):
+        pass
+    try:
+        with sqlite3.connect(f'file:{LEDGER}?mode=ro', uri=True, timeout=2) as ledger:
+            ledger.row_factory = sqlite3.Row
+            rows = ledger.execute("SELECT id,ts,subject,payload FROM events WHERE kind='office.permission'").fetchall()
+            for event in rows:
+                _permission_event(db, ledger, event, active)
+    except (OSError, ValueError, sqlite3.Error):
+        db.execute("UPDATE asks SET source_stale=1 WHERE source='office-permission' AND state='open'")
+    return active
+
+
+def _ingest_gates(db):
+    import runtime
+    active = {}
+    try:
+        gates = runtime.read_gates()
+    except (OSError, ValueError):
+        gates = {'gates': [], 'state': 'unavailable'}
+    for gate in gates.get('gates') or []:
+        ref = str(gate['id'])
+        observe(db, {'id': f'gate:{ref}', 'source': 'gate', 'source_ref': ref,
+                     'owner': 'aria', 'action': gate.get('detail') or gate.get('target') or gate.get('permission') or 'Answer this exact agent gate.',
+                     'created_at': dt.datetime.fromtimestamp(gate.get('asked_at') or time.time(), dt.timezone.utc).isoformat()})
+        active[ref] = gate
+        db.execute('UPDATE asks SET source_stale=0,last_source_verification=? WHERE id=?', (now(), f'gate:{ref}'))
+    for row in db.execute("SELECT id,source_ref FROM asks WHERE source='gate' AND state='open'").fetchall():
+        if row['source_ref'] not in active:
+            db.execute('UPDATE asks SET source_stale=1 WHERE id=?', (row['id'],))
+    return active
+
+
+def ingest_runtime_asks(db):
+    """Project durable permission events and pending gates, not process liveness."""
+    return {'office-permission': _ingest_permissions(db), 'gate': _ingest_gates(db)}
+
+
+def gate_answered(question_id, answer, path=None):
+    """A successful source-file write is the resolution receipt for that gate."""
+    with closing(connect(path)) as db, db:
+        ask_id = f'gate:{question_id}'
+        if db.execute('SELECT state FROM asks WHERE id=?', (ask_id,)).fetchone():
+            transition(db, ask_id, 'resolved', {'source_ref': question_id,
+                       'answer': answer, 'written_at': now(), 'source': 'runtime gate file'})
+
+
 def github_issue(ref):
     repo, number = ref.rsplit('#', 1)
     result = subprocess.run(['gh', 'issue', 'view', number, '-R', repo,
@@ -160,17 +233,21 @@ def reconcile(db, fetch=github_issue):
             db.execute('UPDATE asks SET source_stale=1 WHERE id=?', (row['id'],))
 
 
-def listing(path=None, fetch=github_issue, max_age_s=300, stations=None):
+def listing(path=None, fetch=github_issue, max_age_s=300, stations=None, runtime_asks=True):
     global _last_check
     with _lock, closing(connect(path)) as db:
         with db:
             seed(db)
             observe_stations(db, stations)
+            active = ingest_runtime_asks(db) if runtime_asks and path is None else {'office-permission': {}, 'gate': {}}
             if time.monotonic() - _last_check >= max_age_s or path is not None:
                 reconcile(db, fetch)
                 if path is None:
                     _last_check = time.monotonic()
             rows = db.execute("SELECT * FROM asks WHERE owner='aria' AND state='open' ORDER BY created_at,id").fetchall()
             return {'items': [dict(r, resolution_evidence=json.loads(r['resolution_evidence'])
-                                      if r['resolution_evidence'] else None) for r in rows],
+                                      if r['resolution_evidence'] else None,
+                                      live_request=active.get(r['source'], {}).get(
+                                          int(r['source_ref'].rsplit(':', 1)[1]) if r['source'] == 'office-permission' else r['source_ref']))
+                              for r in rows],
                     'at': now()}

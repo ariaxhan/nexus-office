@@ -2455,7 +2455,7 @@ async function watch(parent) {
   });
 }
 function requiresYou(entry) {
-  return entry.kind === "permission" || entry.kind === "gate" || entry.kind === "human-ask";
+  return entry.kind === "human-ask";
 }
 function formatAge(milliseconds) {
   if (!Number.isFinite(milliseconds)) return "not checked yet";
@@ -3154,14 +3154,14 @@ async function githubReviews(repo, number, cursor = 1, parent = null, inline2 = 
   if (!parent) body.append(button("Inline comments", () => githubReviews(repo, number, 1, body, true)));
 }
 async function refreshAttention() {
-  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), api("/api/human-asks"), world()]);
+  const results = await Promise.allSettled([api("/api/human-asks"), world()]);
   const items = [], errors = [], failures = [];
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
       errors.push(result.reason.message);
       continue;
     }
-    if (index === 2) errors.push(...result.value.errors || []);
+    if (index === 0) errors.push(...result.value.errors || []);
     for (const entry of attentionItems(index, result.value)) {
       (automationFailure(entry) ? failures : items).push(entry);
     }
@@ -3183,7 +3183,7 @@ function drawAttention(parent) {
   const shown = parent.id === "needs-list" ? attention.items.slice(0, 3) : attention.items;
   for (const entry of shown) {
     const key = `${entry.kind}:${entry.item.id}`;
-    const node = entry.kind === "permission" ? existing.get(key) || permissionCard(entry.item) : attentionCard(entry);
+    const node = attentionCard(entry);
     node.dataset.attentionKey = key;
     nodes.push(node);
   }
@@ -3209,10 +3209,12 @@ function attentionCard(entry) {
   return issueAttentionCard(entry);
 }
 function humanAskCard(ask2) {
+  if (ask2.source === "office-permission" && ask2.live_request) return permissionCard(ask2.live_request);
+  if (ask2.source === "gate" && ask2.live_request) return gateAttentionCard(ask2.live_request);
   const node = el("article", "card attention-choice");
   const verified = ask2.last_source_verification ? ` \xB7 verified ${formatAge(Date.now() - Date.parse(ask2.last_source_verification))}` : " \xB7 not verified yet";
   node.append(el("p", "attention-source", `${ask2.source_ref}${verified}`), el("h3", "", "A decision needs you"), el("p", "attention-question", ask2.action));
-  if (ask2.source_stale) node.append(el("p", "muted", "Source temporarily unavailable; this request remains open."));
+  if (ask2.source_stale) node.append(el("p", "muted", "The execution owner or source is unavailable; this request remains open until its outcome is verified."));
   if (ask2.source === "github") {
     const [repo, number] = ask2.source_ref.split("#");
     node.append(button("Inspect source and answer there", () => githubDetail(repo, { number: Number(number) }, "issues"), "attention-details"));
@@ -3295,10 +3297,8 @@ async function attentionList(parent) {
 }
 setInterval(refreshAttention, 1e4);
 function attentionItems(index, value3) {
-  if (index === 0) return (value3?.items || []).map((item) => ({ kind: "permission", item }));
-  if (index === 1) return (value3?.gates || []).map((item) => ({ kind: "gate", item }));
-  if (index === 2) return (value3?.items || []).map((item) => ({ kind: "human-ask", item }));
-  if (index === 3) return (value3?.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.automation_failure === "missing_decision").map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } })));
+  if (index === 0) return (value3?.items || []).map((item) => ({ kind: "human-ask", item }));
+  if (index === 1) return (value3?.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.automation_failure === "missing_decision").map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } })));
   return [];
 }
 function automationFailure(entry) {

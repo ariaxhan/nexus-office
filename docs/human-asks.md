@@ -12,6 +12,8 @@ Sources publish requests with `human_asks.observe(db, item)`. GitHub sources can
 
 The key is stable within the issue. Office ingests the declaration regardless of the last commenter or `bot_last`. Unstructured prose, an escalation to Tim, and a failed automated pass do not create an Aria ask. Existing free-form issues were individually reviewed and registered in `client/human_asks_sources.json`; that file does not decide their current state.
 
+Office task permissions are ingested from the Nexus ledger's `office.permission` events and closed only by matching `office.permission_closed` events. Harness gates are ingested from the runtime gate files; a successful gate answer through Office supplies their closure receipt. Losing a flight, a gate file, or a source connection leaves the request visible as stale until a source-backed outcome is recorded. The existing permission controls remain available while their execution owner is live.
+
 GitHub issue closure supplies a terminal receipt. A source can record an earlier resolution, dismissal, reassignment, or supersession in a comment:
 
 ```text
