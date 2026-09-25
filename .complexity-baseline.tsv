@@ -14,7 +14,7 @@ client/office-sync.py	236	receipts	19	33
 client/office-sync.py	813	_fetch_pr_tail	18	37
 client/office-sync.py	856	fetch_batch	20	35
 client/office-sync.py	1211	_verify_check_refusal	18	25
-client/office_ask.py	546	_answer_turn	39	95
+client/office_ask.py	562	_answer_turn	28	76
 client/office_feed.py	135	publish	25	41
 client/office_feed.py	179	listing	24	56
 client/office_feed_runner.py	63	source_rows	24	40
@@ -66,7 +66,7 @@ client/sources/prs.py	45	read	18	33
 client/sources/prs.py	89	card	24	40
 client/sources/webhook.py	163	read	27	57
 client/sources/webhook.py	263	card	23	46
-client/tower_board.py	28	read	28	58
+client/tower_board.py	58	read	17	46
 client/webhook.py	275	parse	37	32
 client/webhook.py	594	_drop_ignored	17	30
 nexus/contract.py	31	parse	19	18
