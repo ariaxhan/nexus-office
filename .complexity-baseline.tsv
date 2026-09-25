@@ -8,7 +8,7 @@ client/chat.py	136	office_evidence	56	99
 client/chat.py	252	decision_blocks	17	25
 client/context.py	294	write	16	47
 client/coordinator_chat.py	245	runs	22	31
-client/coordinator_chat.py	582	summary	46	41
+client/coordinator_chat.py	582	summary	44	40
 client/live.py	444	parse_claude_line	27	38
 client/office-sync.py	236	receipts	19	33
 client/office-sync.py	813	_fetch_pr_tail	18	37
@@ -39,9 +39,9 @@ client/sessions.py	264	read	21	27
 client/sessions.py	321	transcript	19	33
 client/sessions.py	395	say	17	35
 client/sessions.py	699	_checkouts	16	37
-client/sources/care.py	79	read	20	44
-client/sources/care.py	127	card	26	51
-client/sources/care_grader.py	111	card	26	44
+client/sources/care.py	79	read	15	25
+client/sources/care.py	127	card	25	42
+client/sources/care_grader.py	111	card	20	36
 client/sources/clock.py	59	_schedule	19	21
 client/sources/clock.py	175	read	22	44
 client/sources/clock.py	300	rows	17	25

@@ -3,6 +3,9 @@
 Publication is an explicit operation. Collection alone never creates a post.
 """
 import json
+import datetime
+import hashlib
+import os
 import re
 import sqlite3
 import time
@@ -187,6 +190,65 @@ def _store_post(db, identifier, now, category, format_, title, body, payload, mo
                    (identifier, now, now, category, format_, title.strip(), body.strip(), json.dumps(payload), model, source_hash))
 
 
+def _care_context():
+    root = os.environ.get('OFFICE_RUNTIME_ROOT')
+    if not root:
+        return None
+    queue_path = Path(root) / 'CodingVault/thinking-brain-school/_meta/receipts/care-fix/queue.json'
+    try:
+        queue = json.loads(queue_path.read_text())
+        stamped = datetime.datetime.fromisoformat(queue['generated_at'].replace('Z', '+00:00')).timestamp()
+        if time.time() - stamped > 2 * 3600:
+            return None
+        import office_buzz
+        buzz = {row['id']: row for row in office_buzz.listing()['items']}
+    except (OSError, ValueError, KeyError, RuntimeError):
+        return None
+    by_ref = {hashlib.sha1(row['thread'].encode()).hexdigest()[:8]: row
+              for row in queue.get('rows', []) if row.get('thread')}
+    return queue['generated_at'], buzz, by_ref
+
+
+def _care_terminal(post, buzz, by_ref):
+    source_ids = [s['url'].split('id=', 1)[1] for s in post['sources']
+                  if s.get('url', '').startswith('/api/buzz/detail?id=')]
+    refs = [re.search(r'Thread ref:\s*([0-9a-f]{8})', buzz[sid].get('text', ''), re.I)
+            for sid in source_ids if sid in buzz]
+    states = [by_ref[m.group(1)] for m in refs if m and m.group(1) in by_ref]
+    return next((row for row in states if row['state'] in ('answered', 'no-reply-owed')), None)
+
+
+def _care_revision(post, terminal, queue_at):
+    outcome = terminal['state']
+    title = 'Care thread answered' if outcome == 'answered' else 'Care thread closed: no reply owed'
+    body = ('Care later verified a reply tied to this inquiry. The earlier escalation is historical.'
+            if outcome == 'answered' else
+            'Care later verified that no reply was owed. The earlier needs-Tim alert is historical.')
+    return dict(post, title=title, body=body,
+                superseded_from={'title': post['title'], 'body': post['body']},
+                care_reconciliation={'state': outcome, 'queue_at': queue_at,
+                                     'receipt': terminal.get('receipt'),
+                                     'inbound_id': terminal.get('inbound_id')})
+
+
+def _current_care(posts):
+    """Overlay later verified Care outcomes while retaining the original published evidence."""
+    candidates = [p for p in posts if 'care' in (p.get('title', '') + ' ' + p.get('body', '')).lower()
+                  and any(s.get('url', '').startswith('/api/buzz/detail?id=') for s in p.get('sources', []))]
+    if not candidates:
+        return posts
+    context = _care_context()
+    if context is None:
+        return posts
+    queue_at, buzz, by_ref = context
+    changed = {id(p): p for p in posts}
+    for post in candidates:
+        terminal = _care_terminal(post, buzz, by_ref)
+        if terminal:
+            changed[id(post)] = _care_revision(post, terminal, queue_at)
+    return [changed[id(p)] for p in posts]
+
+
 def listing(category='all', cursor=0, limit=40):
     if category not in CATEGORIES and category not in ('all', 'latest', 'saved', 'following'):
         raise ValueError('Unknown category')
@@ -205,7 +267,7 @@ def listing(category='all', cursor=0, limit=40):
                     posts.append(post)
             selected = posts[offset:offset + limit]
             feedback = _feedback(db, [post['id'] for post in selected])
-            return {'items': [dict(post, feedback=feedback[post['id']]) for post in selected],
+            return {'items': _current_care([dict(post, feedback=feedback[post['id']]) for post in selected]),
                     'next_cursor': offset + limit if len(posts) > offset + limit else None,
                     'checked_at': time.time(), 'categories': sorted(CATEGORIES)}
         if category in ('all', 'latest'):
@@ -230,7 +292,7 @@ def listing(category='all', cursor=0, limit=40):
             ids = [item[2]['id'] for item in selected]
             feedback = _feedback(db, ids)
             items = [dict(item[2], feedback=feedback[item[2]['id']]) for item in selected]
-            return {'items': items,
+            return {'items': _current_care(items),
                     'next_cursor': offset + limit if len(parsed) > offset + limit else None,
                     'checked_at': time.time(), 'categories': sorted(CATEGORIES)}
         where = ''
@@ -246,7 +308,7 @@ def listing(category='all', cursor=0, limit=40):
         feedback = _feedback(db, ids)
         items = [dict(json.loads(row['payload']), feedback=feedback.get(identifier, {}))
                  for row, identifier in zip(rows[:limit], ids)]
-        return {'items': items, 'next_cursor': offset + limit if len(rows) > limit else None,
+        return {'items': _current_care(items), 'next_cursor': offset + limit if len(rows) > limit else None,
                 'checked_at': time.time(), 'categories': sorted(CATEGORIES)}
 
 
@@ -271,7 +333,7 @@ def detail(identifier):
         post['feedback'] = _feedback(db, [identifier])[identifier]
         post['replies'] = [dict(row) for row in db.execute(
             'SELECT id,body,created_at FROM replies WHERE post_id=? ORDER BY id DESC LIMIT 100', (identifier,))]
-        return post
+        return _current_care([post])[0]
 
 
 def withdraw(identifier, reason):

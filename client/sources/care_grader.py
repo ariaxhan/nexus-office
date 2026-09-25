@@ -31,8 +31,10 @@ grader that agreed with everything, and that is the false-green this office exis
 from __future__ import annotations
 
 import json
+import datetime
 import os
 import pathlib
+import time
 
 from sources import _card
 
@@ -40,6 +42,9 @@ KEY = "care-grader"
 TITLE = "Care Grader (shadow)"
 
 LOG = "_meta/logs/care-grader-shadow.jsonl"
+MAIL_MIRROR = "CodingVault/tbs-care/.local/mail"
+CARE_QUEUE = "CodingVault/thinking-brain-school/_meta/receipts/care-fix/queue.json"
+MIRROR_MAX_AGE_S = 48 * 3600
 RECENT = 20
 
 TROUBLE = {
@@ -54,7 +59,27 @@ def _root() -> pathlib.Path | None:
     return pathlib.Path(v).expanduser() if v else None
 
 
-def read() -> dict:
+def _coverage(root, rows, now):
+    mirror = root / MAIL_MIRROR
+    mail_files = [p for p in mirror.rglob("*") if p.is_file()] if mirror.exists() else []
+    mirror_at = max((p.stat().st_mtime for p in mail_files), default=None)
+    mirror_current = mirror_at is not None and now - mirror_at <= MIRROR_MAX_AGE_S
+    latest_care_send = ""
+    queue_path = root / CARE_QUEUE
+    if queue_path.exists():
+        try:
+            queue = json.loads(queue_path.read_text())
+            latest_care_send = max((r.get("sent_at") or "" for r in queue.get("rows", [])), default="")
+        except (OSError, ValueError):
+            pass
+    latest_graded_send = max((r.get("sent_at") or "" for r in rows), default="")
+    return {"mirror_at": (None if mirror_at is None else
+                          datetime.datetime.fromtimestamp(mirror_at, datetime.timezone.utc).isoformat()),
+            "latest_care_send": latest_care_send, "latest_graded_send": latest_graded_send,
+            "coverage_current": mirror_current and (not latest_care_send or latest_graded_send >= latest_care_send)}
+
+
+def read(now=None) -> dict:
     root = _root()
     if root is None:
         return {"state": "unconfigured",
@@ -94,8 +119,10 @@ def read() -> dict:
             disagree += 1
 
     scored = agree + disagree
+    now = time.time() if now is None else now
+    coverage = _coverage(root, rows, now)
     return {
-        "state": "ok",
+        "state": "ok" if coverage["coverage_current"] else "coverage-stale",
         "total": len(rows),
         "by_decision": by_decision,
         "agree": agree,
@@ -104,8 +131,27 @@ def read() -> dict:
         "agreement_pct": None if not scored else round(100 * agree / scored),
         "torn": torn,
         "as_of": _card.zulu(rows[-1].get("ts")),
+        **coverage,
         "recent": rows[-RECENT:],
     }
+
+
+def _facts(data, when):
+    bd = data.get("by_decision") or {}
+    disagree = data.get("disagree", 0)
+    pct = data.get("agreement_pct")
+    facts = [_card.fact("graded historically", str(data["total"]), "dim")]
+    facts.append(_card.fact("current coverage", "yes" if data.get("coverage_current") else "no — source or grading stale",
+                            "ok" if data.get("coverage_current") else "bad"))
+    if pct is not None:
+        facts.append(_card.fact("agreement", f"{pct}%", "ok" if pct >= 90 else "warn"))
+    facts.append(_card.fact("would hold", str(disagree), "bad" if disagree else "ok"))
+    facts.append(_card.fact("decisions", ", ".join(f"{k} {v}" for k, v in sorted(bd.items())),
+                            "warn" if (bd.get("REFUSE", 0) or bd.get("ESCALATE", 0)) else "dim"))
+    if data.get("torn"):
+        facts.append(_card.fact("torn lines", str(data["torn"]), "warn"))
+    facts.append(_card.fact("last graded", when, "dim"))
+    return facts
 
 
 def card(data: dict) -> dict:
@@ -121,20 +167,9 @@ def card(data: dict) -> dict:
 
     as_of = data.get("as_of") or ""
     when = _card.ago(as_of) or "unknown"
-    bd = data.get("by_decision") or {}
     disagree = data.get("disagree", 0)
     pct = data.get("agreement_pct")
-
-    facts = [_card.fact("graded", str(data["total"]), "dim")]
-    if pct is not None:
-        facts.append(_card.fact("agreement", f"{pct}%", "ok" if pct >= 90 else "warn"))
-    facts.append(_card.fact("would hold", str(disagree), "bad" if disagree else "ok"))
-    facts.append(_card.fact("decisions",
-                            ", ".join(f"{k} {v}" for k, v in sorted(bd.items())),
-                            "warn" if (bd.get("REFUSE", 0) or bd.get("ESCALATE", 0)) else "dim"))
-    if data.get("torn"):
-        facts.append(_card.fact("torn lines", str(data["torn"]), "warn"))
-    facts.append(_card.fact("last graded", when, "dim"))
+    facts = _facts(data, when)
 
     rows = []
     for r in data.get("recent") or []:
@@ -151,10 +186,12 @@ def card(data: dict) -> dict:
             dec, tone))
     rows.reverse()  # newest first
 
-    if disagree:
+    if not data.get("coverage_current"):
+        headline = "Shadow grader has historical verdicts; current replies are not covered"
+    elif disagree:
         headline = f"{disagree} sent {_card.plural(disagree, 'reply')} the grader would have held"
     elif pct is not None:
         headline = f"Grader agrees with all {data['scored']} scored sends; last {when}"
     else:
         headline = f"{data['total']} graded, none scored yet; last {when}"
-    return _card.build(TITLE, headline, disagree, as_of, facts, rows)
+    return _card.build(TITLE, headline, disagree if data.get("coverage_current") else 0, as_of, facts, rows)

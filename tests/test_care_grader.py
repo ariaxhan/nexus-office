@@ -11,6 +11,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
 
 from test_sections import assert_card
@@ -26,6 +27,9 @@ class CareGraderBase(unittest.TestCase):
         import sources.care_grader as cg
         self.cg = importlib.reload(cg)
         self.path = self.root / self.cg.LOG
+        self.mirror = self.root / self.cg.MAIL_MIRROR / "sent.json"
+        self.mirror.parent.mkdir(parents=True, exist_ok=True)
+        self.mirror.write_text("[]")
 
     def tearDown(self):
         os.environ.pop("OFFICE_RUNTIME_ROOT", None)
@@ -100,6 +104,17 @@ class States(CareGraderBase):
         self.assertEqual(d["total"], 2)
         self.assertEqual(d["torn"], 1)
         assert_card(self, self.cg.card(d))
+
+    def test_successful_no_op_over_stale_mail_is_not_current_coverage(self):
+        self.write([self.row(ts="2026-09-25T12:00:00Z")])
+        stale = time.time() - 22 * 86400
+        os.utime(self.mirror, (stale, stale))
+        data = self.cg.read()
+        self.assertEqual(data["state"], "coverage-stale")
+        self.assertFalse(data["coverage_current"])
+        card = self.cg.card(data)
+        self.assertIn("not covered", card["headline"])
+        self.assertEqual(card["needs"], 0)
 
 
 if __name__ == "__main__":

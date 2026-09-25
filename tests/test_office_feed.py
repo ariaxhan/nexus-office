@@ -1,6 +1,7 @@
 """The feed must preserve provenance and cross-device feedback."""
 import os
 import json
+import hashlib
 import sys
 import tempfile
 import time
@@ -74,6 +75,30 @@ class FeedTest(unittest.TestCase):
         self.assertEqual(office_feed.listing('latest')['items'][0]['id'], 'rss-2')
         office_feed.react({'id': 'rss-1', 'kind': 'save', 'active': True})
         self.assertEqual(office_feed.listing('all')['items'][0]['id'], 'rss-1')
+
+    def test_closed_care_development_keeps_history_but_not_active_tim_alert(self):
+        root = Path(self.temp.name)
+        queue = root / 'CodingVault/thinking-brain-school/_meta/receipts/care-fix/queue.json'
+        queue.parent.mkdir(parents=True, exist_ok=True)
+        queue.write_text(json.dumps({'generated_at': __import__('datetime').datetime.now(
+            __import__('datetime').timezone.utc).isoformat(),
+            'rows': [{'thread': 'care-conversation', 'state': 'no-reply-owed',
+                      'receipt': '/private/close-ack.json'}]}))
+        ref = hashlib.sha1(b'care-conversation').hexdigest()[:8]
+        post = dict(self.post, id='buzz-care', category='work', format='work',
+                    title='Care Desk Thread Needs Tim', body='A refusal needs Tim.',
+                    sources=[{'title': 'Buzz', 'url': '/api/buzz/detail?id=source1'}])
+        with patch.dict(os.environ, {'OFFICE_RUNTIME_ROOT': str(root)}), patch(
+                'office_buzz.listing', return_value={'items': [{'id': 'source1',
+                                                              'text': 'Thread ref: ' + ref}]}):
+            current = office_feed._current_care([post])[0]
+            self.assertEqual(current['title'], 'Care thread closed: no reply owed')
+            self.assertEqual(current['superseded_from']['title'], post['title'])
+            self.assertEqual(current['care_reconciliation']['receipt'], '/private/close-ack.json')
+            value = json.loads(queue.read_text())
+            value['rows'][0]['state'] = 'escalated'
+            queue.write_text(json.dumps(value))
+            self.assertEqual(office_feed._current_care([post])[0]['title'], post['title'])
 
 
 if __name__ == '__main__':

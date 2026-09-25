@@ -1,10 +1,5 @@
-"""The care fixture: a dead reader must never look like a quiet mailbox.
-
-    python3 -m unittest discover -s tests -p 'test_*.py'
-"""
-
-from __future__ import annotations
-
+"""Care cards read the active receipts, never the retired intake snapshot."""
+import datetime
 import importlib
 import json
 import os
@@ -16,120 +11,89 @@ import unittest
 from test_sections import assert_card
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
-
-NOW = 1_800_000_000.0   # an arbitrary "now"; snapshots are stamped relative to it
-
-
-def stamp(seconds_ago: float) -> str:
-    import datetime
-    return datetime.datetime.fromtimestamp(NOW - seconds_ago, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+NOW = 1_800_000_000.0
 
 
-class CareBase(unittest.TestCase):
+def stamp(age):
+    return datetime.datetime.fromtimestamp(NOW - age, datetime.timezone.utc).isoformat()
+
+
+class CareState(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = pathlib.Path(self.tmp.name)
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.temp.name)
         os.environ["OFFICE_RUNTIME_ROOT"] = str(self.root)
-        import sources.care as care
+        from sources import care
         self.care = importlib.reload(care)
-        self.path = self.root / self.care.SNAPSHOT
 
     def tearDown(self):
         os.environ.pop("OFFICE_RUNTIME_ROOT", None)
-        self.tmp.cleanup()
+        self.temp.cleanup()
 
-    def snapshot(self, age_s=60, dry_run=False, notes=None, **extra):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        snap = {"at": stamp(age_s), "dry_run": dry_run, "sources": ["care"],
-                "filed": 0, "would_file": 0, "followup": 0, "skipped_duplicate": 0,
-                "error": 0, "blocked": {}, "threads": [],
-                "notes": notes if notes is not None else
-                ["care[hello@thinkingbrainschool.com]: 20 messages read, 9 threads, "
-                 "3 unanswered, 5 answered, 2 noise"]}
-        snap.update(extra)
-        self.path.write_text(json.dumps(snap))
+    def write(self, rows=(), scan_age=60, queue_age=60, scan_status="ok", errors=0):
+        scan = self.root / self.care.SCAN
+        queue = self.root / self.care.QUEUE
+        scan.parent.mkdir(parents=True, exist_ok=True)
+        scan.write_text(json.dumps({"at": stamp(scan_age), "status": scan_status, "errors": errors}))
+        counts = {state.replace("-", "_"): 0 for state in self.care.STATES}
+        for row in rows:
+            counts[row["state"].replace("-", "_")] += 1
+        queue.write_text(json.dumps({"generated_at": stamp(queue_age),
+                                     "summary": {"threads": len(rows), **counts}, "rows": list(rows)}))
 
-    def read(self):
-        return self.care.read(now=NOW)
+    def row(self, state, suffix):
+        return {"thread": suffix, "inbound_id": suffix + "-message", "state": state,
+                "subject": "customer inquiry", "last_inbound_at": stamp(3600)}
 
+    def test_retired_snapshot_cannot_make_care_current(self):
+        retired = self.root / "_meta/services/intake/cache/care-last-run.json"
+        retired.parent.mkdir(parents=True, exist_ok=True)
+        retired.write_text(json.dumps({"at": stamp(60), "notes": ["0 unanswered"]}))
+        data = self.care.read(now=NOW)
+        self.assertEqual(data["state"], "source-stale")
+        self.assertIn("Missing current Care receipt", self.care.card(data)["headline"])
 
-class States(CareBase):
-    def test_never_run_is_not_quiet(self):
-        data = self.read()
-        self.assertEqual(data["state"], "never")
+    def test_current_receipts_show_distinct_obligation_states(self):
+        rows = [self.row(s, str(i)) for i, s in enumerate(
+            ("answered", "no-reply-owed", "waiting", "draft-held", "escalated", "outcome-unverified"))]
+        self.write(rows)
+        data = self.care.read(now=NOW)
+        self.assertEqual(data["state"], "unverified")
+        self.assertTrue(data["intake_current"])
+        self.assertTrue(data["data_current"])
+        self.assertEqual(data["counts"]["no-reply-owed"], 1)
         card = self.care.card(data)
-        assert_card(self, card, "never")
-        self.assertEqual(card["needs"], 1)
-        self.assertIn("never run", card["headline"])
+        assert_card(self, card)
+        self.assertEqual(card["needs"], 0)  # No receipt says Aria must decide.
+        self.assertIn("unverified", card["headline"])
+        self.assertEqual(len(card["rows"]), 4)
 
-    def test_a_dark_mailbox_is_named(self):
-        self.snapshot(notes=["care[hello@thinkingbrainschool.com]: mailbox unreachable: tbs-mail inbox failed: token expired"])
-        data = self.read()
-        self.assertEqual(data["state"], "dark")
-        card = self.care.card(data)
-        assert_card(self, card, "dark")
-        self.assertEqual(card["needs"], 1)
-        self.assertIn("could not be read", card["headline"])
-        self.assertIn("token expired", card["headline"])
+    def test_stale_intake_and_queue_are_named_separately(self):
+        self.write([self.row("answered", "one")], scan_age=5 * 3600)
+        data = self.care.read(now=NOW)
+        self.assertEqual(data["state"], "intake-stale")
+        self.assertIn("intake is stale", self.care.card(data)["headline"])
+        self.write([self.row("answered", "one")], queue_age=3 * 3600)
+        data = self.care.read(now=NOW)
+        self.assertEqual(data["state"], "source-stale")
+        self.assertIn("queue source is stale", self.care.card(data)["headline"])
 
-    def test_a_stale_sweep_takes_the_headline_over_every_count(self):
-        self.snapshot(age_s=3 * 3600, filed=4)
-        data = self.read()
-        self.assertTrue(data["stale"])
-        card = self.care.card(data)
-        assert_card(self, card, "stale")
-        self.assertEqual(card["needs"], 1)
-        self.assertIn("has not run since", card["headline"])
+    def test_successful_scan_does_not_override_unverified_outcome(self):
+        self.write([self.row("outcome-unverified", "one")])
+        data = self.care.read(now=NOW)
+        self.assertEqual(data["scan_status"], "ok")
+        self.assertNotEqual(data["state"], "ok")
+        self.assertEqual(data["counts"]["outcome-unverified"], 1)
 
-    def test_a_torn_snapshot_has_a_name(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text("{not json")
-        card = self.care.card(self.read())
-        assert_card(self, card, "torn")
-        self.assertEqual(card["needs"], 1)
-
-    def test_a_rehearsal_is_not_a_filing(self):
-        self.snapshot(dry_run=True, would_file=3)
-        card = self.care.card(self.read())
-        assert_card(self, card, "dry")
-        self.assertEqual(card["needs"], 0)
-        self.assertIn("Rehearsal", card["headline"])
-        self.assertIn("none were", card["headline"])
-
-    def test_errors_and_holds_raise_a_hand(self):
-        self.snapshot(error=2)
-        card = self.care.card(self.read())
-        self.assertEqual(card["needs"], 1)
-        self.assertIn("could not be drafted", card["headline"])
-        self.snapshot(blocked={"blocked_on_identity": 3})
-        card = self.care.card(self.read())
-        self.assertEqual(card["needs"], 1)
-        self.assertIn("held back", card["headline"])
-
-    def test_a_healthy_sweep_counts_and_lists_threads(self):
-        self.snapshot(filed=2, followup=1, threads=[
-            {"title": "문의드립니다 <p@naver.com>", "date": "2026-08-29", "outcome": "filed", "detail": "#7"},
-            {"title": "[웹문의] 이은경 <k@naver.com>", "date": "2026-08-29", "outcome": "followup", "detail": "#5: 1 new message(s)"},
-        ])
-        data = self.read()
-        self.assertEqual(data["state"], "ok")
-        self.assertEqual(data["unanswered"], 3)
-        card = self.care.card(data)
-        assert_card(self, card, "ok")
-        self.assertEqual(card["needs"], 0)
-        self.assertIn("3 threads waiting", card["headline"])
-        self.assertIn("3 reached tbs-care", card["headline"])
-        self.assertEqual(len(card["rows"]), 2)
-        self.assertEqual(card["rows"][0]["badge"], "filed")
-        labels = [f["label"] for f in card["facts"]]
-        self.assertIn("threads waiting", labels)
-        self.assertIn("last sweep", labels)
-
-    def test_a_clear_inbox_says_so_without_an_alarm(self):
-        self.snapshot(notes=["care[hello@thinkingbrainschool.com]: 4 messages read, 2 threads, 0 unanswered, 2 answered, 0 noise"])
-        card = self.care.card(self.read())
-        self.assertEqual(card["needs"], 0)
-        self.assertIn("clear", card["headline"])
+    def test_torn_or_inconsistent_queue_cannot_claim_clear(self):
+        self.write([self.row("answered", "one")])
+        queue = self.root / self.care.QUEUE
+        value = json.loads(queue.read_text())
+        value["summary"]["answered"] = 2
+        queue.write_text(json.dumps(value))
+        self.assertEqual(self.care.read(now=NOW)["state"], "source-stale")
+        queue.write_text("{broken")
+        self.assertEqual(self.care.read(now=NOW)["state"], "source-stale")
 
 
 if __name__ == "__main__":
