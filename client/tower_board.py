@@ -25,6 +25,36 @@ def _next(due, now):
     return f"retry in {max(1, (seconds + 59) // 60)} min"
 
 
+def _recovery_state(db, attempt):
+    if not attempt:
+        return None
+    fid = attempt['id']
+    if attempt['state'] == 'resolving':
+        recovery = _payload(db, 'work.recovery_ambiguous', fid)
+        error = _payload(db, 'work.recovery_unconfigured', fid)
+        return 'held', recovery.get('reason') or error.get('reason') or 'Tower recovery needs checkout inspection', ''
+    owner = _payload(db, 'work.recovered', fid)
+    if owner.get('reason') == 'dead_owner_claim_released':
+        return 'retrying', 'Work owner exited; Tower released the claim. Outcome proof is required before another execution.', 'ready to verify'
+    return None
+
+
+def _issue_state(attempt, labels, pending, failure, disposition, recovery, now):
+    if recovery:
+        return recovery
+    if attempt and attempt['state'] in ('running', 'produced', 'verifying', 'verified', 'landing'):
+        return 'working', 'Tower is working this issue', ''
+    if labels & {'hold', 'waiting on human', 'blocked-needs-look'}:
+        return 'held', disposition.get('reason') or 'Held by issue label', ''
+    if 'epic' in labels:
+        return 'planned', 'Milestone; not a Tower flight', ''
+    if pending and (not failure or pending.get('next_retry', 0) >= failure.get('next_retry', 0)):
+        return 'retrying', pending.get('reason') or 'Waiting for next Tower attempt', _next(pending.get('next_retry'), now)
+    if failure:
+        return 'retrying', failure.get('error') or 'Tower attempt failed', _next(failure.get('next_retry'), now)
+    return 'ready', 'Waiting for Tower', ''
+
+
 def read(path=None, now=None):
     now = time.time() if now is None else now
     path = Path(path or os.environ.get('OFFICE_WORK_LEDGER') or
@@ -52,25 +82,13 @@ def read(path=None, now=None):
                     continue
                 attempt = db.execute("SELECT id,state,created_at FROM flights WHERE task_id=? "
                                      "ORDER BY created_at DESC LIMIT 1", (task['id'],)).fetchone()
+                recovery = _recovery_state(db, attempt)
                 pending = _payload(db, 'work.pending', task['id'])
                 failure = _payload(db, 'work.failure', task['id'])
                 disposition = _payload(db, 'work.disposition', task['id'])
                 issue = _payload(db, 'work.issue', task['id'])
                 labels = {str(x.get('name', '')).lower() for x in issue.get('labels', [])}
-                if attempt and attempt['state'] in ('running', 'produced', 'verifying', 'verified', 'landing'):
-                    state, detail, next_try = 'working', 'Tower is working this issue', ''
-                elif labels & {'hold', 'waiting on human', 'blocked-needs-look'}:
-                    state, detail, next_try = 'held', disposition.get('reason') or 'Held by issue label', ''
-                elif 'epic' in labels:
-                    state, detail, next_try = 'planned', 'Milestone; not a Tower flight', ''
-                elif pending and (not failure or pending.get('next_retry', 0) >= failure.get('next_retry', 0)):
-                    state, detail = 'retrying', pending.get('reason') or 'Waiting for next Tower attempt'
-                    next_try = _next(pending.get('next_retry'), now)
-                elif failure:
-                    state, detail = 'retrying', failure.get('error') or 'Tower attempt failed'
-                    next_try = _next(failure.get('next_retry'), now)
-                else:
-                    state, detail, next_try = 'ready', 'Waiting for Tower', ''
+                state, detail, next_try = _issue_state(attempt, labels, pending, failure, disposition, recovery, now)
                 issues.append({'id': target, 'repo': repo, 'number': int(number),
                                'title': task['title'], 'url': f'https://github.com/{target.replace("#", "/issues/")}',
                                'state': state, 'detail': detail[:300], 'next': next_try,

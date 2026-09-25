@@ -890,7 +890,7 @@ init_office_state();
 
 // client/phone/office-attachments.js
 init_office_ui();
-function attachments(parent, initial, onChange) {
+function attachments(parent, initial, onChange, options = {}) {
   let values = [...initial || []];
   const panel = el("div", "stack");
   parent.append(panel);
@@ -898,16 +898,28 @@ function attachments(parent, initial, onChange) {
   input.type = "file";
   input.multiple = true;
   input.setAttribute("aria-label", "Attach photos or files");
+  if (options.imagesOnly) input.accept = "image/png,image/jpeg,image/gif,image/webp";
   const progress = el("p", "muted");
   progress.setAttribute("role", "status");
   panel.append(progress);
-  const list = el("div", "stack");
-  panel.append(el("p", "muted", "Photos or files \xB7 up to eight, 5 MiB each. Uploaded to your Mac."), input, list);
+  const list = el("div", options.compact ? "ask-image-list" : "stack");
+  if (options.compact) {
+    input.hidden = true;
+    panel.append(input, button("\uFF0B Image", () => input.click(), "ask-attach-button"));
+  } else panel.append(el("p", "muted", "Photos or files \xB7 up to eight, 5 MiB each. Uploaded to your Mac."), input);
+  panel.append(list);
   function draw() {
     list.replaceChildren();
     for (const item of values) {
-      const row = el("div", "row");
-      row.append(link(item.name || "Attached file", `/api/uploads/content?id=${encodeURIComponent(item.id)}&revision=${item.revision}`), button("Remove", () => {
+      const row = el("div", options.compact ? "ask-image-chip" : "row");
+      const url = `/api/uploads/content?id=${encodeURIComponent(item.id)}&revision=${item.revision}`;
+      if (options.imagesOnly) {
+        const preview2 = el("img");
+        preview2.src = url;
+        preview2.alt = "";
+        row.append(preview2);
+      }
+      row.append(link(item.name || "Attached file", url), button("Remove", () => {
         values = values.filter((other) => other.id !== item.id);
         onChange(values);
         draw();
@@ -922,6 +934,7 @@ function attachments(parent, initial, onChange) {
       for (const file of input.files) {
         if (values.length >= 8) throw Error("Attach at most eight files.");
         if (file.size > 5 * 1024 * 1024) throw Error(`${file.name} exceeds 5 MiB.`);
+        if (options.imagesOnly && !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type)) throw Error("Choose a PNG, JPEG, GIF, or WebP image.");
         const encoded = await encode(file);
         const receipt = await api("/api/uploads", { name: file.name, base64: encoded });
         if (!values.some((item) => item.id === receipt.id)) values.push(receipt);
@@ -1208,7 +1221,7 @@ function conversation(parent, data) {
     if (item.kind === "message") {
       const node = el("article", "coord-you");
       rich(node.appendChild(el("div", "coord-text")), item.segments);
-      node.append(el("small", "", `You \xB7 ${clock(item.at)} \xB7 ${item.read_at ? "read by the coordinator " + clock(item.read_at) : "waiting for the coordinator"}`));
+      node.append(el("small", "", `You \xB7 ${clock(item.at)} \xB7 ${item.acted_at ? `acted ${clock(item.acted_at)}: ${item.action}` : item.read_at ? "read by the coordinator " + clock(item.read_at) : "queued for the coordinator"}`));
       parent.append(node);
       continue;
     }
@@ -1268,15 +1281,15 @@ function changes(parent, data) {
   }
   if (!any) parent.append(el("p", "empty", "No landed commits, publishes or issue changes in the recorded runs."));
 }
-var SYSTEM_NAME = { tbs: "Thinking Brain School", matra: "Matra" };
-var SYSTEM_OUTCOME = { tbs: "Keeping lessons healthy and ready for families.", matra: "Fixing app issues and delivering tested improvements." };
+var SYSTEM_NAME = { tbs: "Thinking Brain School", matra: "Matra", office: "Office" };
+var SYSTEM_OUTCOME = { tbs: "Keeping lessons healthy and ready for families.", matra: "Fixing app issues and delivering tested improvements.", office: "Moving Office issues, releases, failures and stabilization through Tower." };
 var needsAttention = (row) => row.thrashing || ["failing", "stalled", "error"].includes(row.health);
 var systemName = (row) => SYSTEM_NAME[row.id] || row.name;
 var systemOutcome = (row) => SYSTEM_OUTCOME[row.id] || "Moving its assigned work forward.";
 function healthLine(row) {
   const node = el("span", "coord-health");
   node.dataset.health = needsAttention(row) ? "error" : "ok";
-  node.textContent = needsAttention(row) ? "Needs attention" : "Working normally";
+  node.textContent = needsAttention(row) ? "Needs attention" : row.health === "idle" ? "Idle" : row.health === "running" ? "Working" : "Working normally";
   return node;
 }
 function detail(parent, row) {
@@ -1286,9 +1299,7 @@ function detail(parent, row) {
     parent.append(el("p", "error", row.error));
     return;
   }
-  const summary = el("div", "coord-outcome");
-  summary.append(el("h1", "coord-system-name", systemName(row)), el("p", "coord-outcome-title", systemOutcome(row)), healthLine(row), el("p", "muted", needsAttention(row) ? "I\u2019m checking what needs attention." : "Nothing needed from you."));
-  parent.append(summary);
+  parent.append(coordinatorSummary(row));
   const evidence = el("details", "coord-evidence");
   evidence.append(el("summary", "", "Coordinator notes and work"));
   parent.append(evidence);
@@ -1305,6 +1316,17 @@ function detail(parent, row) {
     shipped.append(node);
   }
   if (!(row.commits || []).length) shipped.append(el("p", "empty", "No recent changes recorded."));
+}
+function coordinatorSummary(row) {
+  const summary = el("div", "coord-outcome");
+  const note = row.id === "office" ? `Last run ${row.age_s == null ? "never" : Math.max(0, Math.floor(row.age_s / 60)) + " min ago"} \xB7 ${row.failures || 0} recent failures \xB7 ${row.changes || 0} recent changes \xB7 ${row.unread || 0} queued messages` : needsAttention(row) ? "I\u2019m checking what needs attention." : "Nothing needed from you.";
+  summary.append(el("h1", "coord-system-name", systemName(row)), el("p", "coord-outcome-title", systemOutcome(row)), healthLine(row), el("p", "muted", note));
+  if (row.id === "office") {
+    const inspect = el("a", "", "Inspect Office");
+    inspect.href = "#system";
+    summary.append(inspect);
+  }
+  return summary;
 }
 async function coordinator(parent) {
   try {
@@ -2410,8 +2432,8 @@ async function watch(parent) {
   }
   if (failures.length) {
     const stalled = section(parent, "Automation needs repair");
-    stalled.append(el("p", "muted", `${failures.length} automated ${failures.length === 1 ? "pass stopped" : "passes stopped"} without explaining why. These are not decisions for you. Open an issue to inspect its history or add guidance.`));
-    for (const entry of failures) stalled.append(card(`${entry.repo} #${entry.item.number} \xB7 ${entry.item.title}`, "Inspect issue history", () => githubDetail(entry.repo, entry.item, "issues")));
+    stalled.append(el("p", "muted", `${failures.length} automated ${failures.length === 1 ? "pass needs" : "passes need"} diagnosis. Open the issue history for the original work and blocker before giving guidance.`));
+    for (const entry of failures) stalled.append(automationFailureCard(entry));
     stalled.append(link("Track the repair", "https://github.com/ariaxhan/nexus-office/issues/186"));
   }
   if (coordinatorRows.length) {
@@ -2419,13 +2441,14 @@ async function watch(parent) {
     systems.append(el("h2", "watch-section-title", "Systems"));
     for (const row of coordinatorRows) {
       const issue = exceptions.includes(row);
-      const names = { tbs: "Thinking Brain School", matra: "Matra" };
-      const outcomes = { tbs: "Keeping lessons healthy and ready for families.", matra: "Fixing app issues and delivering tested improvements." };
+      const names = { tbs: "Thinking Brain School", matra: "Matra", office: "Office" };
+      const outcomes = { tbs: "Keeping lessons healthy and ready for families.", matra: "Fixing app issues and delivering tested improvements.", office: "Moving Office issues, releases, failures and stabilization through Tower." };
       const item = el("article", "watch-system" + (issue ? " is-attention" : ""));
       const head = el("div", "watch-system-head");
-      head.append(el("h3", "", names[row.id] || row.name), el("span", issue ? "watch-system-status is-attention" : "watch-system-status", issue ? "Needs attention" : "Working normally"));
-      item.append(head, el("p", "watch-system-outcome", outcomes[row.id] || "Moving its assigned work forward."), el("p", "watch-system-action", issue ? "I\u2019m looking into it." : "Nothing needed from you."));
-      item.append(button("See activity", () => {
+      head.append(el("h3", "", names[row.id] || row.name), el("span", issue ? "watch-system-status is-attention" : "watch-system-status", issue ? "Needs attention" : row.health === "idle" ? "Idle" : row.health === "running" ? "Working" : "Working normally"));
+      item.append(head, el("p", "watch-system-outcome", outcomes[row.id] || "Moving its assigned work forward."), el("p", "watch-system-action", row.id === "office" ? row.working_on || "No current Office work" : issue ? "I\u2019m looking into it." : "Nothing needed from you."));
+      if (row.id === "office") item.append(el("p", "muted", `Last run ${row.age_s == null ? "never" : formatAge(row.age_s * 1e3)} \xB7 ${row.failures || 0} recent failures \xB7 ${row.changes || 0} recent changes \xB7 ${row.unread || 0} queued messages`));
+      item.append(button(row.id === "office" ? "Inspect Office" : "See activity", () => {
         localStorage.setItem("office-coordinator-pick", row.id);
         location.hash = "coordinator";
       }, "watch-activity-link"));
@@ -2455,7 +2478,7 @@ async function watch(parent) {
   });
 }
 function requiresYou(entry) {
-  return entry.kind === "permission" || entry.kind === "gate" || entry.kind === "issue";
+  return entry.kind === "permission" || entry.kind === "gate" || entry.kind === "issue" || entry.kind === "buzz";
 }
 function formatAge(milliseconds) {
   if (!Number.isFinite(milliseconds)) return "not checked yet";
@@ -2488,6 +2511,9 @@ async function feedDetail(post) {
     else if (source.url.startsWith("/api/media/detail?id=")) {
       const id = decodeURIComponent(source.url.split("id=")[1]);
       sources.append(button(source.title, () => mediaDetail(id)));
+    } else if (source.url.startsWith("/api/buzz/detail?id=")) {
+      const id = decodeURIComponent(source.url.split("id=")[1]);
+      sources.append(button(source.title, () => buzzSourceDetail(id)));
     } else if (issue) sources.append(button(source.title, () => githubDetail(issue[1], { number: Number(issue[3]) }, issue[2] === "pull" ? "prs" : "issues")));
     else sources.append(link(source.title, source.url));
   }
@@ -2532,6 +2558,20 @@ async function feedDetail(post) {
     notice("Reply saved");
     feedDetail(post);
   }, "primary"));
+}
+async function buzzSourceDetail(id) {
+  const data = await api("/api/buzz/detail?id=" + encodeURIComponent(id));
+  const body = sheet("Source conversation");
+  for (const row of data.thread) {
+    const state = ["posted", row.mirrored && "mirrored", row.coordinator_read && "coordinator read", row.acted && "acted on"].filter(Boolean).join(" \xB7 ");
+    body.append(el("p", "muted", `${row.author} \xB7 #${row.channel} \xB7 ${new Date(row.at).toLocaleString()} \xB7 ${state}`), el("p", "", row.text));
+    if (row.issue) {
+      const [repo, number] = row.issue.split("#");
+      body.append(link("Open linked issue", `https://github.com/${repo}/issues/${number}`));
+    }
+    if (row.receipt) body.append(el("p", "muted", `Receipt: ${row.receipt}`));
+    body.append(el("p", "muted", `Buzz event: ${row.source}`));
+  }
 }
 async function digestDetail(id) {
   const data = await api("/api/digests/detail?id=" + encodeURIComponent(id));
@@ -2662,7 +2702,16 @@ async function ask(parent) {
   const picker = el("select", "ask-model");
   picker.setAttribute("aria-label", "Office model");
   advanced.append(picker);
-  chat.append(advanced);
+  const toolbar = el("div", "ask-toolbar");
+  const selectMessages = button("Select messages", () => {
+    if (!current2) return;
+    selectionMode = !selectionMode;
+    selected.clear();
+    draw(current2);
+  }, "ask-select");
+  const copySelected = button("Copy selected", () => copyRows(current2.messages.filter((row) => selected.has(row.id))), "ask-copy-selected");
+  toolbar.append(selectMessages, copySelected, advanced);
+  chat.append(toolbar);
   const scrollRegion = el("div", "ask-scroll-region");
   const thread = el("div", "ask-thread");
   const jump = button("\u2193", () => {
@@ -2678,13 +2727,42 @@ async function ask(parent) {
   input.placeholder = "Ask what happened, why work is waiting, or what to fix\u2026";
   input.setAttribute("aria-label", "Ask Office");
   input.rows = 2;
+  const imageBox = el("div", "ask-image-box");
+  const attached = attachments(imageBox, [], () => {
+  }, { imagesOnly: true, compact: true });
+  const composeRow = el("div", "ask-compose-row");
   const queueStatus = el("p", "ask-queue-status");
   queueStatus.setAttribute("aria-live", "polite");
   const submit = el("button", "primary", "Send");
   submit.type = "submit";
-  form.append(input, submit);
+  composeRow.append(input, submit);
+  form.append(imageBox, composeRow);
   chat.append(queueStatus, form);
-  let current2 = null, rendered = false;
+  let current2 = null, rendered = false, selectionMode = false, draw = () => {
+  };
+  const selected = /* @__PURE__ */ new Set();
+  const activityOpen = /* @__PURE__ */ new Map(), activityStatus = /* @__PURE__ */ new Map();
+  const messageText = (row) => row.text || (["queued", "working"].includes(row.status) ? row.status === "queued" ? "Queued behind earlier messages\u2026" : "Working\u2026" : "");
+  async function copyRows(rows) {
+    if (!rows.length) return;
+    const copied = rows.map((row) => {
+      const prefix = rows.length === 1 ? "" : `${row.role === "user" ? "You" : "Office"} \xB7 ${new Date(row.created_at * 1e3).toLocaleString()}
+`;
+      const images = (row.images || []).map((item) => `[Image: ${item.name}]`);
+      return prefix + [messageText(row), ...images].filter(Boolean).join("\n");
+    }).join("\n\n");
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(copied);
+    else {
+      const field2 = el("textarea");
+      field2.value = copied;
+      document.body.append(field2);
+      field2.select();
+      const ok = document.execCommand("copy");
+      field2.remove();
+      if (!ok) throw Error("Could not copy messages");
+    }
+    notice(rows.length === 1 ? "Message copied" : `${rows.length} messages copied`);
+  }
   const distanceFromBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight;
   const updateJump = () => {
     jump.hidden = !rendered || distanceFromBottom() < 64;
@@ -2700,14 +2778,18 @@ async function ask(parent) {
     } catch {
       localStorage.removeItem(pendingKey2);
     }
-    if (!pending2?.request_id || !pending2?.text || !pending2?.model) pending2 = null;
+    if (!pending2?.request_id || !pending2?.text && !pending2?.images?.length || !pending2?.model) pending2 = null;
     const initial = el("option", "", data.selection || data.model);
     initial.value = data.selection || data.model;
     picker.append(initial);
-    const draw = (state, toBottom = false) => {
+    draw = (state, toBottom = false) => {
       const follow = toBottom || !rendered || distanceFromBottom() < 64, previousTop = thread.scrollTop;
       current2 = state;
       thread.replaceChildren();
+      selectMessages.textContent = selectionMode ? "Cancel selection" : "Select messages";
+      copySelected.hidden = !selectionMode;
+      copySelected.disabled = !selected.size;
+      copySelected.textContent = `Copy ${selected.size} selected`;
       if (!state.messages.length) {
         thread.append(el("p", "ask-intro", "Ask in your own words. Office will bring back the answer and where it came from."));
         for (const prompt of ["Is anything blocked on me?", "What happened while I was asleep?", "Why isn\u2019t HomeClass moving?"])
@@ -2720,14 +2802,30 @@ async function ask(parent) {
       for (const row of state.messages) {
         const bubble = el("article", "ask-bubble " + row.role);
         const label = row.role === "user" ? "You" : row.role === "office" ? "Office \xB7 " + (row.model || "") : row.text;
-        const heading = el("small", "", label);
+        const heading = el("small");
+        heading.append(el("span", "ask-author", label));
         if (row.role !== "system") heading.append(el("span", "ask-status is-" + row.status, row.status));
         bubble.append(heading);
         if (row.role !== "system") {
+          if (selectionMode) {
+            const choose = el("input");
+            choose.type = "checkbox";
+            choose.checked = selected.has(row.id);
+            choose.setAttribute("aria-label", `Select ${label} message`);
+            choose.addEventListener("change", () => {
+              if (choose.checked) selected.add(row.id);
+              else selected.delete(row.id);
+              copySelected.disabled = !selected.size;
+              copySelected.textContent = `Copy ${selected.size} selected`;
+            });
+            const chooseLabel = el("label", "ask-select-label");
+            chooseLabel.append(choose);
+            heading.prepend(chooseLabel);
+          }
           const waiting = row.status === "queued" ? "Queued behind earlier messages\u2026" : row.status === "working" ? "Working\u2026" : "";
           const copy = markdownView(row.text || waiting, { text: officeLinkText });
           copy.classList.add("ask-copy");
-          copy.addEventListener("click", (event) => {
+          bubble.addEventListener("click", (event) => {
             const anchor2 = event.target.closest("a");
             if (!anchor2) return;
             const match = anchor2.href.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
@@ -2737,6 +2835,52 @@ async function ask(parent) {
             }
           });
           bubble.append(copy);
+          if (row.images?.length) {
+            const gallery = el("div", "ask-gallery");
+            for (const item of row.images) {
+              const url = `/api/uploads/content?id=${encodeURIComponent(item.id)}&revision=${encodeURIComponent(item.revision)}`;
+              const imageLink = link(item.name, url);
+              imageLink.classList.add("ask-image");
+              const preview2 = el("img");
+              preview2.src = url;
+              preview2.alt = item.name;
+              imageLink.replaceChildren(preview2, el("span", "", item.name));
+              gallery.append(imageLink);
+            }
+            bubble.append(gallery);
+          }
+          if (row.role === "office") {
+            const activity = row.activity || [];
+            const same = (a, b) => String(a || "").trim().replace(/\s+/g, " ").toLowerCase() === String(b || "").trim().replace(/\s+/g, " ").toLowerCase();
+            const currentUpdate = row.status === "working" && activity.length && same(activity.at(-1).text, row.text);
+            const history2 = currentUpdate ? activity.slice(0, -1) : activity;
+            if (currentUpdate) {
+              const stamp = el("time", "ask-activity-time", new Date(activity.at(-1).created_at * 1e3).toLocaleString());
+              stamp.dateTime = new Date(activity.at(-1).created_at * 1e3).toISOString();
+              heading.append(stamp);
+            }
+            const previousStatus = activityStatus.get(row.id);
+            if (previousStatus === "working" && row.status !== "working") activityOpen.set(row.id, false);
+            activityStatus.set(row.id, row.status);
+            if (history2.length) {
+              const details = el("details", "ask-activity");
+              details.open = activityOpen.get(row.id) ?? row.status === "working";
+              const count = history2.length;
+              details.append(el("summary", "", row.status === "working" ? `${count} earlier ${count === 1 ? "update" : "updates"}` : `${count} ${count === 1 ? "update" : "updates"} \xB7 view activity`));
+              details.addEventListener("toggle", () => activityOpen.set(row.id, details.open));
+              const list = el("ol", "ask-activity-list");
+              for (const update of history2.slice().reverse()) {
+                const item = el("li", "ask-activity-item");
+                const date = new Date(update.created_at * 1e3);
+                const stamp = el("time", "ask-activity-time", date.toLocaleString());
+                stamp.dateTime = date.toISOString();
+                item.append(stamp, markdownView(update.text, { text: officeLinkText }));
+                list.append(item);
+              }
+              details.append(list);
+              bubble.append(details);
+            }
+          }
           if (row.id === lastAnswer?.id) {
             const rating = el("div", "ask-rating");
             rating.append(el("span", "muted", "Useful?"));
@@ -2746,6 +2890,7 @@ async function ask(parent) {
             }, "ask-rate" + (row.rating === kind ? " active" : "")));
             bubble.append(rating);
           }
+          if (!selectionMode) bubble.append(button("Copy", () => copyRows([row]), "ask-copy-one"));
         }
         thread.append(bubble);
       }
@@ -2788,6 +2933,7 @@ async function ask(parent) {
           pending2 = null;
         }
         clearDraft(payload.text);
+        if (JSON.stringify(attached.references()) === JSON.stringify(payload.images || [])) attached.clear();
         draw(await api("/api/ask"), true);
       } catch (error) {
         if ([400, 403, 404, 409, 413, 422].includes(error.status)) {
@@ -2805,11 +2951,11 @@ async function ask(parent) {
         void sendPending(pending2);
         return;
       }
-      const text = input.value.trim();
-      if (!text) return;
+      const text = input.value.trim(), images = attached.references();
+      if (!text && !images.length || !attached.ready()) return;
       input.value = text;
       input.dispatchEvent(new Event("input"));
-      pending2 = { request_id: crypto.randomUUID(), text, model: picker.value };
+      pending2 = { request_id: crypto.randomUUID(), text, images, model: picker.value };
       localStorage.setItem(pendingKey2, JSON.stringify(pending2));
       void sendPending(pending2);
     });
@@ -2850,12 +2996,37 @@ async function find(parent) {
     if (systemBox.open && systemBox.childElementCount === 1) system(systemBox).catch((error) => failure(systemBox, error));
   });
 }
+async function documentView(parent) {
+  const params = new URLSearchParams(location.hash.split("?").slice(1).join("?"));
+  const repo = params.get("repo"), path = params.get("path");
+  if (!repo || !path) {
+    failure(parent, Error("No document was requested."));
+    return;
+  }
+  intro(parent, repo, path, "Checkout document");
+  const body = section(parent, "Document");
+  try {
+    const data = await api(`/api/context?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+    if (data.path !== path) throw Error("The Office returned a different document.");
+    body.append(el("p", "muted", `${repo} / ${data.path}`), markdownView(data.text));
+  } catch (error) {
+    failure(body, error);
+  }
+}
 async function route() {
   const [pageRaw, parameters] = location.hash.slice(1).split("?");
   const page = pageRaw || "watch";
   const params = new URLSearchParams(parameters || "");
+  if (page === "document") {
+    if ($("#detail").open) $("#detail").close();
+    const url = new URL(location.href);
+    if (url.searchParams.has("detail")) {
+      url.searchParams.delete("detail");
+      history.replaceState({}, "", url);
+    }
+  }
   if (page === "coordinator" && ["tbs", "matra"].includes(params.get("id"))) localStorage.setItem("office-coordinator-pick", params.get("id"));
-  const views = { watch, feed, ask, find, today, work, coordinator, library, system };
+  const views = { watch, feed, ask, find, today, work, coordinator, library, system, document: documentView };
   const parent = $("#content");
   parent.replaceChildren();
   document.body.dataset.page = page;
@@ -3137,13 +3308,14 @@ async function githubReviews(repo, number, cursor = 1, parent = null, inline2 = 
   if (!parent) body.append(button("Inline comments", () => githubReviews(repo, number, 1, body, true)));
 }
 async function refreshAttention() {
-  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), world()]);
+  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), world(), api("/api/buzz")]);
   const items = [], errors = [], failures = [];
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
       errors.push(result.reason.message);
       continue;
     }
+    if (index === 3) errors.push(...result.value.errors || []);
     for (const entry of attentionItems(index, result.value)) {
       (automationFailure(entry) ? failures : items).push(entry);
     }
@@ -3185,6 +3357,7 @@ function reconcileChildren(parent, nodes) {
   }
 }
 function attentionCard(entry) {
+  if (entry.kind === "buzz") return buzzDecisionCard(entry.item);
   if (entry.kind === "gate") {
     const node2 = el("article", "card attention-choice");
     node2.append(el("h3", "", "Permission needed"), el("p", "attention-question", entry.item.question || entry.item.title || "Pending decision"));
@@ -3207,6 +3380,11 @@ function attentionCard(entry) {
   node.append(head, el("h3", "", issue.title));
   const context = reportLead(issue.body || "");
   if (context && context !== issue.title) node.append(el("p", "attention-context", context.length > 200 ? context.slice(0, 199) + "\u2026" : context));
+  if (issue.decision_context) {
+    node.append(el("p", "attention-question", "A product decision is still needed for this issue."), markdownView(issue.decision_context));
+    node.append(button("Inspect evidence and answer in issue", () => githubDetail(entry.repo, issue, "issues"), "attention-details"));
+    return node;
+  }
   node.append(el("p", "attention-question", decision.question));
   const choices = el("div", "attention-options");
   let busy = false;
@@ -3239,6 +3417,16 @@ function attentionCard(entry) {
   node.append(choices, button("Open issue details", () => githubDetail(entry.repo, issue, "issues"), "attention-details"));
   return node;
 }
+function buzzDecisionCard(row) {
+  const node = el("article", "card attention-choice");
+  node.append(
+    el("p", "attention-source", `${row.author} \xB7 TBS #${row.channel} \xB7 ${formatAge(Date.now() - Date.parse(row.at))}`),
+    el("h3", "", "A reply needs you"),
+    el("p", "attention-question", row.question)
+  );
+  node.append(button("Inspect source conversation", () => buzzSourceDetail(row.id), "attention-details"));
+  return node;
+}
 async function attentionList(parent) {
   await refreshAttention();
   drawAttention(parent);
@@ -3249,12 +3437,38 @@ function attentionItems(index, value3) {
   if (index === 1) return (value3?.gates || []).map((item) => ({ kind: "gate", item }));
   if (index === 2) {
     const pinned = new Set(value3?.pins || []);
-    return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision?.question && issue.decision?.options?.length).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updatedAt || "").localeCompare(String(a.item.updatedAt || "")));
+    return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && (issue.automation_failure || issue.decision?.question && issue.decision?.options?.length)).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updatedAt || "").localeCompare(String(a.item.updatedAt || "")));
   }
+  if (index === 3) return (value3?.items || []).filter((row) => row.needs_you).map((item) => ({ kind: "buzz", item }));
   return [];
 }
 function automationFailure(entry) {
-  return entry.kind === "issue" && String(entry.item.decision?.question || "").startsWith("The automated pass could not resolve this and did not say what to decide.");
+  return entry.kind === "issue" && !entry.item.decision_context && (entry.item.automation_failure === "missing_decision" || String(entry.item.decision?.question || "").startsWith("The automated pass could not resolve this and did not say what to decide."));
+}
+function meaningfulFailureLine(text) {
+  const lines = String(text || "").split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#") && !line.startsWith("|") && !line.startsWith("- ") && !/^Read[: `]/i.test(line));
+  const found = lines.find((line) => /\b(stopping|stopped|root cause|concrete cause|no code change|implemented|commit|does not exist|not implemented)\b/i.test(line)) || lines.find((line) => line.length > 35) || lines[0] || "";
+  return found.replace(/^[*\d.\s]+|[*\s]+$/g, "");
+}
+function automationFailureCard(entry) {
+  const issue = entry.item, askedAt = Date.parse(issue.last_word_at || "");
+  const node = el("article", "card attention-choice");
+  node.append(el("h3", "", `${entry.repo} #${issue.number} \xB7 ${issue.title}`), el("p", "muted", `Unexplained pass${Number.isFinite(askedAt) ? ` \xB7 ${formatAge(Date.now() - askedAt)}` : ""}`));
+  const receipt = el("p", "muted", "Checking earlier work and failure receipt\u2026");
+  node.append(receipt);
+  const actions = el("div", "actions");
+  actions.append(button("Inspect history or add guidance", () => githubDetail(entry.repo, issue, "issues")), link("Open on GitHub", issue.url || `https://github.com/${entry.repo}/issues/${issue.number}`));
+  node.append(actions);
+  api(`/api/github/detail?repo=${encodeURIComponent(entry.repo)}&number=${issue.number}&kind=issues`).then((data) => {
+    if (!node.isConnected) return;
+    const comments = (data.comments || []).filter((row) => !String(row.body || "").includes("<!-- pipeline-bot -->") && !String(row.body || "").includes("<!-- office-request:"));
+    const meaningful = comments.at(-1), text = String(meaningful?.body || "");
+    const lead = meaningfulFailureLine(text);
+    receipt.textContent = lead ? `Last substantive report (${formatAge(Date.now() - Date.parse(meaningful.created_at))}): ${lead.slice(0, 350)}` : "No substantive run receipt found in the available issue comments. Inspect the history before retrying.";
+  }).catch((error) => {
+    if (node.isConnected) receipt.textContent = `Issue history unavailable: ${error.message}. Inspect on GitHub before retrying.`;
+  });
+  return node;
 }
 var layoutObserver = new ResizeObserver(() => {
   document.documentElement.style.setProperty("--tabs-height", `${$(".tabs").getBoundingClientRect().height}px`);
