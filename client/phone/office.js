@@ -270,7 +270,7 @@ async function watch(parent){
   try{const data=await api('/api/coordinators');coordinatorRows=data.coordinators||[];}
   catch(error){coordinatorError=error.message;}
 
-  const exceptions=coordinatorRows.filter(row=>row.thrashing||['failing','stalled','error'].includes(row.health));
+  const exceptions=coordinatorRows.filter(row=>['failing','stalled','error'].includes(row.health));
   const healthy=coordinatorRows.length-exceptions.length;
   const overview=el('header','watch-overview');
   overview.append(el('div','eyebrow','Watch'));

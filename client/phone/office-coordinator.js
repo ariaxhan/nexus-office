@@ -79,7 +79,7 @@ function changes(parent,data){
 }
 const SYSTEM_NAME={tbs:'Thinking Brain School',matra:'Matra'};
 const SYSTEM_OUTCOME={tbs:'Keeping lessons healthy and ready for families.',matra:'Fixing app issues and delivering tested improvements.'};
-const needsAttention=row=>row.thrashing||['failing','stalled','error'].includes(row.health);
+ const needsAttention=row=>['failing','stalled','error'].includes(row.health);
 const systemName=row=>SYSTEM_NAME[row.id]||row.name;
 const systemOutcome=row=>SYSTEM_OUTCOME[row.id]||'Moving its assigned work forward.';
 export function healthLine(row){

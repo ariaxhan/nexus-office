@@ -1270,7 +1270,7 @@ function changes(parent, data) {
 }
 var SYSTEM_NAME = { tbs: "Thinking Brain School", matra: "Matra" };
 var SYSTEM_OUTCOME = { tbs: "Keeping lessons healthy and ready for families.", matra: "Fixing app issues and delivering tested improvements." };
-var needsAttention = (row) => row.thrashing || ["failing", "stalled", "error"].includes(row.health);
+var needsAttention = (row) => ["failing", "stalled", "error"].includes(row.health);
 var systemName = (row) => SYSTEM_NAME[row.id] || row.name;
 var systemOutcome = (row) => SYSTEM_OUTCOME[row.id] || "Moving its assigned work forward.";
 function healthLine(row) {
@@ -2354,7 +2354,7 @@ async function watch(parent) {
   } catch (error) {
     coordinatorError = error.message;
   }
-  const exceptions = coordinatorRows.filter((row) => row.thrashing || ["failing", "stalled", "error"].includes(row.health));
+  const exceptions = coordinatorRows.filter((row) => ["failing", "stalled", "error"].includes(row.health));
   const healthy = coordinatorRows.length - exceptions.length;
   const overview = el("header", "watch-overview");
   overview.append(el("div", "eyebrow", "Watch"));

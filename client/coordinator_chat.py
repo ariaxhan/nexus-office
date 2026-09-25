@@ -534,7 +534,7 @@ def _read(root):
 
 
 # ── the overview: one row per coordinator ───────────────────────────────────
-THRASH_RUNS = 4  # this many ended runs in a row that shipped nothing is thrashing
+RECENT_RUNS = 4
 OVERVIEW_TTL = 15
 OVERVIEW = {}
 LANE_RE = re.compile(r"^\s*LANE\s+\S+\s*\|.*$", re.M)
@@ -588,10 +588,9 @@ def summary(row):
     latest = Path(logs[-1]) if logs else None
     live = bool(latest) and not any(os.path.basename(r.get("log") or "") == latest.name for r in ends) and _live(root, latest)
     last_end = ends[-1] if ends else None
-    recent = ends[-THRASH_RUNS:]
+    recent = ends[-RECENT_RUNS:]
     windows = [_window_commits(root, r.get("start") or r["at"], r["at"]) for r in recent]
     shipped = [(r.get("prod_changes") or 0) + len(found) for r, found in zip(recent, windows)]
-    thrashing = len(recent) >= THRASH_RUNS and not any(shipped)
     doing, lanes = "", []
     if latest:
         events = parse_log(_tail(latest, OVERVIEW_LOG_BYTES))
@@ -607,7 +606,9 @@ def summary(row):
     commits = sorted({c["sha"]: c for c in found}.values(), key=lambda c: c["at"], reverse=True)[:6]
     last_start = starts[-1]["at"] if starts else None
     last_skip_row = last_skip(root)
-    health = "running" if live else "thrashing" if thrashing else "ok"
+    # A successful run can legitimately ship nothing when work is blocked or already handled.
+    # Lack of production changes alone does not establish a failure or need for Aria.
+    health = "running" if live else "ok"
     if not live and last_end and last_end.get("rc") not in (0, None):
         health = "failing"
     age = _age((last_end or {}).get("at") or last_start)
@@ -615,7 +616,7 @@ def summary(row):
         health = "stalled"
     return {"id": row["id"], "name": row["name"], "live": live, "health": health,
             "last_start": last_start, "last_end": last_end, "age_s": age,
-            "shipped_recent": shipped, "thrashing": thrashing,
+            "shipped_recent": shipped, "thrashing": False,
             "working_on": doing, "lanes": lanes, "commits": commits,
             "unread": len(unread(root)), "last_skip": last_skip_row,
             "supervisor": (_rows(root / SUPERVISOR) or [None])[-1],
