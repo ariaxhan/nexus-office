@@ -459,6 +459,7 @@ def validate(body: dict):
 
 class Handler(BaseHTTPRequestHandler):
     github_sync = office_sync
+    office_revision = SERVER_REVISION
     server_version = "nexus-office"
     protocol_version = "HTTP/1.1"
     world = None
