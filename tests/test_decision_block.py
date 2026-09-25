@@ -137,7 +137,9 @@ class IssueRowTest(unittest.TestCase):
                       "url": "source", "createdAt": "2026-08-26T00:00:00Z"},
                      {"body": "❓ The automated pass could not resolve this and did not say what to decide. What now?\n"
                               "- [ ] **1.** Re-run: guidance\n- [ ] **2.** Close: done\n<!-- pipeline-bot -->",
-                      "url": "generic", "createdAt": "2026-09-02T00:00:00Z"}]}}
+                      "url": "generic", "createdAt": "2026-09-02T00:00:00Z"},
+                     {"body": "Nexus diagnosis, not a decision.\n<!-- nexus-stability-diagnosis -->",
+                      "url": "note", "createdAt": "2026-09-24T00:00:00Z"}]}}
         row = office_sync._issue_row(issue)
         self.assertEqual(row["automation_failure"], "missing_decision")
         self.assertIn("Category mapping", row["decision_context"])

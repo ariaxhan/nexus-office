@@ -567,7 +567,8 @@ def _bot_last_word(node) -> dict:
     what turns "the pipeline commented on #284 an hour ago" into a link that
     lands on that comment rather than on the top of a thread with ninety others.
     """
-    comments = ((node.get("comments") or {}).get("nodes")) or []
+    comments = [row for row in (((node.get("comments") or {}).get("nodes")) or [])
+                if "<!-- nexus-stability-diagnosis -->" not in str((row or {}).get("body") or "")]
     if not comments:
         return {}
     last = comments[-1] or {}
