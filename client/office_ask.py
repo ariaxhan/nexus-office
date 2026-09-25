@@ -47,7 +47,13 @@ def claude_environment():
     allowed = ('HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'SHELL', 'LANG', 'LC_ALL',
                'SSH_AUTH_SOCK', 'XDG_CONFIG_HOME')
     return {name: selected[name] for name in allowed if name in selected}
-OFFICE_DIR = Path(__file__).resolve().parents[1]
+def workspace_dir():
+    """The stable user workspace, independent of the executable release path."""
+    return Path(os.environ.get('OFFICE_WORKSPACE') or
+                os.environ.get('OFFICE_RUNTIME_ROOT') or Path.home()).expanduser().resolve()
+
+
+OFFICE_DIR = workspace_dir()
 MANAGER_INSTRUCTIONS = (
     'You are the user\'s Office manager in one continuous chat. Primarily answer questions about '
     'coordinators, work, issues, pull requests, runs, and timelines from current evidence. '

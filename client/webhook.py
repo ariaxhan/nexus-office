@@ -41,9 +41,9 @@ the one event we most want to hear about (the merge) is the one we drop.
 
 AT-LEAST-ONCE, AND THE REDELIVER BUTTON
 --------------------------------------
-GitHub retries on any non-2xx and gives the request 10 seconds, so the door
-answers 200 before it does anything and remembers what it handled on a bounded
-on-disk set. Delivery ids are the only dedup key that survives a restart.
+GitHub retries on any non-2xx and gives the request 10 seconds. The door
+commits the dispatch obligation before answering 200; the existing serial
+drainer performs the slow work. Delivery ids survive restart in SQLite.
 
 The subtlety is the redeliver button. `X-GitHub-Delivery` is the SAME id on a
 manual redelivery, so a set that drops everything it has seen turns the one
@@ -84,12 +84,14 @@ Configuration:
 from __future__ import annotations
 
 import dataclasses
+from contextlib import closing, contextmanager
 import hashlib
 import hmac
 import json
 import os
 import pathlib
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -382,10 +384,45 @@ class Mailbox:
         self.seen_path = self.dir / SEEN_FILE
         self.events_path = self.dir / EVENTS_FILE
         self.runs_path = self.dir / RUNS_FILE
+        self.obligations_path = self.dir / "webhook-obligations.sqlite"
         self.lock = threading.Lock()
         self._rows = None     # loaded on first use, oldest first
         self._out = None      # delivery id -> outcome
         self._inflight = set()
+        with self._obligations() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS obligations (
+                delivery TEXT PRIMARY KEY, repo TEXT NOT NULL, event TEXT NOT NULL,
+                accepted_at TEXT NOT NULL, settled_at TEXT)""")
+
+    @contextmanager
+    def _obligations(self):
+        with closing(sqlite3.connect(self.obligations_path, timeout=10)) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=FULL")
+            with db:
+                yield db
+
+    def accept(self, ev):
+        """Commit the dispatch obligation before acknowledging its delivery."""
+        if not NWO_RE.match(ev.repo or ""):
+            raise ValueError("invalid webhook repo")
+        with self._obligations() as db:
+            db.execute("INSERT OR IGNORE INTO obligations VALUES (?,?,?,?,NULL)",
+                       (ev.delivery, ev.repo, json.dumps(ev.as_dict()), now_iso()))
+
+    def pending_obligations(self):
+        with self._obligations() as db:
+            rows = db.execute("SELECT event FROM obligations WHERE settled_at IS NULL ORDER BY accepted_at,delivery").fetchall()
+        return [Event(**json.loads(row[0])) for row in rows]
+
+    def settle_obligations(self, ids):
+        if ids:
+            with self._obligations() as db:
+                db.executemany("UPDATE obligations SET settled_at=? WHERE delivery=? AND settled_at IS NULL",
+                               [(now_iso(), delivery) for delivery in ids])
+                db.execute("""DELETE FROM obligations WHERE settled_at IS NOT NULL AND delivery NOT IN
+                    (SELECT delivery FROM obligations WHERE settled_at IS NOT NULL
+                     ORDER BY settled_at DESC,delivery DESC LIMIT ?)""", (SEEN_MAX,))
 
     # -- the seen set ------------------------------------------------------
     def _load(self) -> None:
@@ -431,7 +468,9 @@ class Mailbox:
             return False
         with self.lock:
             self._load()
-            if self._out.get(delivery) == self.OK or delivery in self._inflight:
+            with self._obligations() as db:
+                accepted = db.execute("SELECT 1 FROM obligations WHERE delivery=?", (delivery,)).fetchone()
+            if accepted or self._out.get(delivery) == self.OK or delivery in self._inflight:
                 return False
             self._inflight.add(delivery)
             return True
@@ -721,12 +760,15 @@ class Trigger:
         self.pending = {}     # repo -> [Event] waiting on a debounce window
         self.due = {}         # repo -> monotonic deadline
         self.retry = {}       # repo -> the delivery a requeued dispatch is for
+        self.retry_ids = {}   # repo -> accepted delivery ids awaiting the retry
         self.stopped = False
         self.acts = 0         # dispatch attempts
         self.requeued = 0     # attempts that found the pipeline already running
         self._map = None
         self._map_at = 0.0
         self._map_lock = threading.Lock()
+
+        self._restore_pending()
 
         self.thread = threading.Thread(target=self._drain, daemon=True,
                                        name="webhook-drainer")
@@ -736,11 +778,18 @@ class Trigger:
         RUNNING_TRIGGER = self
 
     # -- the queue ---------------------------------------------------------
-    def notice(self, ev) -> None:
-        """One event in. Returns at once: this is called after the 200 has gone
-        out, and nothing here may take a second, let alone thirty minutes."""
+    def _restore_pending(self):
+        # The same drainer replays committed work after a service stop.
+        for ev in self.mailbox.pending_obligations():
+            self.pending.setdefault(ev.repo, []).append(ev)
+            self.due.setdefault(ev.repo, time.monotonic() + self.debounce_s)
+
+    def notice(self, ev, accepted=False) -> None:
+        """One event in. Its obligation is durable before the slow dispatch."""
         if ev is None or not NWO_RE.match(ev.repo or ""):
             return
+        if not accepted:
+            self.mailbox.accept(ev)
         with self.cv:
             if self.stopped:
                 return
@@ -761,6 +810,7 @@ class Trigger:
             self.pending.clear()
             self.due.clear()
             self.retry.clear()
+            self.retry_ids.clear()
             self.cv.notify_all()
 
     cancel = stop
@@ -794,13 +844,25 @@ class Trigger:
                 again = self.act(repo, events)
             except Exception as exc:  # noqa: BLE001 - one bad act, not a dead office
                 log(f"{repo}: the trigger failed: {type(exc).__name__}: {exc}")
-                again = False
+                again = True
             if again:
                 with self.cv:
                     if self.stopped:
                         return
-                    self.due[repo] = time.monotonic() + self.requeue_s
+                    self.retry_ids.setdefault(repo, set()).update(ev.delivery for ev in events)
+                    self.due.setdefault(repo, time.monotonic() + self.requeue_s)
                     self.cv.notify_all()
+            else:
+                with self.cv:
+                    ids = self.retry_ids.pop(repo, set()) | {ev.delivery for ev in events}
+                try:
+                    self.mailbox.settle_obligations(ids)
+                except (OSError, sqlite3.Error) as exc:
+                    log(f"{repo}: could not settle durable webhook obligations: {exc}")
+                    with self.cv:
+                        self.retry_ids.setdefault(repo, set()).update(ids)
+                        self.due.setdefault(repo, time.monotonic() + self.requeue_s)
+                        self.cv.notify_all()
 
     # -- the act -----------------------------------------------------------
     def act(self, repo: str, events: list) -> bool:

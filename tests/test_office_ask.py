@@ -1,5 +1,6 @@
 """Durable FIFO behavior for the shared Office Ask conversation."""
 import pathlib
+import os
 import tempfile
 import threading
 import unittest
@@ -11,6 +12,19 @@ import office_ask as ask
 
 
 class AskQueueTest(unittest.TestCase):
+    def test_provider_workspace_is_stable_across_release_paths(self):
+        with tempfile.TemporaryDirectory() as root:
+            stable = pathlib.Path(root) / 'workspace'
+            stable.mkdir()
+            release = pathlib.Path(root) / '.office-release-123'
+            release.mkdir()
+            with patch.dict(os.environ, {'OFFICE_RUNTIME_ROOT': str(stable)}, clear=False):
+                with patch.dict(os.environ, {'OFFICE_WORKSPACE': ''}, clear=False):
+                    self.assertEqual(ask.workspace_dir(), stable.resolve())
+                    self.assertNotEqual(ask.workspace_dir(), release)
+            with patch.dict(os.environ, {'OFFICE_WORKSPACE': str(stable)}, clear=False):
+                self.assertEqual(ask.workspace_dir(), stable.resolve())
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

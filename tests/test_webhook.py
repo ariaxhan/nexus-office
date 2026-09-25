@@ -488,6 +488,34 @@ class TriggerTest(unittest.TestCase):
             time.sleep(0.02)
         return False
 
+    def test_accepted_before_notice_replays_after_restart(self):
+        ev = wh.parse("issue_comment", "durable-1", issue_comment(login="tim"))
+        self.box.accept(ev)  # service stops before notifying the drainer
+        self.assertFalse(wh.Mailbox(self.dir).claim(ev.delivery), "redelivery is deduplicated")
+        t = self.trigger()
+        self.assertTrue(self.until(lambda: len(self.runner.calls) == 1))
+        self.assertTrue(self.until(lambda: not self.box.pending_obligations()))
+
+    def test_pending_debounce_survives_restart_without_duplicate_dispatch(self):
+        first = self.trigger(debounce_s=30)
+        for delivery in ("durable-1", "durable-2"):
+            first.notice(wh.parse("issue_comment", delivery, issue_comment(login="tim")))
+        first.stop()
+        self.assertEqual(len(wh.Mailbox(self.dir).pending_obligations()), 2)
+        second = self.trigger()
+        self.assertTrue(self.until(lambda: len(self.runner.calls) == 1))
+        self.assertTrue(self.until(lambda: not self.box.pending_obligations()))
+        self.assertEqual(len(self.box.last_runs(10)), 1)
+
+    def test_acceptance_failure_cannot_be_recorded_as_handled(self):
+        ev = wh.parse("issue_comment", "durable-1", issue_comment(login="tim"))
+        self.box.obligations_path.unlink()
+        self.box.obligations_path.mkdir()
+        with self.assertRaises(Exception):
+            self.box.accept(ev)
+        self.box.obligations_path.rmdir()
+        self.assertTrue(wh.Mailbox(self.dir).claim(ev.delivery), "GitHub may retry a failed durable commit")
+
     def test_three_events_in_one_window_are_one_act(self):
         """A push, a PR and a comment inside two seconds are the same news.
         Without the window that is three lanes racing over one working tree."""
@@ -726,10 +754,11 @@ class TriggerTest(unittest.TestCase):
         def boom(path):
             raise RuntimeError("no")
 
-        t = self.trigger(runner=boom)
+        t = self.trigger(runner=boom, requeue_s=0.05)
         t.notice(wh.parse("issue_comment", "d1", issue_comment()))
-        time.sleep(0.4)
-        self.assertEqual(t.queued(), [], "the repo is not stuck in the queue")
+        self.assertTrue(self.until(lambda: t.acts >= 1))
+        self.assertEqual([ev.delivery for ev in self.box.pending_obligations()], ["d1"],
+                         "failed dispatch remains owed")
         t.notice(wh.parse("issue_comment", "d2", issue_comment()))
         self.assertTrue(self.until(lambda: t.acts >= 2), "and the next one still runs")
 

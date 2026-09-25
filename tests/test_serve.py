@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1426,7 +1427,7 @@ class FakeTrigger:
     def __init__(self):
         self.seen = []
 
-    def notice(self, ev):
+    def notice(self, ev, accepted=False):
         self.seen.append(ev)
 
     def queued(self):
@@ -1532,10 +1533,24 @@ class WebhookTest(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["delivery"], delivery)
         self.assertEqual([e.delivery for e in self.trigger.seen], [delivery])
+        self.assertIn(delivery, [e.delivery for e in self.mailbox.pending_obligations()],
+                      "a 200 must mean dispatch is already durable")
         row = self.mailbox.last_events(1)[0]
         self.assertEqual((row["delivery"], row["repo"], row["login"]),
                          (delivery, "acme/thing", "tim"))
         self.assertTrue(row["trigger"])
+
+    def test_dispatch_commit_failure_returns_retryable_response(self):
+        delivery = f'failed-commit-{time.time_ns()}'
+        with patch.object(self.mailbox, 'accept', side_effect=OSError('disk unavailable')):
+            code, body, _ = self.deliver(self.comment(), delivery=delivery)
+        self.assertEqual(code, 503)
+        self.assertIn('persisted', body['error'])
+        self.assertFalse(self.mailbox.seen(delivery))
+        self.assertEqual(self.trigger.seen, [])
+        code, _, _ = self.deliver(self.comment(), delivery=delivery)
+        self.assertEqual(code, 200)
+        self.assertEqual([event.delivery for event in self.trigger.seen], [delivery])
 
     def test_an_unsigned_delivery_is_refused(self):
         code, body, _ = self.deliver(self.comment(), sign=False)
