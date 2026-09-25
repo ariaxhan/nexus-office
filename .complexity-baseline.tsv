@@ -19,7 +19,7 @@ client/office_feed.py	135	publish	25	41
 client/office_feed.py	179	listing	24	56
 client/office_feed_runner.py	63	source_rows	24	40
 client/office_feed_runner.py	243	verify	41	52
-client/office_feed_runner.py	326	run	54	81
+client/office_feed_runner.py	436	run	42	81
 client/phone/office-markdown.js	21	blocks	17	0
 client/phone/office.js	52	draw	5	0
 client/phone/office.js	264	watch	32	0

@@ -2488,6 +2488,9 @@ async function feedDetail(post) {
     else if (source.url.startsWith("/api/media/detail?id=")) {
       const id = decodeURIComponent(source.url.split("id=")[1]);
       sources.append(button(source.title, () => mediaDetail(id)));
+    } else if (source.url.startsWith("/api/buzz/detail?id=")) {
+      const id = decodeURIComponent(source.url.split("id=")[1]);
+      sources.append(button(source.title, () => buzzSourceDetail(id)));
     } else if (issue) sources.append(button(source.title, () => githubDetail(issue[1], { number: Number(issue[3]) }, issue[2] === "pull" ? "prs" : "issues")));
     else sources.append(link(source.title, source.url));
   }
@@ -2532,6 +2535,20 @@ async function feedDetail(post) {
     notice("Reply saved");
     feedDetail(post);
   }, "primary"));
+}
+async function buzzSourceDetail(id) {
+  const data = await api("/api/buzz/detail?id=" + encodeURIComponent(id));
+  const body = sheet("Source conversation");
+  for (const row of data.thread) {
+    const state = ["posted", row.mirrored && "mirrored", row.coordinator_read && "coordinator read", row.acted && "acted on"].filter(Boolean).join(" \xB7 ");
+    body.append(el("p", "muted", `${row.author} \xB7 #${row.channel} \xB7 ${new Date(row.at).toLocaleString()} \xB7 ${state}`), el("p", "", row.text));
+    if (row.issue) {
+      const [repo, number] = row.issue.split("#");
+      body.append(link("Open linked issue", `https://github.com/${repo}/issues/${number}`));
+    }
+    if (row.receipt) body.append(el("p", "muted", `Receipt: ${row.receipt}`));
+    body.append(el("p", "muted", `Buzz event: ${row.source}`));
+  }
 }
 async function digestDetail(id) {
   const data = await api("/api/digests/detail?id=" + encodeURIComponent(id));

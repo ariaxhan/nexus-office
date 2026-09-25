@@ -369,8 +369,9 @@ async function feedDetail(post){
  body.append(el('p','muted',`${data.category} · ${new Date(data.published_at*1000).toLocaleString()} · ${data.model}`),el('p','',data.body));
   const sources=section(body,'Sources');for(const source of data.sources){
    const issue=source.url.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
-   if(source.url==='/#watch')sources.append(button(source.title,()=>{document.querySelector('#detail').close();location.hash='watch';}));
-   else if(source.url.startsWith('/api/media/detail?id=')){const id=decodeURIComponent(source.url.split('id=')[1]);sources.append(button(source.title,()=>mediaDetail(id)));}
+    if(source.url==='/#watch')sources.append(button(source.title,()=>{document.querySelector('#detail').close();location.hash='watch';}));
+    else if(source.url.startsWith('/api/media/detail?id=')){const id=decodeURIComponent(source.url.split('id=')[1]);sources.append(button(source.title,()=>mediaDetail(id)));}
+    else if(source.url.startsWith('/api/buzz/detail?id=')){const id=decodeURIComponent(source.url.split('id=')[1]);sources.append(button(source.title,()=>buzzSourceDetail(id)));}
    else if(issue)sources.append(button(source.title,()=>githubDetail(issue[1],{number:Number(issue[3])},issue[2]==='pull'?'prs':'issues')));
    else sources.append(link(source.title,source.url));
   }
@@ -387,6 +388,17 @@ async function feedDetail(post){
  const replies=section(body,'Your replies');for(const reply of data.replies)replies.append(el('p','',reply.body));
  const fieldNode=field(body,'Reply',el('textarea'));fieldNode.placeholder='What did this miss or make you curious about?';
  body.append(button('Send reply',async()=>{await api('/api/feed/reply',{id:post.id,body:fieldNode.value});notice('Reply saved');feedDetail(post);},'primary'));
+}
+async function buzzSourceDetail(id){
+ const data=await api('/api/buzz/detail?id='+encodeURIComponent(id));
+ const body=sheet('Source conversation');
+ for(const row of data.thread){
+  const state=['posted',row.mirrored&&'mirrored',row.coordinator_read&&'coordinator read',row.acted&&'acted on'].filter(Boolean).join(' · ');
+  body.append(el('p','muted',`${row.author} · #${row.channel} · ${new Date(row.at).toLocaleString()} · ${state}`),el('p','',row.text));
+  if(row.issue){const [repo,number]=row.issue.split('#');body.append(link('Open linked issue',`https://github.com/${repo}/issues/${number}`));}
+  if(row.receipt)body.append(el('p','muted',`Receipt: ${row.receipt}`));
+  body.append(el('p','muted',`Buzz event: ${row.source}`));
+ }
 }
 async function digestDetail(id){
   const data=await api('/api/digests/detail?id='+encodeURIComponent(id));

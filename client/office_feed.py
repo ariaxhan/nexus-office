@@ -123,6 +123,7 @@ def _source(value):
     url = value.get('url', '')
     parsed = urlparse(url)
     local_path = ((url.startswith('/api/media/detail?id=') and len(url) < 500)
+                  or (url.startswith('/api/buzz/detail?id=') and len(url) < 500)
                   or url == '/#watch')
     if not local_path and (parsed.scheme not in ('https', 'http') or not parsed.netloc):
         raise ValueError('Source URL must be HTTP, HTTPS, or an Office detail')
