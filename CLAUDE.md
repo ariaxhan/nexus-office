@@ -29,15 +29,18 @@ omission is also a defect.
 Read this before changing anything. It is short because only a few things here
 are non-obvious, and all of them have already cost a day.
 
-## Written work is durable state
+## Durable records
 
-Vault rule (`Vaults/.claude/skills/artifact-handoff/SKILL.md`), applied here:
+Commission (intent), artifact (work product), chronicle (outcome): the shared model is the
+`artifact-handoff` skill (`Vaults/.claude/skills/artifact-handoff/SKILL.md`). Here:
 
-- substantial audits, designs, plans, investigations, validation evidence → a file in `docs/`, never terminal.
-- continuing work updates the file that already owns the topic (`docs/work.md`, `docs/restart-safety-validation.md`, ...): corrections, evidence, status, deviations go there.
-- new file only for a distinct purpose, audience or lifecycle. no `-v2`, `-final`, follow-up or result files because work progressed.
-- scratch analysis stays in tests or a scratch dir, not `docs/`.
-- superseded doc: consolidate deliberately, fix references, keep unique evidence. never delete to reduce the count.
+- commission and chronicle: Vaults `_meta/commissions/` and `_meta/chronicles/` via
+  `vaults commission` / `vaults end`; this repo's `_meta/` only for its existing repo-scoped
+  history.
+- artifact: `docs/` for this product (`docs/work.md`, `docs/restart-safety-validation.md`, ...);
+  cross-project design and audits in Vaults `_meta/reports/`. Continuing work updates the owner.
+- link by the IDs Office already holds (issue, PR, merge SHA, flight/task id): #191 renders
+  `commission → artifacts → flights → PR → verification → outcome` from them.
 
 ## The one rule: a build passing proves nothing about a screen
 
