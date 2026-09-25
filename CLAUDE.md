@@ -29,6 +29,16 @@ omission is also a defect.
 Read this before changing anything. It is short because only a few things here
 are non-obvious, and all of them have already cost a day.
 
+## Written work is durable state
+
+Vault rule (`Vaults/.claude/skills/artifact-handoff/SKILL.md`), applied here:
+
+- substantial audits, designs, plans, investigations, validation evidence → a file in `docs/`, never terminal.
+- continuing work updates the file that already owns the topic (`docs/work.md`, `docs/restart-safety-validation.md`, ...): corrections, evidence, status, deviations go there.
+- new file only for a distinct purpose, audience or lifecycle. no `-v2`, `-final`, follow-up or result files because work progressed.
+- scratch analysis stays in tests or a scratch dir, not `docs/`.
+- superseded doc: consolidate deliberately, fix references, keep unique evidence. never delete to reduce the count.
+
 ## The one rule: a build passing proves nothing about a screen
 
 Almost every defect this project has had was **invisible in source and obvious
