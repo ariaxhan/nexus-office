@@ -66,6 +66,7 @@ class AskQueueTest(unittest.TestCase):
 
         with patch.object(ask, "_answer_turn", side_effect=provider):
             ask.send({"request_id": "request-00000001", "text": "A", "model": "model-a"})
+            ask._ensure_worker()
             self.assertTrue(started["A"].wait(1))
             ask.send({"request_id": "request-00000002", "text": "B", "model": "model-b"})
             ask.send({"request_id": "request-00000003", "text": "C", "model": "model-c"})
@@ -104,6 +105,7 @@ class AskQueueTest(unittest.TestCase):
         with patch.object(ask, "_answer_turn", side_effect=provider):
             recovered = ask.recover()
             self.assertEqual(recovered["resuming"], 1)
+            ask._ensure_worker()
             self._wait_for(lambda: any(row['text'] == 'answer C' for row in ask.read()['messages']))
             with ask.connect() as db:
                 db.execute("UPDATE messages SET next_attempt_at=0 WHERE role='user' AND text='B'")
@@ -133,6 +135,7 @@ class AskQueueTest(unittest.TestCase):
             with patch.object(ask, "models", return_value=available), patch.object(ask, "_answer_turn", side_effect=provider):
                 receipt = ask.send({"request_id": f"fallback-{primary.replace(':', '-')}-001",
                                     "text": "Complete the request", "model": primary})
+                ask._ensure_worker()
                 self._wait_for(lambda: not ask.read()["busy"])
             reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
             self.assertEqual(reply["status"], "completed")
@@ -147,6 +150,7 @@ class AskQueueTest(unittest.TestCase):
                 ask, "_answer_turn", side_effect=RuntimeError("provider unavailable")):
             receipt = ask.send({"request_id": "both-provider-failure-001",
                                 "text": "Keep going", "model": "gpt-6-sol"})
+            ask._ensure_worker()
             self._wait_for(lambda: any(row['id'] == receipt['reply_id'] and 'retry automatically' in row['text']
                                        for row in ask.read()['messages']))
         reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
@@ -187,6 +191,7 @@ class AskQueueTest(unittest.TestCase):
         fake = SavedServer()
         with patch.object(ask, "AppServer", return_value=fake):
             self.assertEqual(ask.recover(), {"resuming": 1})
+            ask._ensure_worker()
             self._wait_for(lambda: not ask.read()["busy"])
         answer = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
         self.assertEqual(answer["text"], "The verified answer")
@@ -218,7 +223,7 @@ class AskQueueTest(unittest.TestCase):
             self.assertEqual(ask._answer_turn("Check the work", "model-a", receipt["reply_id"]),
                              "Saved answer")
 
-    def test_restart_continues_interrupted_codex_turn_without_resending_instruction(self):
+    def test_interrupted_codex_turn_is_not_replayed(self):
         body = {"request_id": "recover-request-0002", "text": "Do the work", "model": "model-a"}
         with patch.object(ask, "_ensure_worker"):
             receipt = ask.send(body)
@@ -250,11 +255,12 @@ class AskQueueTest(unittest.TestCase):
         fake = InterruptedServer()
         with patch.object(ask, "AppServer", return_value=fake):
             self.assertEqual(ask.recover(), {"resuming": 1})
+            ask._ensure_worker()
             self._wait_for(lambda: not ask.read()["busy"])
         answer = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
-        self.assertEqual(answer["text"], "Recovered answer")
-        self.assertEqual(len(fake.prompts), 1)
-        self.assertIn("Do not repeat completed actions", fake.prompts[0])
+        self.assertEqual(answer["status"], "failed")
+        self.assertIn("was not replayed", answer["text"])
+        self.assertEqual(fake.prompts, [])
 
     def test_request_retry_is_idempotent_and_conflicts_are_rejected(self):
         body = {"request_id": "retry-request-0001", "text": "Keep this", "model": "model-a"}

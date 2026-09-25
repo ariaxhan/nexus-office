@@ -1,5 +1,6 @@
 """One durable Office chat backed by the personal Codex app-server session."""
 import json
+import os
 import random
 import re
 import selectors
@@ -21,6 +22,10 @@ CATALOG = (0, [])
 AUTO_CHOICE = {'engine': 'office', 'id': 'auto', 'name': 'Auto · learns from feedback'}
 REQUEST_ID_RE = re.compile(r'[A-Za-z0-9_-]{16,80}\Z', re.ASCII)
 INTERRUPTED = 'Office restarted before this answer finished.'
+
+
+class UnsafeReplay(RuntimeError):
+    """An interrupted provider turn cannot be safely executed again."""
 
 
 class Connection(sqlite3.Connection):
@@ -87,7 +92,8 @@ def connect():
                              ('requested_model', 'TEXT'), ('provider_turn_id', 'TEXT'),
                              ('recovering', 'INTEGER NOT NULL DEFAULT 0'),
                              ('next_attempt_at', 'REAL NOT NULL DEFAULT 0'),
-                             ('failure_count', 'INTEGER NOT NULL DEFAULT 0')):
+                             ('failure_count', 'INTEGER NOT NULL DEFAULT 0'),
+                             ('claimed_at', 'REAL')):
         if name not in columns:
             db.execute(f'ALTER TABLE messages ADD COLUMN {name} {definition}')
     db.execute("UPDATE messages SET status='completed' WHERE status='complete'")
@@ -313,7 +319,6 @@ def send(body):
         reply_id = cursor.lastrowid
         receipt = _receipt(request_id, user_id, reply_id, model)
         db.commit()
-    _ensure_worker()
     return receipt
 
 
@@ -360,13 +365,13 @@ def _schedule_retry(delay):
 def _claim():
     with LOCK, connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        changed = db.execute('''UPDATE messages SET status='working' WHERE id=(
+        changed = db.execute('''UPDATE messages SET status='working',claimed_at=? WHERE id=(
                                    SELECT id FROM messages WHERE role='user' AND status='queued'
                                    AND next_attempt_at <= ?
                                    ORDER BY id LIMIT 1
                                 ) AND NOT EXISTS (
                                   SELECT 1 FROM messages WHERE role='user' AND status='working'
-                                 )''', (time.time(),)).rowcount
+                                 )''', (time.time(), time.time())).rowcount
         if changed != 1:
             db.commit()
             return None
@@ -395,7 +400,7 @@ def _retry(turn, error):
         row = db.execute('SELECT failure_count FROM messages WHERE id=?', (turn['user_id'],)).fetchone()
         failures = (row['failure_count'] if row else 0) + 1
         due = time.time() + min(3600, 60 * 3 ** min(failures - 1, 4))
-        db.execute("UPDATE messages SET status='queued',recovering=1,failure_count=?,next_attempt_at=? "
+        db.execute("UPDATE messages SET status='queued',recovering=1,claimed_at=NULL,failure_count=?,next_attempt_at=? "
                    "WHERE id=? AND status='working'", (failures, due, turn['user_id']))
         db.execute("UPDATE messages SET text=?,status='queued',completed_at=NULL WHERE id=? AND status='working'",
                    (f'Both providers failed; Office will retry automatically. {error}'[:1000], turn['reply_id']))
@@ -409,6 +414,8 @@ def _drain():
             try:
                 answer = _answer_turn(turn['text'], turn['model'], turn['reply_id'])
                 _finish(turn, answer, 'completed')
+            except UnsafeReplay as exc:
+                _finish(turn, f'Execution stopped and was not replayed: {exc}', 'failed')
             except Exception as exc:
                 alternate = ('gpt-6-sol' if turn['model'].startswith('claude:') else
                              'claude:sonnet' if turn['model'].startswith('gpt-') else None)
@@ -438,10 +445,6 @@ def _drain():
                 working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
             if queued is not None and queued <= time.time() and not working:
                 continue
-            if WORKER is threading.current_thread():
-                WORKER = None
-            if queued is not None and not working:
-                _schedule_retry(queued - time.time())
             return
 
 
@@ -455,16 +458,41 @@ def recover():
                                     (o.status='failed' AND o.text=?))
                              ORDER BY u.id''', (INTERRUPTED,)).fetchall()
         for row in rows:
-            db.execute("UPDATE messages SET status='queued',completed_at=NULL,recovering=1 WHERE id=?",
+            db.execute("UPDATE messages SET status='queued',claimed_at=NULL,completed_at=NULL,recovering=1 WHERE id=?",
                        (row['user_id'],))
-            db.execute("UPDATE messages SET text='',status='queued',completed_at=NULL WHERE id=?",
+            db.execute("UPDATE messages SET status='queued',completed_at=NULL WHERE id=?",
                        (row['reply_id'],))
         db.execute('''UPDATE messages SET status='failed',completed_at=?
                       WHERE role='user' AND status='working' AND NOT EXISTS
                       (SELECT 1 FROM messages o WHERE o.parent_id=messages.id)''', (time.time(),))
         db.commit()
-    _ensure_worker()
     return {'resuming': len(rows)}
+
+
+def worker_heartbeat():
+    with connect() as db:
+        _set(db, 'worker_heartbeat', time.time())
+        _set(db, 'worker_pid', os.getpid())
+
+
+def worker_health():
+    with connect() as db:
+        heartbeat = float(_state(db, 'worker_heartbeat', '0'))
+        oldest = db.execute("SELECT MIN(claimed_at) FROM messages WHERE role='user' AND status='working'").fetchone()[0]
+    return time.time() - heartbeat < 20 and (oldest is None or time.time() - oldest < 2400)
+
+
+def worker_forever():
+    """Only the independent Ask job calls this; the HTTP service only reads/enqueues."""
+    recover()
+    def pulse():
+        while True:
+            worker_heartbeat()
+            time.sleep(5)
+    threading.Thread(target=pulse, name='office-ask-heartbeat', daemon=True).start()
+    while True:
+        _drain()
+        time.sleep(.5)
 
 
 def _bridge(db, model, before_id):
@@ -543,6 +571,23 @@ def _record_turn(user_id, turn_id):
                    (turn_id, user_id))
 
 
+def _recovered_answer(client, thread_id, user_id, message, user):
+    previous = _saved_turn(client, thread_id, user_id, message, user['request_id'], user['provider_turn_id'])
+    if not previous:
+        raise UnsafeReplay('Codex turn could not be found in its durable thread; external effects are unknown.')
+    deadline = time.monotonic() + 1800
+    while previous.get('status') == 'inProgress' and time.monotonic() < deadline:
+        time.sleep(2)
+        previous = _saved_turn(client, thread_id, user_id, message, user['request_id'], previous['id'])
+        if not previous:
+            raise UnsafeReplay('Codex turn disappeared while reconnecting; external effects are unknown.')
+    if previous.get('status') == 'completed':
+        answer = _turn_answer(previous)
+        if answer:
+            return answer
+    raise UnsafeReplay(f'Codex turn is {previous.get("status", "unknown")}; external effects are unknown.')
+
+
 def _answer_turn(message, model, reply_id):
     client = None
     answer = ''
@@ -552,6 +597,8 @@ def _answer_turn(message, model, reply_id):
             bridge = _bridge(db, model, user_id)
             user = db.execute("SELECT request_id,provider_turn_id,recovering FROM messages WHERE id=?", (user_id,)).fetchone()
         if model.startswith('claude:'):
+            if user['recovering']:
+                raise UnsafeReplay('Claude execution stopped before a final receipt; inspect the source state before retrying.')
             resume_note = ('Office restarted while this request was in progress. Inspect the existing session '
                            'and current external state, continue the unfinished work, and do not repeat completed actions.\n\n') if user['recovering'] else ''
             answer = _claude_answer(resume_note + message, model, bridge)
@@ -574,31 +621,10 @@ def _answer_turn(message, model, reply_id):
             thread_id = result['thread']['id']
             with connect() as db:
                 _set(db, 'thread_id', thread_id)
-        previous = (_saved_turn(client, thread_id, user_id, message, user['request_id'],
-                                user['provider_turn_id']) if user['recovering'] else None)
-        if previous and previous.get('status') == 'completed':
-            answer = _turn_answer(previous)
-            if answer:
-                return answer
-        if previous and previous.get('status') == 'inProgress':
-            deadline = time.monotonic() + 1800
-            while time.monotonic() < deadline:
-                time.sleep(2)
-                previous = _saved_turn(client, thread_id, user_id, message, user['request_id'],
-                                       previous['id'])
-                if previous and previous.get('status') != 'inProgress':
-                    break
-            if previous and previous.get('status') == 'completed':
-                answer = _turn_answer(previous)
-                if answer:
-                    return answer
+        if user['recovering']:
+            return _recovered_answer(client, thread_id, user_id, message, user)
         marker = f'[Office request: {user["request_id"]}]\n' if user['request_id'] else ''
-        if previous:
-            prompt = (marker + 'Office restarted during the preceding turn. Reconcile its recorded work and '
-                      'the current external state before continuing. Do not repeat completed actions. '
-                      'Answer the original request once the outcome is verified.\n\nOriginal request:\n' + message)
-        else:
-            prompt = marker + (bridge or '') + message
+        prompt = marker + (bridge or '') + message
         started = client.request('turn/start', {'threadId': thread_id,
                                                 'input': [{'type': 'text', 'text': prompt}], 'model': model}, 30)
         _record_turn(user_id, started['turn']['id'])
