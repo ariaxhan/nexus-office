@@ -1,0 +1,98 @@
+[
+  {
+    "id": "github:Thinking-Brain-School/tbs#145",
+    "source": "github",
+    "source_ref": "Thinking-Brain-School/tbs#145",
+    "owner": "aria",
+    "action": "Decide whether the invite-velocity safeguard is a daily alert or an automatic pause.",
+    "created_at": "2026-09-16T16:48:08Z"
+  },
+  {
+    "id": "github:Thinking-Brain-School/tbs#197",
+    "source": "github",
+    "source_ref": "Thinking-Brain-School/tbs#197",
+    "owner": "aria",
+    "action": "Resolve the conflicting instructions for Care refs 439fe86d and 4cf7f8c4, including which decision or Tim route supersedes the other.",
+    "created_at": "2026-09-23T08:21:12Z"
+  },
+  {
+    "id": "github:ariaxhan/thinking-brain-school#266",
+    "source": "github",
+    "source_ref": "ariaxhan/thinking-brain-school#266",
+    "owner": "aria",
+    "action": "Send Tim Aria’s recommendations for the book approach, or decide explicitly not to proceed.",
+    "created_at": "2026-09-07T06:23:01Z"
+  },
+  {
+    "id": "github:ariaxhan/thinking-brain-school#330",
+    "source": "github",
+    "source_ref": "ariaxhan/thinking-brain-school#330",
+    "owner": "aria",
+    "action": "Choose the destination for the proposed workspace archive before any retention action.",
+    "created_at": "2026-09-14T03:43:26Z"
+  },
+  {
+    "id": "github:ariaxhan/paper-rooms#45",
+    "source": "github",
+    "source_ref": "ariaxhan/paper-rooms#45",
+    "owner": "aria",
+    "action": "Give the on-device acceptance verdict for build 1.3(8).",
+    "created_at": "2026-08-08T21:41:19Z"
+  },
+  {
+    "id": "github:ariaxhan/paper-rooms#42",
+    "source": "github",
+    "source_ref": "ariaxhan/paper-rooms#42",
+    "owner": "aria",
+    "action": "Choose which STUDY filters to support and how they combine.",
+    "created_at": "2026-08-08T19:06:20Z"
+  },
+  {
+    "id": "github:ariaxhan/paper-rooms#34",
+    "source": "github",
+    "source_ref": "ariaxhan/paper-rooms#34",
+    "owner": "aria",
+    "action": "Choose whether map-store export/import belongs in this slice or Contract E.",
+    "created_at": "2026-08-08T18:49:54Z"
+  },
+  {
+    "id": "github:ariaxhan/paper-rooms#32",
+    "source": "github",
+    "source_ref": "ariaxhan/paper-rooms#32",
+    "owner": "aria",
+    "action": "Choose whether local PDF upload retains source bytes or extracted text only.",
+    "created_at": "2026-08-08T18:40:00Z"
+  },
+  {
+    "id": "github:ariaxhan/the-correction#5",
+    "source": "github",
+    "source_ref": "ariaxhan/the-correction#5",
+    "owner": "aria",
+    "action": "Choose the scope and first chapters for the Part II polish pass.",
+    "created_at": "2026-04-02T20:05:07Z"
+  },
+  {
+    "id": "github:ariaxhan/the-correction#6",
+    "source": "github",
+    "source_ref": "ariaxhan/the-correction#6",
+    "owner": "aria",
+    "action": "Choose the Ch 21 canon: Steppe death or Iceland journey.",
+    "created_at": "2026-04-02T20:05:33Z"
+  },
+  {
+    "id": "github:ariaxhan/the-correction#7",
+    "source": "github",
+    "source_ref": "ariaxhan/the-correction#7",
+    "owner": "aria",
+    "action": "Choose whether to start the independent Part III chapter before Ch 21 is decided.",
+    "created_at": "2026-04-02T20:05:48Z"
+  },
+  {
+    "id": "github:ariaxhan/modelmind#107",
+    "source": "github",
+    "source_ref": "ariaxhan/modelmind#107",
+    "owner": "aria",
+    "action": "Settle the three decisions for streaks, first-lesson unlock and RevenueCat verification.",
+    "created_at": "2026-04-01T19:49:15Z"
+  }
+]

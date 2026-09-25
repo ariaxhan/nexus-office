@@ -2455,7 +2455,7 @@ async function watch(parent) {
   });
 }
 function requiresYou(entry) {
-  return entry.kind === "permission" || entry.kind === "gate" || entry.kind === "issue" || entry.kind === "buzz";
+  return entry.kind === "permission" || entry.kind === "gate" || entry.kind === "human-ask";
 }
 function formatAge(milliseconds) {
   if (!Number.isFinite(milliseconds)) return "not checked yet";
@@ -3154,14 +3154,14 @@ async function githubReviews(repo, number, cursor = 1, parent = null, inline2 = 
   if (!parent) body.append(button("Inline comments", () => githubReviews(repo, number, 1, body, true)));
 }
 async function refreshAttention() {
-  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), world(), api("/api/buzz")]);
+  const results = await Promise.allSettled([api("/api/tasks/permissions"), api("/api/gates"), api("/api/human-asks"), world()]);
   const items = [], errors = [], failures = [];
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
       errors.push(result.reason.message);
       continue;
     }
-    if (index === 3) errors.push(...result.value.errors || []);
+    if (index === 2) errors.push(...result.value.errors || []);
     for (const entry of attentionItems(index, result.value)) {
       (automationFailure(entry) ? failures : items).push(entry);
     }
@@ -3203,9 +3203,21 @@ function reconcileChildren(parent, nodes) {
   }
 }
 function attentionCard(entry) {
+  if (entry.kind === "human-ask") return humanAskCard(entry.item);
   if (entry.kind === "buzz") return buzzDecisionCard(entry.item);
   if (entry.kind === "gate") return gateAttentionCard(entry.item);
   return issueAttentionCard(entry);
+}
+function humanAskCard(ask2) {
+  const node = el("article", "card attention-choice");
+  const verified = ask2.last_source_verification ? ` \xB7 verified ${formatAge(Date.now() - Date.parse(ask2.last_source_verification))}` : " \xB7 not verified yet";
+  node.append(el("p", "attention-source", `${ask2.source_ref}${verified}`), el("h3", "", "A decision needs you"), el("p", "attention-question", ask2.action));
+  if (ask2.source_stale) node.append(el("p", "muted", "Source temporarily unavailable; this request remains open."));
+  if (ask2.source === "github") {
+    const [repo, number] = ask2.source_ref.split("#");
+    node.append(button("Inspect source and answer there", () => githubDetail(repo, { number: Number(number) }, "issues"), "attention-details"));
+  }
+  return node;
 }
 function gateAttentionCard(gate) {
   const node = el("article", "card attention-choice");
@@ -3285,11 +3297,8 @@ setInterval(refreshAttention, 1e4);
 function attentionItems(index, value3) {
   if (index === 0) return (value3?.items || []).map((item) => ({ kind: "permission", item }));
   if (index === 1) return (value3?.gates || []).map((item) => ({ kind: "gate", item }));
-  if (index === 2) {
-    const pinned = new Set(value3?.pins || []);
-    return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && (issue.automation_failure || issue.decision_context || issue.decision?.question && issue.decision?.options?.length)).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updatedAt || "").localeCompare(String(a.item.updatedAt || "")));
-  }
-  if (index === 3) return (value3?.items || []).filter((row) => row.needs_you).map((item) => ({ kind: "buzz", item }));
+  if (index === 2) return (value3?.items || []).map((item) => ({ kind: "human-ask", item }));
+  if (index === 3) return (value3?.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.automation_failure === "missing_decision").map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } })));
   return [];
 }
 function automationFailure(entry) {

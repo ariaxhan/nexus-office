@@ -57,6 +57,7 @@ import run_board  # noqa: E402  (needs the path above)
 import product_board  # noqa: E402  (needs the path above)
 import tower_board  # noqa: E402  (needs the path above)
 import sections as sections_mod  # noqa: E402  (needs the path above)
+import human_asks  # noqa: E402  (typed source declarations, independent of bot_last)
 
 def _env_path(name):
     v = os.environ.get(name, "").strip()
@@ -668,6 +669,13 @@ def parse_landed_pr(text):
     return int(hit.group(1)) if hit else None
 
 
+def _ask_declarations(issue):
+    found = human_asks.declarations(issue.get('body'))
+    for comment in ((issue.get('comments') or {}).get('nodes') or []):
+        found.extend(human_asks.declarations(comment.get('body')))
+    return found
+
+
 def _issue_row(i) -> dict:
     last_word = _bot_last_word(i)
     full = str(last_word.get("body") or "")
@@ -683,6 +691,7 @@ def _issue_row(i) -> dict:
         "url": i.get("url") or "",
         "updatedAt": i.get("updatedAt") or "",
         "bot_last": bool(last_word),
+        "human_ask_declarations": _ask_declarations(i),
         # When the bot spoke last, its words ARE the question a human has to
         # answer, so they travel with the issue instead of behind a click.
         "last_word": str(last_word.get("body") or "")[:1500],

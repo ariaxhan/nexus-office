@@ -22,6 +22,7 @@ import office_bot_history as bot_history
 import office_github_actions as github_actions
 import coordinator_chat
 import office_buzz
+import human_asks
 
 
 def arguments(query):
@@ -50,6 +51,7 @@ def get(handler, path, query):
         '/api/feed/detail': lambda: feed.detail(q['id']),
         '/api/feed/threads': feed.threads,
         '/api/buzz': office_buzz.listing,
+        '/api/human-asks': lambda: human_asks.listing(stations=(handler.world.snapshot or {}).get('stations')),
         '/api/buzz/detail': lambda: office_buzz.detail(q['id']),
         '/api/ask': ask.read,
         '/api/ask/models': ask.models,
