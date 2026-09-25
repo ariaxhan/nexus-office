@@ -72,12 +72,16 @@ class Codex:
         self.rpc=Transport(['codex','app-server','--listen','stdio://'],env,cwd,stderr)
         self.rpc.call('initialize',{'clientInfo':{'name':'nexus_office','title':'Nexus Office','version':'1.0.0'},'capabilities':{}})
         self.rpc.send({'method':'initialized'})
-        params={'cwd':str(cwd),'approvalPolicy':'on-request','sandbox':'workspace-write'}
+        # The selected CODEX_HOME owns approval and sandbox policy. Overriding
+        # it here made routine task work request permission from Aria.
+        params={'cwd':str(cwd)}
         method='thread/start'
         if resume:
             method='thread/resume';params['threadId']=resume
         result=self.rpc.call(method,params)
         self.session_id=result['thread']['id']
+        self.policy={'approvalPolicy':result.get('approvalPolicy'),
+                     'sandbox':result.get('sandbox'),'source':'selected-seat'}
         self.turn_id=None
         self.requests={}
 

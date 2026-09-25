@@ -123,6 +123,8 @@ class Conversation:
             raise RuntimeError('Both providers unavailable: '+'; '.join(errors))
         session={'engine_session_id':self.adapter.session_id,'engine':name,'profile':self.spec['profile'],'checkout':str(self.checkout),'flight_id':self.flight['id']}
         write(previous,session);self.emit('office.session',session)
+        if name=='codex':
+            self.emit('office.policy',{'engine':name,'profile':self.spec['profile'],**self.adapter.policy})
         self.emit('office.phase',{'state':'listening' if resume else 'starting'})
         if self.reconcile_message is not None:
             prompt=('The previous provider disconnected or did not acknowledge the message. '

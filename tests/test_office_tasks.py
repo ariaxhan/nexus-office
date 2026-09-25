@@ -101,6 +101,25 @@ class TaskReceipts(unittest.TestCase):
         self.assertFalse(self.ledger.plans())
 
 class AccountIsolation(unittest.TestCase):
+    def test_codex_task_inherits_selected_seat_policy_on_start_and_resume(self):
+        from nexus.office_rpc import Codex
+        class Transport:
+            calls=[]
+            def __init__(self,*args):pass
+            def call(self,method,params):
+                self.calls.append((method,params))
+                if method=='initialize':return {}
+                return {'thread':{'id':'fixture'},'approvalPolicy':'never','sandbox':'workspace-write'}
+            def send(self,*args):pass
+        with patch('nexus.office_rpc.Transport',Transport):
+            started=Codex({'CODEX_HOME':'/seat/personal'},'/task/checkout',None)
+            resumed=Codex({'CODEX_HOME':'/seat/personal'},'/task/checkout',None,resume='fixture')
+        self.assertEqual(started.policy,{'approvalPolicy':'never','sandbox':'workspace-write','source':'selected-seat'})
+        self.assertEqual(resumed.policy,started.policy)
+        self.assertEqual([('thread/start',{'cwd':'/task/checkout'}),
+                          ('thread/resume',{'cwd':'/task/checkout','threadId':'fixture'})],
+                         [(method,params) for method,params in Transport.calls if method.startswith('thread/')])
+
     def test_personal_claude_unsets_profile_and_inherited_credentials(self):
         with patch.object(office_profiles,'seats',return_value={('claude','personal'):None}),patch.dict(os.environ,{'CLAUDE_CONFIG_DIR':'/wrong','ANTHROPIC_API_KEY':'fixture','OPENAI_API_KEY':'fixture','CODEX_THREAD_ID':'parent'}):
             env=office_profiles.environment('claude','personal')
