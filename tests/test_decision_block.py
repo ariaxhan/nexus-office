@@ -128,6 +128,21 @@ class IssueRowTest(unittest.TestCase):
         self.assertEqual(len(row["decision"]["options"]), 2)
         self.assertEqual(len(row["last_word"]), 1500)
 
+    def test_generic_last_comment_preserves_earlier_real_decision(self):
+        issue = {"number": 108, "title": "quiz", "body": "", "url": "", "updatedAt": "",
+                 "labels": {"nodes": [{"name": "waiting on human"}]},
+                 "comments": {"nodes": [
+                     {"body": "## Findings\nRead path missing\n## What a person has to decide\n"
+                              "- Category mapping\n- Consumer surface\n- Sign-out semantics\n",
+                      "url": "source", "createdAt": "2026-08-26T00:00:00Z"},
+                     {"body": "❓ The automated pass could not resolve this and did not say what to decide. What now?\n"
+                              "- [ ] **1.** Re-run: guidance\n- [ ] **2.** Close: done\n<!-- pipeline-bot -->",
+                      "url": "generic", "createdAt": "2026-09-02T00:00:00Z"}]}}
+        row = office_sync._issue_row(issue)
+        self.assertEqual(row["automation_failure"], "missing_decision")
+        self.assertIn("Category mapping", row["decision_context"])
+        self.assertNotIn("What now?", row["decision_context"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2410,8 +2410,8 @@ async function watch(parent) {
   }
   if (failures.length) {
     const stalled = section(parent, "Automation needs repair");
-    stalled.append(el("p", "muted", `${failures.length} automated ${failures.length === 1 ? "pass stopped" : "passes stopped"} without explaining why. These are not decisions for you. Open an issue to inspect its history or add guidance.`));
-    for (const entry of failures) stalled.append(card(`${entry.repo} #${entry.item.number} \xB7 ${entry.item.title}`, "Inspect issue history", () => githubDetail(entry.repo, entry.item, "issues")));
+    stalled.append(el("p", "muted", `${failures.length} automated ${failures.length === 1 ? "pass needs" : "passes need"} diagnosis. Inspect the original work and blocker before retrying.`));
+    for (const entry of failures) stalled.append(automationFailureCard(entry));
     stalled.append(link("Track the repair", "https://github.com/ariaxhan/nexus-office/issues/186"));
   }
   if (coordinatorRows.length) {
@@ -3204,20 +3204,24 @@ function reconcileChildren(parent, nodes) {
 }
 function attentionCard(entry) {
   if (entry.kind === "buzz") return buzzDecisionCard(entry.item);
-  if (entry.kind === "gate") {
-    const node2 = el("article", "card attention-choice");
-    node2.append(el("h3", "", "Permission needed"), el("p", "attention-question", entry.item.question || entry.item.title || "Pending decision"));
-    const choices2 = el("div", "attention-options");
-    for (const [answer, label] of [["allow", "Allow once"], ["deny", "Deny"]]) choices2.append(button(label, async () => {
-      const result = await api("/api/gate", { question_id: entry.item.id, answer });
-      if (!result.ok) throw Error(result.message || "Answer was not recorded");
-      notice("Answer recorded");
-      if ($("#detail").open) $("#detail").close();
-      await route();
-    }, "attention-option"));
-    node2.append(choices2);
-    return node2;
-  }
+  if (entry.kind === "gate") return gateAttentionCard(entry.item);
+  return issueAttentionCard(entry);
+}
+function gateAttentionCard(gate) {
+  const node = el("article", "card attention-choice");
+  node.append(el("h3", "", "Permission needed"), el("p", "attention-question", gate.question || gate.title || "Pending decision"));
+  const choices = el("div", "attention-options");
+  for (const [answer, label] of [["allow", "Allow once"], ["deny", "Deny"]]) choices.append(button(label, async () => {
+    const result = await api("/api/gate", { question_id: gate.id, answer });
+    if (!result.ok) throw Error(result.message || "Answer was not recorded");
+    notice("Answer recorded");
+    if ($("#detail").open) $("#detail").close();
+    await route();
+  }, "attention-option"));
+  node.append(choices);
+  return node;
+}
+function issueAttentionCard(entry) {
   const issue = entry.item, decision = issue.decision;
   const node = el("article", "card attention-choice");
   const askedAt = Date.parse(issue.last_word_at || "");
@@ -3226,6 +3230,11 @@ function attentionCard(entry) {
   node.append(head, el("h3", "", issue.title));
   const context = reportLead(issue.body || "");
   if (context && context !== issue.title) node.append(el("p", "attention-context", context.length > 200 ? context.slice(0, 199) + "\u2026" : context));
+  if (issue.decision_context) {
+    node.append(el("p", "attention-question", "A product decision is still needed for this issue."), markdownView(issue.decision_context));
+    node.append(button("Inspect evidence and answer in issue", () => githubDetail(entry.repo, issue, "issues"), "attention-details"));
+    return node;
+  }
   node.append(el("p", "attention-question", decision.question));
   const choices = el("div", "attention-options");
   let busy = false;
@@ -3278,13 +3287,36 @@ function attentionItems(index, value3) {
   if (index === 1) return (value3?.gates || []).map((item) => ({ kind: "gate", item }));
   if (index === 2) {
     const pinned = new Set(value3?.pins || []);
-    return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision?.question && issue.decision?.options?.length).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updatedAt || "").localeCompare(String(a.item.updatedAt || "")));
+    return (value3?.stations || []).filter((station) => !station.hidden).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && (issue.automation_failure || issue.decision_context || issue.decision?.question && issue.decision?.options?.length)).map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))).sort((a, b) => Number(pinned.has(b.repo)) - Number(pinned.has(a.repo)) || String(b.item.updatedAt || "").localeCompare(String(a.item.updatedAt || "")));
   }
   if (index === 3) return (value3?.items || []).filter((row) => row.needs_you).map((item) => ({ kind: "buzz", item }));
   return [];
 }
 function automationFailure(entry) {
-  return entry.kind === "issue" && String(entry.item.decision?.question || "").startsWith("The automated pass could not resolve this and did not say what to decide.");
+  return entry.kind === "issue" && !entry.item.decision_context && (entry.item.automation_failure === "missing_decision" || String(entry.item.decision?.question || "").startsWith("The automated pass could not resolve this and did not say what to decide."));
+}
+function meaningfulFailureLine(text) {
+  const lines = String(text || "").split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#") && !line.startsWith("|") && !line.startsWith("- ") && !/^Read[: `]/i.test(line));
+  return (lines.find((line) => /\b(stopping|stopped|root cause|concrete cause|no code change|implemented|commit|does not exist|not implemented)\b/i.test(line)) || lines.find((line) => line.length > 35) || lines[0] || "").replace(/^[*\d.\s]+|[*\s]+$/g, "");
+}
+function automationFailureCard(entry) {
+  const issue = entry.item, askedAt = Date.parse(issue.last_word_at || "");
+  const node = el("article", "card attention-choice");
+  node.append(el("h3", "", `${entry.repo} #${issue.number} \xB7 ${issue.title}`), el("p", "muted", `Unexplained pass${Number.isFinite(askedAt) ? ` \xB7 ${formatAge(Date.now() - askedAt)}` : ""}`));
+  const receipt = el("p", "muted", "Checking earlier work and failure receipt\u2026");
+  node.append(receipt);
+  const actions = el("div", "actions");
+  actions.append(button("Inspect history or add guidance", () => githubDetail(entry.repo, issue, "issues")), link("Open on GitHub", issue.url || `https://github.com/${entry.repo}/issues/${issue.number}`));
+  node.append(actions);
+  api(`/api/github/detail?repo=${encodeURIComponent(entry.repo)}&number=${issue.number}&kind=issues`).then((data) => {
+    if (!node.isConnected) return;
+    const comments = (data.comments || []).filter((row) => !String(row.body || "").includes("<!-- pipeline-bot -->") && !String(row.body || "").includes("<!-- office-request:"));
+    const meaningful = comments.at(-1), lead = meaningfulFailureLine(meaningful?.body || "");
+    receipt.textContent = lead ? `Last substantive report (${formatAge(Date.now() - Date.parse(meaningful.created_at))}): ${lead.slice(0, 350)}` : "No substantive run receipt found in the available issue comments. Inspect the history before retrying.";
+  }).catch((error) => {
+    if (node.isConnected) receipt.textContent = `Issue history unavailable: ${error.message}. Inspect on GitHub before retrying.`;
+  });
+  return node;
 }
 var layoutObserver = new ResizeObserver(() => {
   document.documentElement.style.setProperty("--tabs-height", `${$(".tabs").getBoundingClientRect().height}px`);

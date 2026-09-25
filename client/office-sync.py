@@ -516,7 +516,7 @@ fragment Desk on Repository {
     nodes {
       number title body url updatedAt
       labels(first: 20) { nodes { name } }
-      comments(last: 1) { nodes { body url createdAt } }
+      comments(last: 5) { nodes { body url createdAt } }
     }
   }
   pullRequests(first: 100, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -598,6 +598,27 @@ HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 OPTION_RE = re.compile(r"^\s*[-*]\s*\[[ xX]?\]\s*\*\*(\d+)\.\*\*\s*(\S.*?)\s*$")
 RECOMMENDED_RE = re.compile(r"\s*\(recommended\)\s*$", re.I)
 LANDED_PR_RE = re.compile(r"merging\s+PR\s+#(\d+)", re.I)
+UNEXPLAINED_PASS = "The automated pass could not resolve this and did not say what to decide."
+
+
+def _previous_decision_context(issue):
+    comments = ((issue.get("comments") or {}).get("nodes")) or []
+    marker = "## What a person has to decide"
+    for previous in reversed(comments[:-1]):
+        report = str((previous or {}).get("body") or "")
+        if marker in report:
+            return report.split(marker, 1)[1].split("\n## ", 1)[0].strip()[:1800]
+    return ""
+
+
+def _issue_automation_fields(issue, full):
+    if not full.lstrip().startswith(DECISION_MARK + " " + UNEXPLAINED_PASS):
+        return {}
+    fields = {"automation_failure": "missing_decision"}
+    context = _previous_decision_context(issue)
+    if context:
+        fields["decision_context"] = context
+    return fields
 
 
 def parse_decision(text):
@@ -671,6 +692,7 @@ def _issue_row(i) -> dict:
         # Present only when the comment really is one, so "has a decision" is a
         # key test on the phone and not a truthiness dance over an empty shape.
         **({"decision": decision} if decision else {}),
+        **_issue_automation_fields(i, full),
         **({"landed_pr": landed_pr} if landed_pr else {}),
     }
 
