@@ -870,7 +870,7 @@ def tower_execute(led, entry, task):
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
     from . import evidence
     recorded, issue["nexus_evidence"] = evidence.packet(led, task, issue, entry["path"], flight=fid)
-    issue["nexus_evidence"] += repair_brief(led, fid, repair)
+    issue["nexus_evidence"] += repair_brief(led, fid, repair) + redesign_brief(led, fid, task)
     led.event("work.evidence", fid, recorded, "work")  # retrieved; "used" is the agent naming an id
 
     def gh(*args, timeout=None):
@@ -1045,6 +1045,36 @@ def open_pr_route(led, entry, task, repo, number):
     return (tower_review(led, entry, task, pr_url) if pr_url else None), None
 
 
+def findings(led, pr_url):
+    return [p.get("reason", "").strip() for p in (loads(r[0], {}) for r in led.conn.execute(
+        "SELECT payload FROM events WHERE kind='work.review' ORDER BY id")) if p.get("pr") == pr_url and p.get("verdict") == "FAIL"]
+
+
+def after_fail(led, gh, task, pr_url):
+    """(requeue, note). Repairs first; when they run out, one redesign from every finding (#191: five findings in one
+    mechanism were a design fault, not five bugs); only a failed redesign waits for a person."""
+    if repairs_spent(led, pr_url) < MAX_REVIEW_REPAIRS:
+        return True, "the next flight repairs it"
+    if led.events(kind="work.redesign", subject=task["id"]):
+        return False, "repairs and a redesign exhausted, waiting for a person"
+    led.event("work.redesign", task["id"], {"pr": pr_url, "findings": findings(led, pr_url)}, "work")
+    gh("pr", "close", pr_url, "--comment", "Repairs exhausted: the next Tower flight rebuilds from every finding.")
+    return True, "repairs exhausted, the next flight redesigns from every finding"
+
+
+def redesign_brief(led, fid, task):
+    """Once, for the first build after a redesign was owed."""
+    owed = led.events(kind="work.redesign", subject=task["id"])
+    if not owed or led.events(kind="work.redesign_flown", subject=task["id"]):
+        return ""
+    brief = loads(owed[-1]["payload"], {})
+    led.event("work.redesign_flown", task["id"], {"flight": fid, "pr": brief.get("pr")}, "work")
+    listed = "\n".join(f"- {f}" for f in brief.get("findings", []))
+    return (f"\n\nRedesign: {brief.get('pr')} failed independent review after every repair. Its findings:\n{listed}\n"
+            "Treat them as symptoms of one design fault, not separate bugs: find the mechanism they share, replace it "
+            "with one that makes each impossible, and add a test per finding. The closed PR's branch holds the prior work.")
+
+
 def repair_brief(led, fid, repair):
     if not repair:
         return ""
@@ -1085,8 +1115,7 @@ def tower_review(led, entry, task, pr_url):
                                 pr_url=pr_url, sha=pr["headRefOid"], branch=pr["headRefName"]))
         if verdict == "PASS":
             return _merge(led, fid, entry, task, issue, pr, pr_url, gh)
-        repairs = repairs_spent(led, pr_url) < MAX_REVIEW_REPAIRS
-        note = "the next flight repairs it" if repairs else "repairs exhausted, waiting for a person"
+        repairs, note = after_fail(led, gh, task, pr_url)
         return _settle(led, fid, entry, task, issue,
                        dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: FAIL, {note}. {why}"),
                             state="HELD", flight=fid, reason=f"review_fail: {why}"[:300], pr_url=pr_url,
