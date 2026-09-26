@@ -169,8 +169,31 @@ class TowerYield(unittest.TestCase):
                 work.repair_brief(self.led, "flt_r", dict(repair, pr="https://pr/9"))  # the rebuild flies
             self.pr["headRefOid"] = "last"
             work.tower_review(self.led, self.entry, self.task, "https://pr/9")
+            self.assertEqual([], held)  # repairs spent: one redesign before a person
+            self.assertIsNone(work.review_repair(self.led, self.entry["repo"], "https://pr/9"))
+            brief = work.redesign_brief(self.led, "flt_d", self.task)
+            self.assertEqual(work.MAX_REVIEW_REPAIRS + 1, brief.count("- hides a failure"))
+            self.assertEqual("", work.redesign_brief(self.led, "flt_e", self.task))  # once
+            for head in heads:  # the redesign's own PR spends its repairs too
+                self.pr["headRefOid"] = "r" + head
+                work.tower_review(self.led, self.entry, self.task, "https://pr/10")
+                work.repair_brief(self.led, "flt_r", dict(work.review_repair(
+                    self.led, self.entry["repo"], "https://pr/10"), pr="https://pr/10"))
+            self.pr["headRefOid"] = "rlast"
+            work.tower_review(self.led, self.entry, self.task, "https://pr/10")
         self.assertIn("hold", held[0])
-        self.assertIsNone(work.review_repair(self.led, self.entry["repo"], "https://pr/9"))
+
+    def test_a_failed_close_is_retried_never_recorded_as_a_redesign(self):
+        fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
+        for n in range(work.MAX_REVIEW_REPAIRS):
+            self.led.event("work.repair", fid, {"pr": "https://pr/9"}, "work")
+        failing = lambda *a: subprocess.CompletedProcess(a, 1, "", "HTTP 502")  # noqa: E731
+        self.assertEqual((True, "repairs exhausted; closing the PR for a redesign failed, retrying"),
+                         work.after_fail(self.led, failing, self.task, "https://pr/9"))
+        self.assertEqual([], self.led.events(kind="work.redesign"))
+        closing = lambda *a: subprocess.CompletedProcess(a, 0, "", "")  # noqa: E731
+        self.assertTrue(work.after_fail(self.led, closing, self.task, "https://pr/9")[0])
+        self.assertEqual(1, len(self.led.events(kind="work.redesign")))
 
     def test_a_repair_that_changes_nothing_still_spends_its_attempt(self):
         fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
