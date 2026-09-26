@@ -182,12 +182,13 @@ def flight_paths(repo, record):
     return mine, strays
 
 
-def recover(repo, comment=None):
+def recover(repo, comment=None, flight=None, comment_for=None):
     """A stale lane is held from its OWN write-set paths only; nothing outside them is committed or reverted."""
     results = []
     for record in records(repo):
-        if not lease.stale(record):
+        if not lease.stale(record) or (flight and record["flight"] != flight):
             continue
+        comment = comment_for(record["flight"]) if comment_for else comment
         tip = landing.remote_tip(landing.target_key(repo, landing.HELD_PREFIX + record["flight"]))
         if tip:  # an earlier attempt already pushed this lane's work: re-holding could only fail non-fast-forward
             release(repo, record["flight"])

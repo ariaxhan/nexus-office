@@ -103,7 +103,8 @@ class CloseBeforeDone(TowerFixture):
         patch("nexus.tower.land_write_flight", side_effect=landed).start()
         self.issues[0]["labels"] = [{"name": "hold"}]  # a person parked it mid-flight
         state = work._settle(self.led, fid, self.entry, self.task, self.issues[0],
-                             {"state": "LANDED", "flight": fid, "sha": "abc", "branch": "main"}, None)
+                             {"state": "LANDED", "flight": fid, "sha": "abc", "branch": "main",
+                              "review": "flt_r PASS at abc"}, None)
         self.assertEqual("pending", state)
         self.assertNotEqual("done", self.task_state(self.task["id"]))
         self.assertIn("close_pending", work.latest(self.led, "work.pending", self.task["id"])["reason"])
@@ -115,6 +116,28 @@ class CloseBeforeDone(TowerFixture):
         fly.assert_not_called()
         self.assertEqual(1, len(self.closed))
         self.assertEqual("done", self.task_state(self.task["id"]))
+
+
+class UnverifiedLandingIsHeld(TowerFixture):
+    """D1 (#210): a landed commit with no contract check and no review is held for a person, never done."""
+
+    def test_unverified_landing_is_held_not_done_and_not_reflown(self):
+        fid = work.claim(self.led, self.entry["repo"], 1, os.getpid(), runner=True)
+
+        def landed(ledger, flight_id, repo, result):
+            ledger.set_state(flight_id, "produced"), ledger.set_state(flight_id, "verified", evidence=terminal.landed(result, result["sha"]))
+        patch("nexus.tower.land_write_flight", side_effect=landed).start()
+        edits = []
+        github = self.github
+        patch("nexus.work.subprocess.run", side_effect=lambda argv, **k: edits.append(argv) or github(argv, **k)).start()
+        state = work._settle(self.led, fid, self.entry, self.task, self.issues[0],
+                             {"state": "LANDED", "flight": fid, "sha": "abc", "branch": "main"}, None)
+        self.assertEqual("pending", state)
+        self.assertNotEqual("done", self.task_state(self.task["id"]))
+        self.assertEqual([], self.closed)
+        pending = work.latest(self.led, "work.pending", self.task["id"])
+        self.assertIn("no contract check and no review", pending["hold"])
+        self.assertTrue(any("--add-label" in a and "hold" in a for a in edits))
 
 
 class CrashIsNotNoChange(unittest.TestCase):

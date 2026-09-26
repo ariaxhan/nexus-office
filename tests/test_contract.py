@@ -48,6 +48,16 @@ class Contract(unittest.TestCase):
         self.assertFalse(contract.done_receipt({"state": "LANDED", "sha": "abc"}, c, "/", run=bad)[0])
         self.assertTrue(contract.done_receipt({"state": "LANDED", "sha": "abc"}, c, "/", run=ok)[0])
 
+    def test_missing_check_is_not_a_pass_unless_a_review_flight_passed(self):
+        no_check = dict(contract.parse(BLOCK), check=None)
+        for c in (no_check, None):  # a null check, and a contract-less repo
+            done, why = contract.done_receipt({"state": "LANDED", "sha": "abc"}, c, "/")
+            self.assertFalse(done)
+            self.assertTrue(why.startswith(contract.UNVERIFIED))
+            done, why = contract.done_receipt({"state": "LANDED", "sha": "abc", "review": "flt_r PASS at abc"}, c, "/")
+            self.assertTrue(done)
+            self.assertIn("review flight passed", why)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -84,6 +84,10 @@ def gate(issue, *, required=True, window_open=None, gh=_gh):
     return c, None
 
 
+#: a landed commit nothing verified: re-flying cannot help, so it is held for a person
+UNVERIFIED = "unverified:"
+
+
 def done_receipt(result, contract_, checkout, run=subprocess.run):
     """(done, reason). Done needs a landed commit AND the contract CHECK passing at that exact sha.
 
@@ -93,8 +97,10 @@ def done_receipt(result, contract_, checkout, run=subprocess.run):
         return False, f"no landed commit ({result.get('state')}: {result.get('reason')})"
     sha = result["sha"]
     check = (contract_ or {}).get("check")
-    if not check:
-        return True, f"landed {sha}; contract has no check"
+    if not check:  # a missing verifier is not a passing one; a separate review flight's PASS is
+        if result.get("review"):
+            return True, f"landed {sha}; review flight passed: {result['review']}"[:300]
+        return False, f"{UNVERIFIED} landed {sha} with no contract check and no review"
     tmp = tempfile.mkdtemp(prefix="nexus-receipt-")
     tree = os.path.join(tmp, "tree")
     git = lambda *a: run(["git", *a], cwd=checkout, capture_output=True, text=True, timeout=300)  # noqa: E731

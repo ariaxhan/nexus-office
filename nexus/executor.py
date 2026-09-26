@@ -173,12 +173,14 @@ def invoke(argv, *, cwd, env, input, timeout, run):
 
 
 def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subprocess.run, write_set=None,
-        per_repo=lanes.PER_REPO):
-    """write_set: this lane leases only those paths in the shared checkout; None leases the whole repo."""
+        per_repo=lanes.PER_REPO, comment_for=None):
+    """write_set: this lane leases only those paths in the shared checkout; None leases the whole repo.
+
+    comment_for(flight) comments on a recovered dead flight's OWN issue, never this one (#210 W5)."""
     repo, branch = entry["path"], entry.get("default_branch", "main")
     argv, prompt, road, forced = plan(entry, issue)
     write_set = None if road else write_set  # roads (lessons) keep the whole-repo lane
-    recovered = [lease.recover(repo, comment)] + lanes.recover(repo, comment)
+    recovered = [lease.recover(repo, comment_for=comment_for)] + lanes.recover(repo, comment_for=comment_for)
     base = prompt
     if write_set:
         record = lanes.acquire(repo, branch, flight, os.getpid(), timeout_s + 600, write_set, per_repo)

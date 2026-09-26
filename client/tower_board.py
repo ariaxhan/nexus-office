@@ -52,7 +52,49 @@ def _issue_state(attempt, labels, pending, failure, disposition, recovery, now):
         return 'retrying', pending.get('reason') or 'Waiting for next Tower attempt', _next(pending.get('next_retry'), now)
     if failure:
         return 'retrying', failure.get('error') or 'Tower attempt failed', _next(failure.get('next_retry'), now)
-    return 'ready', 'Waiting for Tower', ''
+    return _queued_state(labels, disposition)
+
+
+def _queued_state(labels, disposition):
+    if disposition.get('state') in ('backoff', 'blocked'):  # e.g. an open dependency: say so, not "ready"
+        return 'waiting', disposition.get('reason') or 'Tower gate is closed', ''
+    if labels & {'ready', 'in-pr', 'in pr'}:
+        return 'ready', 'Waiting for Tower', ''
+    return None  # nothing asked Tower to fly it: not Tower work, so not on this board (#210 D4)
+
+
+def _row(db, task, now):
+    """The board row for one issue-backed task, or None when it is not on the board."""
+    target = (task['dedupe_key'] or '').removeprefix('github:')
+    repo, _, number = target.rpartition('#')
+    if not repo or not number.isdigit():
+        return None
+    attempt = db.execute("SELECT id,state,created_at FROM flights WHERE task_id=? "
+                         "ORDER BY created_at DESC LIMIT 1", (task['id'],)).fetchone()
+    issue = _payload(db, 'work.issue', task['id'])
+    labels = {str(x.get('name', '')).lower() for x in issue.get('labels', [])}
+    shown = _issue_state(attempt, labels, _payload(db, 'work.pending', task['id']),
+                         _payload(db, 'work.failure', task['id']), _payload(db, 'work.disposition', task['id']),
+                         _recovery_state(db, attempt), now)
+    if shown is None:
+        return None
+    state, detail, next_try = shown
+    return {'id': target, 'repo': repo, 'number': int(number),
+            'title': task['title'], 'url': f'https://github.com/{target.replace("#", "/issues/")}',
+            'state': state, 'detail': detail[:300], 'next': next_try,
+            'attempt': attempt['id'] if attempt else ''}
+
+
+def _board(issues, not_queued, limit=60):
+    """What needs a look comes first and is never cut; only quiet queue rows make room (#210 D4)."""
+    order = {'working': 0, 'held': 1, 'retrying': 2, 'waiting': 3, 'ready': 4, 'planned': 5}
+    issues.sort(key=lambda item: (order.get(item['state'], 9), item['repo'], item['number']))
+    urgent = [x for x in issues if order.get(x['state'], 9) <= order['retrying']]
+    shown = urgent + [x for x in issues if x not in urgent][:max(0, limit - len(urgent))]
+    return {'state': 'ok', 'detail': '', 'issues': shown,
+            'dropped': len(issues) - len(shown), 'not_queued': not_queued,
+            'working': sum(x['state'] == 'working' for x in issues),
+            'retrying': sum(x['state'] == 'retrying' for x in issues)}
 
 
 def read(path=None, now=None):
@@ -66,7 +108,7 @@ def read(path=None, now=None):
             db.row_factory = sqlite3.Row
             tasks = db.execute("SELECT id,dedupe_key,title,state,created_at FROM tasks "
                                "WHERE origin='github-work' ORDER BY created_at DESC").fetchall()
-            seen, issues = set(), []
+            seen, issues, not_queued = set(), [], 0
             for task in tasks:
                 key = task['dedupe_key'] or ''
                 if not key.startswith('github:') or key in seen:
@@ -74,30 +116,11 @@ def read(path=None, now=None):
                 seen.add(key)
                 if task['state'] == 'done':
                     continue
-                target = key.removeprefix('github:')
-                if '#' not in target:
-                    continue
-                repo, number = target.rsplit('#', 1)
-                if not number.isdigit():
-                    continue
-                attempt = db.execute("SELECT id,state,created_at FROM flights WHERE task_id=? "
-                                     "ORDER BY created_at DESC LIMIT 1", (task['id'],)).fetchone()
-                recovery = _recovery_state(db, attempt)
-                pending = _payload(db, 'work.pending', task['id'])
-                failure = _payload(db, 'work.failure', task['id'])
-                disposition = _payload(db, 'work.disposition', task['id'])
-                issue = _payload(db, 'work.issue', task['id'])
-                labels = {str(x.get('name', '')).lower() for x in issue.get('labels', [])}
-                state, detail, next_try = _issue_state(attempt, labels, pending, failure, disposition, recovery, now)
-                issues.append({'id': target, 'repo': repo, 'number': int(number),
-                               'title': task['title'], 'url': f'https://github.com/{target.replace("#", "/issues/")}',
-                               'state': state, 'detail': detail[:300], 'next': next_try,
-                               'attempt': attempt['id'] if attempt else ''})
-        order = {'working': 0, 'ready': 1, 'retrying': 2, 'held': 3, 'planned': 4}
-        issues.sort(key=lambda item: (order.get(item['state'], 9), item['repo'], item['number']))
-        return {'state': 'ok', 'detail': '', 'issues': issues[:60],
-                'dropped': max(0, len(issues) - 60),
-                'working': sum(x['state'] == 'working' for x in issues),
-                'retrying': sum(x['state'] == 'retrying' for x in issues)}
+                row = _row(db, task, now)
+                if row is None:
+                    not_queued += 1
+                else:
+                    issues.append(row)
+        return _board(issues, not_queued)
     except (OSError, sqlite3.Error) as exc:
         return {'state': 'unreadable', 'detail': f'Tower ledger: {type(exc).__name__}', 'issues': []}
