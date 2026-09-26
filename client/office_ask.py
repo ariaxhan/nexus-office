@@ -502,13 +502,18 @@ def _claude_answer(message, model, bridge):
         with connect() as db:
             _set(db, 'claude_session_id', session_id)
     args.append((bridge or '') + message)
-    proc = subprocess.run(args, cwd=OFFICE_DIR, env=claude_environment(),
-                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1800)
-    if proc.returncode:
-        raise RuntimeError((proc.stderr or proc.stdout)[-600:])
-    result = json.loads(proc.stdout)
-    if result.get('is_error'):
-        raise RuntimeError(str(result.get('result') or result.get('error'))[:600])
+    env = claude_environment()
+    try:
+        proc = subprocess.run(args, cwd=OFFICE_DIR, env=env,
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1800)
+        if proc.returncode:
+            raise RuntimeError((proc.stderr or proc.stdout)[-600:])
+        result = json.loads(proc.stdout)
+        if result.get('is_error'):
+            raise RuntimeError(str(result.get('result') or result.get('error'))[:600])
+    except (subprocess.SubprocessError, RuntimeError, ValueError) as exc:  # OSError: never launched
+        raise UnsafeReplay(f'Claude execution started and did not finish cleanly '
+                           f'({type(exc).__name__}: {str(exc)[:400]}); external effects are unknown.') from exc
     with connect() as db:
         _set(db, 'claude_session_id', result.get('session_id') or session_id)
     return result.get('result', '')
@@ -602,45 +607,73 @@ def _answer_turn(message, model, reply_id):
             return _recovered_answer(client, thread_id, user_id, message, user)
         marker = f'[Office request: {user["request_id"]}]\n' if user['request_id'] else ''
         prompt = marker + (bridge or '') + message
-        started = client.request('turn/start', {'threadId': thread_id,
-                                                'input': [{'type': 'text', 'text': prompt}], 'model': model}, 30)
-        _record_turn(user_id, started['turn']['id'])
-        deadline = time.monotonic() + 1800
-        while time.monotonic() < deadline:
+        try:
+            started = client.request('turn/start', {'threadId': thread_id,
+                                                    'input': [{'type': 'text', 'text': prompt}], 'model': model}, 30)
+        except Exception as exc:
+            # The request may have reached the provider. Only a durable thread without
+            # this turn proves nothing ran; anything else must not be run a second time.
             try:
-                item = client.receive(min(30, max(.1, deadline - time.monotonic())))
-            except TimeoutError:
-                # Notifications can be lost while the provider's durable turn has finished.
-                # Read the recorded turn before waiting again, so one finished answer
-                # cannot hold every later Ask message until the 30-minute timeout.
-                saved = _saved_turn(client, thread_id, user_id, message,
-                                    user['request_id'], started['turn']['id'])
-                if saved and saved.get('status') == 'completed':
-                    answer = _turn_answer(saved) or answer
-                    if answer:
-                        return answer
-                if saved and saved.get('status') in ('failed', 'interrupted', 'cancelled'):
-                    raise RuntimeError('Codex turn ' + saved['status'])
-                continue
-            if item.get('method') == 'item/completed':
-                output = item.get('params', {}).get('item', {})
-                if output.get('type') == 'agentMessage':
-                    answer = output.get('text', '')
-                    with connect() as db:
-                        db.execute("UPDATE messages SET text=? WHERE id=? AND status='working'", (answer, reply_id))
-            if item.get('method') == 'turn/completed':
-                turn = item.get('params', {}).get('turn', {})
-                if turn.get('status') != 'completed':
-                    raise RuntimeError(str(turn.get('error') or turn.get('status'))[:500])
-                if not answer:
-                    answer = next((x.get('text', '') for x in reversed(turn.get('items', []))
-                                   if x.get('type') == 'agentMessage'), '')
-                break
-        else:
-            raise TimeoutError('Ask turn exceeded 30 minutes')
-        if not answer:
-            raise RuntimeError('Codex completed without an answer')
-        return answer
+                created = _saved_turn(client, thread_id, user_id, message, user['request_id'], None)
+            except Exception:
+                created = True
+            if created:
+                raise UnsafeReplay(f'Codex turn start failed ({type(exc).__name__}: {exc}) and the turn may exist; '
+                                   'external effects are unknown.') from exc
+            raise
+        _record_turn(user_id, started['turn']['id'])
+        try:
+            return _started_answer(client, thread_id, user_id, message, user, started, reply_id)
+        except UnsafeReplay:
+            raise
+        except Exception as exc:
+            raise UnsafeReplay(f'Codex turn {started["turn"]["id"]} started and did not finish cleanly '
+                               f'({type(exc).__name__}: {exc}); external effects are unknown.') from exc
     finally:
         if client:
             client.close()
+
+
+def _saved_answer(saved, answer):
+    """The finished answer from a durable turn read, or '' while it is still running."""
+    if saved and saved.get('status') in ('failed', 'interrupted', 'cancelled'):
+        raise RuntimeError('Codex turn ' + saved['status'])
+    if saved and saved.get('status') == 'completed':
+        return _turn_answer(saved) or answer
+    return ''
+
+
+def _started_answer(client, thread_id, user_id, message, user, started, reply_id):
+    answer = ''
+    deadline = time.monotonic() + 1800
+    while time.monotonic() < deadline:
+        try:
+            item = client.receive(min(30, max(.1, deadline - time.monotonic())))
+        except TimeoutError:
+            # Notifications can be lost while the provider's durable turn has finished.
+            # Read the recorded turn before waiting again, so one finished answer
+            # cannot hold every later Ask message until the 30-minute timeout.
+            saved = _saved_answer(_saved_turn(client, thread_id, user_id, message,
+                                              user['request_id'], started['turn']['id']), answer)
+            if saved:
+                return saved
+            continue
+        if item.get('method') == 'item/completed':
+            output = item.get('params', {}).get('item', {})
+            if output.get('type') == 'agentMessage':
+                answer = output.get('text', '')
+                with connect() as db:
+                    db.execute("UPDATE messages SET text=? WHERE id=? AND status='working'", (answer, reply_id))
+        if item.get('method') == 'turn/completed':
+            turn = item.get('params', {}).get('turn', {})
+            if turn.get('status') != 'completed':
+                raise RuntimeError(str(turn.get('error') or turn.get('status'))[:500])
+            if not answer:
+                answer = next((x.get('text', '') for x in reversed(turn.get('items', []))
+                               if x.get('type') == 'agentMessage'), '')
+            break
+    else:
+        raise TimeoutError('Ask turn exceeded 30 minutes')
+    if not answer:
+        raise RuntimeError('Codex completed without an answer')
+    return answer

@@ -273,6 +273,106 @@ class AskQueueTest(unittest.TestCase):
         self.assertIn("was not replayed", answer["text"])
         self.assertEqual(fake.prompts, [])
 
+    def _run_drain(self, model, request_id, server):
+        available = {"items": [{"id": "gpt-6-sol"}, {"id": "claude:sonnet"}], "default": model}
+        claude_calls = []
+        def fake_claude(message, alias, bridge):
+            claude_calls.append(message)
+            return "second execution"
+        patches = [patch.object(ask, "models", return_value=available),
+                   patch.object(ask, "_claude_answer", side_effect=fake_claude),
+                   patch.object(ask, "AppServer", return_value=server)]
+        for item in patches:
+            item.start()
+        try:
+            receipt = ask.send({"request_id": request_id, "text": "Send the invoice", "model": model})
+            self._start_drain()
+            self._wait_for(lambda: not ask.read()["busy"])
+        finally:
+            for item in patches:
+                item.stop()
+        reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        return reply, claude_calls
+
+    def test_timed_out_codex_turn_fails_instead_of_running_on_other_model(self):
+        class HungServer:
+            starts = []
+            def request(self, method, params, timeout=20):
+                if method == "turn/start":
+                    self.starts.append(params)
+                    return {"turn": {"id": "turn-live"}}
+                if method == "thread/read":
+                    return {"thread": {"turns": [{"id": "turn-live", "status": "inProgress", "items": []}]}}
+                return {"thread": {"id": "thread-1"}}
+            def receive(self, timeout):
+                raise TimeoutError("no notification")
+            def close(self):
+                pass
+        server = HungServer()
+        clock = iter(range(0, 10 ** 7, 1000))
+        with patch.object(ask.time, "monotonic", side_effect=lambda: next(clock)):
+            reply, claude_calls = self._run_drain("gpt-6-sol", "timeout-codex-request-01", server=server)
+        self.assertEqual(claude_calls, [])
+        self.assertEqual(len(server.starts), 1)
+        self.assertEqual(reply["status"], "failed")
+        self.assertEqual(reply["model"], "gpt-6-sol")
+        self.assertIn("was not replayed", reply["text"])
+        self.assertIn("exceeded 30 minutes", reply["text"])
+
+    def test_timed_out_claude_run_fails_instead_of_running_on_other_model(self):
+        import subprocess
+        available = {"items": [{"id": "gpt-6-sol"}, {"id": "claude:sonnet"}], "default": "claude:sonnet"}
+        runs = []
+        def hung(*args, **kwargs):
+            runs.append(args)
+            raise subprocess.TimeoutExpired("claude", 1800)
+        with patch.object(ask, "models", return_value=available), \
+                patch.object(ask, "claude_binary", return_value="/bin/claude"), \
+                patch.object(ask, "claude_environment", return_value={}), \
+                patch.object(ask.subprocess, "run", side_effect=hung), \
+                patch.object(ask, "AppServer", side_effect=AssertionError("second execution on Codex")) as codex:
+            receipt = ask.send({"request_id": "timeout-claude-request-1", "text": "Send the invoice",
+                                "model": "claude:sonnet"})
+            self._start_drain()
+            self._wait_for(lambda: not ask.read()["busy"])
+        reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(len(runs), 1, reply["text"])
+        codex.assert_not_called()
+        self.assertEqual(reply["status"], "failed")
+        self.assertIn("was not replayed", reply["text"])
+
+    def test_codex_turn_that_never_started_still_falls_back(self):
+        class RefusingServer:
+            def request(self, method, params, timeout=20):
+                if method == "turn/start":
+                    raise RuntimeError("provider unavailable")
+                if method == "thread/read":
+                    return {"thread": {"turns": []}}
+                return {"thread": {"id": "thread-1"}}
+            def close(self):
+                pass
+        reply, claude_calls = self._run_drain("gpt-6-sol", "never-started-request-1", server=RefusingServer())
+        self.assertEqual(len(claude_calls), 1)
+        self.assertEqual(reply["status"], "completed")
+        self.assertEqual(reply["model"], "claude:sonnet")
+
+    def test_codex_start_error_with_turn_recorded_is_not_replayed(self):
+        class AmbiguousServer:
+            def request(self, method, params, timeout=20):
+                if method == "turn/start":
+                    raise TimeoutError("turn/start response lost")
+                if method == "thread/read":
+                    return {"thread": {"turns": [{"id": "turn-ghost", "status": "inProgress", "items": [
+                        {"type": "userMessage", "content": [{"type": "text",
+                         "text": "[Office request: ambiguous-start-request]\nSend the invoice"}]}]}]}}
+                return {"thread": {"id": "thread-1"}}
+            def close(self):
+                pass
+        reply, claude_calls = self._run_drain("gpt-6-sol", "ambiguous-start-request", server=AmbiguousServer())
+        self.assertEqual(claude_calls, [])
+        self.assertEqual(reply["status"], "failed")
+        self.assertIn("was not replayed", reply["text"])
+
     def test_request_retry_is_idempotent_and_conflicts_are_rejected(self):
         body = {"request_id": "retry-request-0001", "text": "Keep this", "model": "model-a"}
         with patch.object(ask, "_ensure_worker", create=True):

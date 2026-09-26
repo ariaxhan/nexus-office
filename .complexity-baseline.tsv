@@ -14,7 +14,7 @@ client/office-sync.py	236	receipts	19	33
 client/office-sync.py	813	_fetch_pr_tail	18	37
 client/office-sync.py	856	fetch_batch	20	35
 client/office-sync.py	1211	_verify_check_refusal	18	25
-client/office_ask.py	562	_answer_turn	28	76
+client/office_ask.py	573	_answer_turn	16	60
 client/office_feed.py	135	publish	25	41
 client/office_feed.py	179	listing	24	56
 client/office_feed_runner.py	63	source_rows	24	40
