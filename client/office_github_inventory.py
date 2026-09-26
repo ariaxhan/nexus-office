@@ -53,7 +53,10 @@ def graphql(query, variables, token):
     cmd = ['gh', 'api', 'graphql', '-f', 'query=' + query]
     for key, value in variables.items():
         cmd += ['-f', f'{key}={value}']
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=dict(os.environ, GH_TOKEN=token))
+    try:  # a timeout is one failed fetch like any other: its repos keep last-good, the refresh goes on
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=dict(os.environ, GH_TOKEN=token))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('GitHub timed out after 90s') from None
     try:
         body = json.loads(proc.stdout) if proc.stdout.strip() else {}
     except ValueError:
@@ -129,9 +132,13 @@ def org_listing(access):
     who, token = access.read_token_for(f'{TBS_ORG}/tbs')
     if not token:
         return None, 'no identity can read the TBS org'
-    proc = subprocess.run(['gh', 'api', '--paginate', f'orgs/{TBS_ORG}/repos?per_page=100',
-                           '--jq', '.[] | [.full_name, .archived] | @tsv'],
-                          capture_output=True, text=True, timeout=60, env=dict(os.environ, GH_TOKEN=token))
+    try:
+        proc = subprocess.run(['gh', 'api', '--paginate', f'orgs/{TBS_ORG}/repos?per_page=100',
+                               '--jq', '.[] | [.full_name, .archived] | @tsv'],
+                              capture_output=True, text=True, timeout=60, env=dict(os.environ, GH_TOKEN=token))
+    except subprocess.TimeoutExpired:
+        return None, 'org listing timed out after 60s'
+
     if proc.returncode:
         return None, (proc.stderr.strip() or 'org listing failed')[:200]
     rows = [line.split('\t') for line in proc.stdout.splitlines() if '\t' in line]

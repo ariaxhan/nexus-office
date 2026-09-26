@@ -49,6 +49,15 @@ class Sets(unittest.TestCase):
         self.assertFalse(group['complete'])
         self.assertIn('repo set unconfirmed, org listing failed: HTTP 502',group['denominator'])
 
+    def test_a_github_timeout_is_a_failed_fetch_not_an_aborted_refresh(self):
+        import subprocess
+        access=type('A',(),{'read_token_for':lambda self,repo:('me','t')})()
+        with patch.object(inventory.subprocess,'run',side_effect=subprocess.TimeoutExpired('gh',60)):
+            self.assertEqual((None,'org listing timed out after 60s'),inventory.org_listing(access))
+            fresh,errors=inventory.collect(access,['ariaxhan/app'])
+        self.assertEqual({},fresh)
+        self.assertIn('timed out',errors['ariaxhan/app'])
+
     def test_failed_org_listing_with_no_last_good_uses_registry_and_is_incomplete(self):
         spec=inventory.tbs_set(ROWS,None,'HTTP 502')
         self.assertEqual(spec['included'],['thinking-brain-school/tbs'])
