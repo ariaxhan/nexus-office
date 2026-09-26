@@ -6,9 +6,11 @@ import os
 import re
 import subprocess
 import time
+import urllib.parse
 
 from nexus.ledger import Ledger,loads
 import office_github as github
+import office_github_bump as bump
 import office_tasks
 import run_board
 
@@ -29,14 +31,21 @@ def text(body,key,required=False,limit=60000):
 
 def validate(body):
     action=body.get('action')
-    if action not in ('create','comment','review','labels','close','reopen','merge'):raise ValueError('Unknown GitHub action')
+    if action not in ('create','comment','review','labels','label_add','label_remove','edit','bump','close','reopen','merge'):raise ValueError('Unknown GitHub action')
     text(body,'body',required=action=='comment' or (action=='review' and body.get('event')!='APPROVE'))
     if action=='create':text(body,'title',required=True,limit=256)
     else:github.number(body.get('number'))
     if action in ('review','merge') and not re.fullmatch(r'[0-9a-f]{40,64}',body.get('head','')):raise ValueError('An exact reviewed head is required')
     if action=='review' and body.get('event') not in ('APPROVE','COMMENT','REQUEST_CHANGES'):raise ValueError('Invalid review action')
-    if action=='labels':validate_labels(body.get('labels'))
+    if action in ('labels','label_add','label_remove'):validate_labels(body.get('labels'))
+    if action=='edit':validate_edit(body)
+    if action=='bump':bump.validate(body)
     return action
+
+
+def validate_edit(body):
+    if 'title' not in body and 'body' not in body:raise ValueError('Edit needs a title or a body')
+    if 'title' in body:text(body,'title',required=True,limit=256)
 
 
 def validate_labels(labels):
@@ -84,8 +93,7 @@ def perform(action,body,who,token,sync):
     message=text(body,'body')+'\n\n<!-- office-request:'+body['request_id']+' -->'
     if action=='create':return request(endpoint,'POST',{'title':body['title'],'body':message},token)
     if action=='comment':return request(endpoint+'/'+num+'/comments','POST',{'body':message},token)
-    if action=='labels':return request(endpoint+'/'+num+'/labels','PUT',{'labels':body['labels']},token)
-    if action in ('close','reopen'):return request(endpoint+'/'+num,'PATCH',{'state':'closed' if action=='close' else 'open'},token)
+    if action in ISSUE_WRITES:return ISSUE_WRITES[action](repo,endpoint+'/'+num,body,token)
     if action=='merge':
         ok,result=sync.apply_merge(repo,who,token,{'pr':num,'head':body['head']},False)
         if not ok:
@@ -95,6 +103,35 @@ def perform(action,body,who,token,sync):
     current=request(f'repos/{repo}/pulls/{num}','GET',{},token)
     if current['head']['sha']!=body['head']:raise FileExistsError('PR head changed; reopen the current diff before reviewing')
     return request(f'repos/{repo}/pulls/{num}/reviews','POST',{'commit_id':body['head'],'event':body['event'],'body':message},token)
+
+
+ISSUE_WRITES={
+    'labels':lambda repo,issue,body,token:request(issue+'/labels','PUT',{'labels':body['labels']},token),
+    'label_add':lambda repo,issue,body,token:request(issue+'/labels','POST',{'labels':body['labels']},token),
+    'label_remove':lambda repo,issue,body,token:remove_labels(issue,body['labels'],token),
+    'edit':lambda repo,issue,body,token:request(issue,'PATCH',{key:body[key] for key in ('title','body') if key in body},token),
+    'bump':lambda repo,issue,body,token:perform_bump(repo,issue,body['priority'],token),
+    'close':lambda repo,issue,body,token:request(issue,'PATCH',{'state':'closed'},token),
+    'reopen':lambda repo,issue,body,token:request(issue,'PATCH',{'state':'open'},token),
+}
+
+
+def remove_labels(endpoint,labels,token):
+    """One DELETE per label, so a concurrent change to any other label survives. Absent is removed."""
+    for label in labels:
+        try:request(endpoint+'/labels/'+urllib.parse.quote(label,safe=''),'DELETE',{},token)
+        except RuntimeError as exc:
+            if 'HTTP 404' not in str(exc):raise
+    return request(endpoint,'GET',{},token)
+
+
+def perform_bump(repo,endpoint,priority,token):
+    current=request(endpoint,'GET',{},token)
+    verdict=bump.assess(repo,current,priority)
+    if not verdict['eligible']:raise PermissionError('Bump refused: '+verdict['reason'])
+    stale=[label['name'] for label in current.get('labels',[]) if label['name'].lower() in bump.PRIORITIES and label['name'].lower()!=priority]
+    request(endpoint+'/labels','POST',{'labels':['ready',priority]},token)
+    return remove_labels(endpoint,stale,token)
 
 
 def reconcile(world,known,body):
@@ -119,7 +156,7 @@ def reconcile(world,known,body):
 def observe_outcome(body,who,token,page):
     repo=body['repo'];num=body.get('number');action=body['action']
     base=f'repos/{repo}/issues'
-    if action in ('labels','close','reopen','merge'):
+    if action in ('labels','label_add','label_remove','edit','bump','close','reopen','merge'):
         endpoint=f'repos/{repo}/pulls/{num}' if action=='merge' else f'{base}/{num}'
         current=request(endpoint,'GET',{},token)
         return (current if desired_state(body,current) else None),None
@@ -133,8 +170,17 @@ def observe_outcome(body,who,token,page):
     return None,page+1 if len(rows)==100 else None
 
 
+LABEL_OUTCOMES={
+    'label_add':lambda body,names:all(label.lower() in names for label in body['labels']),
+    'label_remove':lambda body,names:not any(label.lower() in names for label in body['labels']),
+    'bump':lambda body,names:{'ready',body['priority']}<=names and not (names&set(bump.PRIORITIES))-{body['priority']},
+}
+
+
 def desired_state(body,current):
     action=body['action']
+    if action in LABEL_OUTCOMES:return LABEL_OUTCOMES[action](body,{label['name'].lower() for label in current.get('labels',[])})
     if action=='labels':return sorted(label['name'] for label in current.get('labels',[]))==sorted(body['labels'])
+    if action=='edit':return all(current.get(key)==body[key] for key in ('title','body') if key in body)
     if action=='merge':return bool(current.get('merged')) and current.get('head',{}).get('sha')==body['head']
     return current.get('state')==('closed' if action=='close' else 'open')

@@ -73,6 +73,7 @@ import webhook  # noqa: E402
 _spec = importlib.util.spec_from_file_location("office_sync", HERE / "office-sync.py")
 office_sync = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(office_sync)
+sys.modules.setdefault("office_sync", office_sync)  # one instance for modules that read its state
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 # How often the room rebuilds itself. Every build asks GitHub, and GitHub gives
@@ -174,7 +175,7 @@ PAGE = {"/": "office.html", "/index.html": "office.html", "/classic": "index.htm
         "/lessons": "lessons.html", "/lessons.html": "lessons.html",
         "/lessons.css": "lessons.css", "/lessons.js": "lessons.js",
         "/outlines": "outlines.html", "/outlines.html": "outlines.html", "/outlines.js": "outlines.js"}
-PAGE.update({name: name[1:] for name in ['/office.css', '/office-v2.css', '/office.js', '/office-bundle.js', '/office-ui.js', '/office-settings.js', '/office-media.js', '/office-files.js', '/office-markdown.js', '/office-tasks.js', '/office-coordinator.js', '/office-attachments.js', '/office-state.js', '/office-native.js', '/office-sw.js', '/office-register-sw.js', '/manifest.webmanifest', '/office-icon.svg', '/office-icon-192.png', '/office-icon-512.png']})
+PAGE.update({name: name[1:] for name in ['/office.css', '/office-v2.css', '/office.js', '/office-bundle.js', '/office-ui.js', '/office-settings.js', '/office-media.js', '/office-files.js', '/office-markdown.js', '/office-tasks.js', '/office-issues.js', '/office-coordinator.js', '/office-attachments.js', '/office-state.js', '/office-native.js', '/office-sw.js', '/office-register-sw.js', '/manifest.webmanifest', '/office-icon.svg', '/office-icon-192.png', '/office-icon-512.png']})
 
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".png": "image/png"}
