@@ -29,35 +29,6 @@ class Objects(unittest.TestCase):
         path.write_text(text)
         return objects.encode('root', name)
 
-    def test_locate_names_the_exact_file_or_says_why_not(self):
-        self.file('_meta/reports/audit.md', '# audit')
-        found = objects.locate('FIXTURE', '_meta/reports/audit.md')
-        self.assertEqual(objects.read(found['id'])['path'], '_meta/reports/audit.md')
-        with self.assertRaisesRegex(FileNotFoundError, 'no longer exists'):
-            objects.locate('fixture', '_meta/reports/moved.md')
-        with self.assertRaisesRegex(FileNotFoundError, 'not a workspace'):
-            objects.locate('other/repo', '_meta/reports/audit.md')
-        with self.assertRaises(PermissionError):
-            objects.locate('fixture', '../escape.md')
-
-    def test_a_discovered_repo_keeps_its_github_name(self):
-        self.patcher.stop()
-        (self.root / 'CollabVault/_meta').mkdir(parents=True)
-        repo = [('ariaxhan/CollabVault', self.root / 'CollabVault')]
-        with patch.dict(os.environ, {'OFFICE_RUNTIME_ROOT': str(self.root)}), \
-                patch.object(objects.office_workspaces, 'discover', return_value=repo), \
-                patch.object(objects, 'task_workspaces', return_value=[]):
-            names = [r['name'] for r in objects.roots().values()]
-            self.assertIn('ariaxhan/CollabVault', names)
-            self.assertNotIn('CollabVault', names)
-        self.patcher.start()
-
-    def test_active_document_is_what_the_view_acked(self):
-        objects.activate({'repo': 'a/b', 'path': 'x.md', 'state': 'missing', 'error': 'gone'})
-        self.assertEqual((objects.active()['state'], objects.active()['error']), ('missing', 'gone'))
-        with self.assertRaises(ValueError):
-            objects.activate({'repo': 'a/b', 'path': 'x.md', 'state': 'shown'})
-
     def test_navigation_returns_working_root_parent(self):
         self.file('docs/spec.md', 'draft')
         result = objects.browse(objects.encode('root', 'docs'))

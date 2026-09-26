@@ -50,8 +50,6 @@ def get(handler, path, query):
         '/api/objects': lambda: objects.browse(q.get('id', ''), q.get('cursor', 0)),
         '/api/objects/provenance': lambda: objects.provenance(q['id']),
         '/api/objects/detail': lambda: objects.read(q['id'], q.get('offset', 0)),
-        '/api/objects/locate': lambda: objects.locate(q.get('repo', ''), q.get('path', '')),
-        '/api/objects/active': objects.active,
         '/api/preferences': preferences.read,
         '/api/user-state': user_state.read,
         '/api/feed': lambda: feed.listing(q.get('category','all'),q.get('cursor',0)),
@@ -149,7 +147,7 @@ def post(handler, path):
     if path == '/api/coordinator/say':
         handler._json(coordinator_chat.say(handler._read_json(limit=64 * 1024)))
         return True
-    routes = {'/api/user-state': user_state.save, '/api/uploads': uploads.upload, '/api/objects/diff': objects.diff, '/api/system/command': system.command, '/api/objects/save': objects.save, '/api/objects/active': objects.activate, '/api/preferences': preferences.save,
+    routes = {'/api/user-state': user_state.save, '/api/uploads': uploads.upload, '/api/objects/diff': objects.diff, '/api/system/command': system.command, '/api/objects/save': objects.save, '/api/preferences': preferences.save,
               '/api/feed/react': feed.react, '/api/feed/reply': feed.reply,
               '/api/feed/follow': feed.follow,
               '/api/ask/send': ask.send, '/api/ask/rate': ask.rate,
