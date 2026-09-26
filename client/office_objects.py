@@ -38,6 +38,8 @@ def roots() -> dict:
         if not path.is_dir():
             continue
         key = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+        if key in output:  # a discovered repo keeps its GitHub identity
+            continue
         output[key] = {'id': key, 'name': name, 'path': str(path.resolve()),'label':name+' · '+os.path.relpath(path,base)}
     return output
 
@@ -92,6 +94,39 @@ def resolve(identifier: str, directory=False) -> tuple:
             raise PermissionError('Linked paths cannot be opened')
     candidate.resolve(strict=True).relative_to(base)
     return root, candidate
+
+
+def locate(repo: str, relative: str) -> dict:
+    """The object a `repo` + repo-relative `path` names, or an explicit reason it cannot be shown."""
+    matches = [r for r in roots().values() if r['name'].lower() == str(repo).lower()]
+    if not matches:
+        raise FileNotFoundError(f'{repo} is not a workspace this Office can read')
+    identifier = encode(matches[0]['id'], relative)
+    try:
+        _, path = resolve(identifier)
+    except FileNotFoundError:
+        raise FileNotFoundError(f'{relative} no longer exists in {repo}') from None
+    if not path.is_file():
+        raise ValueError(f'{relative} is not a file')
+    return {'id': identifier, 'project': matches[0]['name'], 'path': relative}
+
+
+ACTIVE = {}
+
+
+def activate(body: dict) -> dict:
+    """The document the web view is actually showing, so `vaults open` reports what happened, not what it asked."""
+    fields = {key: body.get(key) for key in ('repo', 'path', 'state', 'error')}
+    if not all(isinstance(fields[key], str) for key in ('repo', 'path', 'state')) or fields['state'] not in ('open', 'missing'):
+        raise ValueError('Active document needs repo, path and state open|missing')
+    with LOCK:
+        ACTIVE.clear(); ACTIVE.update(fields, at=__import__('time').time())
+        return dict(ACTIVE)
+
+
+def active() -> dict:
+    with LOCK:
+        return dict(ACTIVE)
 
 
 def entry(root: dict, path: Path) -> dict:
