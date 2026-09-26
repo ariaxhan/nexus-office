@@ -53,5 +53,31 @@ class TowerBoard(unittest.TestCase):
         self.assertIn('Outcome proof', issue['detail'])
 
 
+    def test_issue_nobody_queued_is_not_advertised_as_waiting_for_tower(self):
+        work.discover(self.led, self.entry)
+        self.issues[0]['labels'] = []  # e.g. a human-owned commission: no ready label, never flown
+        work.discover(self.led, self.entry)
+        board = tower_board.read(self.root / 'ledger.sqlite')
+        self.assertEqual([], board['issues'])
+        self.assertEqual(1, board['not_queued'])
+
+    def test_closed_gate_is_shown_as_waiting_with_its_reason(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        self.led.event('work.disposition', task['id'],
+                       {'state': 'backoff', 'reason': 'gate: blocked by open dependency #183'}, 'work')
+        [issue] = tower_board.read(self.root / 'ledger.sqlite')['issues']
+        self.assertEqual(('waiting', 'gate: blocked by open dependency #183'), (issue['state'], issue['detail']))
+
+    def test_held_rows_are_never_cut_behind_a_long_ready_queue(self):
+        self.issues[:] = [dict(number=n, title=f'n{n}', state='open', labels=[{'name': 'ready'}]) for n in range(1, 71)]
+        work.discover(self.led, self.entry)
+        fid = work.claim(self.led, self.entry['repo'], 70, os.getpid(), runner=True)
+        self.led.set_state(fid, 'resolving', expect='running', resolution_step='checkout_ownership_ambiguous')
+        board = tower_board.read(self.root / 'ledger.sqlite')
+        self.assertEqual(('held', 70), (board['issues'][0]['state'], board['issues'][0]['number']))
+        self.assertEqual(60, len(board['issues']))
+        self.assertEqual(10, board['dropped'])
+
 if __name__ == '__main__':
     unittest.main()
