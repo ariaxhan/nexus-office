@@ -236,7 +236,7 @@ def push_owned(repo, sha, branch):
     return None
 
 
-def hold(repo, record, paths, reason, comment=None):
+def hold(repo, record, paths, reason, comment=None, detail=None):
     """landing.hold with an idempotent, retried push. An unpushable hold is a wait, never a failure:
     the lease and the bytes stay, and recovery pushes them on a later tick."""
     head = landing._git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -246,9 +246,9 @@ def hold(repo, record, paths, reason, comment=None):
     if not pushed:
         raise lease.Owned(f"held_push_failed:{branch}")
     landing.restore(repo, paths, head)
-    url, why = landing.notify(comment, f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {pushed}.")
+    url, why = landing.notify(comment, landing._body(record, reason, branch, pushed, detail))
     return {"state": "HELD", "flight": record["flight"], "reason": reason, "sha": pushed, "branch": branch,
-            "comment_url": url, "comment_error": why, "paths": paths}
+            "comment_url": url, "comment_error": why, "paths": paths, **({"detail": detail} if detail else {})}
 
 
 def note(repo, number, record, paths, reason="needs paths outside write_set"):
@@ -304,9 +304,9 @@ def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, 
             why = catch_up(repo, record, branch)
             if why:
                 return dict(hold(repo, record, mine, why, comment), requeue="plan")
-            if entry.get("check") and run(entry["check"], cwd=repo, capture_output=True, text=True,
-                                          timeout=1800).returncode:
-                return hold(repo, record, mine, "check_failed", comment)
+            failed = entry.get("check") and landing.failed_check(entry["check"], repo, run)
+            if failed:
+                return hold(repo, record, mine, "check_failed", comment, failed)
             mode = forced or classify(entry.get("risk"), labels, mine, lines(repo, mine), entry.get("first_road", False))
             head = landing._git(repo, "rev-parse", "HEAD").stdout.strip()
             if mode != "direct":

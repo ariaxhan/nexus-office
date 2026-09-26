@@ -266,9 +266,9 @@ def _land(entry, issue, record, proc, road, forced, pr_create, comment, run):
     if proc.returncode:
         return (landing.hold(repo, record, paths, collisions, f"exit_{proc.returncode}", comment)
                 if paths else landing.nothing_landed(record, proc))
-    if paths and entry.get("check"):
-        if run(entry["check"], cwd=repo, capture_output=True, text=True, timeout=1800).returncode:
-            return landing.hold(repo, record, paths, collisions, "check_failed", comment)
+    failed = paths and entry.get("check") and landing.failed_check(entry["check"], repo, run)
+    if failed:
+        return landing.hold(repo, record, paths, collisions, "check_failed", comment, failed)
     lines = _lines(repo, paths)
     mode = forced or risk.classify(entry.get("risk"), labels, paths, lines, entry.get("first_road", False))
     message = f"{entry['repo'].split('/')[-1]}: #{issue['number']} {issue.get('title', '')}".strip()

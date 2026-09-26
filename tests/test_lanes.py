@@ -25,8 +25,8 @@ def git(cwd, *args):
 
 
 class Fake:
-    def __init__(self, returncode=0):
-        self.returncode, self.stdout, self.stderr = returncode, "", ""
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, ""
 
 
 class Lanes(unittest.TestCase):
@@ -106,6 +106,21 @@ class Lanes(unittest.TestCase):
         self.assertEqual(result["state"], "LANDED")
         self.assertEqual([argv[1] for argv in seen], ["run", "run-provider"])
         self.assertEqual("continued", self.origin_file("a.txt"))
+
+    def test_failed_check_hold_says_which_check_and_what_it_printed(self):
+        said = []
+        def run(argv, cwd=None, **kw):
+            if kw.get("timeout") == 1800:
+                return Fake(2, stdout="FAIL test_gate\n")
+            self.write("a.txt", "edit\n")
+            return Fake()
+        self.entry["check"] = ["npm", "test"]
+        issue = {"number": 1, "title": "fix", "labels": []}
+        result = executor.fly(self.entry, issue, "flt_check", pr_create=None, comment=lambda b: said.append(b) or "c",
+                              run=run, write_set=["a.txt"])
+        self.assertEqual(("HELD", "check_failed"), (result["state"], result["reason"]))
+        self.assertIn("`npm test` exited 2", said[0])
+        self.assertIn("FAIL test_gate", result["detail"])
 
     def test_both_provider_failures_requeue_retained_edits(self):
         def run(argv, cwd=None, **kw):

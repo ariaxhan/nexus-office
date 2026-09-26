@@ -181,7 +181,23 @@ def _record(state, record, **extra):
     return {"state": state, "flight": record["flight"], **extra}
 
 
-def hold(repo, record, paths, collisions, reason, comment=None):
+def failed_check(check, repo, run):
+    """None when the check passes, else what failed and the end of its output: a hold that says only
+    `check_failed` sends the next reader to rerun the check to learn what it said."""
+    proc = run(check, cwd=repo, capture_output=True, text=True, timeout=1800)
+    if not proc.returncode:
+        return None
+    name = check if isinstance(check, str) else " ".join(check)
+    tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-1500:]
+    return f"`{name}` exited {proc.returncode}" + (f"\n\n```\n{tail}\n```" if tail else "")
+
+
+def _body(record, reason, branch, sha, detail):
+    body = f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {sha}."
+    return f"{body}\n\n{detail}" if detail else body
+
+
+def hold(repo, record, paths, collisions, reason, comment=None, detail=None):
     """Push the flight's work to aria/held/<flight>, comment, restore non-collision paths.
 
     Collision paths were dirty before the flight: they may hold a person's bytes and are left."""
@@ -191,9 +207,9 @@ def hold(repo, record, paths, collisions, reason, comment=None):
     if not push_ref(repo, sha, branch):
         raise LandingError("held_push_failed", branch)
     restore(repo, [p for p in paths if p not in collisions], head)  # the push made the bytes durable
-    url, why = notify(comment, f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {sha}.")
+    url, why = notify(comment, _body(record, reason, branch, sha, detail))
     return _record("HELD", record, reason=reason, sha=sha, branch=branch, comment_url=url,
-                   comment_error=why, paths=paths)
+                   comment_error=why, paths=paths, **({"detail": detail} if detail else {}))
 
 
 def notify(comment, body):
