@@ -186,6 +186,16 @@ class Lanes(unittest.TestCase):
         self.assertEqual("live session\n", self.read("human.txt"))
         self.assertEqual("base\n", self.read("a.txt"))
 
+    def test_recovered_work_is_announced_on_the_dead_flights_own_issue(self):
+        """#210 W5: a later flight recovering a dead one comments where the dead flight's issue is."""
+        record = lanes.acquire(self.repo, "main", "flt_dead", os.getpid(), 600, ["a.txt"])
+        self.write("a.txt", "crashed lane\n")
+        with open(os.path.join(lanes._dir(self.repo), "flt_dead.json"), "w") as f:
+            json.dump(dict(record, pid=999999), f)
+        said = []
+        [result] = lanes.recover(self.repo, comment_for=lambda flight: lambda body: said.append(flight) or "u")
+        self.assertEqual(("HELD", ["flt_dead"]), (result["state"], said))
+
     def test_whole_repo_recovery_never_reverts_the_shared_checkout(self):
         record = lease.acquire(self.repo, "main", "flt_whole", os.getpid(), 600)
         self.write("human.txt", "another session\n")

@@ -96,6 +96,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report["produced"] += reaped["produced"]
     report["failed"] += reaped["failed"]
     report["vanished"] = _reconcile_vanished(ledger, now, root)
+    report["vanished"] += _resolve_ambiguous(ledger, now)
     report["orphan_leases"] = _reconcile_orphan_leases(ledger, now)
     report["failed"] += report["timed_out"] + report["vanished"]
     report["retried"] = _retry_exhausted(ledger, now)
@@ -258,14 +259,48 @@ def _reconcile_vanished_work(ledger, flight, now):
     if fl.alive(work.latest(ledger, "work.process", flight["id"]).get("pid")):
         return 0
     repo = _work_repo(ledger, flight, now)
-    if repo is None or not _recover_work_checkout(ledger, flight, repo, now):
+    if repo is None:
         return 0
-    if ledger.fail(flight["id"], "owner_exited", "work owner exited; outcome requires proof before retry",
-                   expect="running", now=now):
-        ledger.event("work.recovered", flight["id"],
-                     {"reason": "dead_owner_claim_released", "replay": False}, "tower", now)
-        return 1
-    return 0
+    held = _recover_work_checkout(ledger, flight, repo, now)
+    if held is None:
+        return 0
+    return _release_dead_owner(ledger, flight, held, "running", now)
+
+
+def _release_dead_owner(ledger, flight, held, expect, now):
+    detail = "work owner exited; outcome requires proof before retry"
+    if held:
+        detail += "; its checkout bytes are held on " + ", ".join(h["branch"] for h in held)
+    if not ledger.fail(flight["id"], "owner_exited", detail, expect=expect, now=now):
+        return 0
+    for h in held:  # the held branch is this flight's output, not free text in an error (#210 W6)
+        ledger.add_artifact(flight["id"], "held_branch", h["branch"], h.get("sha"), now=now)
+    ledger.event("work.recovered", flight["id"],
+                 {"reason": "dead_owner_claim_released", "replay": False, "held": held}, "tower", now)
+    return 1
+
+
+def _resolve_ambiguous(ledger, now):
+    """A dead owner's `resolving` flight gets the same recovery as a running one, every tick, until it exits.
+
+    Its bytes go to its own held branch, announced on its own issue. If its lease is already gone
+    nothing in the checkout can be attributed to it: the bytes stay put and the flight fails, so
+    the issue can be flown again instead of waiting on a person forever (#210 D3)."""
+    from . import work
+    resolved = 0
+    for flight in ledger.flights(states=("resolving",)):
+        if (flight["resolution_step"] != "checkout_ownership_ambiguous"
+                or ledger.plan(flight["plan_id"])["kind"] != "work"
+                or fl.alive(flight["pid"]) or fl.alive(work.latest(ledger, "work.process", flight["id"]).get("pid"))):
+            continue
+        try:
+            repo = _work_repo(ledger, flight, now)
+            held = None if repo is None else _recover_work_checkout(ledger, flight, repo, now)
+            if held is not None:
+                resolved += _release_dead_owner(ledger, flight, held, "resolving", now)
+        except (OSError, ValueError, KeyError, ld.LandingError) as exc:
+            ledger.event("work.recovery_error", flight["id"], {"error": str(exc)}, "tower", now)
+    return resolved
 
 
 def _discover(ledger, now):
@@ -303,34 +338,59 @@ def _work_repo(ledger, flight, now):
     return entry["path"] or ""
 
 
-def _ambiguous_work_checkout(ledger, flight, repo, changed, reason, now, moved=False):
-    ledger.event("work.recovery_ambiguous", flight["id"],
-                 {"repo": repo, "changed_paths": len(changed), "head_moved": moved,
-                  "reason": reason}, "tower", now)
-    ledger.set_state(flight["id"], "resolving", expect="running", now=now,
-                     resolution_step="checkout_ownership_ambiguous")
-    return False
+def _ambiguous_work_checkout(ledger, flight, repo, reason, now):
+    """The hold could not be pushed: the lease keeps the bytes and `_resolve_ambiguous` retries."""
+    if flight["state"] == "running":
+        ledger.event("work.recovery_ambiguous", flight["id"], {"repo": repo, "reason": reason}, "tower", now)
+        ledger.set_state(flight["id"], "resolving", expect="running", now=now,
+                         resolution_step="checkout_ownership_ambiguous")
+    return None
+
+
+def owning_issue_comment(ledger, flight):
+    """Comment on the issue this flight was flying, never on whichever issue flies next (#210 W5)."""
+    task = ledger.task(flight["task_id"]) if flight and flight["task_id"] else None
+    key = str(task["dedupe_key"] if task else "").removeprefix("github:")
+    if "#" not in key:
+        return None
+    repo, number = key.rsplit("#", 1)
+    return lambda body: subprocess.run(["gh", "issue", "comment", number, "-R", repo, "--body", body],
+                                       capture_output=True, text=True, timeout=60, check=True).stdout.strip()
 
 
 def _recover_work_checkout(ledger, flight, repo, now):
+    """[held results] once the dead flight no longer owns the checkout; None while it still must.
+
+    Bytes the flight provably wrote (clean at its baseline) go to its own held branch, announced on
+    its own issue; nothing is restored. Bytes already dirty at its baseline may be a person's: they
+    are never captured, only left in place and named, and ownership is released (#210 D3)."""
     from . import lease, lanes
-    if repo and os.path.isdir(repo):
+    held = []
+    if not (repo and os.path.isdir(repo)):
+        return held
+    comment = owning_issue_comment(ledger, flight)
+    try:
         record = lease.read(repo)
         if record and record.get("flight") == flight["id"]:
-            changed, _ = lease.flight_paths(repo, record)
+            changed, collisions = lease.flight_paths(repo, record)
+            mine = [p for p in changed if p not in collisions]
             moved = ld._git(repo, "rev-parse", "HEAD").stdout.strip() != record.get("head")
-            if changed or moved:
-                return _ambiguous_work_checkout(ledger, flight, repo, changed,
-                                                "checkout bytes cannot be attributed to dead flight", now, moved)
+            if mine or moved:
+                result = ld.hold(repo, record, mine, list(mine), "owner_exited", comment)
+                if not ld.terminal(repo, result):
+                    return _ambiguous_work_checkout(ledger, flight, repo, "held work not yet announced", now)
+                held.append(result)
+            if collisions:
+                ledger.event("work.recovery_preserved", flight["id"],
+                             {"repo": repo, "left_in_place": collisions,
+                              "reason": "dirty before the flight started; may be a person's"}, "tower", now)
             lease.release(repo, flight["id"])
-        lane = lanes.read(repo, flight["id"])
-        if lane:
-            mine, _ = lanes.flight_paths(repo, lane)
-            if mine:
-                return _ambiguous_work_checkout(ledger, flight, repo, mine,
-                                                "write-set bytes cannot be attributed to dead flight", now)
-            lanes.release(repo, flight["id"])
-    return True
+        held += [r for r in lanes.recover(repo, comment, flight=flight["id"]) if r["state"] == "HELD"]
+    except (ld.LandingError, lease.Owned) as exc:
+        return _ambiguous_work_checkout(ledger, flight, repo, f"held push failed: {exc}", now)
+    if lanes.read(repo, flight["id"]):
+        return _ambiguous_work_checkout(ledger, flight, repo, "write-set lease still owned", now)
+    return held
 
 
 def _reconcile_orphan_leases(ledger, now):

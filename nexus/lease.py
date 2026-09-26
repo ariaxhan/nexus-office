@@ -222,11 +222,14 @@ def flight_paths(repo, record):
     return changed, [p for p in changed if p in base]
 
 
-def recover(repo, comment=None):
-    """A stale lease is driven to HELD before any new flight: nothing stays local-only."""
+def recover(repo, comment=None, comment_for=None):
+    """A stale lease is driven to HELD before any new flight: nothing stays local-only.
+
+    comment_for(flight) names the dead flight's own issue; `comment` is only for callers that know it."""
     record = read(repo)
     if not record or not stale(record):
         return None
+    comment = comment_for(record["flight"]) if comment_for else comment
     held = landing.HELD_PREFIX + record["flight"]
     tip = landing.remote_tip(landing.target_key(repo, held))
     if tip:  # an earlier recovery already pushed this flight's work; re-holding can only fail non-fast-forward
