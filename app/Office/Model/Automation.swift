@@ -313,9 +313,73 @@ public struct TowerBoard: Decodable, Equatable {
     public var detail = ""
     public var working = 0
     public var retrying = 0
+    public var failed = 0
+    public var held = 0
+    public var queued = 0
     public var dropped = 0
+    public var activity = ""
+    public var oldestQueued = ""
+    public var tickAge = ""
+    public var tower = Liveness()
     public var issues: [Issue] = []
+    public var completions: [Completion] = []
+    public var runs: [Run] = []
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case state, detail, working, retrying, failed, held, queued, dropped, activity, tower, issues, completions, runs
+        case oldestQueued = "oldest_queued"
+        case tickAge = "tick_age"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = try c.decodeIfPresent(String.self, forKey: .state) ?? "missing"
+        detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        working = try c.decodeIfPresent(Int.self, forKey: .working) ?? 0
+        retrying = try c.decodeIfPresent(Int.self, forKey: .retrying) ?? 0
+        failed = try c.decodeIfPresent(Int.self, forKey: .failed) ?? 0
+        held = try c.decodeIfPresent(Int.self, forKey: .held) ?? 0
+        queued = try c.decodeIfPresent(Int.self, forKey: .queued) ?? 0
+        dropped = try c.decodeIfPresent(Int.self, forKey: .dropped) ?? 0
+        activity = try c.decodeIfPresent(String.self, forKey: .activity) ?? ""
+        oldestQueued = try c.decodeIfPresent(String.self, forKey: .oldestQueued) ?? ""
+        tickAge = try c.decodeIfPresent(String.self, forKey: .tickAge) ?? ""
+        tower = try c.decodeIfPresent(Liveness.self, forKey: .tower) ?? Liveness()
+        issues = try c.decodeIfPresent([Issue].self, forKey: .issues) ?? []
+        completions = try c.decodeIfPresent([Completion].self, forKey: .completions) ?? []
+        runs = try c.decodeIfPresent([Run].self, forKey: .runs) ?? []
+    }
+
+    public struct Liveness: Decodable, Equatable {
+        public var state = "unknown"
+        public var detail = ""
+    }
+
+    public struct Completion: Decodable, Equatable, Identifiable {
+        public var flight = ""
+        public var issue = ""
+        public var sha = ""
+        public var age = ""
+        public var id: String { flight }
+    }
+
+    public struct Run: Decodable, Equatable, Identifiable {
+        public var flight = ""
+        public var plan = ""
+        public var state = ""
+        public var age = ""
+        public var id: String { flight }
+
+        enum CodingKeys: String, CodingKey { case flight, plan, state, age }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            flight = try c.decodeIfPresent(String.self, forKey: .flight) ?? ""
+            plan = try c.decodeIfPresent(String.self, forKey: .plan) ?? ""
+            state = try c.decodeIfPresent(String.self, forKey: .state) ?? "running"
+            age = try c.decodeIfPresent(String.self, forKey: .age) ?? ""
+        }
+    }
 
     public struct Issue: Decodable, Equatable, Identifiable {
         public var id = ""
@@ -327,6 +391,25 @@ public struct TowerBoard: Decodable, Equatable {
         public var detail = ""
         public var next = ""
         public var attempt = ""
+        public var phase = ""
+        public var age = ""
+        public var progress = ""
+        public var obligation = ""
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            func text(_ key: CodingKeys) throws -> String { try c.decodeIfPresent(String.self, forKey: key) ?? "" }
+            id = try text(.id); repo = try text(.repo); title = try text(.title); url = try text(.url)
+            state = try text(.state); detail = try text(.detail); next = try text(.next)
+            attempt = try text(.attempt); phase = try text(.phase); age = try text(.age)
+            progress = try text(.progress)
+            obligation = try text(.obligation)
+            number = try c.decodeIfPresent(Int.self, forKey: .number) ?? 0
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, repo, number, title, url, state, detail, next, attempt, phase, age, progress, obligation
+        }
     }
 }
 

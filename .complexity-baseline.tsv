@@ -66,7 +66,6 @@ client/sources/prs.py	45	read	18	33
 client/sources/prs.py	89	card	24	40
 client/sources/webhook.py	163	read	27	57
 client/sources/webhook.py	263	card	23	46
-client/tower_board.py	58	read	17	46
 client/webhook.py	275	parse	37	32
 nexus/contract.py	31	parse	19	18
 nexus/executor.py	55	lesson_batch	17	15

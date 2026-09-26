@@ -47,11 +47,13 @@ def validate_lane(lane):
 def flight(identifier):
     validate_flight(identifier)
     with closing(connect()) as db:
-        row=db.execute('SELECT f.*,t.title,t.objective,p.name plan FROM flights f LEFT JOIN tasks t ON t.id=f.task_id JOIN plans p ON p.id=f.plan_id WHERE f.id=?',(identifier,)).fetchone()
+        row=db.execute('SELECT f.*,t.title,t.objective,t.dedupe_key source_task,p.name plan FROM flights f LEFT JOIN tasks t ON t.id=f.task_id JOIN plans p ON p.id=f.plan_id WHERE f.id=?',(identifier,)).fetchone()
         if row is None:
             raise FileNotFoundError('Flight is not in the ledger')
         data=dict(row)
         data['artifacts']=[dict(r) for r in db.execute('SELECT * FROM artifacts WHERE flight_id=? ORDER BY created_at',(identifier,))]
+        # Inspect: the durable trail behind the state Office shows, newest last; rediscovery rewrites are not trail.
+        data['evidence']=[dict(r,payload=json.loads(r['payload'])) for r in reversed(db.execute("SELECT id,ts,kind,source,payload FROM events WHERE subject IN (?,?) AND kind NOT IN ('work.issue','work.disposition','work.serviced') ORDER BY id DESC LIMIT 40",(identifier,data.get('task_id') or '')).fetchall())]
     return data
 
 
