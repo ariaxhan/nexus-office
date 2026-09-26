@@ -303,9 +303,10 @@ else:
 
     def test_closure_outage_retries_closure_only(self):
         with patch("nexus.work.close_issue", side_effect=work.WorkError("API unavailable")):
-            self.assertEqual("failed", self.run_work()[0]["state"])
-        self.assertEqual("done", self.led.tasks()[0]["state"])
-        self.assertEqual("done", self.run_work()[0]["state"])
+            self.assertEqual("pending", self.run_work()[0]["state"])
+        self.assertNotEqual("done", self.led.tasks()[0]["state"])  # never done while the issue is open
+        with patch("nexus.work.next_retry", return_value=0):
+            self.assertEqual("done", self.run_work()[0]["state"])
         self.assertEqual(1, len(self.calls()))
         self.assertEqual(1, len(self.closed))
 

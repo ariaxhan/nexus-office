@@ -19,7 +19,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 
 KEYS = ("depends_on", "write_set", "route", "check", "acceptance")
 ROUTES = {"claude": "code-judgment", "antigravity": "customer-copy-antigravity"}
@@ -83,13 +85,27 @@ def gate(issue, *, required=True, window_open=None, gh=_gh):
 
 
 def done_receipt(result, contract_, checkout, run=subprocess.run):
-    """(done, reason). Done needs a landed commit AND the contract CHECK passing on main (when one exists)."""
+    """(done, reason). Done needs a landed commit AND the contract CHECK passing at that exact sha.
+
+    The check runs in a throwaway detached worktree of the landed sha, never the canonical checkout,
+    which a PR merge does not move. A sha that cannot be checked out is not done."""
     if result.get("state") != "LANDED" or not result.get("sha"):
         return False, f"no landed commit ({result.get('state')}: {result.get('reason')})"
+    sha = result["sha"]
     check = (contract_ or {}).get("check")
     if not check:
-        return True, f"landed {result['sha'][:12]}; contract has no check"
-    proc = run(["bash", "-lc", check], cwd=checkout, capture_output=True, text=True, timeout=1800)
-    if proc.returncode:
-        return False, f"contract check failed on main: {check} (exit {proc.returncode})"
-    return True, f"landed {result['sha'][:12]}; check passed: {check}"
+        return True, f"landed {sha}; contract has no check"
+    tmp = tempfile.mkdtemp(prefix="nexus-receipt-")
+    tree = os.path.join(tmp, "tree")
+    git = lambda *a: run(["git", *a], cwd=checkout, capture_output=True, text=True, timeout=300)  # noqa: E731
+    try:
+        git("fetch", "--quiet", "origin", sha)
+        if git("worktree", "add", "--detach", tree, sha).returncode:
+            return False, f"cannot check out landed {sha} to verify"
+        proc = run(["bash", "-lc", check], cwd=tree, capture_output=True, text=True, timeout=1800)
+        if proc.returncode:
+            return False, f"contract check failed at {sha}: {check} (exit {proc.returncode})"
+        return True, f"landed {sha}; check passed at {sha}: {check}"
+    finally:
+        git("worktree", "remove", "--force", tree)
+        shutil.rmtree(tmp, ignore_errors=True)
