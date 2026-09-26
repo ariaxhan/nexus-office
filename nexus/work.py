@@ -1015,12 +1015,13 @@ def review_verdict(led, pr_url, head):
     return None
 
 
-MAX_REVIEW_REPAIRS = 2  # failed heads a PR may be rebuilt from before it waits for a person
+MAX_REVIEW_REPAIRS = 2  # rebuilds a PR gets from failed reviews before it waits for a person
 
 
-def failed_heads(led, pr_url):
-    return {p.get("head") for p in (loads(r[0], {}) for r in led.conn.execute(
-        "SELECT payload FROM events WHERE kind='work.review'")) if p.get("pr") == pr_url and p.get("verdict") == "FAIL"}
+def repairs_spent(led, pr_url):
+    """Rebuild attempts, not failed heads: a rebuild that changes nothing leaves the head, and must still count."""
+    return sum(loads(r[0], {}).get("pr") == pr_url
+               for r in led.conn.execute("SELECT payload FROM events WHERE kind='work.repair'"))
 
 
 def review_repair(led, repo, pr_url):
@@ -1029,7 +1030,7 @@ def review_repair(led, repo, pr_url):
                           capture_output=True, text=True, timeout=remaining(60))
     pr = loads(proc.stdout, {}) if proc.returncode == 0 else {}
     verdict = review_verdict(led, pr_url, pr.get("headRefOid"))
-    if not verdict or verdict.get("verdict") != "FAIL" or len(failed_heads(led, pr_url)) > MAX_REVIEW_REPAIRS:
+    if not verdict or verdict.get("verdict") != "FAIL" or repairs_spent(led, pr_url) >= MAX_REVIEW_REPAIRS:
         return None
     return {"branch": pr["headRefName"], "head": pr["headRefOid"], "reason": str(verdict.get("reason", ""))[:400]}
 
@@ -1084,7 +1085,7 @@ def tower_review(led, entry, task, pr_url):
                                 pr_url=pr_url, sha=pr["headRefOid"], branch=pr["headRefName"]))
         if verdict == "PASS":
             return _merge(led, fid, entry, task, issue, pr, pr_url, gh)
-        repairs = len(failed_heads(led, pr_url)) <= MAX_REVIEW_REPAIRS  # this FAIL is already recorded above
+        repairs = repairs_spent(led, pr_url) < MAX_REVIEW_REPAIRS
         note = "the next flight repairs it" if repairs else "repairs exhausted, waiting for a person"
         return _settle(led, fid, entry, task, issue,
                        dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: FAIL, {note}. {why}"),

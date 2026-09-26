@@ -165,9 +165,18 @@ class TowerYield(unittest.TestCase):
                 self.assertEqual([], held, head)  # a finding to fix, not a person to wake
                 repair = work.review_repair(self.led, self.entry["repo"], "https://pr/9")
                 self.assertEqual({"branch": "aria/issue-60", "head": head, "reason": "hides a failure"}, repair)
+                work.repair_brief(self.led, "flt_r", dict(repair, pr="https://pr/9"))  # the rebuild flies
             self.pr["headRefOid"] = "h3"
             work.tower_review(self.led, self.entry, self.task, "https://pr/9")
         self.assertIn("hold", held[0])
+        self.assertIsNone(work.review_repair(self.led, self.entry["repo"], "https://pr/9"))
+
+    def test_a_repair_that_changes_nothing_still_spends_its_attempt(self):
+        fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
+        self.led.event("work.review", fid, {"pr": "https://pr/9", "head": "h1", "verdict": "FAIL", "reason": "x"}, "work")
+        for _ in range(work.MAX_REVIEW_REPAIRS):  # each rebuild ends no_change: the head never moves
+            repair = work.review_repair(self.led, self.entry["repo"], "https://pr/9")
+            work.repair_brief(self.led, fid, dict(repair, pr="https://pr/9"))
         self.assertIsNone(work.review_repair(self.led, self.entry["repo"], "https://pr/9"))
 
     def test_repair_flight_rebuilds_with_the_review_finding(self):
