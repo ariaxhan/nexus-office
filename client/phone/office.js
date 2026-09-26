@@ -227,6 +227,7 @@ async function library(parent){
 }
 async function system(parent){
  intro(parent,'System','Behind the scenes.','Connection, schedules, and the complete run history.');
+ const towerBox=section(parent,'Tower');await guarded(towerBox,()=>towerWork(towerBox));
  const health=section(parent,'Your Mac');await guarded(health,async()=>{const data=await api('/api/health');health.append(card(data.ok?'Connected':'Needs attention',`Serving ${data.revision?.slice(0,10)} · snapshot ${data.snapshot_at}`));});
  await guarded(health,async()=>{const data=await api('/api/system/machine');health.append(card('Machine',data.uptime),card('Memory',data.memory),card('Storage',`${(data.disk.free/1073741824).toFixed(1)} GB free`));});
  const observed=section(parent,'Other Mac agent processes');await guarded(observed,async()=>{const data=await api('/api/live');observed.append(el('p','muted',`Observed ${data.as_of}. Process visibility does not prove account or conversation identity.`));for(const item of data.sessions)observed.append(card(`${item.engine} · PID ${item.pid}`,`${item.cwd} · observed only`,()=>{const body=sheet('Observed Mac process');body.append(el('p','',`PID ${item.pid} · started ${item.started}`),el('p','muted','Control and transcript association are unproven. Open an exact retained conversation in Work.'));}));});
@@ -236,8 +237,29 @@ async function system(parent){
  await officeSections(parent,['flows','cost','webhook','care-grader']);
  parent.append(button('Settings',settings));
 }
+async function towerWork(parent){
+ const t=(await world()).automation?.tower||{};if(t.state!=='ok'){parent.append(el('p','error',t.detail||'Tower state is unavailable'));return;}
+ towerPulse(parent,t);
+ for(const run of t.runs||[])parent.append(card(run.plan,`${run.state} for ${run.age}`,()=>flightDetail(run.flight)));
+ for(const issue of t.issues||[])parent.append(towerIssueCard(issue));
+ if(t.activity==='idle')parent.append(el('p','muted','Idle: no eligible Tower work.'));
+ towerVerified(section(parent,'Verified recently'),t.completions||[]);
+}
+function towerVerified(parent,items){
+ if(!items.length)parent.append(el('p','muted','No landed, verified Tower result on record.'));
+ for(const item of items)parent.append(card(item.issue||item.flight,`landed ${String(item.sha).slice(0,7)} · ${item.age} ago`,()=>flightDetail(item.flight)));
+}
+function towerPulse(parent,t){
+ const live=t.tower||{},tick=t.tick_age?` · last tick ${t.tick_age} ago`:'';parent.append(card(t.activity||'unknown',live.detail||`tower ${live.state}${tick}`));
+ const oldest=t.oldest_queued?` (oldest ${t.oldest_queued})`:'',failed=t.failed?` · ${t.failed} failed`:'';
+ parent.append(el('p','muted',`${t.working} working · ${t.queued} queued${oldest} · ${t.held} held · ${t.retrying} retrying${failed}`));
+}
+function towerIssueCard(issue){
+ const facts=[issue.state,issue.detail,issue.next,issue.phase&&`phase ${issue.phase}`,issue.age&&`for ${issue.age}`,issue.progress?`last progress ${issue.progress} ago`:'timing unavailable',issue.obligation&&`Next: ${issue.obligation}`];
+ return card(`${issue.id} · ${issue.title}`,facts.filter(Boolean).join(' · '),issue.attempt?()=>flightDetail(issue.attempt):undefined);
+}
 async function runs(parent,cursor=0){const data=await api(`/api/system/runs?cursor=${cursor}`);for(const item of data.items)parent.append(card(item.title||item.plan,`${item.state} · ${new Date(item.created_at*1000).toLocaleString()}`,()=>flightDetail(item.id)));if(data.next_cursor!==null)parent.append(button('Older runs',()=>runs(parent,data.next_cursor)));}
-async function flightDetail(id){rememberDetail('flight',id);const data=await api(`/api/system/flight?id=${id}`);const body=sheet(data.title||id);body.append(el('p','muted',`${data.state} · ${data.plan} · attempt ${data.attempt}`));body.append(markdownView(data.objective||''));for(const action of (['failed','cancelled'].includes(data.state)?['retry']:['running','queued'].includes(data.state)?['cancel']:[]))body.append(button(action,()=>systemCommand(action,id)));const log=section(body,'Log');await flightLogs(log,id);const events=section(body,'Events');await eventPage(events,id);const artifacts=section(body,'Artifacts');for(const item of data.artifacts)artifacts.append(card(item.kind,item.ref,()=>{const view=sheet(item.ref);view.append(link('Open or download artifact',`/api/system/artifact?id=${encodeURIComponent(item.id)}`));const frame=el('iframe','preview');frame.src=`/api/system/artifact?id=${encodeURIComponent(item.id)}`;frame.setAttribute('sandbox','allow-scripts');frame.title=item.ref;view.append(frame);}));}
+ async function flightDetail(id){rememberDetail('flight',id);const data=await api(`/api/system/flight?id=${id}`);const body=sheet(data.title||id);body.append(el('p','muted',`${data.state} · ${data.plan} · attempt ${data.attempt}`));if(data.source_task?.startsWith('github:')){const target=data.source_task.slice(7).replace('#','/issues/');body.append(link('Source issue',`https://github.com/${target}`));}body.append(markdownView(data.objective||''));for(const action of (['failed','cancelled'].includes(data.state)?['retry']:['running','queued'].includes(data.state)?['cancel']:[]))body.append(button(action,()=>systemCommand(action,id)));const proof=section(body,'Durable evidence');for(const item of data.evidence||[])proof.append(card(item.kind,new Date(item.ts*1000).toLocaleString(),()=>{const view=sheet(item.kind);view.append(el('pre','',JSON.stringify(item.payload,null,2)));}));const log=section(body,'Log');await flightLogs(log,id);const events=section(body,'Events');await eventPage(events,id);const artifacts=section(body,'Artifacts');for(const item of data.artifacts)artifacts.append(card(item.kind,item.ref,()=>{const view=sheet(item.ref);view.append(link('Open or download artifact',`/api/system/artifact?id=${encodeURIComponent(item.id)}`));const frame=el('iframe','preview');frame.src=`/api/system/artifact?id=${encodeURIComponent(item.id)}`;frame.setAttribute('sandbox','allow-scripts');frame.title=item.ref;view.append(frame);}));}
 async function flightLogs(parent,id){
  const lanes=await api(`/api/system/log-lanes?id=${id}`);const log=el('div');
  const picker=select([['','Main log'],...lanes.items.map(name=>[name,name])],'');picker.setAttribute('aria-label','Log source');

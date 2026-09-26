@@ -107,6 +107,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
 
     if is_paused(ledger):
         report["paused"] = True
+        _receipt(ledger, report, now)
         return report
 
     report["discovered"] = _discover(ledger, now)
@@ -114,7 +115,19 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     accepted, rejected = accept_tasks(ledger, now)
     report["accepted"], report["rejected"] = accepted, rejected
     report["launched"] = _launch(ledger, now, root)
+    _receipt(ledger, report, now)
     return report
+
+
+TICK_RECEIPT_EVERY_S = 60
+
+
+def _receipt(ledger, report, now):
+    """A clean tick writes one durable receipt a minute, so Office can tell idle from dead (#183)."""
+    last = ledger.last_event(("tower.tick",))
+    if last and now - last["ts"] < TICK_RECEIPT_EVERY_S:
+        return
+    ledger.event("tower.tick", None, {k: v for k, v in report.items() if v}, "tower", now)
 
 
 _last_heartbeat = [0.0]

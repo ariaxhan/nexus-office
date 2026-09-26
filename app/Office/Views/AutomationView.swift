@@ -62,54 +62,86 @@ struct AutomationView: View {
                     .foregroundStyle(Theme.text)
                 Spacer()
                 if tower.state == "ok" {
-                    Text("\(tower.working) working · \(tower.retrying) retrying")
-                        .officeFont(size: 11).foregroundStyle(Theme.dim)
+                    Text(towerCounts).officeFont(size: 11).foregroundStyle(Theme.dim)
                 }
             }
             if tower.state != "ok" {
                 notice(tower.detail.isEmpty ? "Tower state is unavailable" : tower.detail,
                        color: Theme.amber)
-            } else if tower.issues.isEmpty {
-                notice("Tower has no open captured issues.", color: Theme.green)
             } else {
-                ForEach(tower.issues) { issue in
-                    HStack(alignment: .top, spacing: 10) {
-                        Circle().fill(towerColor(issue.state)).frame(width: 7, height: 7)
-                            .padding(.top, 5)
-                        VStack(alignment: .leading, spacing: 4) {
-                            if let url = URL(string: issue.url) {
-                                Link("\(issue.repo)#\(issue.number) · \(issue.title)", destination: url)
-                                    .officeFont(size: 12, weight: .medium).foregroundStyle(Theme.text)
-                            } else {
-                                Text(issue.title).officeFont(size: 12, weight: .medium)
-                            }
-                            Text([issue.state, issue.detail, issue.next].filter { !$0.isEmpty }
-                                .joined(separator: " · "))
-                                .officeFont(size: 11).foregroundStyle(Theme.dim)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(11)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 9).fill(Theme.raised))
+                towerPulse
+                if tower.activity == "idle" {
+                    notice("Idle: no eligible Tower work.", color: Theme.green)
                 }
+                ForEach(tower.issues) { issue in TowerIssueRow(issue: issue, inspect: inspect(issue.attempt)) }
                 if tower.dropped > 0 {
                     Text("\(tower.dropped) more issues are in the Tower ledger")
                         .officeFont(size: 11).foregroundStyle(Theme.faint)
+                }
+                completions
+            }
+        }
+    }
+
+    private var towerCounts: String {
+        var parts = ["\(tower.working) working", "\(tower.queued) queued"]
+        if !tower.oldestQueued.isEmpty { parts[1] += " (oldest \(tower.oldestQueued))" }
+        parts += ["\(tower.held) held", "\(tower.retrying) retrying"]
+        if tower.failed > 0 { parts.append("\(tower.failed) failed") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// One word for the whole of Tower, then whether its own receipts say it is alive.
+    private var towerPulse: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle().fill(towerColor(tower.activity)).frame(width: 8, height: 8)
+                Text(tower.activity.isEmpty ? "unknown" : tower.activity)
+                    .officeFont(size: 13, weight: .semibold).foregroundStyle(Theme.text)
+                Text(pulseLine).officeFont(size: 11).foregroundStyle(Theme.dim)
+            }
+            ForEach(tower.runs) { run in
+                HStack(spacing: 6) {
+                    Text("\(run.plan) · \(run.state) for \(run.age)")
+                        .officeFont(size: 11).foregroundStyle(Theme.faint)
+                    if let url = inspect(run.flight) {
+                        Link("inspect", destination: url).officeFont(size: 11).foregroundStyle(Theme.blue)
+                    }
+                }
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.raised))
+    }
+
+    private var pulseLine: String {
+        let live = tower.tower
+        if !live.detail.isEmpty { return live.detail }
+        return tower.tickAge.isEmpty ? "tower \(live.state)" : "tower \(live.state) · last tick \(tower.tickAge) ago"
+    }
+
+    private var completions: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Verified recently").officeFont(size: 11, weight: .semibold).foregroundStyle(Theme.text)
+                .padding(.top, 6)
+            if tower.completions.isEmpty {
+                Text("No landed, verified Tower result on record.")
+                    .officeFont(size: 11).foregroundStyle(Theme.faint)
+            }
+            ForEach(tower.completions) { done in
+                HStack(spacing: 6) {
+                    Text("\(done.issue.isEmpty ? done.flight : done.issue) · landed \(String(done.sha.prefix(7))) · \(done.age) ago")
+                        .officeFont(size: 11).foregroundStyle(Theme.dim)
+                    if let url = inspect(done.flight) {
+                        Link("inspect", destination: url).officeFont(size: 11).foregroundStyle(Theme.blue)
+                    }
                 }
             }
         }
     }
 
-    private func towerColor(_ state: String) -> Color {
-        switch state {
-        case "working": Theme.blue
-        case "ready": Theme.green
-        case "retrying": Theme.amber
-        default: Theme.faint
-        }
-    }
+    private func inspect(_ flight: String) -> URL? { store.api.inspectURL(flight: flight) }
 
     private var automationHistory: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -144,6 +176,60 @@ struct AutomationView: View {
         Text(text).officeFont(size: 12.5).foregroundStyle(color).padding(13)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
+    }
+}
+
+private func towerColor(_ state: String) -> Color {
+    switch state {
+    case "working": Theme.blue
+    case "ready", "queued", "idle": Theme.green
+    case "retrying", "waiting", "paused", "held": Theme.amber
+    case "failed", "down", "erroring": Theme.red
+    default: Theme.faint
+    }
+}
+
+private struct TowerIssueRow: View {
+    let issue: TowerBoard.Issue
+    let inspect: URL?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle().fill(towerColor(issue.state)).frame(width: 7, height: 7).padding(.top, 5)
+            VStack(alignment: .leading, spacing: 4) {
+                if let url = URL(string: issue.url) {
+                    Link("\(issue.repo)#\(issue.number) · \(issue.title)", destination: url)
+                        .officeFont(size: 12, weight: .medium).foregroundStyle(Theme.text)
+                } else {
+                    Text(issue.title).officeFont(size: 12, weight: .medium)
+                }
+                Text([issue.state, issue.detail, issue.next].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .officeFont(size: 11).foregroundStyle(Theme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !issue.obligation.isEmpty {
+                    Text("Next: \(issue.obligation)").officeFont(size: 11).foregroundStyle(Theme.dim)
+                }
+                HStack(spacing: 8) {
+                    Text(timing).officeFont(size: 10.5).foregroundStyle(Theme.faint)
+                    if let inspect {
+                        Link("inspect \(issue.attempt)", destination: inspect)
+                            .officeFont(size: 10.5).foregroundStyle(Theme.blue)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.raised))
+    }
+
+    private var timing: String {
+        var parts: [String] = []
+        if !issue.phase.isEmpty { parts.append("phase \(issue.phase)") }
+        if !issue.age.isEmpty { parts.append("for \(issue.age)") }
+        parts.append(issue.progress.isEmpty ? "no attempt progress yet" : "last progress \(issue.progress) ago")
+        return parts.joined(separator: " · ")
     }
 }
 
