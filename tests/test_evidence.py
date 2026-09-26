@@ -3,6 +3,7 @@
 import os
 import subprocess
 import unittest
+import unittest.mock
 
 from nexus import evidence, work
 from tests import test_work
@@ -48,6 +49,12 @@ class EvidencePacket(unittest.TestCase):
         def down(argv, **k):
             raise OSError("no agentdb")
         self.assertEqual("recall unavailable: OSError", evidence.scars("dead owner", None, run=down)[1])
+
+    def test_a_hit_that_shares_only_generic_words_is_left_out(self):
+        run = lambda argv, **k: subprocess.CompletedProcess(argv, 0, "weak\t2\nstrong\t4\n", "")  # noqa: E731
+        with unittest.mock.patch.object(evidence, "_insight", side_effect=lambda dbs, lid: ("gotcha", lid)):
+            found, _ = evidence.scars("office selection copy paste", None, run=run)
+        self.assertEqual(["agentdb:strong"], [s["id"] for s in found])
 
     def test_nothing_known_adds_nothing(self):
         recorded, text = evidence.packet(self.led, self.task, {"title": ""}, None, run=self.recall([]))

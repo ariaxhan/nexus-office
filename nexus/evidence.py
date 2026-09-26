@@ -51,6 +51,9 @@ def _insight(dbs, lid):
     return None
 
 
+MIN_SCORE = 3  # 2026-09-26: every score-2 hit on #183/#190/#191 shared only "make"/"office"; empty beats noise
+
+
 def scars(query, repo, limit=3, run=subprocess.run):
     """([{id, type, insight}], error|None) from `agentdb recall --scores`: ids only, no hit_count bump."""
     terms = _terms(query)
@@ -62,7 +65,8 @@ def scars(query, repo, limit=3, run=subprocess.run):
                    capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError) as exc:
         return [], f"recall unavailable: {type(exc).__name__}"
-    ids = [line.split("\t")[0] for line in proc.stdout.splitlines() if "\t" in line]
+    rows = [line.split("\t") for line in proc.stdout.splitlines() if "\t" in line]
+    ids = [row[0] for row in rows if _score(row[1]) >= MIN_SCORE]
     dbs = [os.path.join(repo, "_meta", "agentdb", "agent.db"), GLOBAL_DB]
     out = []
     for lid in ids:
@@ -75,6 +79,13 @@ def scars(query, repo, limit=3, run=subprocess.run):
         if len(out) == limit:
             break
     return out, (None if proc.returncode == 0 else f"recall exit {proc.returncode}")
+
+
+def _score(text):
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
 
 
 def packet(led, task, issue, repo, moment="start", run=subprocess.run, flight=None):
