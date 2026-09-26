@@ -150,7 +150,7 @@ class TowerYield(unittest.TestCase):
         cached = [e for e in self.led.events(kind="work.review") if json.loads(e["payload"])["cached"]]
         self.assertEqual(1, len(cached))
 
-    def test_failed_review_is_repaired_twice_then_waits_for_a_person(self):
+    def test_failed_review_is_repaired_to_its_bound_then_waits_for_a_person(self):
         patch("nexus.tower.land_write_flight").start()
         patch("nexus.work._sensitive_hold", return_value=None).start()
         self.open_pr = "https://pr/9\n"
@@ -159,14 +159,15 @@ class TowerYield(unittest.TestCase):
         patch("nexus.work.subprocess.run", side_effect=lambda argv, **kw: (
             held.append(argv) if argv[:3] == ["gh", "issue", "edit"] else None) or run(argv, **kw)).start()
         with patch("nexus.executor.review", return_value=("FAIL", "hides a failure")):
-            for head in ("h1", "h2"):
+            heads = [f"h{n}" for n in range(1, work.MAX_REVIEW_REPAIRS + 1)]
+            for head in heads:
                 self.pr["headRefOid"] = head
                 work.tower_review(self.led, self.entry, self.task, "https://pr/9")
                 self.assertEqual([], held, head)  # a finding to fix, not a person to wake
                 repair = work.review_repair(self.led, self.entry["repo"], "https://pr/9")
                 self.assertEqual({"branch": "aria/issue-60", "head": head, "reason": "hides a failure"}, repair)
                 work.repair_brief(self.led, "flt_r", dict(repair, pr="https://pr/9"))  # the rebuild flies
-            self.pr["headRefOid"] = "h3"
+            self.pr["headRefOid"] = "last"
             work.tower_review(self.led, self.entry, self.task, "https://pr/9")
         self.assertIn("hold", held[0])
         self.assertIsNone(work.review_repair(self.led, self.entry["repo"], "https://pr/9"))

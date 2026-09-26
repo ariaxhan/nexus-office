@@ -1015,7 +1015,7 @@ def review_verdict(led, pr_url, head):
     return None
 
 
-MAX_REVIEW_REPAIRS = 2  # rebuilds a PR gets from failed reviews before it waits for a person
+MAX_REVIEW_REPAIRS = 4  # #192 converged on its 4th review, one new smaller finding each; the no-change bound keeps it finite
 
 
 def repairs_spent(led, pr_url):
