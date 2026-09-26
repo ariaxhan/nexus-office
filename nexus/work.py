@@ -1297,9 +1297,11 @@ def _run_task(led, entry, task):
             return "done"
         current = issue_now(led, entry, task)
         state = eligibility(current)
-        reconcile = state == "closed" and _lane.get() != TOWER_LABEL and any(
-            latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"]))
-        if state not in ("ready", "resume") and not reconcile:
+        if state == "closed":
+            step = closed_step(led, entry, task, current)
+            if step:
+                return step
+        elif state not in ("ready", "resume"):
             return state
         if conveyor_backoff(led, task["dedupe_key"].removeprefix("github:")) > time.time():
             return "backoff"
@@ -1329,6 +1331,43 @@ def tower_step(led, entry, task, current):
     if waiting.get("pr_url") and (waiting.get("reason") == "in_review" or waiting.get("requeue") == "merge"):
         return tower_review(led, entry, task, waiting["pr_url"])
     return tower_execute(led, entry, task)
+
+
+REPROVE_ATTEMPTS = 3
+
+
+def closed_step(led, entry, task, issue):
+    """Tower proves a closed issue's merged change; the legacy lane reconciles one it executed. None: reconcile."""
+    if _lane.get() == TOWER_LABEL:
+        return reprove(led, entry, task, issue)
+    return None if any(latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"])) else "closed"
+
+
+def last_landed(led, task):
+    """(flight, LANDED result) the ledger recorded for this task, newest first, or (None, None)."""
+    for row in sorted(led.flights(task_id=task["id"]), key=lambda f: f["created_at"], reverse=True):
+        result = latest(led, "flight.terminal", row["id"])
+        if result and result.get("state") == "LANDED" and result.get("sha"):
+            return row["id"], result
+    return None, None
+
+
+def reprove(led, entry, task, issue):
+    """A closed issue whose merged change failed its receipt for a reason outside the change (a check that could
+    not run): prove it again, a bounded number of times, so merged work is neither unproven forever nor re-flown."""
+    fid, result = last_landed(led, task)
+    tries = len(led.events(kind="work.reprove", subject=task["id"]))
+    if not fid or latest(led, "work.receipt", task["id"]) or tries >= REPROVE_ATTEMPTS or next_retry(led, task) > time.time():
+        return "closed"
+    from . import contract
+    done, why = contract.done_receipt(result, tower_gate(entry, issue)[0], entry["path"],
+                                      review=review_verdict(led, result.get("pr_url"), result.get("reviewed_head")))
+    led.event("work.reprove", task["id"], {"flight": fid, "sha": result["sha"], "done": done, "why": why}, "work")
+    if not done:
+        led.event("work.pending", task["id"], {"reason": f"not_done: {why}"[:300], "next_retry": time.time() + 3600}, "work")
+        return "pending"
+    led.event("work.receipt", task["id"], {"flight": fid, "sha": result["sha"], "receipt": why}, "work")
+    return close_received(led, entry, task, issue, latest(led, "work.receipt", task["id"]))
 
 
 def close_received(led, entry, task, issue, receipt):
