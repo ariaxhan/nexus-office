@@ -290,11 +290,10 @@ def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, 
     mine, strays = flight_paths(repo, record)
     if strays:  # refused at commit; never committed, never reverted: they may be a person's bytes
         note(entry["repo"], issue["number"], record, strays)
-        held = hold(repo, record, mine, "out_of_write_set", comment) if mine else {
-            "state": "CLOSED", "flight": record["flight"], "reason": "no_change"}
+        held = hold(repo, record, mine, "out_of_write_set", comment) if mine else landing.nothing_landed(record, proc)
         return dict(held, requeue="plan", strays=strays[:20])
     if not mine:
-        return {"state": "CLOSED", "flight": record["flight"], "reason": "no_change"}
+        return landing.nothing_landed(record, proc)
     if proc.returncode:
         return hold(repo, record, mine, f"exit_{proc.returncode}", comment)
     labels = [l["name"] for l in issue.get("labels", [])]

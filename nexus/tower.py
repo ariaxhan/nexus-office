@@ -215,7 +215,7 @@ def land_write_flight(ledger, flight_id, repo, result, now=None):
     """A write flight is finished only with a proven terminal state; local-only work raises."""
     ld.require_terminal(repo, result)
     ledger.event("flight.terminal", flight_id, result, "tower", now)
-    if result["state"] != "HELD":
+    if result["state"] == "LANDED" and result.get("sha"):  # proven on origin by require_terminal
         for state in ("produced", "verified"):
             ledger.set_state(flight_id, state, source="tower", now=now)
     return result

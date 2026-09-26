@@ -342,8 +342,18 @@ def finish(led, fid, payload, result):
         led.set_state(fid, state, source="work")
     landing = led.create_landing(fid, payload["idempotency_key"], state="verified")
     led.apply_landing(landing, json.dumps(result["evidence"], sort_keys=True))
-    led.set_task_state(row["task_id"], "done", decided_by="work proof")
-    close_issue(led, payload)
+    return close_then_done(led, fid, payload, "work proof", result["evidence"])
+
+
+def close_then_done(led, fid, payload, decided_by, evidence):
+    """Done only once the source issue is closed. A blocked or failed close waits; it never raises."""
+    try:
+        close_issue(led, payload)
+    except (WorkError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        return pending(led, fid, {"reason": f"close_pending: {exc}"[:300], "retry_at": time.time() + WAIT_S,
+                                  "evidence": evidence})
+    led.set_task_state(payload["task"], "done", decided_by=decided_by)
+    return "done"
 
 
 def close_issue(led, payload):
@@ -484,8 +494,7 @@ def execute(led, entry, task):
             return state
         result = proof(entry, payload, log)
         if result["state"] == "delivered":
-            finish(led, fid, payload, result)
-            return "done"
+            return finish(led, fid, payload, result)
         if state not in ("ready", "resume"):
             led.set_state(fid, "cancelled", expect="running", source="work")
             return state
@@ -514,8 +523,7 @@ def execute(led, entry, task):
             return pending(led, fid, result)
         if result["state"] != "delivered":
             raise WorkError("requested outcome not proven")
-        finish(led, fid, payload, result)
-        return "done"
+        return finish(led, fid, payload, result)
     except (OSError, ValueError, KeyError, TypeError, LedgerError, subprocess.SubprocessError) as exc:
         fail(led, fid, exc)
         return "failed"
@@ -541,7 +549,10 @@ def selection_queue(led, entry):
         if newest[0] != task["id"]:
             continue
         if task["state"] == "done" and latest(led, "work.closed", task["id"]):
-            continue
+            if not reopened_after_close(led, task):
+                continue
+            task = led.conn.execute("SELECT * FROM tasks WHERE id=?",
+                                    (reopen(led, task["id"], "reopened after close"),)).fetchone()
         issue = latest(led, "work.issue", task["id"])
         state = eligibility(issue)
         if state in ("ready", "resume") or needs_reconciliation(led, task, state):
@@ -553,6 +564,15 @@ def selection_queue(led, entry):
         disposition(led, task, state, reason)
         report.append(dict(repo=name, task=task["id"], state=state))
     return sorted(queue, key=lambda task: selection_priority(led, task)), report
+
+
+def reopened_after_close(led, task):
+    """GitHub reopened the issue after Nexus closed it: the newest capture is open and actionable."""
+    newest = lambda kind: led.conn.execute("SELECT MAX(id) FROM events WHERE kind=? AND subject=?",  # noqa: E731
+                                           (kind, task["id"])).fetchone()[0] or 0
+    issue = latest(led, "work.issue", task["id"])
+    return (newest("work.issue") > newest("work.closed") and issue.get("state") == "open"
+            and eligibility(issue) in ("ready", "resume"))
 
 
 def selection_priority(led, task):
@@ -897,6 +917,8 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                                  verification_id=verification_id, scope="tower terminal and done receipt",
                                  exact_head=result.get("sha"), proof_kind="work.receipt")
     tower.land_write_flight(led, fid, entry["path"], result)
+    if result["state"] == "FAILED":  # the executor crashed: a failure, never a no-change close
+        raise WorkError(f"executor failed: {result.get('reason')}")
     if result["state"] == "HELD":
         lifecycle_observe.for_flight(led, fid, "lifecycle.verification_finished",
                                      verification_id=verification_id, result="inconclusive",
@@ -927,8 +949,9 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                                  verification_id=verification_id, result="passed",
                                  exact_head=result["sha"], proof_ref=proof_ref,
                                  evidence_ref=proof_ref)
-    led.set_task_state(led.flight(fid)["task_id"], "done", decided_by="tower receipt: " + why)
-    close_issue(led, {"repo": repo, "task": task["id"], "issue": issue})
+    if close_then_done(led, fid, {"repo": repo, "task": task["id"], "issue": issue},
+                       "tower receipt: " + why, [proof_ref] if proof_ref else []) != "done":
+        return "pending"
     if not led.set_state(fid, "landing", expect="verified", source="work"):
         raise WorkError(f"delivered flight {fid} lost its verified state")
     led.set_state(fid, "landed", expect="landing", source="work")
@@ -1191,22 +1214,40 @@ def _run_task(led, entry, task):
         if next_retry(led, task) > time.time():
             return "backoff"
         if _lane.get() == TOWER_LABEL:
-            why = tower_gate(entry, current)[1]
-            from . import lifecycle_observe
-            lifecycle_observe.gate_state(led, task, current, why)
-            if why:
-                led.event("work.pending", task["id"], {"reason": f"gate: {why}", "next_retry": time.time() + 1800}, "work")
-                return "blocked"
-            waiting = latest(led, "work.pending", task["id"])
-            if waiting.get("reason") == "in_review" and waiting.get("pr_url"):
-                return tower_review(led, entry, task, waiting["pr_url"])
-            return tower_execute(led, entry, task)
+            return tower_step(led, entry, task, current)
         return execute(led, entry, task)
     except Owned:
         return "owned"
     except (OSError, ValueError, KeyError, TypeError, LedgerError, sqlite3.Error, subprocess.SubprocessError) as exc:
         led.event("work.item_failed", task["id"], {"error": str(exc)}, "work")
         return "failed"
+
+
+def tower_step(led, entry, task, current):
+    receipt = latest(led, "work.receipt", task["id"])
+    if receipt:  # proven done, only the close was left: never re-fly landed work
+        return close_received(led, entry, task, current, receipt)
+    why = tower_gate(entry, current)[1]
+    from . import lifecycle_observe
+    lifecycle_observe.gate_state(led, task, current, why)
+    if why:
+        led.event("work.pending", task["id"], {"reason": f"gate: {why}", "next_retry": time.time() + 1800}, "work")
+        return "blocked"
+    waiting = latest(led, "work.pending", task["id"])
+    if waiting.get("reason") == "in_review" and waiting.get("pr_url"):
+        return tower_review(led, entry, task, waiting["pr_url"])
+    return tower_execute(led, entry, task)
+
+
+def close_received(led, entry, task, issue, receipt):
+    try:
+        close_issue(led, {"repo": entry["repo"], "task": task["id"], "issue": issue})
+    except WorkError as exc:
+        led.event("work.pending", task["id"], {"reason": f"close_pending: {exc}"[:300],
+                                               "next_retry": time.time() + WAIT_S}, "work")
+        return "pending"
+    led.set_task_state(task["id"], "done", decided_by="tower receipt: " + str(receipt.get("receipt")))
+    return "done"
 
 
 def workspace_available(entry):

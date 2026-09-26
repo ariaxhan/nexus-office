@@ -263,7 +263,7 @@ def _land(entry, issue, record, proc, road, forced, pr_create, comment, run):
         return landing.hold(repo, record, paths, collisions, "local_commit", comment)
     if proc.returncode:
         return (landing.hold(repo, record, paths, collisions, f"exit_{proc.returncode}", comment)
-                if paths else {"state": "CLOSED", "flight": record["flight"], "reason": "no_change"})
+                if paths else landing.nothing_landed(record, proc))
     if paths and entry.get("check"):
         if run(entry["check"], cwd=repo, capture_output=True, text=True, timeout=1800).returncode:
             return landing.hold(repo, record, paths, collisions, "check_failed", comment)

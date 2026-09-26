@@ -242,6 +242,13 @@ def review(repo, record, message, issue, pr_create, comment=None, reason="in_rev
     return _record("HELD", record, reason=reason, sha=sha, branch=branch, pr_url=url, comment_error=why, paths=paths)
 
 
+def nothing_landed(record, proc):
+    """No paths changed: a clean exit is no_change; a crash is a failure, never a no-change close."""
+    if proc.returncode:
+        return _record("FAILED", record, reason=f"exit_{proc.returncode}")
+    return _record("CLOSED", record, reason="no_change")
+
+
 def _flight_paths(repo, record):
     from . import lease
     return lease.flight_paths(repo, record)
@@ -266,7 +273,12 @@ def terminal(repo, result):
                     and bool(result.get("comment_url") or result.get("pr_url")))
     except LandingError:
         return False
-    return False
+    return crashed(result)
+
+
+def crashed(result):
+    """A proven executor crash: nonzero exit, nothing committed."""
+    return result.get("state") == "FAILED" and not result.get("sha") and str(result.get("reason", "")).startswith("exit_")
 
 
 def require_terminal(repo, result):
