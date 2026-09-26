@@ -10,6 +10,13 @@ class SystemReceipts(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.ledger=Ledger(str(Path(self.tmp.name)/'ledger.sqlite'));self.addCleanup(self.ledger.close)
 
+    def test_inspect_returns_the_flight_evidence_trail(self):
+        plan=self.ledger.add_plan('fixture');fid=self.ledger.create_flight(plan)
+        self.ledger.event('work.progress',fid,{'step':'edit'},'tower')
+        with patch.object(system.run_board,'LEDGER',Path(self.tmp.name)/'ledger.sqlite'):
+            data=system.flight(fid)
+        self.assertEqual(('work.progress','tower',{'step':'edit'}),tuple(data['evidence'][-1][k] for k in ('kind','source','payload')))
+
     def test_rejected_command_is_not_permanently_ambiguous(self):
         first=system.apply_command(self.ledger,'run','missing-plan','request-12345678')
         self.assertEqual(first['result']['state'],'rejected')

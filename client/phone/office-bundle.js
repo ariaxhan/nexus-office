@@ -2220,6 +2220,8 @@ async function library(parent) {
 }
 async function system(parent) {
   intro(parent, "System", "Behind the scenes.", "Connection, schedules, and the complete run history.");
+  const towerBox = section(parent, "Tower");
+  await guarded(towerBox, () => towerWork(towerBox));
   const health = section(parent, "Your Mac");
   await guarded(health, async () => {
     const data = await api("/api/health");
@@ -2260,6 +2262,32 @@ async function system(parent) {
   await officeSections(parent, ["flows", "cost", "webhook", "care-grader"]);
   parent.append(button("Settings", settings));
 }
+async function towerWork(parent) {
+  const t = (await world()).automation?.tower || {};
+  if (t.state !== "ok") {
+    parent.append(el("p", "error", t.detail || "Tower state is unavailable"));
+    return;
+  }
+  towerPulse(parent, t);
+  for (const run of t.runs || []) parent.append(card(run.plan, `${run.state} for ${run.age}`, () => flightDetail(run.flight)));
+  for (const issue of t.issues || []) parent.append(towerIssueCard(issue));
+  if (t.activity === "idle") parent.append(el("p", "muted", "Idle: no eligible Tower work."));
+  towerVerified(section(parent, "Verified recently"), t.completions || []);
+}
+function towerVerified(parent, items) {
+  if (!items.length) parent.append(el("p", "muted", "No landed, verified Tower result on record."));
+  for (const item of items) parent.append(card(item.issue || item.flight, `landed ${String(item.sha).slice(0, 7)} \xB7 ${item.age} ago`, () => flightDetail(item.flight)));
+}
+function towerPulse(parent, t) {
+  const live = t.tower || {}, tick = t.tick_age ? ` \xB7 last tick ${t.tick_age} ago` : "";
+  parent.append(card(t.activity || "unknown", live.detail || `tower ${live.state}${tick}`));
+  const oldest = t.oldest_queued ? ` (oldest ${t.oldest_queued})` : "", failed = t.failed ? ` \xB7 ${t.failed} failed` : "";
+  parent.append(el("p", "muted", `${t.working} working \xB7 ${t.queued} queued${oldest} \xB7 ${t.held} held \xB7 ${t.retrying} retrying${failed}`));
+}
+function towerIssueCard(issue) {
+  const facts = [issue.state, issue.detail, issue.next, issue.phase && `phase ${issue.phase}`, issue.age && `for ${issue.age}`, issue.progress ? `last progress ${issue.progress} ago` : "timing unavailable", issue.obligation && `Next: ${issue.obligation}`];
+  return card(`${issue.id} \xB7 ${issue.title}`, facts.filter(Boolean).join(" \xB7 "), issue.attempt ? () => flightDetail(issue.attempt) : void 0);
+}
 async function runs(parent, cursor = 0) {
   const data = await api(`/api/system/runs?cursor=${cursor}`);
   for (const item of data.items) parent.append(card(item.title || item.plan, `${item.state} \xB7 ${new Date(item.created_at * 1e3).toLocaleString()}`, () => flightDetail(item.id)));
@@ -2270,8 +2298,17 @@ async function flightDetail(id) {
   const data = await api(`/api/system/flight?id=${id}`);
   const body = sheet(data.title || id);
   body.append(el("p", "muted", `${data.state} \xB7 ${data.plan} \xB7 attempt ${data.attempt}`));
+  if (data.source_task?.startsWith("github:")) {
+    const target = data.source_task.slice(7).replace("#", "/issues/");
+    body.append(link("Source issue", `https://github.com/${target}`));
+  }
   body.append(markdownView(data.objective || ""));
   for (const action of ["failed", "cancelled"].includes(data.state) ? ["retry"] : ["running", "queued"].includes(data.state) ? ["cancel"] : []) body.append(button(action, () => systemCommand(action, id)));
+  const proof = section(body, "Durable evidence");
+  for (const item of data.evidence || []) proof.append(card(item.kind, new Date(item.ts * 1e3).toLocaleString(), () => {
+    const view = sheet(item.kind);
+    view.append(el("pre", "", JSON.stringify(item.payload, null, 2)));
+  }));
   const log = section(body, "Log");
   await flightLogs(log, id);
   const events = section(body, "Events");
