@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from nexus import work
+from nexus import terminal
 from tests import test_work  # fixture only
 
 PR = "https://github.com/sample/product/pull/9"
@@ -45,7 +46,7 @@ class GithubReconcile(unittest.TestCase):
         def landing(ledger, fid, repo, result):
             self.terminals.append(result)
             if result["state"] == "LANDED":
-                ledger.set_state(fid, "produced"), ledger.set_state(fid, "verified")
+                ledger.set_state(fid, "produced"), ledger.set_state(fid, "verified", evidence=terminal.landed(result, result["sha"]))
         patch("nexus.tower.land_write_flight", side_effect=landing).start()
         work.discover(self.led, self.entry)
         self.task = self.led.tasks()[0]

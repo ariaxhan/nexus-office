@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nexus import flights as fl  # noqa: E402
 from nexus import tower  # noqa: E402
+from nexus import terminal  # noqa: E402
 from nexus.ledger import Ledger  # noqa: E402
 
 
@@ -311,7 +312,7 @@ class Reconciliation(TowerCase):
         plan = self.plan()
         flight = self.led.create_flight(plan)
         for state in ("running", "produced", "verified"):
-            self.led.set_state(flight, state)
+            self.led.set_state(flight, state, evidence=terminal.outputs({"ok": True}))
         landing = self.led.create_landing(flight, "repo#main", state="verified")
         self.led.start_applying(landing, "sha1")
         self.tick()

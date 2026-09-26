@@ -16,6 +16,7 @@ import sys
 import time
 
 from . import flights
+from . import terminal
 from .ledger import Ledger, LedgerError, TERMINAL, default_path, loads, new_id
 
 
@@ -338,8 +339,8 @@ def finish(led, fid, payload, result):
     led.event("work.proof", fid, result, "work")
     item_attempt(led, fid, "succeeded", evidence=result["evidence"])
     row = led.flight(fid)
-    for state in ("produced", "verified"):
-        led.set_state(fid, state, source="work")
+    led.set_state(fid, "produced", source="work")
+    led.set_state(fid, "verified", source="work", evidence=terminal.delivered(result))
     landing = led.create_landing(fid, payload["idempotency_key"], state="verified")
     led.apply_landing(landing, json.dumps(result["evidence"], sort_keys=True))
     return close_then_done(led, fid, payload, "work proof", result["evidence"])
@@ -348,11 +349,12 @@ def finish(led, fid, payload, result):
 def close_then_done(led, fid, payload, decided_by, evidence):
     """Done only once the source issue is closed. A blocked or failed close waits; it never raises."""
     try:
-        close_issue(led, payload)
+        source = close_issue(led, payload)
     except (WorkError, OSError, ValueError, subprocess.SubprocessError) as exc:
         return pending(led, fid, {"reason": f"close_pending: {exc}"[:300], "retry_at": time.time() + WAIT_S,
                                   "evidence": evidence})
-    led.set_task_state(payload["task"], "done", decided_by=decided_by)
+    led.set_task_state(payload["task"], "done", decided_by=decided_by,
+                       evidence=terminal.closed(decided_by, source))
     return "done"
 
 
@@ -360,7 +362,7 @@ def close_issue(led, payload):
     issue = issue_now(led, {"repo": payload["repo"]}, {"id": payload["task"]})
     if issue["state"] == "closed":
         led.event("work.closed", payload["task"], {"repo": payload["repo"]}, "work")
-        return
+        return "closed"
     if eligibility(issue) not in ("ready", "resume"):
         raise WorkError("issue closure held by current eligibility")
     proc = subprocess.run(["gh", "api", "--method", "PATCH",
@@ -371,6 +373,7 @@ def close_issue(led, payload):
     if json.loads(proc.stdout).get("state") != "closed":
         raise WorkError("issue closure not confirmed")
     led.event("work.closed", payload["task"], {"repo": payload["repo"]}, "work")
+    return "closed"
 
 
 def item_attempt(led, fid, status, retry_at=0, evidence=None):
@@ -954,7 +957,7 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
         return "pending"
     if not led.set_state(fid, "landing", expect="verified", source="work"):
         raise WorkError(f"delivered flight {fid} lost its verified state")
-    led.set_state(fid, "landed", expect="landing", source="work")
+    led.set_state(fid, "landed", expect="landing", source="work", evidence=terminal.landed(result, why))
     lifecycle_observe.for_flight(led, fid, "lifecycle.attempt_finished", outcome="landed", finished_at=time.time())
     lifecycle_observe.for_flight(led, fid, "lifecycle.verified", verification_id=verification_id,
                                  verified_at=time.time(), exact_head=result["sha"], proof_ref=proof_ref,
@@ -1262,12 +1265,13 @@ def tower_step(led, entry, task, current):
 
 def close_received(led, entry, task, issue, receipt):
     try:
-        close_issue(led, {"repo": entry["repo"], "task": task["id"], "issue": issue})
+        source = close_issue(led, {"repo": entry["repo"], "task": task["id"], "issue": issue})
     except WorkError as exc:
         led.event("work.pending", task["id"], {"reason": f"close_pending: {exc}"[:300],
                                                "next_retry": time.time() + WAIT_S}, "work")
         return "pending"
-    led.set_task_state(task["id"], "done", decided_by="tower receipt: " + str(receipt.get("receipt")))
+    decided_by = "tower receipt: " + str(receipt.get("receipt"))
+    led.set_task_state(task["id"], "done", decided_by=decided_by, evidence=terminal.closed(decided_by, source))
     return "done"
 
 

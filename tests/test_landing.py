@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nexus import flights as fl  # noqa: E402
 from nexus import landing as ld  # noqa: E402
 from nexus import tower  # noqa: E402
+from nexus import terminal  # noqa: E402
 from nexus.ledger import Ledger  # noqa: E402
 
 
@@ -145,7 +146,7 @@ class LandingCase(unittest.TestCase):
     def test_crash_after_applying_before_push_is_reconciled_by_pushing_again(self):
         # freeze the flight at `applying` as if tower died between the two writes
         flight = self.produced_by_hand()
-        self.led.set_state(flight["id"], "verified", expect="produced")
+        self.led.set_state(flight["id"], "verified", expect="produced", evidence=terminal.outputs({"ok": True}))
         hangar = ld.hangar_path(flight["workspace"])
         sha, _ = ld.commit_outputs(hangar, ["brief.md"], "m")
         landing = self.led.create_landing(flight["id"], ld.target_key(self.human, "main"),
@@ -159,7 +160,7 @@ class LandingCase(unittest.TestCase):
 
     def test_crash_after_push_before_applied_is_reconciled_from_the_remote_tip(self):
         flight = self.produced_by_hand()
-        self.led.set_state(flight["id"], "verified", expect="produced")
+        self.led.set_state(flight["id"], "verified", expect="produced", evidence=terminal.outputs({"ok": True}))
         hangar = ld.hangar_path(flight["workspace"])
         sha, _ = ld.commit_outputs(hangar, ["brief.md"], "m")
         landing = self.led.create_landing(flight["id"], ld.target_key(self.human, "main"),
@@ -173,7 +174,7 @@ class LandingCase(unittest.TestCase):
 
     def test_applying_with_no_hangar_and_no_push_is_refused_not_guessed(self):
         flight = self.produced_by_hand()
-        self.led.set_state(flight["id"], "verified", expect="produced")
+        self.led.set_state(flight["id"], "verified", expect="produced", evidence=terminal.outputs({"ok": True}))
         landing = self.led.create_landing(flight["id"], ld.target_key(self.human, "main"),
                                           expected_sha="0" * 40, state="verified")
         self.led.start_applying(landing, "0" * 40)

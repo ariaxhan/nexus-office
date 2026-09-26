@@ -21,6 +21,8 @@ import sqlite3
 import time
 import uuid
 
+from . import terminal
+
 SCHEMA_VERSION = 3
 
 TERMINAL = ("landed", "failed", "cancelled")
@@ -544,10 +546,11 @@ class Ledger:
         return self.conn.execute(sql, args).fetchall()
 
     def set_task_state(self, task_id, to_state, decided_by=None, expect=None,
-                       reason=None, now=None):
+                       reason=None, now=None, evidence=None):
         now = now if now is not None else time.time()
         if to_state not in TASK_STATES:
             raise LedgerError(f"unknown task state: {to_state}")
+        terminal.require("task", to_state, evidence)
         with self.tx():
             row = self.conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if row is None:
@@ -629,7 +632,8 @@ class Ledger:
             sql += f" LIMIT {int(limit)}"
         return self.conn.execute(sql, args).fetchall()
 
-    def set_state(self, flight_id, to_state, expect=None, now=None, source="tower", **fields):
+    def set_state(self, flight_id, to_state, expect=None, now=None, source="tower", evidence=None,
+                  **fields):
         """Move a flight. Returns False when someone else moved it first.
 
         `expect` makes the move a compare-and-set, which is the whole reason two
@@ -653,6 +657,7 @@ class Ledger:
                 return False
             if to_state not in TRANSITIONS[frm]:
                 raise LedgerError(f"illegal transition {frm} -> {to_state} ({flight_id})")
+            terminal.require("flight", to_state, evidence)
             sets, args = ["state=?"], [to_state]
             for key, value in fields.items():
                 sets.append(f"{key}=?")
@@ -774,6 +779,7 @@ class Ledger:
         what makes retrying a landing safe.
         """
         now = now if now is not None else time.time()
+        terminal.require("flight", "landed", terminal.applied(applied_sha))
         with self.tx():
             row = self.conn.execute("SELECT * FROM landings WHERE id=?",
                                     (landing_id,)).fetchone()

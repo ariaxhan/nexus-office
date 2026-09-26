@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from nexus import contract, executor, landing, lanes, tower, work
+from nexus import terminal
 from tests import test_work  # fixture only
 
 
@@ -72,7 +73,8 @@ class ReopenedAfterClose(TowerFixture):
     """A2: a person reopening a closed issue must bring it back, not be skipped forever."""
 
     def close(self):
-        self.led.set_task_state(self.task["id"], "done", decided_by="tower receipt")
+        self.led.set_task_state(self.task["id"], "done", decided_by="tower receipt",
+                                evidence=terminal.closed("tower receipt", "closed"))
         self.led.event("work.receipt", self.task["id"], {"sha": "abc"}, "work")
         self.led.event("work.closed", self.task["id"], {"repo": self.entry["repo"]}, "work")
 
@@ -97,7 +99,7 @@ class CloseBeforeDone(TowerFixture):
         fid = work.claim(self.led, self.entry["repo"], 1, os.getpid(), runner=True)
 
         def landed(ledger, flight_id, repo, result):
-            ledger.set_state(flight_id, "produced"), ledger.set_state(flight_id, "verified")
+            ledger.set_state(flight_id, "produced"), ledger.set_state(flight_id, "verified", evidence=terminal.landed(result, result["sha"]))
         patch("nexus.tower.land_write_flight", side_effect=landed).start()
         self.issues[0]["labels"] = [{"name": "hold"}]  # a person parked it mid-flight
         state = work._settle(self.led, fid, self.entry, self.task, self.issues[0],

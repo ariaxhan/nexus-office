@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from nexus.ledger import Ledger
 from nexus import work
+from nexus.terminal import landed as landed_evidence
 from nexus.lifecycle_timing import project, read_events
 
 
@@ -63,11 +64,11 @@ def test_tower_observations_join_source_flight_proof_and_office_api(tmp_path, mo
 
     def terminal(ledger, flight_id, repo, result):
         ledger.set_state(flight_id, "produced", source="fixture")
-        ledger.set_state(flight_id, "verified", source="fixture")
+        ledger.set_state(flight_id, "verified", source="fixture", evidence=landed_evidence(result, result["sha"]))
 
     monkeypatch.setattr(tower, "land_write_flight", terminal)
-    monkeypatch.setattr(contract, "done_receipt", lambda result, contract_, repo: (True, "fixture proof"))
-    monkeypatch.setattr(work, "close_issue", lambda ledger, payload: None)
+    monkeypatch.setattr(contract, "done_receipt", lambda result, contract_, repo: (True, "fixture proof " + result["sha"]))
+    monkeypatch.setattr(work, "close_issue", lambda ledger, payload: "closed")
     result = {"state": "LANDED", "sha": "a" * 40, "flight": fid}
     assert work._settle(led, fid, {"repo": "sample/app", "path": str(tmp_path)},
                         {"id": tid}, ISSUE, result) == "done"
