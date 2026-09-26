@@ -846,7 +846,7 @@ def cut_idle(led, entries, now=None):
 
 def tower_execute(led, entry, task):
     """Tower v2: lease the canonical checkout, run, land in place, prove a terminal state."""
-    from . import executor
+    from . import executor, tower
     entry = dict(entry, path=entry.get("canonical_path") or entry["path"])
     deadline = _deadline.get()
     if deadline is not None and deadline - time.monotonic() < MIN_FLIGHT_S:
@@ -894,6 +894,7 @@ def tower_execute(led, entry, task):
             pr_create=pr_create,
             comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body,
                                     timeout=notify_timeout()),
+            comment_for=lambda flight: tower.owning_issue_comment(led, led.flight(flight)),
             write_set=write_set, per_repo=per_repo)
         led.event("work.lane", fid, {"repo": repo, "issue": number, "write_set": write_set, "state": result["state"],
                                      "sha": result.get("sha"), "ended": time.time()}, "work")
@@ -940,11 +941,7 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
         lifecycle_observe.for_flight(led, fid, "lifecycle.verification_finished",
                                      verification_id=verification_id, result="failed",
                                      exact_head=result.get("sha"), proof_ref=None)
-        url = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body",
-                              f"Nexus flight {fid}: not done. {why}. Left open for the next attempt."],
-                             capture_output=True, text=True, timeout=remaining(60)).stdout.strip()
-        return pending(led, fid, {"reason": f"not_done: {why}", "retry_at": time.time() + 3600,
-                                  "evidence": [url] if url else []})
+        return _not_done(led, fid, repo, number, why)
     led.event("work.receipt", task["id"], {"flight": fid, "sha": result["sha"], "receipt": why}, "work")
     receipt_id = lifecycle_observe.latest_receipt_id(led, task["id"])
     proof_ref = f"nexus:event:{receipt_id}" if receipt_id else None
@@ -963,6 +960,19 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                                  verified_at=time.time(), exact_head=result["sha"], proof_ref=proof_ref,
                                  result_kind="tower receipt", evidence_ref=proof_ref)
     return "done"
+
+
+def _not_done(led, fid, repo, number, why):
+    from . import contract
+    url = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body",
+                          f"Nexus flight {fid}: not done. {why}. Left open for the next attempt."],
+                         capture_output=True, text=True, timeout=remaining(60)).stdout.strip()
+    held = why.startswith(contract.UNVERIFIED)
+    if held:  # the commit is on origin; another flight would only find no change
+        subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
+                        "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
+    return pending(led, fid, {"reason": f"not_done: {why}", "retry_at": time.time() + 3600,
+                              "hold": why if held else None, "evidence": [url] if url else []})
 
 
 def _sensitive_hold(entry, pr):
@@ -1050,7 +1060,8 @@ def _merge(led, fid, entry, task, issue, pr, pr_url, gh):
     oid = ((now or {}).get("mergeCommit") or {}).get("oid")
     if now and now.get("state") == "MERGED" and oid:
         return _settle(led, fid, entry, task, issue,
-                       {"state": "LANDED", "flight": fid, "sha": oid, "branch": pr["baseRefName"]},
+                       {"state": "LANDED", "flight": fid, "sha": oid, "branch": pr["baseRefName"],
+                        "review": f"{fid} PASS at {pr['headRefOid']}"},
                        tower_gate(entry, issue)[0])
     known = bool(now and now.get("state"))
     why = ("merge failed: " + (merged.stderr or "").strip()[:200] if known
