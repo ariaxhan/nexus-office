@@ -902,7 +902,7 @@ class Handler(BaseHTTPRequestHandler):
         document, it is bytes, and json.loads on it is the first thing an
         attacker gets to choose.
 
-        Commit the dispatch obligation before 200, then run the slow pipeline
+        Commit the handoff obligation before 200, then hand it to Tower
         asynchronously. GitHub retries a failed commit without a duplicate run.
         """
         n = int(self.headers.get("content-length") or 0)
@@ -1063,7 +1063,6 @@ def make_server(world: World, port: int = 8790):
     """
     mailbox = webhook.Mailbox(webhook.STATE)
     trigger = webhook.Trigger(mailbox,
-                              root=os.environ.get("OFFICE_RUNTIME_ROOT") or None,
                               refresh=world.refresh_desk,
                               receipts=office_sync.RECEIPTS)
     handler = type("BoundHandler", (Handler,),

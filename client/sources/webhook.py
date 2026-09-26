@@ -260,6 +260,9 @@ def _bad_signature_run(state_dir: pathlib.Path) -> int:
         return 0
 
 
+RUN_OUTCOME = {0: "handed to Tower"}
+
+
 def card(data: dict, now: float | None = None) -> dict:
     """One line: is anything arriving, and how long ago was the last one."""
     state = data.get("state")
@@ -295,9 +298,9 @@ def card(data: dict, now: float | None = None) -> dict:
     if run_age is None:
         run_row = _card.fact("last run", "none yet", "dim")
     elif rc is None:
-        run_row = _card.fact("last run", f"{_card.human(run_age)} ago, no checkout to run", "warn")
+        run_row = _card.fact("last run", f"{_card.human(run_age)} ago, no outcome recorded", "warn")
     else:
-        run_row = _card.fact("last run", f"{_card.human(run_age)} ago, exit {rc}",
+        run_row = _card.fact("last run", f"{_card.human(run_age)} ago, {RUN_OUTCOME.get(rc, 'handoff failed, still owed')}",
                              "ok" if rc == 0 else "bad")
 
     queued = list(data.get("queued") or [])

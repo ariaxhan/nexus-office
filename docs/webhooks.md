@@ -13,8 +13,9 @@ flowchart LR
   F --> D[the door<br/>127.0.0.1:8790 /webhook]
   D -->|verify · dedupe · 204| MB[(mailbox file)]
   MB --> DR[one drainer, serial]
-  DR --> DP[dispatch.sh --repo]
-  DP -->|PR merged| RC[receipt]
+  DR -->|PR merged| RC[receipt]
+  DR --> TL[(Nexus ledger<br/>work.discovery_requested)]
+  TL --> TW[Tower tick: discovery pass]
   D -.->|gate · landed · refused| BZ[Buzz #queue]
 ```
 
@@ -26,12 +27,16 @@ Read it in that order, because each arrow is a rule:
 - **Answer first, work after.** GitHub gives you 10 seconds and then calls the
   delivery failed. So the door verifies the signature, writes the event to a
   mailbox file, returns 204, and lets a drainer do the work.
-- **One drainer, serial.** `dispatch.sh` holds a single global lock and exits 0
-  when it is already held. Spawning one per event would silently drop every
-  event but the first, so events queue in a file and one thread runs them one at
-  a time.
-- **The webhook triggers, dispatch decides.** The event says "look at this repo".
-  What to do about it is still `dispatch.sh`'s call, exactly as it is on the poll.
+- **One drainer, serial.** Each accepted delivery is a durable obligation. The
+  drainer writes one `work.discovery_requested` per delivery (idempotent by
+  delivery id) into the Nexus ledger for Tower-owned repos. The obligation
+  settles only once that row is committed, or when the repo has no Tower owner
+  (recorded as such). Anything else stays owed and retries with backoff, capped
+  at 30 minutes. `reconcile_obligation` settles old rows Tower later covered.
+- **The webhook triggers, Tower decides.** The tower tick runs a capture-only
+  discovery pass (never claims or executes) for a requested repo within
+  seconds, and for every Tower repo every 300 s, so a long github-work flight
+  no longer stops capture. Executing is unchanged.
 - **Buzz is the tap on the shoulder.** A raised gate, a landed PR, a refused
   lane. Throttled per kind and subject, so a redelivery storm is one message.
 

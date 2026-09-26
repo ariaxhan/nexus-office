@@ -8,8 +8,8 @@ comes from the ledger; nothing it learns lives anywhere else. That is what makes
 Tick order is load bearing:
 
     expire leases -> budgets -> reap finished -> reconcile vanished ->
-    reconcile applying landings -> land verified -> quarantine -> accept tasks ->
-    schedule -> launch
+    reconcile applying landings -> land verified -> quarantine -> discover (capture only) ->
+    schedule -> accept tasks -> launch
 
 Reaping before reconciling is why a flight that finished and exited between two
 ticks is read as produced rather than declared vanished.
@@ -107,6 +107,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
         report["paused"] = True
         return report
 
+    report["discovered"] = _discover(ledger, now)
     report["scheduled"] = _schedule(ledger, now)
     accepted, rejected = accept_tasks(ledger, now)
     report["accepted"], report["rejected"] = accepted, rejected
@@ -263,6 +264,18 @@ def _reconcile_vanished_work(ledger, flight, now):
                      {"reason": "dead_owner_claim_released", "replay": False}, "tower", now)
         return 1
     return 0
+
+
+def _discover(ledger, now):
+    """Capture keeps running while a github-work flight executes; see work.discovery_pass."""
+    from . import work
+    registry = os.environ.get("NEXUS_WORK_REGISTRY")
+    if not registry:
+        return 0
+    try:
+        return work.discovery_pass(ledger, work.registry(registry), now)
+    except (OSError, ValueError, work.WorkError):
+        return 0  # _reconcile_orphan_leases already records an unreadable registry each tick
 
 
 def _work_repo(ledger, flight, now):

@@ -244,10 +244,10 @@ def hold(repo, record, paths, reason, comment=None):
     pushed = push_owned(repo, sha, branch)
     if not pushed:
         raise lease.Owned(f"held_push_failed:{branch}")
-    url = comment(f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {pushed}.") if comment else None
     landing.restore(repo, paths, head)
+    url, why = landing.notify(comment, f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {pushed}.")
     return {"state": "HELD", "flight": record["flight"], "reason": reason, "sha": pushed, "branch": branch,
-            "comment_url": url, "paths": paths}
+            "comment_url": url, "comment_error": why, "paths": paths}
 
 
 def note(repo, number, record, paths, reason="needs paths outside write_set"):

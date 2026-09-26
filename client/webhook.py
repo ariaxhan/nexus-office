@@ -42,7 +42,7 @@ the one event we most want to hear about (the merge) is the one we drop.
 AT-LEAST-ONCE, AND THE REDELIVER BUTTON
 --------------------------------------
 GitHub retries on any non-2xx and gives the request 10 seconds. The door
-commits the dispatch obligation before answering 200; the existing serial
+commits the handoff obligation before answering 200; the existing serial
 drainer performs the slow work. Delivery ids survive restart in SQLite.
 
 The subtlety is the redeliver button. `X-GitHub-Delivery` is the SAME id on a
@@ -57,27 +57,31 @@ next redelivery run everything twice. Absence IS the record of a refusal.
 
   webhook-seen.json    the last 2000 accepted deliveries, written whole
   webhook-events.jsonl every parsed event, trimmed to the last 5000 lines
-  webhook-runs.jsonl   every dispatch this triggered, with its exit code
+  webhook-runs.jsonl   every Tower handoff attempt, with its outcome
 
-ONE DRAINER, NEVER A POOL
--------------------------
-`dispatch.sh` takes ONE global lock for the whole pipeline, not one per repo
-(`LOCK="$STATE/pid"`, dispatch.sh:77-78), and a second run finding it held says
-so and EXITS 0 (dispatch.sh:472-476). Exit zero, no queue, nothing done. So
-running several at once does not parallelise anything; it silently drops every
-event but the first, wearing a green exit code.
+ONE DRAINER, AND WHAT SETTLES AN OBLIGATION
+-------------------------------------------
+Nexus Tower owns GitHub issue work, and it polls. A webhook's job is to make
+the next discovery pass happen now instead of in five minutes. So the drainer
+hands each accepted delivery to Tower as one `work.discovery_requested` event
+in the Nexus ledger (subject: lowercase owner/name), idempotent per delivery
+id, and Tower's tick discovers that repo on its next pass.
 
-This is therefore a mailbox with a single serial drainer. Before spawning it
-reads that pidfile, and after a run it checks the tell of a silent no-op (exit
-0, under two seconds, lock still held by another pid) and puts the repo back for
-the next drain rather than believing it.
+An obligation settles ONLY when that event is durably in the ledger (inserted,
+or already there), or when the repo has no Tower owner (recorded as such: the
+desk refresh is all there is to do). A missing ledger or registry, a sqlite
+error, anything unknown: the obligation stays owed and the repo is retried
+with exponential backoff from OFFICE_TRIGGER_REQUEUE_S to RETRY_CAP_S.
+`reconcile_obligation` settles an old one when Tower's own records prove it
+was covered anyway.
 
 Configuration:
 
   OFFICE_WEBHOOK_SECRET      the shared secret GitHub signs with (required)
   OFFICE_TRIGGER_DEBOUNCE_S  collect a repo's events for this long (default 20)
-  OFFICE_TRIGGER_REQUEUE_S   wait this long after finding the pipeline busy (60)
-  OFFICE_DISPATCH            the runner script (default: under the runtime root)
+  OFFICE_TRIGGER_REQUEUE_S   first retry delay after a failed handoff (60)
+  OFFICE_WORK_LEDGER         the Nexus ledger (falls back as run_board.py does)
+  OFFICE_WORK_REGISTRY       Tower's work registry (or NEXUS_WORK_REGISTRY)
   OFFICE_STATE               where the three files above live
 """
 
@@ -92,7 +96,6 @@ import os
 import pathlib
 import re
 import sqlite3
-import subprocess
 import sys
 import threading
 import time
@@ -158,28 +161,12 @@ EVENTS_KEEP = 5000
 EVENTS_MAX = 6000
 
 DEBOUNCE_S = float(os.environ.get("OFFICE_TRIGGER_DEBOUNCE_S", "") or 20)
-# How long to wait before trying a repo again after finding the pipeline's one
-# global lock held. Not a retry storm: the run holding it takes minutes, so
-# asking again in a minute costs nothing and asking again in a second is noise.
+# First retry after a failed handoff; doubles per consecutive failure up to the
+# cap, so an owed obligation is retried forever but never in a hot loop.
 REQUEUE_S = float(os.environ.get("OFFICE_TRIGGER_REQUEUE_S", "") or 60)
-# The tell of a run that did nothing. dispatch.sh's lock guard logs one line and
-# exits 0, so a real sweep and a silent no-op differ only in how long they took
-# and whether somebody else still holds the lock.
-SILENT_EXIT_S = 2.0
-# dispatch.sh:77-78. `PIPELINE_STATE_DIR` is its own override, honoured here so a
-# test can point both at the same disposable place.
-LOCK_REL = ".runtime/pid"
-# A pipeline lane can genuinely take half an hour. Past that it is wedged, and a
-# wedged run holding a slot forever is how a debounce turns into a queue nobody
-# drains.
-DISPATCH_TIMEOUT_S = 30 * 60
-# How long the owner/name to local checkout map is trusted. Walking the vault
-# costs a find and one `git config` per repo; a clone appearing is not something
-# that needs to be noticed inside ten minutes.
-MAP_TTL_S = 10 * 60
-DISPATCH_REL = "_meta/services/issue-pipeline/dispatch.sh"
-CONFIG_REL = "_meta/services/issue-pipeline/pipeline-config.py"
-LOG_LINES = 20
+RETRY_CAP_S = 30 * 60
+REQUESTED = "work.discovery_requested"
+LEDGER_TIMEOUT_S = 2.0   # Tower holds busy_timeout 30s; a webhook waits briefly and retries later
 
 # The Trigger this process is running, if it is running one. `sources/webhook.py`
 # reads it to show what is waiting on a debounce, which is a fact that exists
@@ -403,7 +390,7 @@ class Mailbox:
                 yield db
 
     def accept(self, ev):
-        """Commit the dispatch obligation before acknowledging its delivery."""
+        """Commit the handoff obligation before acknowledging its delivery."""
         if not NWO_RE.match(ev.repo or ""):
             raise ValueError("invalid webhook repo")
         with self._obligations() as db:
@@ -562,211 +549,130 @@ class Mailbox:
         return self.tail(self.runs_path, n)
 
 
-# ── owner/name to a checkout on this machine ─────────────────────────────────
-# Two halves, and each is taken from the place that already owns it.
-#
-# WHICH DIRECTORIES ARE REPOS: dispatch.sh's own walk, restated. Every `.git`
-# under the vault, pruned so a gitdir inside another repo's `.git/` is
-# unreachable, minus any checkout its own parent repo gitignores (vendored,
-# cached, a managed clone). dispatch.sh:249-330.
-#
-# WHICH REPO A CHECKOUT IS: `pipeline-config.py origin <path>`, which is that
-# subsystem's own answer to "where do this repo's issues live"
-# (pipeline-config.py:12, 411-418). NOT parsed out of `--list-repos`: that
-# prints a human report, and a parser over it has already dropped a repo
-# silently once, when the status vocabulary grew `PARKED` mid-build.
+# ── the Tower handoff ────────────────────────────────────────────────────────
 
-# The fallback, for a machine with no pipeline installed. Same expression
-# pipeline-config.py:146 uses, so the two cannot disagree about a URL shape:
-#   git@github.com:o/n.git   https://github.com/o/n   ssh://git@github.com/o/n.git
-_REMOTE_RE = re.compile(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$")
+class HandoffError(RuntimeError):
+    """The downstream did not durably record the work. The obligation stays owed."""
 
 
-def normalise_remote(url: str) -> str:
-    """owner/name out of a remote URL, or "" when it is not a GitHub one.
-
-    The host check is not decoration. This map answers "which checkout is the
-    repo GitHub just told me about", and a GitLab remote at the same owner/name
-    would answer it wrongly and run the pipeline against the wrong tree.
-    """
-    text = str(url or "").strip()
-    if not text or "github.com" not in text.lower():
-        return ""
-    m = _REMOTE_RE.search(text)
-    if not m:
-        return ""
-    nwo = f"{m.group(1)}/{m.group(2)}"
-    return nwo if NWO_RE.match(nwo) else ""
+def _nexus_work():
+    """Tower's own registry parser and ownership predicate, imported, never restated."""
+    root = str(pathlib.Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.append(root)
+    from nexus import work
+    return work
 
 
-def _git(args, cwd=None, timeout=15):
+def ledger_path(explicit=None) -> pathlib.Path:
+    """OFFICE_WORK_LEDGER, else the ledger run_board.py reads."""
+    if explicit:
+        return pathlib.Path(explicit).expanduser()
+    env = _env_path("OFFICE_WORK_LEDGER")
+    if env is not None:
+        return env
+    import run_board
+    return run_board.LEDGER
+
+
+def tower_owned(repo: str, registry=None) -> bool:
+    """`enabled && tower_row`, exactly as nexus/work.py decides it. Raises when unreadable."""
+    path = registry or os.environ.get("OFFICE_WORK_REGISTRY") or os.environ.get("NEXUS_WORK_REGISTRY")
+    if not path:
+        raise HandoffError("no work registry (OFFICE_WORK_REGISTRY)")
+    work = _nexus_work()
     try:
-        p = subprocess.run(["git", *args], capture_output=True, text=True,
-                           timeout=timeout, cwd=str(cwd) if cwd else None)
-    except (OSError, subprocess.SubprocessError):
-        return 1, ""
-    return p.returncode, p.stdout
+        rows = work.registry(path)
+    except (OSError, ValueError, KeyError, TypeError, work.WorkError) as exc:
+        raise HandoffError(f"work registry unreadable: {exc}") from exc
+    return any(r["repo"] == repo.lower() and r["enabled"] and work.tower_row(r) for r in rows)
 
 
-def find_checkouts(root) -> list:
-    """Every working tree under `root`, by dispatch.sh's own two skip rules."""
-    base = pathlib.Path(root).expanduser()
+def handoff(repo: str, events: list, ledger=None, registry=None) -> str:
+    """One `work.discovery_requested` per delivery into the Nexus ledger, in one transaction.
+
+    Returns the run note on success; raises on anything else, so nothing can settle on it."""
+    if not tower_owned(repo, registry):
+        return f"no Tower owner for {repo}; desk refreshed"
+    path = ledger_path(ledger)
+    if not path.is_file():
+        raise HandoffError(f"no Nexus ledger at {path}")
+    subject, added = repo.lower(), 0
     try:
-        base = base.resolve()
-    except OSError:
-        return []
-    if not base.is_dir():
-        return []
-
-    found = []
-    for here, dirs, _files in os.walk(base, followlinks=False):
-        if ".git" in dirs or ".git" in _files:
-            found.append(pathlib.Path(here))
-            # Prune AT .git, exactly as `find -name .git -prune` does, so a
-            # gitdir under .git/modules is unreachable rather than filtered.
-            dirs[:] = [d for d in dirs if d != ".git"]
-        else:
-            dirs[:] = [d for d in dirs if d != ".git"]
-    return sorted(found)
-
-
-def _drop_ignored(repos: list) -> list:
-    """Drop a checkout its nearest enclosing repo gitignores.
-
-    One `check-ignore` per PARENT, never per repo: asking one big repo the same
-    question seventy times is how a walk becomes a wait. Same reasoning, and the
-    same shape, as dispatch.sh:305-315.
-    """
-    if not repos:
-        return []
-    by_parent = {}
-    for repo in repos:
-        best = None
-        for cand in repos:
-            if cand == repo:
-                continue
+        with closing(sqlite3.connect(path, timeout=LEDGER_TIMEOUT_S, isolation_level=None)) as db:
+            db.execute("BEGIN IMMEDIATE")
             try:
-                repo.relative_to(cand)
-            except ValueError:
-                continue
-            if best is None or len(str(cand)) > len(str(best)):
-                best = cand
-        if best is not None:
-            by_parent.setdefault(best, []).append(repo)
-
-    ignored = set()
-    for parent, kids in by_parent.items():
-        try:
-            p = subprocess.run(["git", "-C", str(parent), "check-ignore", "--stdin"],
-                               input="\n".join(str(k) for k in kids),
-                               capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            continue
-        for line in (p.stdout or "").splitlines():
-            line = line.strip()
-            if line:
-                ignored.add(pathlib.Path(line))
-    return [r for r in repos if r not in ignored]
+                for ev in events:
+                    if db.execute("SELECT 1 FROM events WHERE kind=? AND json_extract(payload,'$.delivery')=?",
+                                  (REQUESTED, ev.delivery)).fetchone():
+                        continue
+                    payload = {"delivery": ev.delivery, "event": ev.event, "action": ev.action,
+                               "number": ev.number, "at": ev.at, "requested_at": now_iso()}
+                    db.execute("INSERT INTO events (ts, kind, subject, payload, source) VALUES (?,?,?,?,?)",
+                               (time.time(), REQUESTED, subject, json.dumps(payload), "office-webhook"))
+                    added += 1
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+    except sqlite3.Error as exc:
+        raise HandoffError(f"Nexus ledger write failed: {exc}") from exc
+    return f"handed to Tower: {added} requested, {len(events) - added} already recorded"
 
 
-def origin_of(repo, config=None) -> str:
-    """owner/name for one checkout, asked of the pipeline's own resolver.
-
-    `pipeline-config.py origin` is the single answer that subsystem gives to
-    "where do this repo's issues live". Asking it, rather than re-deriving it,
-    means a repo whose origin convention changes changes in one place.
-
-    Falls back to reading the remote directly when the script is not installed,
-    so this module still works on a machine with no pipeline.
-    """
-    if config is not None and pathlib.Path(config).exists():
-        try:
-            p = subprocess.run([sys.executable, str(config), "origin", str(repo)],
-                               capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return ""
-        nwo = (p.stdout or "").strip()
-        return nwo if NWO_RE.match(nwo) else ""
-    rc, url = _git(["-C", str(repo), "config", "--get", "remote.origin.url"])
-    return normalise_remote(url) if rc == 0 else ""
+def _epoch(iso: str) -> float:
+    return datetime.strptime(iso, ISO).replace(tzinfo=timezone.utc).timestamp()
 
 
-def build_repo_map(root, config=None) -> dict:
-    """{owner/name (lowercased): the shallowest checkout of it}."""
-    out = {}
-    for repo in _drop_ignored(find_checkouts(root)):
-        nwo = origin_of(repo, config)
-        if not nwo:
-            continue
-        key = nwo.lower()
-        # Shallowest wins. Two checkouts of one repo happen (a clone under a
-        # client folder, the canonical one at the top); the shorter path is the
-        # one a person means.
-        if key not in out or len(str(repo)) < len(str(out[key])):
-            out[key] = repo
-    return out
+def reconcile_obligation(ev, ledger=None):
+    """A reason when Tower's own records prove this delivery needs nothing more, else None.
+
+    Proof: a `work.issue` capture of repo#number, or a `work.serviced` pass over the
+    repo, recorded after the delivery arrived. Polling covered it."""
+    repo, since = ev.repo.lower(), _epoch(ev.at)
+    uri = ledger_path(ledger).as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=LEDGER_TIMEOUT_S)) as db:
+        if ev.number and db.execute(
+                "SELECT 1 FROM events e JOIN tasks t ON t.id=e.subject WHERE e.kind='work.issue'"
+                " AND lower(t.dedupe_key)=? AND e.ts>? LIMIT 1", (f"github:{repo}#{ev.number}", since)).fetchone():
+            return f"Tower captured {repo}#{ev.number} after the delivery"
+        if db.execute("SELECT 1 FROM events WHERE kind='work.serviced' AND subject=? AND ts>? LIMIT 1",
+                      (repo, since)).fetchone():
+            return f"Tower serviced {repo} after the delivery"
+    return None
 
 
 # ── acting on it ─────────────────────────────────────────────────────────────
 
 class Trigger:
-    """Collect a repo's events, then run the pipeline against it. One at a time.
+    """Collect a repo's events, then hand them to Tower. One at a time.
 
     **Debounce.** A push, a PR opened and a comment inside two seconds are three
-    deliveries carrying one piece of news: look at this repo. Without the window
-    that is three dispatches over one working tree.
+    deliveries carrying one piece of news: look at this repo.
 
-    **One drainer, serial.** Not a choice about load. `dispatch.sh` holds ONE
-    global lock for the whole pipeline (dispatch.sh:77-78) and a second run
-    finding it held logs a line and EXITS 0 (dispatch.sh:472-476). So a pool
-    would not run two sweeps, it would silently drop all but one of them behind
-    a green exit code. The lock is read before spawning, and the tell of a
-    silent no-op is checked after, and either way the repo goes back in the
-    queue instead of being marked done.
+    **One drainer, serial.** One writer into the Nexus ledger from this process,
+    and one place that decides whether an obligation is settled. A failed handoff
+    keeps its events owed and puts the repo back with backoff.
     """
 
-    def __init__(self, mailbox, root=None, dispatch=None, debounce_s=None,
-                 refresh=None, receipts=None, timeout_s=DISPATCH_TIMEOUT_S,
-                 runner=None, requeue_s=None, lock_path=None, config=None):
+    def __init__(self, mailbox, debounce_s=None, refresh=None, receipts=None,
+                 runner=None, requeue_s=None, ledger=None, registry=None):
         self.mailbox = mailbox
-        self.root = pathlib.Path(root).expanduser() if root else None
-        self.dispatch = pathlib.Path(dispatch).expanduser() if dispatch else None
-        if self.dispatch is None:
-            env = _env_path("OFFICE_DISPATCH")
-            if env is not None:
-                self.dispatch = env
-            elif self.root is not None:
-                self.dispatch = self.root / DISPATCH_REL
-        self.config = pathlib.Path(config).expanduser() if config else (
-            self.root / CONFIG_REL if self.root else None)
-        # dispatch.sh's own lock, at its own override. Read, never written: this
-        # process must never look like the run holding it.
-        if lock_path is not None:
-            self.lock_path = pathlib.Path(lock_path).expanduser()
-        else:
-            state = _env_path("PIPELINE_STATE_DIR")
-            self.lock_path = ((state / "pid") if state is not None
-                              else (self.dispatch.parent / LOCK_REL if self.dispatch else None))
-
         self.debounce_s = DEBOUNCE_S if debounce_s is None else float(debounce_s)
         self.requeue_s = REQUEUE_S if requeue_s is None else float(requeue_s)
         self.refresh = refresh
         self.receipts = receipts if receipts is not None else _env_path("OFFICE_RECEIPTS")
-        self.timeout_s = timeout_s
-        # Swappable so a test can watch what would have run without running it.
-        self.runner = runner or self._run_dispatch
+        # runner(repo, events) -> note; raises when the work is not durably recorded.
+        self.runner = runner or (lambda repo, events: handoff(repo, events, ledger, registry))
 
         self.cv = threading.Condition()
         self.pending = {}     # repo -> [Event] waiting on a debounce window
         self.due = {}         # repo -> monotonic deadline
-        self.retry = {}       # repo -> the delivery a requeued dispatch is for
-        self.retry_ids = {}   # repo -> accepted delivery ids awaiting the retry
+        self.owed = {}        # repo -> {delivery: Event} a failed handoff still owes
+        self.failures = {}    # repo -> consecutive failed handoffs
         self.stopped = False
-        self.acts = 0         # dispatch attempts
-        self.requeued = 0     # attempts that found the pipeline already running
-        self._map = None
-        self._map_at = 0.0
-        self._map_lock = threading.Lock()
+        self.acts = 0         # handoff attempts
+        self.requeued = 0     # attempts that failed and were put back
 
         self._restore_pending()
 
@@ -785,7 +691,7 @@ class Trigger:
             self.due.setdefault(ev.repo, time.monotonic() + self.debounce_s)
 
     def notice(self, ev, accepted=False) -> None:
-        """One event in. Its obligation is durable before the slow dispatch."""
+        """One event in. Its obligation is durable before the handoff."""
         if ev is None or not NWO_RE.match(ev.repo or ""):
             return
         if not accepted:
@@ -801,7 +707,7 @@ class Trigger:
 
     def queued(self) -> list:
         with self.cv:
-            return sorted(set(self.pending) | set(self.retry))
+            return sorted(set(self.pending) | set(self.owed))
 
     def stop(self) -> None:
         """Put the drainer down. For a test, and for a clean shutdown."""
@@ -809,8 +715,7 @@ class Trigger:
             self.stopped = True
             self.pending.clear()
             self.due.clear()
-            self.retry.clear()
-            self.retry_ids.clear()
+            self.owed.clear()
             self.cv.notify_all()
 
     cancel = stop
@@ -820,7 +725,7 @@ class Trigger:
         with self.cv:
             while True:
                 if self.stopped:
-                    return None, []
+                    return None, [], []
                 if not self.due:
                     self.cv.wait()
                     continue
@@ -831,65 +736,57 @@ class Trigger:
                     continue
                 repo = ready[0]
                 self.due.pop(repo, None)
-                return repo, self.pending.pop(repo, [])
+                return repo, self.pending.pop(repo, []), list(self.owed.pop(repo, {}).values())
 
     def _drain(self) -> None:
-        """The single serial drainer. Everything below happens one at a time,
-        because the thing it drives can only ever be running once."""
+        """The single serial drainer. Settles only what the downstream recorded."""
         while True:
-            repo, events = self._next()
+            repo, events, owed = self._next()
             if repo is None:
                 return
             try:
-                again = self.act(repo, events)
+                again = self.act(repo, events, owed)
             except Exception as exc:  # noqa: BLE001 - one bad act, not a dead office
                 log(f"{repo}: the trigger failed: {type(exc).__name__}: {exc}")
                 again = True
-            if again:
-                with self.cv:
-                    if self.stopped:
-                        return
-                    self.retry_ids.setdefault(repo, set()).update(ev.delivery for ev in events)
-                    self.due.setdefault(repo, time.monotonic() + self.requeue_s)
-                    self.cv.notify_all()
-            else:
-                with self.cv:
-                    ids = self.retry_ids.pop(repo, set()) | {ev.delivery for ev in events}
+            ids = {ev.delivery for ev in owed + events}
+            if not again:
                 try:
                     self.mailbox.settle_obligations(ids)
                 except (OSError, sqlite3.Error) as exc:
                     log(f"{repo}: could not settle durable webhook obligations: {exc}")
-                    with self.cv:
-                        self.retry_ids.setdefault(repo, set()).update(ids)
-                        self.due.setdefault(repo, time.monotonic() + self.requeue_s)
-                        self.cv.notify_all()
+                    again = True
+            if again:
+                self._owe(repo, owed + events)
+
+    def _owe(self, repo, events):
+        with self.cv:
+            if self.stopped:
+                return
+            self.owed.setdefault(repo, {}).update((ev.delivery, ev) for ev in events)
+            self.due.setdefault(repo, time.monotonic() + self.backoff(repo))
+            self.cv.notify_all()
+
+    def backoff(self, repo) -> float:
+        n = max(1, self.failures.get(repo, 1))
+        return min(RETRY_CAP_S, self.requeue_s * 2 ** (n - 1))
 
     # -- the act -----------------------------------------------------------
-    def act(self, repo: str, events: list) -> bool:
-        """One debounce window's worth of work. True means put the repo back.
+    def act(self, repo: str, events: list, owed=()) -> bool:
+        """One debounce window's worth of work. True means still owed.
 
-        Receipts and the desk refresh are about the DELIVERY, so they happen
-        once, here, whether or not the dispatch gets to run. The dispatch is
-        about the pipeline, so it is the only part that can be requeued.
+        Receipts and the desk refresh are about the NEW deliveries, so they
+        happen once; only the handoff is retried, for new and owed alike.
         """
         self.acts += 1
-        latest = events[-1] if events else None
-        delivery = latest.delivery if latest is not None else self.retry.get(repo, "")
-
-        # The receipt goes FIRST, and deliberately not last. It is a fact about
-        # the delivery, not about the run: writing it after a thirty-minute
-        # dispatch would leave the desk showing "in pr" for half an hour after
-        # the PR merged, which is the exact stale this path exists to remove.
+        # The receipt goes FIRST: it is a fact about the delivery, not the handoff.
         for ev in events:
             if ev.event == "pull_request" and ev.action == "closed" and ev.merged:
                 self.write_receipt(ev)
 
-        again = self._dispatch(repo, events, delivery)
+        again = self._handoff(repo, list(owed) + list(events))
 
-        # One desk, about two GraphQL points, never a whole build. Done whether
-        # or not there was a checkout to dispatch against: the news came from
-        # GitHub, and a desk is a picture of GitHub. Skipped on a bare retry,
-        # where there is no new news to draw.
+        # One desk, about two GraphQL points. Skipped on a bare retry.
         if events and self.refresh is not None:
             try:
                 self.refresh(repo)
@@ -897,121 +794,22 @@ class Trigger:
                 log(f"{repo}: could not refresh the desk: {type(exc).__name__}: {exc}")
         return again
 
-    def _dispatch(self, repo: str, events: list, delivery: str) -> bool:
-        """Run the pipeline for one repo, or say why it could not. True = retry."""
-        row = {"at": now_iso(), "trigger": "webhook", "delivery": delivery,
-               "repo": repo, "path": "", "events": len(events), "rc": None,
-               "seconds": 0.0, "log": []}
-
-        busy = self.pipeline_busy()
-        if busy is not None:
-            # Spawning now would not queue behind it. dispatch.sh would log one
-            # line, exit 0, and this repo's news would be gone.
+    def _handoff(self, repo: str, events: list) -> bool:
+        """Hand the deliveries to Tower, or record why not. True = still owed."""
+        row = {"at": now_iso(), "trigger": "webhook", "delivery": events[-1].delivery if events else "",
+               "repo": repo, "events": len(events), "rc": 0}
+        try:
+            row["note"] = self.runner(repo, events)
+            self.failures.pop(repo, None)
+        except Exception as exc:  # noqa: BLE001 - unknown outcome is owed, never settled
             self.requeued += 1
-            self.retry[repo] = delivery
-            row["note"] = f"the pipeline was already running (pid {busy}); requeued"
-            self.mailbox.record_run(row)
+            self.failures[repo] = self.failures.get(repo, 0) + 1
+            row.update(rc=1, attempt=self.failures[repo], retry_in_s=self.backoff(repo),
+                       note=f"handoff failed, still owed: {type(exc).__name__}: {exc}")
             log(f"{repo}: {row['note']}")
-            return True
-
-        path = self.local_path(repo)
-        if path is None:
-            # Not an error. A repo with a desk need not have a checkout here:
-            # the office shows repos you can push to, and the pipeline only runs
-            # where the code actually is.
-            row["note"] = "no local checkout under the vault, so nothing to dispatch"
-            log(f"{repo}: {row['note']}")
-            self.retry.pop(repo, None)
-            self.mailbox.record_run(row)
-            return False
-
-        rc, seconds, tail = self.runner(path)
-        row.update(path=str(path), rc=rc, seconds=round(seconds, 1), log=tail)
-
-        # The tell of a silent no-op: dispatch.sh's lock guard says one line and
-        # exits 0. Believing that green exit would lose the event, so the lock is
-        # read again and a run that cannot have done anything is retried.
-        if rc == 0 and seconds < SILENT_EXIT_S:
-            held = self.pipeline_busy()
-            if held is not None:
-                self.requeued += 1
-                self.retry[repo] = delivery
-                row["note"] = (f"exited 0 in {seconds:.1f}s while pid {held} held the "
-                               f"lock, so it did nothing; requeued")
-                self.mailbox.record_run(row)
-                log(f"{repo}: {row['note']}")
-                return True
-
-        self.retry.pop(repo, None)
         self.mailbox.record_run(row)
-        return False
+        return row["rc"] != 0
 
-    def pipeline_busy(self):
-        """The pid holding dispatch.sh's ONE global lock, or None.
-
-        Read only, and never written: this process must not be mistaken for the
-        run that holds it. A pidfile naming a dead process is not busy, which is
-        exactly how dispatch.sh itself reads it (`kill -0`, dispatch.sh:472).
-        """
-        path = self.lock_path
-        if path is None:
-            return None
-        try:
-            pid = int(path.read_text().strip())
-        except (OSError, ValueError):
-            return None
-        if pid <= 0 or pid == os.getpid():
-            return None
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return None
-        except PermissionError:
-            # Alive, and owned by somebody else. Still busy.
-            return pid
-        except OSError:
-            return None
-        return pid
-
-    def _run_dispatch(self, path):
-        """`dispatch.sh --repo <path>`, and never without `--repo`.
-
-        Without it the runner sweeps every repo under the vault, which is the
-        hourly job's business and not a webhook's. A comment on one issue must
-        never be able to start a full sweep.
-        """
-        script = self.dispatch
-        if script is None or not script.exists():
-            log(f"no dispatch script at {script}; nothing was run")
-            return None, 0.0, [f"no dispatch script at {script}"]
-        started = time.monotonic()
-        try:
-            p = subprocess.run(["bash", str(script), "--repo", str(path)],
-                               capture_output=True, text=True, timeout=self.timeout_s)
-            rc, out = p.returncode, (p.stdout or "") + (p.stderr or "")
-        except subprocess.TimeoutExpired as exc:
-            rc = 124
-            out = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-            out += f"\ntimed out after {self.timeout_s}s"
-        except (OSError, subprocess.SubprocessError) as exc:
-            rc, out = 127, f"could not run {script}: {exc}"
-        seconds = time.monotonic() - started
-        tail = [l[:400] for l in out.splitlines() if l.strip()][-LOG_LINES:]
-        return rc, seconds, tail
-
-    # -- owner/name to a path ----------------------------------------------
-    def local_path(self, nwo: str):
-        m = self.repo_map()
-        return m.get(str(nwo or "").lower())
-
-    def repo_map(self) -> dict:
-        now = time.monotonic()
-        with self._map_lock:
-            if self._map is not None and now - self._map_at < MAP_TTL_S:
-                return self._map
-            self._map = build_repo_map(self.root, self.config) if self.root else {}
-            self._map_at = now
-            return self._map
 
     # -- the receipt -------------------------------------------------------
     def write_receipt(self, ev) -> bool:
