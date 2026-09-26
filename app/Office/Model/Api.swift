@@ -31,6 +31,15 @@ public final class Api {
     private let session: URLSession
     private let demo: DemoFloor?
 
+    /// The evidence behind a flight, on the door itself; nil on the demo floor.
+    public func inspect(flight: String) -> URL? {
+        guard case .live(let base) = source, !flight.isEmpty else { return nil }
+        var parts = URLComponents(url: base.appendingPathComponent("api/system/flight"),
+                                  resolvingAgainstBaseURL: false)
+        parts?.queryItems = [URLQueryItem(name: "id", value: flight)]
+        return parts?.url
+    }
+
     public init(source: ApiSource) {
         self.source = source
         let config = URLSessionConfiguration.ephemeral

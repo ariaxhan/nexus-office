@@ -344,7 +344,7 @@ struct RosterView: View {
 
     private func towerLine(_ tower: TowerBoard) -> String {
         if tower.state != "ok" { return tower.detail.isEmpty ? "issue work unavailable" : tower.detail }
-        return "\(tower.working) working · \(tower.retrying) retrying · \(tower.issues.count) open issues"
+        return "\(tower.summary) · \(tower.working) working · \(tower.queued) queued · \(tower.retrying) retrying"
     }
 
     private var wallCount: AnyView? {

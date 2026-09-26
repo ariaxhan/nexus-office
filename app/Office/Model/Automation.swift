@@ -311,11 +311,41 @@ public struct WorkBoard: Decodable, Equatable {
 public struct TowerBoard: Decodable, Equatable {
     public var state = "missing"
     public var detail = ""
+    /// tower-down, working, queued, paused, idle or unavailable: never a generic "healthy".
+    public var summary = "unavailable"
+    public var livenessDetail = ""
     public var working = 0
+    public var queued = 0
+    public var oldestQueued = ""
     public var retrying = 0
+    public var held = 0
+    public var failed = 0
     public var dropped = 0
     public var issues: [Issue] = []
+    public var recent: [Completion] = []
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case state, detail, summary, working, queued, retrying, held, failed, dropped, issues, recent
+        case livenessDetail = "liveness_detail", oldestQueued = "oldest_queued"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = try c.decodeIfPresent(String.self, forKey: .state) ?? state
+        detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? summary
+        livenessDetail = try c.decodeIfPresent(String.self, forKey: .livenessDetail) ?? ""
+        working = try c.decodeIfPresent(Int.self, forKey: .working) ?? 0
+        queued = try c.decodeIfPresent(Int.self, forKey: .queued) ?? 0
+        oldestQueued = try c.decodeIfPresent(String.self, forKey: .oldestQueued) ?? ""
+        retrying = try c.decodeIfPresent(Int.self, forKey: .retrying) ?? 0
+        held = try c.decodeIfPresent(Int.self, forKey: .held) ?? 0
+        failed = try c.decodeIfPresent(Int.self, forKey: .failed) ?? 0
+        dropped = try c.decodeIfPresent(Int.self, forKey: .dropped) ?? 0
+        issues = try c.decodeIfPresent([Issue].self, forKey: .issues) ?? []
+        recent = try c.decodeIfPresent([Completion].self, forKey: .recent) ?? []
+    }
 
     public struct Issue: Decodable, Equatable, Identifiable {
         public var id = ""
@@ -327,6 +357,19 @@ public struct TowerBoard: Decodable, Equatable {
         public var detail = ""
         public var next = ""
         public var attempt = ""
+        public var phase: String?
+        public var started: String?
+        public var progress: String?
+    }
+
+    /// A verified completion: Tower's done receipt, not a process exit.
+    public struct Completion: Decodable, Equatable, Identifiable {
+        public var id = ""
+        public var title = ""
+        public var flight = ""
+        public var sha = ""
+        public var receipt = ""
+        public var age = ""
     }
 }
 

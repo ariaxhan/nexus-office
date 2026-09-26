@@ -1315,6 +1315,114 @@
       }
     ],
     "automation": {
+      "tower": {
+        "state": "ok",
+        "detail": "",
+        "summary": "working",
+        "liveness": "running",
+        "liveness_detail": "last tick 22s ago",
+        "working": 1,
+        "queued": 2,
+        "oldest_queued": "3 h ago",
+        "retrying": 1,
+        "held": 1,
+        "failed": 1,
+        "dropped": 0,
+        "issues": [
+          {
+            "id": "ariaxhan/nexus-office#183",
+            "repo": "ariaxhan/nexus-office",
+            "number": 183,
+            "title": "Make Tower / Office work visible and inspectable in Office",
+            "url": "https://github.com/ariaxhan/nexus-office/issues/183",
+            "state": "working",
+            "detail": "Tower is working this issue",
+            "next": "",
+            "attempt": "flt_442472de78be",
+            "phase": "running",
+            "started": "14 min ago",
+            "progress": "40s ago"
+          },
+          {
+            "id": "ariaxhan/nexus-office#191",
+            "repo": "ariaxhan/nexus-office",
+            "number": 191,
+            "title": "Render commission to outcome from the ids Office holds",
+            "url": "https://github.com/ariaxhan/nexus-office/issues/191",
+            "state": "failed",
+            "detail": "executor exited 2; no retry scheduled",
+            "next": "",
+            "attempt": "flt_9037ffb9e0aa",
+            "phase": ""
+          },
+          {
+            "id": "ariaxhan/nexus-office#187",
+            "repo": "ariaxhan/nexus-office",
+            "number": 187,
+            "title": "Phone Watch shows Tower rows",
+            "url": "https://github.com/ariaxhan/nexus-office/issues/187",
+            "state": "ready",
+            "detail": "waiting for a lane; 1 running",
+            "next": "",
+            "attempt": "",
+            "phase": ""
+          },
+          {
+            "id": "ariaxhan/nexus-office#188",
+            "repo": "ariaxhan/nexus-office",
+            "number": 188,
+            "title": "Coordinator run ledger feeds desk history",
+            "url": "https://github.com/ariaxhan/nexus-office/issues/188",
+            "state": "ready",
+            "detail": "waiting for a lane; 1 running",
+            "next": "",
+            "attempt": "",
+            "phase": ""
+          },
+          {
+            "id": "ariaxhan/nexus-office#196",
+            "repo": "ariaxhan/nexus-office",
+            "number": 196,
+            "title": "Timing baseline from real flights",
+            "url": "https://github.com/ariaxhan/nexus-office/issues/196",
+            "state": "retrying",
+            "detail": "gate: blocked by open dependency ariaxhan/nexus-office#191",
+            "next": "retry in 24 min",
+            "attempt": "",
+            "phase": ""
+          },
+          {
+            "id": "ariaxhan/clay-app#12",
+            "repo": "ariaxhan/clay-app",
+            "number": 12,
+            "title": "Decide the export format",
+            "url": "https://github.com/ariaxhan/clay-app/issues/12",
+            "state": "held",
+            "detail": "Held by issue label",
+            "next": "",
+            "attempt": "",
+            "phase": ""
+          }
+        ],
+        "recent": [
+          {
+            "id": "ariaxhan/nexus-office#203",
+            "title": "Confirm Tower-lane teardown when owner is dead",
+            "flight": "flt_b09a6795ee1f",
+            "sha": "39e96a5c1d2e",
+            "receipt": "merged to main",
+            "age": "2 h ago"
+          },
+          {
+            "id": "ariaxhan/nexus-office#195",
+            "title": "Point Office agents at the shared durable-record model",
+            "flight": "flt_5a78ff8305a8",
+            "sha": "5cac39d0aa11",
+            "receipt": "merged to main",
+            "age": "9 h ago"
+          }
+        ]
+      },
       "state": "ok",
       "headline": "idle, next look in 21 minutes; 6 issues touched recently",
       "how": [

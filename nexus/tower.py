@@ -39,6 +39,9 @@ DEFAULT_MAX_RETRIES = 2
 #: before it is treated as never having started.
 PID_GRACE_S = 5.0
 LEASE_SLACK_S = 60.0
+#: a clean tick writes nothing else, so without this receipt a dead tower and an idle one
+#: look the same. Office calls the tower down after 3x this with no receipt.
+TICK_RECEIPT_EVERY_S = 60.0
 
 
 def flights_root(ledger: Ledger) -> str:
@@ -105,13 +108,24 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
 
     if is_paused(ledger):
         report["paused"] = True
+        _tick_receipt(ledger, now, report)
         return report
 
     report["scheduled"] = _schedule(ledger, now)
     accepted, rejected = accept_tasks(ledger, now)
     report["accepted"], report["rejected"] = accepted, rejected
     report["launched"] = _launch(ledger, now, root)
+    _tick_receipt(ledger, now, report)
     return report
+
+
+def _tick_receipt(ledger, now, report):
+    """Proof of life for Office, at most every TICK_RECEIPT_EVERY_S; read from the ledger so a
+    restart or a second tower never doubles it."""
+    last = ledger.last_event(("tower.tick",))
+    if last and now - last["ts"] < TICK_RECEIPT_EVERY_S:
+        return
+    ledger.event("tower.tick", None, {k: v for k, v in report.items() if v}, "tower", now)
 
 
 _last_heartbeat = [0.0]
