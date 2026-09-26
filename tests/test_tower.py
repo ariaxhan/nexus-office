@@ -312,7 +312,7 @@ class Reconciliation(TowerCase):
         plan = self.plan()
         flight = self.led.create_flight(plan)
         for state in ("running", "produced", "verified"):
-            self.led.set_state(flight, state, evidence=terminal.outputs({"ok": True}))
+            self.led.set_state(flight, state, evidence=terminal.outputs({"ok": True, "artifacts": [{"kind": "file", "ref": "out"}]}))
         landing = self.led.create_landing(flight, "repo#main", state="verified")
         self.led.start_applying(landing, "sha1")
         self.tick()
@@ -395,3 +395,25 @@ class Release(TowerCase):
         self.led.unquarantine_plan(plan)
         self.tick()
         self.assertIsNone(self.led.plan(plan)["quarantined_at"], "re-quarantined on old failures")
+
+
+class ExitZeroIsNotProof(unittest.TestCase):
+    """#210 D2: a script task is done only with declared-output evidence; ok:true alone proves an exit."""
+
+    def test_outputs_evidence_needs_an_artifact(self):
+        with self.assertRaisesRegex(terminal.IllegalTransition, "no declared output"):
+            terminal.require("task", "done", terminal.outputs({"ok": True, "artifacts": []}))
+        terminal.require("task", "done", terminal.outputs({"ok": True, "artifacts": [{"kind": "file", "ref": "r"}]}))
+
+    def test_exit_zero_without_outputs_ends_the_task_but_not_as_done(self):
+        from nexus.ledger import Ledger
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        led = Ledger(os.path.join(tmp.name, "l.sqlite"))
+        for artifacts, expected in (([], "abandoned"), ([{"kind": "file", "ref": "out"}], "done")):
+            plan = led.add_plan(f"script-{expected}")
+            task = led.add_task("t", "test", plan_id=plan, dedupe_key=expected, state="running")
+            fid = led.create_flight(plan, task_id=task)
+            led.set_state(fid, "running")
+            tower._produced(led, led.flight(fid), tmp.name, {"ok": True, "artifacts": artifacts}, time.time())
+            self.assertEqual(expected, led.task(task)["state"])

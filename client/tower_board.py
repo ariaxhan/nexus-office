@@ -58,6 +58,10 @@ def _issue_state(attempt, labels, pending, failure, disposition, recovery, now):
 def _queued_state(labels, disposition):
     if disposition.get('state') in ('backoff', 'blocked'):  # e.g. an open dependency: say so, not "ready"
         return 'waiting', disposition.get('reason') or 'Tower gate is closed', ''
+    if disposition.get('state') in ('held', 'owned'):
+        return 'held', disposition.get('reason') or 'Tower will not run it', ''
+    if disposition.get('state') in ('ineligible', 'closed'):
+        return None  # Tower decided it is not runnable: a leftover label does not make it ready (#210 D4)
     if labels & {'ready', 'in-pr', 'in pr'}:
         return 'ready', 'Waiting for Tower', ''
     return None  # nothing asked Tower to fly it: not Tower work, so not on this board (#210 D4)
@@ -73,8 +77,11 @@ def _row(db, task, now):
                          "ORDER BY created_at DESC LIMIT 1", (task['id'],)).fetchone()
     issue = _payload(db, 'work.issue', task['id'])
     labels = {str(x.get('name', '')).lower() for x in issue.get('labels', [])}
+    disposition = _payload(db, 'work.disposition', task['id'])
+    if 'labels' in disposition and set(disposition['labels']) != labels:
+        disposition = {}  # decided about labels that have since changed: not authoritative any more
     shown = _issue_state(attempt, labels, _payload(db, 'work.pending', task['id']),
-                         _payload(db, 'work.failure', task['id']), _payload(db, 'work.disposition', task['id']),
+                         _payload(db, 'work.failure', task['id']), disposition,
                          _recovery_state(db, attempt), now)
     if shown is None:
         return None

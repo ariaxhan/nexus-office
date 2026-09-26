@@ -79,5 +79,22 @@ class TowerBoard(unittest.TestCase):
         self.assertEqual(60, len(board['issues']))
         self.assertEqual(10, board['dropped'])
 
+    def test_fresh_ineligible_disposition_beats_a_leftover_ready_label(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        self.led.event('work.disposition', task['id'],
+                       {'state': 'ineligible', 'reason': 'x', 'labels': ['ready']}, 'work')
+        self.assertEqual([], tower_board.read(self.root / 'ledger.sqlite')['issues'])
+        self.led.event('work.disposition', task['id'], {'state': 'held', 'reason': 'held: hold', 'labels': ['ready']}, 'work')
+        [issue] = tower_board.read(self.root / 'ledger.sqlite')['issues']
+        self.assertEqual('held', issue['state'])
+
+    def test_disposition_about_older_labels_is_not_authoritative(self):
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        self.led.event('work.disposition', task['id'], {'state': 'ineligible', 'reason': 'x', 'labels': []}, 'work')
+        [issue] = tower_board.read(self.root / 'ledger.sqlite')['issues']  # ready was added after that decision
+        self.assertEqual('ready', issue['state'])
+
 if __name__ == '__main__':
     unittest.main()

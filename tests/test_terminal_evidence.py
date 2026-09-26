@@ -101,10 +101,11 @@ class CloseBeforeDone(TowerFixture):
         def landed(ledger, flight_id, repo, result):
             ledger.set_state(flight_id, "produced"), ledger.set_state(flight_id, "verified", evidence=terminal.landed(result, result["sha"]))
         patch("nexus.tower.land_write_flight", side_effect=landed).start()
+        self.led.event("work.review", fid, {"pr": "https://pr/1", "head": "h1", "verdict": "PASS"}, "work")
         self.issues[0]["labels"] = [{"name": "hold"}]  # a person parked it mid-flight
         state = work._settle(self.led, fid, self.entry, self.task, self.issues[0],
                              {"state": "LANDED", "flight": fid, "sha": "abc", "branch": "main",
-                              "review": "flt_r PASS at abc"}, None)
+                              "pr_url": "https://pr/1", "reviewed_head": "h1"}, None)
         self.assertEqual("pending", state)
         self.assertNotEqual("done", self.task_state(self.task["id"]))
         self.assertIn("close_pending", work.latest(self.led, "work.pending", self.task["id"])["reason"])
@@ -136,8 +137,31 @@ class UnverifiedLandingIsHeld(TowerFixture):
         self.assertNotEqual("done", self.task_state(self.task["id"]))
         self.assertEqual([], self.closed)
         pending = work.latest(self.led, "work.pending", self.task["id"])
-        self.assertIn("no contract check and no review", pending["hold"])
+        self.assertTrue(pending["hold"].startswith(contract.UNVERIFIED))
         self.assertTrue(any("--add-label" in a and "hold" in a for a in edits))
+
+
+class DiscoveryKnowsEligibilityActs(TowerFixture):
+    """#210 boundary: a held Tower issue is captured but never claimed, even with ready still on it."""
+
+    def test_held_tower_issue_is_captured_but_never_claimed(self):
+        self.issues[0]["labels"] = [{"name": "ready"}, {"name": "tower-v2"}, {"name": "hold"}]
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        with patch("nexus.work.tower_execute") as fly, patch("nexus.work.claim") as claim:
+            self.assertEqual("held", work._run_task(self.led, self.entry, task))
+        fly.assert_not_called(), claim.assert_not_called()
+
+    def test_another_lanes_issue_gets_no_owned_disposition(self):
+        self.issues[0]["labels"] = [{"name": "ready"}, {"name": "tower-v2"}]
+        work.discover(self.led, self.entry)
+        task = self.led.tasks()[0]
+        token = work._lane.set(None)
+        try:
+            work.selection_queue(self.led, self.entry)
+        finally:
+            work._lane.reset(token)
+        self.assertEqual({}, work.latest(self.led, "work.disposition", task["id"]))
 
 
 class CrashIsNotNoChange(unittest.TestCase):

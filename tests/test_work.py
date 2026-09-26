@@ -62,6 +62,11 @@ else:
         self.real_run = subprocess.run
         self.addCleanup(patch.stopall)
         patch("nexus.work.subprocess.run", side_effect=self.github).start()
+        # No real git behind the mocked gh: the receipt still needs the LEDGER's recorded PASS for the head.
+        patch("nexus.contract.reviewed_receipt",
+              side_effect=lambda sha, review, checkout, run=None:
+                  (True, f"landed {sha}; fixture review PASS") if review and review.get("verdict") == "PASS"
+                  else (False, f"unverified: landed {sha} fixture: no recorded PASS")).start()
 
     def github(self, argv, **kwargs):
         if argv[0] != "gh":

@@ -208,8 +208,12 @@ def _produced(ledger, flight, workspace, result, now):
     if _target(ledger, flight) is None:
         ledger.release_leases(flight["id"], now=now)
         if flight["task_id"] and not _persistent_task(ledger, flight):
-            ledger.set_task_state(flight["task_id"], "done", decided_by="tower policy",
-                                  expect="running", now=now, evidence=terminal.outputs(result))
+            if result.get("artifacts"):
+                ledger.set_task_state(flight["task_id"], "done", decided_by="tower policy",
+                                      expect="running", now=now, evidence=terminal.outputs(result))
+            else:  # exit 0 with nothing declared proves nothing: end the task, never as done (#210 D2)
+                ledger.set_task_state(flight["task_id"], "abandoned", decided_by="tower policy", expect="running",
+                                      reason="exited 0 with no declared output; nothing proves an outcome", now=now)
     return True
 
 
