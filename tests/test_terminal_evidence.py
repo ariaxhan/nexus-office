@@ -67,6 +67,16 @@ class StaleCheckoutReceipt(unittest.TestCase):
         self.assertTrue(done, why)
         self.assertLess(seen.index("npm ci --prefer-offline --no-audit --no-fund"), seen.index("test -f package.json"))
 
+    def test_the_check_sees_towers_path_not_a_login_path(self):
+        bin_dir = Path(self.checkout).parent / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "python3").write_text("#!/bin/sh\necho tower\n")
+        (bin_dir / "python3").chmod(0o755)
+        with patch.dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}"):
+            done, why = contract.done_receipt({"state": "LANDED", "sha": self.stale},
+                                              {"check": 'test "$(python3 -c 1 </dev/null)" = tower'}, str(self.checkout))
+        self.assertTrue(done, why)
+
     def test_unreachable_sha_fails_closed(self):
         done, why = contract.done_receipt({"state": "LANDED", "sha": "0" * 40}, {"check": "true"}, str(self.checkout))
         self.assertFalse(done, why)

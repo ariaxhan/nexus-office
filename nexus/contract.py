@@ -132,10 +132,12 @@ def done_receipt(result, contract_, checkout, run=subprocess.run, review=None):
             return False, f"cannot check out landed {sha} to verify"
         if os.path.exists(os.path.join(tree, "package-lock.json")):  # a fresh tree has no node_modules: an npm
             # check would fail on its own tools (esbuild exit 127, #192) and call merged work unproven
-            if run(["bash", "-lc", "npm ci --prefer-offline --no-audit --no-fund"], cwd=tree,
+            if run(["bash", "-c", "npm ci --prefer-offline --no-audit --no-fund"], cwd=tree,
                    capture_output=True, text=True, timeout=900).returncode:
                 return False, f"cannot install dependencies at {sha} to verify"
-        proc = run(["bash", "-lc", check], cwd=tree, capture_output=True, text=True, timeout=1800)
+        # Tower's own environment, not a login shell: a login PATH puts /usr/bin first (python3 3.9), so the
+        # receipt would judge the change with different tools than every check that passed before merge
+        proc = run(["bash", "-c", check], cwd=tree, capture_output=True, text=True, timeout=1800)
         if proc.returncode:
             return False, f"contract check failed at {sha}: {check} (exit {proc.returncode})"
         return True, f"landed {sha}; check passed at {sha}: {check}"

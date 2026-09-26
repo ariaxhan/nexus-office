@@ -76,7 +76,7 @@ class RunnerCancellationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             child_file = os.path.join(tmp, "child")
             command = (
-                "python3 -c \"import subprocess; "
+                f"{sys.executable} -c \"import subprocess; "  # process_group needs 3.11; a login PATH's python3 is 3.9
                 "p=subprocess.Popen(['sleep','900'], process_group=0); "
                 f"open('{child_file}','w').write(str(p.pid))\""
             )
