@@ -238,14 +238,16 @@ class Conversation:
 
     def save_outputs(self):
         (self.directory/'response.md').write_text('\n\n'.join(self.output)+'\n')
+        (self.directory/'changes.patch').unlink(missing_ok=True)  # only this attempt's patch may leave
         try:
             patch=changes(self.checkout,self.spec['source_revision'])
             (self.directory/'changes.patch').write_text(patch)
-        except subprocess.SubprocessError as exc:
+        except (subprocess.SubprocessError,RuntimeError,OSError) as exc:
             self.emit('office.artifact_error',{'error':str(exc)[:200]})
         for name in ('response.md','conversation.jsonl','changes.patch','session.json'):
             source=self.directory/name
             if source.exists():(Path.cwd()/name).write_bytes(source.read_bytes())
+            elif name=='changes.patch':(Path.cwd()/name).unlink(missing_ok=True)
 
 
 def changes(checkout,revision):
