@@ -1,5 +1,6 @@
 """Additive mobile routes. Access checks stay at the existing HTTP door."""
 from pathlib import Path
+import sys
 import office_github_context as github_context
 import urllib.parse
 
@@ -20,6 +21,8 @@ import office_feed as feed
 import office_ask as ask
 import office_bot_history as bot_history
 import office_github_actions as github_actions
+import office_github_bump as github_bump
+import office_github_inventory as inventory
 import coordinator_chat
 import office_buzz
 import human_asks
@@ -36,6 +39,7 @@ def get(handler, path, query):
     known={row['repo'] for row in (handler.world.snapshot or {}).get('stations',[])}
     if path.startswith('/api/github/'):
         known.update(root['name'] for root in tasks.projects())
+        known.update(inventory.repositories())
     routes = {
         '/api/projects': lambda: {'items':[dict(root,folder_id=objects.encode(root['id'],''),task_capable=(Path(root['path'])/'.git').exists()) for root in objects.roots().values()]},
         '/api/bots/archives': bot_history.listing,
@@ -66,6 +70,8 @@ def get(handler, path, query):
         '/api/github/files': lambda: github.files(handler.world.access(),known,q),
         '/api/github/branches': lambda: github.branches(handler.world.access(),known,q),
         '/api/github/tree': lambda: github.tree(handler.world.access(),known,q),
+        '/api/github/inventory': lambda: inventory.read(handler.world.access(),hidden_desks(handler),q.get('fresh')=='1'),
+        '/api/github/bump-check': lambda: bump_check(handler.world.access(),known,q),
         '/api/tasks/capabilities': tasks.capabilities,
         '/api/tasks/sources': lambda: tasks.source_choices(q.get('project','')),
         '/api/tasks': lambda: tasks.active_listing() if q.get('active')=='1' else tasks.listing(q.get('cursor',0),q.get('project','')),
@@ -112,6 +118,17 @@ def get(handler, path, query):
     return True
 
 
+def hidden_desks(handler):
+    """Put-away desks from their own file, not the snapshot: the first request can precede the first build."""
+    return {repo.lower() for repo in sys.modules['office_sync'].read_hidden()}
+
+
+def bump_check(access,known,q):
+    repo=q.get('repo','');who,token=github.read_identity(access,repo,known)
+    issue,_=github.fresh(f"repos/{repo}/issues/{github.number(q.get('number'))}",who,token)
+    return github_bump.assess(repo,issue,q.get('priority','p1'))
+
+
 def _respond(handler, path, result):
     handler._json(result)
     if path == '/api/system/runs':
@@ -120,7 +137,7 @@ def _respond(handler, path, result):
 
 def post(handler, path):
     if path in ('/api/github/command','/api/github/reconcile','/api/github/context'):
-        known={root['name'] for root in tasks.projects()}|{row['repo'] for row in (handler.world.snapshot or {}).get('stations',[])}
+        known={root['name'] for root in tasks.projects()}|{row['repo'] for row in (handler.world.snapshot or {}).get('stations',[])}|inventory.repositories()
         body=handler._read_json(limit=128*1024)
         if path.endswith('/context'):result=github_context.snapshot(handler.world.access(),known,body)
         elif path.endswith('/reconcile'):result=github_actions.reconcile(handler.world,known,body)

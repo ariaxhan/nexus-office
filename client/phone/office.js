@@ -6,6 +6,7 @@ import {mediaList,mediaDetail} from './office-media.js';
 import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
 import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
+import {issueInventory,issueControls} from './office-issues.js';
 import {newTask,taskList,permissions,taskDetail,permissionCard} from './office-tasks.js';
 let attention={items:[],errors:[],failures:[]};
 let snapshot=null,snapshotReadAt=0;
@@ -101,6 +102,7 @@ async function githubDetail(repo,item,kind){
  body.append(button('Ask an agent about this change',()=>githubContext({kind:'change',repo,number:item.number,head:data.head.sha,base:data.base.sha})),button('Reviews & inline discussion',()=>githubReviews(repo,item.number)),button('Review this change',()=>reviewChange(repo,item.number,data.head.sha)),button('Merge checked pipeline change',()=>githubAction({action:'merge',repo,number:item.number,head:data.head.sha})));body.append(el('p','muted','Merge requires a pipeline branch, the current head, a passing verify check, and permission under GitHub’s merge rules.'));githubDiff(body,repo,item.number,data);}
  body.append(button('Full timeline',()=>githubTimeline(repo,item.number)));
  body.append(button('Edit labels',()=>editLabels(repo,item.number,data.labels||[])));
+ if(kind==='issues'&&data.state==='open')await issueControls(body,repo,data,githubAction,()=>githubDetail(repo,item,kind));
  const comments=section(body,'Discussion');for(const comment of data.comments||[])comments.append(commentView(comment));if(data.comments_next_cursor)comments.append(button('More comments',()=>githubComments(comments,repo,item.number,data.comments_next_cursor)));
  const reply=field(body,'Reply',el('textarea'));const clearReply=restoreDraft(reply,['github',repo,item.number]);body.append(button('Post reply',async()=>{await githubAction({action:'comment',repo,number:item.number,body:reply.value},committed=>clearReply(committed.body));}));
  if(kind==='issues')body.append(button(data.state==='closed'?'Reopen issue':'Close issue',async()=>{await githubAction({action:data.state==='closed'?'reopen':'close',repo,number:item.number});}));
@@ -556,6 +558,7 @@ function officeLinkText(node,value){
 async function find(parent){
  intro(parent,'Find','Everything has a place','Search, read, and follow an object back to the work that made it.');
  const projects=section(parent,'Projects');await guarded(projects,()=>projectRoster(projects));
+ parent.append(card('Every open GitHub issue','TBS, Matra and Tower: counts, filters and triage',()=>{location.hash='issues';}));
  const libraryBox=el('details','find-group');libraryBox.append(el('summary','','Files, podcasts, and saved items'));parent.append(libraryBox);
  libraryBox.addEventListener('toggle',()=>{if(libraryBox.open&&libraryBox.childElementCount===1)library(libraryBox).catch(error=>failure(libraryBox,error));});
  const workBox=el('details','find-group');workBox.append(el('summary','','Tasks and conversations'));parent.append(workBox);
@@ -563,10 +566,14 @@ async function find(parent){
  const systemBox=el('details','find-group');systemBox.append(el('summary','','Schedules, runs, and settings'));parent.append(systemBox);
  systemBox.addEventListener('toggle',()=>{if(systemBox.open&&systemBox.childElementCount===1)system(systemBox).catch(error=>failure(systemBox,error));});
 }
+async function issues(parent){
+ intro(parent,'Issues','Everything still open.','Every open issue across TBS, Matra and Tower, counted against the repos that should be there.');
+ const box=el('div','stack');parent.append(box);await guarded(box,()=>issueInventory(box,(repo,item)=>githubDetail(repo,item,'issues')));
+}
 async function route(){
   const [pageRaw,parameters]=location.hash.slice(1).split('?');const page=pageRaw||'watch';const params=new URLSearchParams(parameters||'');
   if(page==='coordinator'&&['tbs','matra'].includes(params.get('id')))localStorage.setItem('office-coordinator-pick',params.get('id'));
-  const views={watch,feed,ask,find,today,work,coordinator,library,system};const parent=$('#content');parent.replaceChildren();
+  const views={watch,feed,ask,find,today,work,coordinator,library,system,issues};const parent=$('#content');parent.replaceChildren();
   document.body.dataset.page=page;
  for(const item of document.querySelectorAll('.tabs a'))item.setAttribute('aria-current',item.hash===`#${page}`?'page':'false');
   const view=el('div');parent.append(view);await guarded(view,()=> (views[page]||watch)(view));
