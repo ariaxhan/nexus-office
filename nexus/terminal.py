@@ -51,8 +51,11 @@ def _delivered(ev):
 
 
 def _outputs(ev):
+    """The runner's verdict AND something it declared and found: exit 0 alone proves only that it exited."""
     result = ev["result"]
-    return None if result.get("ok") is True and not result.get("error") else "runner did not report ok"
+    if result.get("ok") is not True or result.get("error"):
+        return "runner did not report ok"
+    return None if result.get("artifacts") else "no declared output was produced"
 
 
 def _applied(ev):
