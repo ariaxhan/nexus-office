@@ -39,6 +39,8 @@ DEFAULT_MAX_RETRIES = 2
 #: before it is treated as never having started.
 PID_GRACE_S = 5.0
 LEASE_SLACK_S = 60.0
+#: a clean tick writes a `tower.tick` receipt at most this often, so Office can tell idle from dead
+TICK_RECEIPT_S = 60.0
 
 
 def flights_root(ledger: Ledger) -> str:
@@ -105,12 +107,20 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
 
     if is_paused(ledger):
         report["paused"] = True
-        return report
+        return _receipt(ledger, report, now)
 
     report["scheduled"] = _schedule(ledger, now)
     accepted, rejected = accept_tasks(ledger, now)
     report["accepted"], report["rejected"] = accepted, rejected
     report["launched"] = _launch(ledger, now, root)
+    return _receipt(ledger, report, now)
+
+
+def _receipt(ledger, report, now):
+    """Proof the controller is alive: without it a dead Tower and an idle one look the same."""
+    last = ledger.last_event(("tower.tick",))
+    if not last or now - last["ts"] >= TICK_RECEIPT_S:
+        ledger.event("tower.tick", None, {k: v for k, v in report.items() if v}, "tower", now)
     return report
 
 

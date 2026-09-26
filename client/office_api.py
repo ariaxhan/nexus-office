@@ -24,6 +24,7 @@ import coordinator_chat
 import office_buzz
 import human_asks
 import office_timing
+import tower_board
 
 
 def arguments(query):
@@ -79,6 +80,7 @@ def get(handler, path, query):
         '/api/system/plans': system.plans,
         '/api/system/notifications': lambda: system.notifications(q.get('cursor',0)),
         '/api/system/runs': lambda: system.runs(q.get('cursor',0),q.get('plan',''),q.get('state','')),
+        '/api/system/tower': tower_board.read,
         '/api/system/flight': lambda: system.flight(q['id']),
         '/api/system/events': lambda: system.events(q['id'],q.get('cursor',0)),
         '/api/system/log': lambda: system.read_flight_log(q['id'],q.get('offset',0),q.get('lane',''),q.get('version','')),

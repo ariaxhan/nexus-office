@@ -311,11 +311,41 @@ public struct WorkBoard: Decodable, Equatable {
 public struct TowerBoard: Decodable, Equatable {
     public var state = "missing"
     public var detail = ""
+    /// working, queued, paused, idle, tower-down or unknown: never a generic "healthy".
+    public var activity = "unknown"
+    public var tickS: Int?
     public var working = 0
+    public var queued = 0
     public var retrying = 0
+    public var held = 0
+    public var failed = 0
+    public var oldestQueuedS: Int?
     public var dropped = 0
     public var issues: [Issue] = []
+    public var verified: [Verified] = []
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case state, detail, activity, working, queued, retrying, held, failed, dropped, issues, verified
+        case tickS = "tick_s", oldestQueuedS = "oldest_queued_s"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = c.str(.state) ?? "missing"
+        detail = c.str(.detail) ?? ""
+        activity = c.str(.activity) ?? "unknown"
+        tickS = c.int(.tickS)
+        working = c.int(.working) ?? 0
+        queued = c.int(.queued) ?? 0
+        retrying = c.int(.retrying) ?? 0
+        held = c.int(.held) ?? 0
+        failed = c.int(.failed) ?? 0
+        oldestQueuedS = c.int(.oldestQueuedS)
+        dropped = c.int(.dropped) ?? 0
+        issues = c.list(.issues, Lenient<Issue>.self).compactMap(\.value)
+        verified = c.list(.verified, Lenient<Verified>.self).compactMap(\.value)
+    }
 
     public struct Issue: Decodable, Equatable, Identifiable {
         public var id = ""
@@ -327,6 +357,52 @@ public struct TowerBoard: Decodable, Equatable {
         public var detail = ""
         public var next = ""
         public var attempt = ""
+        public var sinceS: Int?
+        public var progressS: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case id, repo, number, title, url, state, detail, next, attempt
+            case sinceS = "since_s", progressS = "progress_s"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = c.str(.id) ?? ""
+            repo = c.str(.repo) ?? ""
+            number = c.int(.number) ?? 0
+            title = c.str(.title) ?? ""
+            url = c.str(.url) ?? ""
+            state = c.str(.state) ?? ""
+            detail = c.str(.detail) ?? ""
+            next = c.str(.next) ?? ""
+            attempt = c.str(.attempt) ?? ""
+            sinceS = c.int(.sinceS)
+            progressS = c.int(.progressS)
+        }
+    }
+
+    /// A flight whose terminal result is LANDED with a commit. A process exit is not one.
+    public struct Verified: Decodable, Equatable, Identifiable {
+        public var flight = ""
+        public var issue = ""
+        public var title = ""
+        public var sha = ""
+        public var branch = ""
+        public var ageS: Int?
+
+        public var id: String { flight }
+
+        enum CodingKeys: String, CodingKey { case flight, issue, title, sha, branch, ageS = "age_s" }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            flight = c.str(.flight) ?? ""
+            issue = c.str(.issue) ?? ""
+            title = c.str(.title) ?? ""
+            sha = c.str(.sha) ?? ""
+            branch = c.str(.branch) ?? ""
+            ageS = c.int(.ageS)
+        }
     }
 }
 

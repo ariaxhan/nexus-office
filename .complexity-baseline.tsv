@@ -66,7 +66,7 @@ client/sources/prs.py	45	read	18	33
 client/sources/prs.py	89	card	24	40
 client/sources/webhook.py	163	read	27	57
 client/sources/webhook.py	263	card	23	46
-client/tower_board.py	58	read	17	46
+client/tower_board.py	206	read	6	17
 client/webhook.py	275	parse	37	32
 client/webhook.py	594	_drop_ignored	17	30
 nexus/contract.py	31	parse	19	18

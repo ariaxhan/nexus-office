@@ -367,6 +367,11 @@ public final class Api {
 
     // MARK: - the socket
 
+    /// A page on this door for a browser: Inspect opens the ledger's own evidence, not a copy of it.
+    public func webURL(_ path: String) -> URL? {
+        URL(string: path, relativeTo: (try? base()) ?? URL(string: Api.local))?.absoluteURL
+    }
+
     private func base() throws -> URL {
         guard case .live(let url) = source else {
             throw ApiError(status: 0, message: "no server configured")

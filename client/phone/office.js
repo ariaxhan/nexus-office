@@ -287,6 +287,8 @@ async function watch(parent){
   }
   if(attention.errors.length)overview.append(el('p','watch-summary-muted','The decision checks are unavailable, so I can’t confirm yet.'));
   parent.append(overview);
+  const tower=section(parent,'Nexus Office');
+  await guarded(tower,()=>towerWatch(tower,parent));
 
   if(rows.length||attention.errors.length){
   const decisions=section(parent,'Needs you');decisions.parentElement.classList.add('watch-decisions');
@@ -354,6 +356,24 @@ async function watch(parent){
    recent.append(list);parent.append(recent);
   });
 
+}
+async function towerWatch(tower,parent){
+   const data=await api('/api/system/tower');
+   if(data.state!=='ok'){tower.append(el('p','watch-unconfirmed',data.detail||'Tower source unavailable'));return;}
+   const state=data.activity==='tower-down'?'Tower down or stale':data.activity==='idle'?'Idle: no eligible work':data.activity;
+   tower.append(el('p','muted',`${state} · last tick ${data.tick_s==null?'unavailable':formatAge(data.tick_s*1000)} · ${data.working} working · ${data.queued} queued · ${data.held} held · ${data.retrying} retrying · ${data.failed} failed`));
+   if(data.oldest_queued_s!=null)tower.append(el('p','muted',`Oldest queued ${formatAge(data.oldest_queued_s*1000)}`));
+   for(const item of data.issues){
+    tower.append(towerItem(item));
+   }
+   const verified=section(parent,'Nexus verified recently');
+   for(const item of data.verified)verified.append(card(`${item.issue||item.title} · ${item.sha}`,`landed ${item.age_s==null?'time unavailable':formatAge(item.age_s*1000)} · ${item.branch}`,()=>flightDetail(item.flight)));
+   if(!data.verified.length)empty(verified,'No verified landed result on record.');
+}
+function towerItem(item){
+ const label=item.number?`${item.repo}#${item.number} · ${item.title}`:item.title;
+ const detail=`${item.state} · ${item.detail||''} · ${item.next||''} · started ${item.since_s==null?'timing unavailable':formatAge(item.since_s*1000)} · last progress ${item.progress_s==null?'timing unavailable':formatAge(item.progress_s*1000)}`;
+ return card(label,detail,()=>item.attempt?flightDetail(item.attempt):item.url&&window.open(item.url,'_blank'));
 }
 function requiresYou(entry){return entry.kind==='human-ask';}
 function formatAge(milliseconds){

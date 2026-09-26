@@ -2371,6 +2371,8 @@ async function watch(parent) {
   }
   if (attention.errors.length) overview.append(el("p", "watch-summary-muted", "The decision checks are unavailable, so I can\u2019t confirm yet."));
   parent.append(overview);
+  const tower = section(parent, "Nexus Office");
+  await guarded(tower, () => towerWatch(tower, parent));
   if (rows.length || attention.errors.length) {
     const decisions = section(parent, "Needs you");
     decisions.parentElement.classList.add("watch-decisions");
@@ -2453,6 +2455,27 @@ async function watch(parent) {
     recent.append(list);
     parent.append(recent);
   });
+}
+async function towerWatch(tower, parent) {
+  const data = await api("/api/system/tower");
+  if (data.state !== "ok") {
+    tower.append(el("p", "watch-unconfirmed", data.detail || "Tower source unavailable"));
+    return;
+  }
+  const state = data.activity === "tower-down" ? "Tower down or stale" : data.activity === "idle" ? "Idle: no eligible work" : data.activity;
+  tower.append(el("p", "muted", `${state} \xB7 last tick ${data.tick_s == null ? "unavailable" : formatAge(data.tick_s * 1e3)} \xB7 ${data.working} working \xB7 ${data.queued} queued \xB7 ${data.held} held \xB7 ${data.retrying} retrying \xB7 ${data.failed} failed`));
+  if (data.oldest_queued_s != null) tower.append(el("p", "muted", `Oldest queued ${formatAge(data.oldest_queued_s * 1e3)}`));
+  for (const item of data.issues) {
+    tower.append(towerItem(item));
+  }
+  const verified = section(parent, "Nexus verified recently");
+  for (const item of data.verified) verified.append(card(`${item.issue || item.title} \xB7 ${item.sha}`, `landed ${item.age_s == null ? "time unavailable" : formatAge(item.age_s * 1e3)} \xB7 ${item.branch}`, () => flightDetail(item.flight)));
+  if (!data.verified.length) empty(verified, "No verified landed result on record.");
+}
+function towerItem(item) {
+  const label = item.number ? `${item.repo}#${item.number} \xB7 ${item.title}` : item.title;
+  const detail2 = `${item.state} \xB7 ${item.detail || ""} \xB7 ${item.next || ""} \xB7 started ${item.since_s == null ? "timing unavailable" : formatAge(item.since_s * 1e3)} \xB7 last progress ${item.progress_s == null ? "timing unavailable" : formatAge(item.progress_s * 1e3)}`;
+  return card(label, detail2, () => item.attempt ? flightDetail(item.attempt) : item.url && window.open(item.url, "_blank"));
 }
 function requiresYou(entry) {
   return entry.kind === "human-ask";
