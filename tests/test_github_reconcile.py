@@ -93,9 +93,9 @@ class GithubReconcile(unittest.TestCase):
         self.assertNotEqual("done", self.led.conn.execute("SELECT state FROM tasks WHERE id=?",
                                                           (self.task["id"],)).fetchone()[0])
 
-    def test_fail_verdict_still_holds(self):
+    def test_first_fail_verdict_is_a_repair_not_a_hold(self):
         self.assertEqual("pending", self.review("FAIL"))
-        self.assertEqual(1, len(self.hold_labels()))
+        self.assertEqual(0, len(self.hold_labels()))  # exhausted repairs hold: test_tower_contract
 
     def test_failed_comment_is_never_proof(self):
         self.comment_rc = 1

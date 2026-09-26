@@ -864,12 +864,13 @@ def tower_execute(led, entry, task):
         return "backoff"  # no claim, no flight: the next tick has a full budget
     issue = issue_now(led, entry, task)
     repo, number = entry["repo"], issue["number"]
-    pr_url = open_pr(repo, number)
-    if pr_url:  # the build already produced a PR: review its head, never rebuild and re-push it
-        return tower_review(led, entry, task, pr_url)
+    reviewed, repair = open_pr_route(led, entry, task, repo, number)
+    if reviewed:
+        return reviewed
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
     from . import evidence
     recorded, issue["nexus_evidence"] = evidence.packet(led, task, issue, entry["path"], flight=fid)
+    issue["nexus_evidence"] += repair_brief(led, fid, repair)
     led.event("work.evidence", fid, recorded, "work")  # retrieved; "used" is the agent naming an id
 
     def gh(*args, timeout=None):
@@ -1014,6 +1015,45 @@ def review_verdict(led, pr_url, head):
     return None
 
 
+MAX_REVIEW_REPAIRS = 2  # rebuilds a PR gets from failed reviews before it waits for a person
+
+
+def repairs_spent(led, pr_url):
+    """Rebuild attempts, not failed heads: a rebuild that changes nothing leaves the head, and must still count."""
+    return sum(loads(r[0], {}).get("pr") == pr_url
+               for r in led.conn.execute("SELECT payload FROM events WHERE kind='work.repair'"))
+
+
+def review_repair(led, repo, pr_url):
+    """{branch, head, reason} when the PR's current head failed review and a rebuild is still owed, else None."""
+    proc = subprocess.run(["gh", "pr", "view", pr_url, "--json", "headRefName,headRefOid"],
+                          capture_output=True, text=True, timeout=remaining(60))
+    pr = loads(proc.stdout, {}) if proc.returncode == 0 else {}
+    verdict = review_verdict(led, pr_url, pr.get("headRefOid"))
+    if not verdict or verdict.get("verdict") != "FAIL" or repairs_spent(led, pr_url) >= MAX_REVIEW_REPAIRS:
+        return None
+    return {"branch": pr["headRefName"], "head": pr["headRefOid"], "reason": str(verdict.get("reason", ""))[:400]}
+
+
+def open_pr_route(led, entry, task, repo, number):
+    """(review outcome, None) for an open PR to review; (None, repair) when its failed head is owed a rebuild;
+    (None, None) with no PR. A PR is never rebuilt and re-pushed except to repair a failed review."""
+    pr_url = open_pr(repo, number)
+    repair = pr_url and review_repair(led, repo, pr_url)
+    if repair:
+        return None, dict(repair, pr=pr_url)
+    return (tower_review(led, entry, task, pr_url) if pr_url else None), None
+
+
+def repair_brief(led, fid, repair):
+    if not repair:
+        return ""
+    led.event("work.repair", fid, repair, "work")
+    return (f"\n\nRepair {repair['pr']}: its independent review failed: {repair['reason']}\n"
+            f"The PR branch `{repair['branch']}` holds the reviewed work: start from "
+            f"`git diff origin/main...origin/{repair['branch']}`, fix that finding, keep the rest.")
+
+
 def tower_review(led, entry, task, pr_url):
 
     """A separate flight, different identity: PASS merges (LANDED), FAIL comments (HELD)."""
@@ -1045,10 +1085,12 @@ def tower_review(led, entry, task, pr_url):
                                 pr_url=pr_url, sha=pr["headRefOid"], branch=pr["headRefName"]))
         if verdict == "PASS":
             return _merge(led, fid, entry, task, issue, pr, pr_url, gh)
+        repairs = repairs_spent(led, pr_url) < MAX_REVIEW_REPAIRS
+        note = "the next flight repairs it" if repairs else "repairs exhausted, waiting for a person"
         return _settle(led, fid, entry, task, issue,
-                       dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: HELD. {why}"),
+                       dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: FAIL, {note}. {why}"),
                             state="HELD", flight=fid, reason=f"review_fail: {why}"[:300], pr_url=pr_url,
-                            sha=pr["headRefOid"], branch=pr["headRefName"]))
+                            sha=pr["headRefOid"], branch=pr["headRefName"], requeue=repairs))
     except Exception as exc:  # noqa: BLE001
         fail(led, fid, exc)
         return "failed"

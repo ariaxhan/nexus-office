@@ -166,6 +166,18 @@ def push_ref(repo, sha, branch):
     return _git(repo, "push", "--quiet", "origin", f"{sha}:refs/heads/{branch}", check=False).returncode == 0
 
 
+def _replace_own(repo, sha, branch):
+    """A repair rebuilds from main, so its push cannot fast-forward the PR branch. Replace the branch only while
+    its tip is still Nexus's own commit: a person's commit on it is never overwritten."""
+    if _git(repo, "fetch", "--quiet", "origin", f"refs/heads/{branch}", check=False).returncode:
+        return False
+    tip = _git(repo, "rev-parse", "FETCH_HEAD").stdout.strip()
+    if "\nNexus-Flight: " not in _git(repo, "log", "-1", "--format=%B", tip).stdout:
+        return False
+    return _git(repo, "push", "--quiet", f"--force-with-lease=refs/heads/{branch}:{tip}", "origin",
+                f"{sha}:refs/heads/{branch}", check=False).returncode == 0
+
+
 def restore(repo, paths, head):
     """Put only these paths back to `head`; files `head` never had are removed."""
     for p in paths:  # index too: an executor that ran `git rm`/`git add` must not leave it staged
@@ -251,7 +263,7 @@ def review(repo, record, message, issue, pr_create, comment=None, reason="in_rev
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
     sha = commit_paths(repo, head, paths, f"{message}\n\nNexus-Flight: {record['flight']}")
     branch = f"aria/issue-{issue}"
-    if not push_ref(repo, sha, branch):
+    if not push_ref(repo, sha, branch) and not _replace_own(repo, sha, branch):
         return hold(repo, record, paths, collisions, "branch_push_rejected", comment)
     url = pr_create(branch, record["branch"], f"{message}\n\nCloses #{issue}")
     restore(repo, paths, head)

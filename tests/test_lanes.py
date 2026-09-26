@@ -363,6 +363,34 @@ class StaleCheckout(Lanes):
         self.assertIsNone(lease.read(self.repo))
 
 
+class PullRequestBranch(Lanes):
+    """A review repair rebuilds from main: it may replace a PR branch Nexus wrote, never one a person pushed to."""
+
+    def commit_on(self, branch, message):
+        git(self.repo, "checkout", "-q", "-b", branch, "main")
+        self.write("a.txt", message + "\n")
+        git(self.repo, "commit", "-qam", message)
+        git(self.repo, "push", "-q", "origin", branch)
+        git(self.repo, "checkout", "-q", "main")
+        return git(self.repo, "rev-parse", branch)
+
+    def rebuilt(self):
+        self.write("b.txt", "repair\n")
+        return landing.commit_paths(self.repo, git(self.repo, "rev-parse", "HEAD"), ["b.txt"],
+                                    "repair\n\nNexus-Flight: flt_2")
+
+    def test_nexus_branch_is_replaced_by_the_repair(self):
+        self.commit_on("aria/issue-7", "first\n\nNexus-Flight: flt_1")
+        sha = self.rebuilt()
+        self.assertTrue(landing._replace_own(self.repo, sha, "aria/issue-7"))
+        self.assertEqual(sha, git(self.origin, "rev-parse", "aria/issue-7"))
+
+    def test_a_persons_commit_on_the_branch_is_never_overwritten(self):
+        theirs = self.commit_on("aria/issue-7", "a person's fix")
+        self.assertFalse(landing._replace_own(self.repo, self.rebuilt(), "aria/issue-7"))
+        self.assertEqual(theirs, git(self.origin, "rev-parse", "aria/issue-7"))
+
+
 class Dispatch(unittest.TestCase):
     def test_stale_or_missing_plan_falls_back_to_current_selection(self):
         from nexus import work

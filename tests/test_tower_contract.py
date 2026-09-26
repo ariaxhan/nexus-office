@@ -150,6 +150,50 @@ class TowerYield(unittest.TestCase):
         cached = [e for e in self.led.events(kind="work.review") if json.loads(e["payload"])["cached"]]
         self.assertEqual(1, len(cached))
 
+    def test_failed_review_is_repaired_twice_then_waits_for_a_person(self):
+        patch("nexus.tower.land_write_flight").start()
+        patch("nexus.work._sensitive_hold", return_value=None).start()
+        self.open_pr = "https://pr/9\n"
+        held = []
+        run = work.subprocess.run
+        patch("nexus.work.subprocess.run", side_effect=lambda argv, **kw: (
+            held.append(argv) if argv[:3] == ["gh", "issue", "edit"] else None) or run(argv, **kw)).start()
+        with patch("nexus.executor.review", return_value=("FAIL", "hides a failure")):
+            for head in ("h1", "h2"):
+                self.pr["headRefOid"] = head
+                work.tower_review(self.led, self.entry, self.task, "https://pr/9")
+                self.assertEqual([], held, head)  # a finding to fix, not a person to wake
+                repair = work.review_repair(self.led, self.entry["repo"], "https://pr/9")
+                self.assertEqual({"branch": "aria/issue-60", "head": head, "reason": "hides a failure"}, repair)
+                work.repair_brief(self.led, "flt_r", dict(repair, pr="https://pr/9"))  # the rebuild flies
+            self.pr["headRefOid"] = "h3"
+            work.tower_review(self.led, self.entry, self.task, "https://pr/9")
+        self.assertIn("hold", held[0])
+        self.assertIsNone(work.review_repair(self.led, self.entry["repo"], "https://pr/9"))
+
+    def test_a_repair_that_changes_nothing_still_spends_its_attempt(self):
+        fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
+        self.led.event("work.review", fid, {"pr": "https://pr/9", "head": "h1", "verdict": "FAIL", "reason": "x"}, "work")
+        for _ in range(work.MAX_REVIEW_REPAIRS):  # each rebuild ends no_change: the head never moves
+            repair = work.review_repair(self.led, self.entry["repo"], "https://pr/9")
+            work.repair_brief(self.led, fid, dict(repair, pr="https://pr/9"))
+        self.assertIsNone(work.review_repair(self.led, self.entry["repo"], "https://pr/9"))
+
+    def test_repair_flight_rebuilds_with_the_review_finding(self):
+        self.open_pr = "https://pr/9\n"
+        fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
+        self.led.event("work.review", fid, {"pr": "https://pr/9", "head": "h1", "verdict": "FAIL",
+                                            "reason": " hides a failure"}, "work")
+        work.pending(self.led, fid, {"reason": "review_fail", "retry_at": 0})
+        seen = {}
+        with patch("nexus.executor.fly", side_effect=lambda entry, issue, *a, **k: seen.update(issue) or {
+                "state": "HELD", "reason": "in_review", "pr_url": "https://pr/9", "flight": a[0]}), \
+                patch("nexus.tower.land_write_flight"), patch("nexus.work.tower_review"):
+            work.tower_execute(self.led, self.entry, self.task)
+        self.assertIn("hides a failure", seen["nexus_evidence"])
+        self.assertIn("origin/main...origin/aria/issue-60", seen["nexus_evidence"])
+        self.assertEqual(1, len(self.led.events(kind="work.repair")))
+
     def test_p0_preempts_a_wait_recorded_before_it_was_p0(self):
         fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
         work.pending(self.led, fid, {"reason": "not_done", "retry_at": work.time.time() + 3600})
