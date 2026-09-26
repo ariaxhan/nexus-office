@@ -316,6 +316,37 @@ class Lanes(unittest.TestCase):
         self.assertIsNone(lanes.read_plan(os.path.join(self.dir, "missing.json")))
 
 
+class StaleCheckout(Lanes):
+    """#210: a whole-repo flight never builds on a checkout origin has moved past."""
+
+    def advance_origin(self, rel, text):
+        other = os.path.join(self.dir, "other")
+        git(self.dir, "clone", "-q", self.origin, other)
+        for k, v in (("user.name", "t"), ("user.email", "t@t")):
+            git(other, "config", k, v)
+        with open(os.path.join(other, rel), "w") as f:
+            f.write(text)
+        git(other, "commit", "-qam", "upstream")
+        git(other, "push", "-q", "origin", "main")
+        return git(other, "rev-parse", "HEAD")
+
+    def test_behind_checkout_catches_up_and_keeps_unrelated_dirty_bytes(self):
+        tip = self.advance_origin("a.txt", "upstream\n")
+        self.write("human.txt", "a person's edit\n")
+        record = lease.acquire(self.repo, "main", "flt_new", os.getpid(), 600)
+        self.assertEqual(tip, record["head"])
+        self.assertEqual("upstream\n", self.read("a.txt"))
+        self.assertEqual("a person's edit\n", self.read("human.txt"))
+
+    def test_dirty_bytes_on_a_file_origin_changed_refuse_the_flight_and_free_the_lock(self):
+        self.advance_origin("a.txt", "upstream\n")
+        self.write("a.txt", "a person's edit\n")
+        with self.assertRaisesRegex(lease.Owned, "behind_origin:dirty a.txt"):
+            lease.acquire(self.repo, "main", "flt_new", os.getpid(), 600)
+        self.assertEqual("a person's edit\n", self.read("a.txt"))
+        self.assertIsNone(lease.read(self.repo))
+
+
 class Dispatch(unittest.TestCase):
     def test_stale_or_missing_plan_falls_back_to_current_selection(self):
         from nexus import work
