@@ -5,6 +5,7 @@ import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
 import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
+import {selecting,redrawIfChanged} from './office-selection.js';
 import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
 import {issueInventory,issueControls} from './office-issues.js';
 import {newTask,taskList,permissions,taskDetail,permissionCard} from './office-tasks.js';
@@ -138,11 +139,11 @@ async function githubBranches(repo,cursor=1,parent=null){
 }
 
 async function refreshRunningSource(source){
- if(source.busy)return;
+ if(source.busy||selecting(source.rows))return;
  source.busy=true;const next=el('div');
  try{
   await source.render(next);
-  source.rows.replaceChildren(...next.childNodes);
+  redrawIfChanged(source.rows,next.innerHTML,()=>source.rows.replaceChildren(...next.childNodes));
   source.status.textContent=`Checked ${new Date().toLocaleTimeString()}`;
  }catch(error){
   source.status.textContent=`${source.name} unavailable; last view retained. ${error.message}`;
@@ -501,7 +502,7 @@ async function ask(parent){
    const initial=el('option','',data.selection||data.model);initial.value=data.selection||data.model;picker.append(initial);
   const draw=(state,toBottom=false)=>{
    const follow=toBottom||!rendered||distanceFromBottom()<64,previousTop=thread.scrollTop;
-   current=state;thread.replaceChildren();
+   current=state;thread.dataset.signature=JSON.stringify(state);thread.replaceChildren();
     if(!state.messages.length){thread.append(el('p','ask-intro','Ask in your own words. Office will bring back the answer and where it came from.'));
      for(const prompt of ['Is anything blocked on me?','What happened while I was asleep?','Why isn’t HomeClass moving?'])
       thread.append(button(prompt,()=>{input.value=prompt;input.focus();},'ask-prompt'));
@@ -535,7 +536,7 @@ async function ask(parent){
     for(const row of models.items){const option=el('option','',row.name);option.value=row.id;picker.append(option);}
     picker.value=chosen;}).catch(error=>notice('Model list: '+error.message));
   const timer=setInterval(async()=>{if(!chat.isConnected){clearInterval(timer);return;}if(!current?.busy)return;
-   try{draw(await api('/api/ask'));}catch(error){notice(error.message);}},2500);
+   try{const next=await api('/api/ask');redrawIfChanged(thread,JSON.stringify(next),()=>draw(next));}catch(error){notice(error.message);}},2500);
   async function sendPending(payload){
    submit.disabled=true;
    try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);draw(await api('/api/ask'),true);}

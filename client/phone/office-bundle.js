@@ -1175,6 +1175,19 @@ function poemProvenance(body, source) {
 init_office_files();
 init_office_markdown();
 
+// client/phone/office-selection.js
+function selecting(node) {
+  const selection = globalThis.getSelection?.();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
+  return node.contains(selection.anchorNode) || node.contains(selection.focusNode);
+}
+function redrawIfChanged(node, signature, draw) {
+  if (node.dataset.signature === signature || selecting(node)) return false;
+  node.dataset.signature = signature;
+  draw();
+  return true;
+}
+
 // client/phone/office-coordinator.js
 init_office_ui();
 init_office_files();
@@ -2269,12 +2282,12 @@ async function githubBranches(repo, cursor = 1, parent = null) {
   return loaded;
 }
 async function refreshRunningSource(source) {
-  if (source.busy) return;
+  if (source.busy || selecting(source.rows)) return;
   source.busy = true;
   const next = el("div");
   try {
     await source.render(next);
-    source.rows.replaceChildren(...next.childNodes);
+    redrawIfChanged(source.rows, next.innerHTML, () => source.rows.replaceChildren(...next.childNodes));
     source.status.textContent = `Checked ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`;
   } catch (error) {
     source.status.textContent = `${source.name} unavailable; last view retained. ${error.message}`;
@@ -2942,6 +2955,7 @@ async function ask(parent) {
     const draw = (state, toBottom = false) => {
       const follow = toBottom || !rendered || distanceFromBottom() < 64, previousTop = thread.scrollTop;
       current2 = state;
+      thread.dataset.signature = JSON.stringify(state);
       thread.replaceChildren();
       if (!state.messages.length) {
         thread.append(el("p", "ask-intro", "Ask in your own words. Office will bring back the answer and where it came from."));
@@ -3009,7 +3023,8 @@ async function ask(parent) {
       }
       if (!current2?.busy) return;
       try {
-        draw(await api("/api/ask"));
+        const next = await api("/api/ask");
+        redrawIfChanged(thread, JSON.stringify(next), () => draw(next));
       } catch (error) {
         notice(error.message);
       }

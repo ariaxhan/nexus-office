@@ -22,7 +22,7 @@ for test_file in $(find tests -type f -name 'test_*.py' | sort); do
   PYTHONPATH="$PWD/client:$PWD${PYTHONPATH:+:$PYTHONPATH}" \
     "$PYTHON" -m unittest discover -s "$(dirname "$test_file")" -p "$(basename "$test_file")"
 done
-node --test tests/pwa_probe.test.mjs tests/markdown.test.mjs tests/active.test.mjs
+node --test tests/pwa_probe.test.mjs tests/markdown.test.mjs tests/active.test.mjs tests/selection.test.mjs
 
 if [ ! -d app/Office.xcodeproj ]; then
   command -v xcodegen >/dev/null 2>&1 || {
