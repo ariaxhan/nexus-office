@@ -89,7 +89,7 @@ UNVERIFIED = "unverified:"
 
 
 def _patch_id(git, *diff_args):
-    diff = git("diff", "--binary", *diff_args)
+    diff = git("diff", "--binary", "--unified=0", *diff_args)  # no context: main moving nearby is not a new change
     if diff.returncode or not diff.stdout:
         return None
     out = subprocess.run(["git", "patch-id", "--stable"], input=diff.stdout, capture_output=True, text=True)
@@ -103,7 +103,8 @@ def reviewed_receipt(sha, review, checkout, run=subprocess.run):
         return False, f"{UNVERIFIED} landed {sha} with no contract check and no recorded review PASS"
     head = review["head"]
     git = lambda *a: run(["git", *a], cwd=checkout, capture_output=True, text=True, timeout=300)  # noqa: E731
-    git("fetch", "--quiet", "origin", sha, head)
+    if git("fetch", "--quiet", "origin", sha, head).returncode:
+        return False, f"{UNVERIFIED} cannot fetch landed {sha} and reviewed {head} to compare"
     base = git("merge-base", f"{sha}^", head).stdout.strip()
     landed, reviewed = _patch_id(git, f"{sha}^", sha), base and _patch_id(git, base, head)
     if not landed or landed != reviewed:

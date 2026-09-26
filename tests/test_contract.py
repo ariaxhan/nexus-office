@@ -99,6 +99,23 @@ class ReviewedChange(unittest.TestCase):
         self.assertTrue(done, why)
         self.assertIn(sha, why)
 
+    def test_main_moving_near_the_reviewed_hunk_is_still_the_reviewed_change(self):
+        lines = [str(n) for n in range(1, 21)]
+        self.git(self.repo, "switch", "-q", "main")
+        self.commit("f", "\n".join(lines) + "\n")
+        self.git(self.repo, "switch", "-q", "-c", "pr2")
+        self.commit("f", "\n".join(lines[:9] + ["TEN"] + lines[10:]) + "\n")
+        head = self.git(self.repo, "rev-parse", "HEAD")
+        self.git(self.repo, "switch", "-q", "main")
+        self.commit("f", "\n".join(lines[:7] + ["EIGHT"] + lines[8:]) + "\n")  # main moves 2 lines away
+        self.git(self.repo, "merge", "-q", "--squash", "pr2")
+        self.git(self.repo, "commit", "-qm", "squash")
+        sha = self.git(self.repo, "rev-parse", "HEAD")
+        self.git(self.repo, "push", "-q", "origin", "main", "pr2")
+        done, why = contract.done_receipt({"state": "LANDED", "sha": sha}, None, str(self.repo),
+                                          review={"verdict": "PASS", "head": head})
+        self.assertTrue(done, why)
+
     def test_landed_change_that_differs_from_the_reviewed_one_is_not_done(self):
         sha = self.squash(extra="c")
         done, why = contract.done_receipt({"state": "LANDED", "sha": sha}, None, str(self.repo),
