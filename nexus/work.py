@@ -403,6 +403,9 @@ def fail(led, fid, exc):
     item_attempt(led, fid, "failed", time.time() + delay, [str(exc)])
     led.event("work.failure", row["task_id"], {"flight": fid, "error": str(exc),
               "next_retry": time.time() + delay, "attempt": row["attempt"]}, "work")
+    from . import evidence  # have we seen this failure before? retrieved now, offered to the next attempt
+    found, error = evidence.scars(str(exc), None)
+    led.event("work.evidence", fid, {"moment": "failure", "scars": [s["id"] for s in found], "error": error}, "work")
     if row["state"] not in TERMINAL:
         led.fail(fid, "work_failed", str(exc), expect=row["state"])
     from . import lifecycle_observe
@@ -865,6 +868,9 @@ def tower_execute(led, entry, task):
     if pr_url:  # the build already produced a PR: review its head, never rebuild and re-push it
         return tower_review(led, entry, task, pr_url)
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
+    from . import evidence
+    recorded, issue["nexus_evidence"] = evidence.packet(led, task, issue, entry["path"], flight=fid)
+    led.event("work.evidence", fid, recorded, "work")  # retrieved; "used" is the agent naming an id
 
     def gh(*args, timeout=None):
         proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout or remaining(120))

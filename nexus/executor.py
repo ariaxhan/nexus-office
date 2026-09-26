@@ -95,7 +95,7 @@ def issue_prompt(entry, issue):
             "If Tower retained work on an aria/held branch, inspect and reuse it before editing. "
             "Do not commit, push, branch, clone, stash or "
             f"open PRs; Nexus lands the change. Run the project's own checks.\n"
-            f"Product guidance: {entry.get('product_guidance', '')}")
+            f"Product guidance: {entry.get('product_guidance', '')}{issue.get('nexus_evidence', '')}")
 
 
 ANTIGRAVITY = re.compile(r"antigravity|tbs-agy|copy[- ]authority", re.I)
