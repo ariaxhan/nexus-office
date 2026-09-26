@@ -52,6 +52,8 @@ def flight(identifier):
             raise FileNotFoundError('Flight is not in the ledger')
         data=dict(row)
         data['artifacts']=[dict(r) for r in db.execute('SELECT * FROM artifacts WHERE flight_id=? ORDER BY created_at',(identifier,))]
+        # Inspect: the durable trail behind the state Office shows, newest last.
+        data['evidence']=[dict(r) for r in reversed(db.execute('SELECT id,ts,kind,actor,payload FROM events WHERE subject IN (?,?) ORDER BY id DESC LIMIT 40',(identifier,data.get('task_id') or '')).fetchall())]
     return data
 
 
