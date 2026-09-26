@@ -194,6 +194,30 @@ class TowerYield(unittest.TestCase):
         self.assertIn("origin/main...origin/aria/issue-60", seen["nexus_evidence"])
         self.assertEqual(1, len(self.led.events(kind="work.repair")))
 
+    def closed_after_merge(self):
+        fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
+        self.led.event("flight.terminal", fid, {"state": "LANDED", "sha": "s1", "pr_url": "https://pr/9",
+                                                "reviewed_head": "h1"}, "work")
+        self.issues[0]["state"] = "closed"
+        work.discover(self.led, self.entry)
+        return self.led.conn.execute("SELECT * FROM tasks WHERE id=?", (self.task["id"],)).fetchone()
+
+    def test_a_merged_change_whose_receipt_could_not_run_is_proven_after_close(self):
+        task = self.closed_after_merge()
+        with patch("nexus.contract.done_receipt", return_value=(True, "landed s1; check passed")) as receipt, \
+                patch("nexus.work.close_issue", return_value="closed"):
+            self.assertEqual("done", work._run_task(self.led, self.entry, task))
+        self.assertEqual("s1", receipt.call_args[0][0]["sha"])
+        self.assertEqual("done", self.led.conn.execute("SELECT state FROM tasks WHERE id=?", (task["id"],)).fetchone()[0])
+
+    def test_reproof_is_bounded(self):
+        task = self.closed_after_merge()
+        with patch("nexus.contract.done_receipt", return_value=(False, "check failed")) as receipt, \
+                patch("nexus.work.next_retry", return_value=0):
+            for _ in range(work.REPROVE_ATTEMPTS + 2):
+                work._run_task(self.led, self.entry, task)
+        self.assertEqual(work.REPROVE_ATTEMPTS, receipt.call_count)
+
     def test_p0_preempts_a_wait_recorded_before_it_was_p0(self):
         fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
         work.pending(self.led, fid, {"reason": "not_done", "retry_at": work.time.time() + 3600})
