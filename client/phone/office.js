@@ -570,10 +570,40 @@ async function issues(parent){
  intro(parent,'Issues','Everything still open.','Every open issue across TBS, Matra and Tower, counted against the repos that should be there.');
  const box=el('div','stack');parent.append(box);await guarded(box,()=>issueInventory(box,(repo,item)=>githubDetail(repo,item,'issues')));
 }
+let documentRequest=0;
+async function documentView(parent,params){
+ const request=++documentRequest,current=()=>request===documentRequest;
+ const repo=params.get('repo')||'',path=params.get('path')||'';
+ if($('#detail').open)$('#detail').close();
+ intro(parent,repo||'Document',path||'No document was requested.','Opened from an agent handoff.');
+ const box=el('div','stack');parent.append(box);
+ try{
+  if(!repo||!path)throw Error('No document was requested.');
+  const found=await api(`/api/objects/locate?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+  if(!current())return;
+  const ack=state=>api('/api/objects/active',{repo,path,state});
+  // Closing the viewer, routing elsewhere, or anything replacing the sheet (Ask an agent, View source)
+  // means the document is no longer on screen.
+  let watcher=null;
+  const closed=()=>{if(!watcher)return;watcher.disconnect();watcher=null;$('#detail').removeEventListener('close',closed);ack('closed').catch(()=>{});};
+  // Every open, including "Open this document again", re-acknowledges the active document.
+  const show=async()=>{watcher?.disconnect();watcher=null;$('#detail').removeEventListener('close',closed);if(!await openFile(found.id,0,current))return false;
+   // Track closing before the ack is awaited: a close during the request must still end as 'closed'.
+   const body=$('#detail-body'),shown=body.firstChild,mine=new MutationObserver(()=>{if(!body.contains(shown))closed();});
+   watcher=mine;mine.observe(body,{childList:true});$('#detail').addEventListener('close',closed);
+   await ack('open');if(!watcher)await ack('closed').catch(()=>{});return watcher===mine;};
+  const leave=()=>{removeEventListener('hashchange',leave);closed();};
+  addEventListener('hashchange',leave);
+  box.append(card(`${found.project} / ${found.path}`,'Open this document again',()=>show().catch(error=>failure(box,error))));
+  await show();
+ }catch(error){if(!current())return;failure(box,error);await api('/api/objects/active',{repo,path,state:'missing',error:error.message}).catch(()=>{});}
+}
 async function route(){
+  // Any navigation abandons a document still loading: its late response must not reopen or ack it.
+  documentRequest++;
   const [pageRaw,parameters]=location.hash.slice(1).split('?');const page=pageRaw||'watch';const params=new URLSearchParams(parameters||'');
   if(page==='coordinator'&&['tbs','matra'].includes(params.get('id')))localStorage.setItem('office-coordinator-pick',params.get('id'));
-  const views={watch,feed,ask,find,today,work,coordinator,library,system,issues};const parent=$('#content');parent.replaceChildren();
+  const views={watch,feed,ask,find,today,work,coordinator,library,system,issues,document:view=>documentView(view,params)};const parent=$('#content');parent.replaceChildren();
   document.body.dataset.page=page;
  for(const item of document.querySelectorAll('.tabs a'))item.setAttribute('aria-current',item.hash===`#${page}`?'page':'false');
   const view=el('div');parent.append(view);await guarded(view,()=> (views[page]||watch)(view));

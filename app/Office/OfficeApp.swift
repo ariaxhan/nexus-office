@@ -280,7 +280,7 @@ private struct OfficeWebView: NSViewRepresentable {
     let openRevision: Int
 
     private var destination: URL {
-        openRequest?.webDestination(from: url) ?? url
+        openRequest?.webDestination(from: url, request: openRevision) ?? url
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(home: url) }

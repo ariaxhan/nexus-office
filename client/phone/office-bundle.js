@@ -719,9 +719,10 @@ function draft(id) {
     return null;
   }
 }
-async function openFile(id, offset = 0) {
-  rememberDetail("file", id);
+async function openFile(id, offset = 0, current2 = () => true) {
   const data = await api(`/api/objects/detail?id=${encodeURIComponent(id)}&offset=${offset}`);
+  if (!current2()) return false;
+  rememberDetail("file", id);
   const body = sheet(data.name);
   body.append(el("p", "muted", `${data.project} / ${data.path}`), el("p", "muted", `Revision ${data.revision.slice(0, 12)}${data.is_text ? ` \xB7 lines ${data.line_start}\u2013${data.line_end}` : ""}`));
   checkoutDetails(body, id);
@@ -744,6 +745,7 @@ async function openFile(id, offset = 0) {
   if (data.is_text) body.append(contextSelection(data));
   if (data.next_offset !== null) body.append(button("Next part", () => openFile(id, data.next_offset)));
   if (offset > 0) body.append(button("Start of file", () => openFile(id)));
+  return true;
 }
 function preview(body, data) {
   if (data.mime.startsWith("image/")) {
@@ -3051,12 +3053,65 @@ async function issues(parent) {
   parent.append(box);
   await guarded(box, () => issueInventory(box, (repo, item) => githubDetail(repo, item, "issues")));
 }
+var documentRequest = 0;
+async function documentView(parent, params) {
+  const request = ++documentRequest, current2 = () => request === documentRequest;
+  const repo = params.get("repo") || "", path = params.get("path") || "";
+  if ($("#detail").open) $("#detail").close();
+  intro(parent, repo || "Document", path || "No document was requested.", "Opened from an agent handoff.");
+  const box = el("div", "stack");
+  parent.append(box);
+  try {
+    if (!repo || !path) throw Error("No document was requested.");
+    const found = await api(`/api/objects/locate?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+    if (!current2()) return;
+    const ack = (state) => api("/api/objects/active", { repo, path, state });
+    let watcher = null;
+    const closed = () => {
+      if (!watcher) return;
+      watcher.disconnect();
+      watcher = null;
+      $("#detail").removeEventListener("close", closed);
+      ack("closed").catch(() => {
+      });
+    };
+    const show = async () => {
+      watcher?.disconnect();
+      watcher = null;
+      $("#detail").removeEventListener("close", closed);
+      if (!await openFile(found.id, 0, current2)) return false;
+      const body = $("#detail-body"), shown = body.firstChild, mine = new MutationObserver(() => {
+        if (!body.contains(shown)) closed();
+      });
+      watcher = mine;
+      mine.observe(body, { childList: true });
+      $("#detail").addEventListener("close", closed);
+      await ack("open");
+      if (!watcher) await ack("closed").catch(() => {
+      });
+      return watcher === mine;
+    };
+    const leave = () => {
+      removeEventListener("hashchange", leave);
+      closed();
+    };
+    addEventListener("hashchange", leave);
+    box.append(card(`${found.project} / ${found.path}`, "Open this document again", () => show().catch((error) => failure(box, error))));
+    await show();
+  } catch (error) {
+    if (!current2()) return;
+    failure(box, error);
+    await api("/api/objects/active", { repo, path, state: "missing", error: error.message }).catch(() => {
+    });
+  }
+}
 async function route() {
+  documentRequest++;
   const [pageRaw, parameters] = location.hash.slice(1).split("?");
   const page = pageRaw || "watch";
   const params = new URLSearchParams(parameters || "");
   if (page === "coordinator" && ["tbs", "matra"].includes(params.get("id"))) localStorage.setItem("office-coordinator-pick", params.get("id"));
-  const views = { watch, feed, ask, find, today, work, coordinator, library, system, issues };
+  const views = { watch, feed, ask, find, today, work, coordinator, library, system, issues, document: (view2) => documentView(view2, params) };
   const parent = $("#content");
   parent.replaceChildren();
   document.body.dataset.page = page;
