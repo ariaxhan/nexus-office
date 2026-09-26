@@ -14,6 +14,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nexus.ledger import Ledger, LedgerError, TRANSITIONS  # noqa: E402
+from nexus import terminal  # noqa: E402
 from tests.ledger_fixture import build  # noqa: E402
 
 
@@ -89,7 +90,7 @@ class AppendOnlyHistory(LedgerCase):
         flight = self.led.create_flight(self.plan)
         self.led.set_state(flight, "running")
         self.led.set_state(flight, "produced")
-        self.led.set_state(flight, "verified")
+        self.led.set_state(flight, "verified", evidence=terminal.outputs({"ok": True}))
         landing = self.led.create_landing(flight, "repo#main", state="verified")
         self.led.apply_landing(landing, "abc123")
         with self.assertRaises(sqlite3.IntegrityError):
@@ -114,14 +115,14 @@ class Transitions(LedgerCase):
     def test_landed_requires_an_applied_landing(self):
         flight = self.led.create_flight(self.plan)
         for state in ("running", "produced", "verified"):
-            self.led.set_state(flight, state)
+            self.led.set_state(flight, state, evidence=terminal.outputs({"ok": True}))
         self.led.conn.execute("UPDATE flights SET state='landed' WHERE id=?", (flight,))
         self.assertTrue(any("no applied landing" in p for p in self.led.integrity_check()))
 
     def test_apply_landing_is_idempotent(self):
         flight = self.led.create_flight(self.plan)
         for state in ("running", "produced", "verified"):
-            self.led.set_state(flight, state)
+            self.led.set_state(flight, state, evidence=terminal.outputs({"ok": True}))
         landing = self.led.create_landing(flight, "repo#main", state="verified")
         self.assertTrue(self.led.apply_landing(landing, "sha1"))
         self.assertFalse(self.led.apply_landing(landing, "sha1"))
@@ -130,7 +131,7 @@ class Transitions(LedgerCase):
     def test_applying_is_recorded_before_the_push(self):
         flight = self.led.create_flight(self.plan)
         for state in ("running", "produced", "verified"):
-            self.led.set_state(flight, state)
+            self.led.set_state(flight, state, evidence=terminal.outputs({"ok": True}))
         landing = self.led.create_landing(flight, "repo#main", state="verified")
         self.assertTrue(self.led.start_applying(landing, "sha1"))
         row = self.led.landing(landing)
@@ -196,7 +197,7 @@ class TasksAndRadio(LedgerCase):
     def test_a_dedupe_key_is_owned_by_one_live_task(self):
         first = self.led.add_task("run it", origin="plan", plan_id=self.plan, dedupe_key="k")
         self.assertIsNotNone(self.led.live_task_with_key("k"))
-        self.led.set_task_state(first, "done")
+        self.led.set_task_state(first, "done", evidence=terminal.outputs({"ok": True}))
         self.assertIsNone(self.led.live_task_with_key("k"))
 
     def test_a_decided_task_is_history(self):

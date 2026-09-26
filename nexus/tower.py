@@ -29,6 +29,7 @@ import time
 
 from . import flights as fl
 from . import landing as ld
+from . import terminal
 from .ledger import Ledger, loads
 
 DEFAULT_CONCURRENCY = 4
@@ -207,7 +208,7 @@ def _produced(ledger, flight, workspace, result, now):
         ledger.release_leases(flight["id"], now=now)
         if flight["task_id"] and not _persistent_task(ledger, flight):
             ledger.set_task_state(flight["task_id"], "done", decided_by="tower policy",
-                                  expect="running", now=now)
+                                  expect="running", now=now, evidence=terminal.outputs(result))
     return True
 
 
@@ -216,8 +217,9 @@ def land_write_flight(ledger, flight_id, repo, result, now=None):
     ld.require_terminal(repo, result)
     ledger.event("flight.terminal", flight_id, result, "tower", now)
     if result["state"] == "LANDED" and result.get("sha"):  # proven on origin by require_terminal
-        for state in ("produced", "verified"):
-            ledger.set_state(flight_id, state, source="tower", now=now)
+        ledger.set_state(flight_id, "produced", source="tower", now=now)
+        ledger.set_state(flight_id, "verified", source="tower", now=now,
+                         evidence=terminal.landed(result, f"origin has {result['sha']}"))
     return result
 
 
@@ -484,7 +486,8 @@ def _land(ledger, now):
         target = _target(ledger, flight)
         if target is None:
             continue
-        if not ledger.set_state(flight["id"], "verified", expect="produced", now=now):
+        if not ledger.set_state(flight["id"], "verified", expect="produced", now=now,
+                                evidence=terminal.outputs(loads(flight["result"], {}))):
             continue
         flight = ledger.flight(flight["id"])
         landed += _land_one(ledger, flight, target, now)
@@ -532,7 +535,7 @@ def _applied(ledger, landing_id, sha, repo, branch, now):
     flight = ledger.flight(row["flight_id"])
     if flight["task_id"]:
         ledger.set_task_state(flight["task_id"], "done", decided_by="tower policy",
-                              expect="running", now=now)
+                              expect="running", now=now, evidence=terminal.applied(sha))
     try:
         moved = ld.fast_forward(repo, branch, sha)
     except (ld.LandingError, OSError, subprocess.TimeoutExpired) as exc:

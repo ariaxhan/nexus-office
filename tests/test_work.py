@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from nexus import tower, work
+from nexus import terminal, tower, work
 from nexus.ledger import Ledger
 
 
@@ -497,7 +497,7 @@ else:
         def fake_landing(ledger, flight_id, repo, result):
             if result["state"] == "LANDED":
                 ledger.set_state(flight_id, "produced")
-                ledger.set_state(flight_id, "verified")
+                ledger.set_state(flight_id, "verified", evidence=terminal.landed(result, result["sha"]))
             return result
         patch("nexus.tower.land_write_flight", side_effect=fake_landing).start()
         with patch.dict(os.environ, TBS_NOW="2026-09-14T10:00:00+09:00", TBS_SENSITIVE_WINDOW_TEST_CLOCK="1"):

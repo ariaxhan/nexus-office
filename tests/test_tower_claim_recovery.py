@@ -33,8 +33,8 @@ class TowerClaimRecovery(unittest.TestCase):
         tower.land_write_flight(self.led, fid, self.entry['path'],
                                 {'state': 'CLOSED', 'flight': fid, 'reason': 'no_change'})
         self.assertEqual(self.led.flight(fid)['state'], 'running')  # no_change is never verified now
-        for state in ('produced', 'verified'):  # the legacy row, written before that rule
-            self.led.set_state(fid, state, source='tower')
+        # the legacy row, written before that rule (and before terminal evidence)
+        self.led.conn.execute("UPDATE flights SET state='verified' WHERE id=?", (fid,))
         with patch('nexus.work.flights.alive', return_value=False):
             self.assertEqual(work.recover_terminal(self.led), [fid])
         self.assertEqual(self.led.flight(fid)['state'], 'cancelled')

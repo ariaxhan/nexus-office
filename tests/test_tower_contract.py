@@ -65,7 +65,9 @@ class TowerContract(unittest.TestCase):
         self.assertEqual([], self.closed)
 
     def test_done_without_receipt_is_reopened_never_closed(self):
-        self.led.set_task_state(self.task["id"], "done", decided_by="old exit-code inference")
+        # a legacy row written before terminal evidence existed; the guard now refuses this write
+        self.led.conn.execute("UPDATE tasks SET state='done', decided_by='old exit-code inference' WHERE id=?",
+                              (self.task["id"],))
         done = self.led.conn.execute("SELECT * FROM tasks WHERE id=?", (self.task["id"],)).fetchone()
         self.assertEqual("reopened", work._run_task(self.led, self.entry, done))
         self.assertEqual([], self.closed)
