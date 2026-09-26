@@ -365,6 +365,12 @@ public final class Api {
         return try await post("/api/decision", payload)
     }
 
+    /// The durable record behind a Tower row: flight, task, artifacts, evidence events.
+    public func inspectURL(flight: String) -> URL? {
+        guard case .live(let url) = source, !flight.isEmpty else { return nil }
+        return URL(string: "/api/system/flight?id=\(flight)", relativeTo: url)
+    }
+
     // MARK: - the socket
 
     private func base() throws -> URL {
