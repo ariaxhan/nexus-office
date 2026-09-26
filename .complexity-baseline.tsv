@@ -83,6 +83,5 @@ nexus/work.py	605	wave_candidates	27	39
 nexus/work.py	750	cut_idle	18	34
 nexus/work.py	788	tower_execute	16	45
 nexus/work.py	951	_run	23	45
-nexus/work.py	1197	_run_task	16	27
 scripts/runtime_identity.py	127	probe_door	18	38
 tests/crash_tower/test_crash_v0.py	80	test_kill_anything_and_the_ledger_still_has_one_reading	22	77
