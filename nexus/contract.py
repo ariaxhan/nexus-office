@@ -130,6 +130,11 @@ def done_receipt(result, contract_, checkout, run=subprocess.run, review=None):
         git("fetch", "--quiet", "origin", sha)
         if git("worktree", "add", "--detach", tree, sha).returncode:
             return False, f"cannot check out landed {sha} to verify"
+        if os.path.exists(os.path.join(tree, "package-lock.json")):  # a fresh tree has no node_modules: an npm
+            # check would fail on its own tools (esbuild exit 127, #192) and call merged work unproven
+            if run(["bash", "-lc", "npm ci --prefer-offline --no-audit --no-fund"], cwd=tree,
+                   capture_output=True, text=True, timeout=900).returncode:
+                return False, f"cannot install dependencies at {sha} to verify"
         proc = run(["bash", "-lc", check], cwd=tree, capture_output=True, text=True, timeout=1800)
         if proc.returncode:
             return False, f"contract check failed at {sha}: {check} (exit {proc.returncode})"

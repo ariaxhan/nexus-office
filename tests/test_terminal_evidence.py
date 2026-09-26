@@ -50,6 +50,23 @@ class StaleCheckoutReceipt(unittest.TestCase):
         self.assertIn(self.stale, why)
         self.assertEqual(1, len(git(self.checkout, "worktree", "list").splitlines()))  # throwaway removed
 
+    def test_an_npm_check_gets_its_dependencies_installed_first(self):
+        (self.checkout / "package.json").write_text('{"name": "t", "version": "1.0.0"}')
+        (self.checkout / "package-lock.json").write_text(
+            '{"name": "t", "version": "1.0.0", "lockfileVersion": 3, "requires": true, '
+            '"packages": {"": {"name": "t", "version": "1.0.0"}}}')
+        git(self.checkout, "add", "package.json", "package-lock.json")
+        git(self.checkout, "commit", "--quiet", "-m", "npm")
+        git(self.checkout, "push", "--quiet", "origin", "HEAD:refs/heads/npm")
+        sha, seen = git(self.checkout, "rev-parse", "HEAD"), []
+        def run(argv, **kw):
+            seen.append(argv[-1])
+            return subprocess.run(argv, **kw)
+        done, why = contract.done_receipt({"state": "LANDED", "sha": sha}, {"check": "test -f package.json"},
+                                          str(self.checkout), run=run)
+        self.assertTrue(done, why)
+        self.assertLess(seen.index("npm ci --prefer-offline --no-audit --no-fund"), seen.index("test -f package.json"))
+
     def test_unreachable_sha_fails_closed(self):
         done, why = contract.done_receipt({"state": "LANDED", "sha": "0" * 40}, {"check": "true"}, str(self.checkout))
         self.assertFalse(done, why)
