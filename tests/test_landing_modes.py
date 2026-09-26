@@ -105,6 +105,30 @@ class Case(unittest.TestCase):
         self.assertIsNone(lease.read(self.repo))
         self.assertEqual(self.read("other-session.txt"), "live\n")
 
+    def test_hold_restores_and_stays_held_when_the_comment_raises(self):
+        """2026-09-25 01:40Z: gh timed out on the spent flight deadline; restore never ran and a
+        durable hold was recorded as failed."""
+        rec = lease.acquire(self.repo, "main", "fcomment", os.getpid(), 600)
+        self.write("wip.txt", "half\n")
+
+        def comment(body):
+            raise subprocess.TimeoutExpired(["gh"], 0.066)
+
+        result = landing.hold(self.repo, rec, ["wip.txt"], [], "crashed", comment)
+        self.assertEqual(result["state"], "HELD")
+        self.assertEqual(self.remote(result["branch"]), [result["sha"]])
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "wip.txt")), "restored after the push")
+        self.assertIsNone(result["comment_url"])
+        self.assertIn("TimeoutExpired", result["comment_error"])
+
+    def test_held_notice_gets_a_timeout_floor_after_the_deadline_is_spent(self):
+        from nexus import work
+        token = work._deadline.set(work.time.monotonic() - 5)
+        try:
+            self.assertEqual(work.notify_timeout(), work.NOTIFY_FLOOR_S)
+        finally:
+            work._deadline.reset(token)
+
     def test_t8_review_pushes_branch_before_pr_and_never_switches(self):
         self.write("human.txt", "human edit\n")
         rec = lease.acquire(self.repo, "main", "f8", os.getpid(), 600)

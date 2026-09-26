@@ -29,6 +29,15 @@ SENSITIVE_WINDOW = os.environ.get("NEXUS_TBS_SENSITIVE_WINDOW", os.path.expandus
 _lane = ContextVar("work_lane", default=None)
 
 
+NOTIFY_FLOOR_S = 20  # a HELD notice after the flight spent its deadline still gets a real attempt
+
+
+def notify_timeout(limit=120):
+    deadline = _deadline.get()
+    left = limit if deadline is None else deadline - time.monotonic()
+    return max(NOTIFY_FLOOR_S, min(limit, left))
+
+
 def remaining(limit):
     deadline = _deadline.get()
     if deadline is None:
@@ -826,8 +835,8 @@ def tower_execute(led, entry, task):
         return tower_review(led, entry, task, pr_url)
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
 
-    def gh(*args):
-        proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=remaining(120))
+    def gh(*args, timeout=None):
+        proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout or remaining(120))
         if proc.returncode:
             raise WorkError(proc.stderr.strip() or "gh failed")
         return proc.stdout.strip()
@@ -860,7 +869,8 @@ def tower_execute(led, entry, task):
         result = executor.fly(
             entry, issue, fid, timeout_s=remaining(float(entry.get("timeout_s", 900))),
             pr_create=pr_create,
-            comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body),
+            comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body,
+                                    timeout=notify_timeout()),
             write_set=write_set, per_repo=per_repo)
         led.event("work.lane", fid, {"repo": repo, "issue": number, "write_set": write_set, "state": result["state"],
                                      "sha": result.get("sha"), "ended": time.time()}, "work")
@@ -1016,7 +1026,9 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
     entries = eligible(led, entries, repo)
     report = []
     # Least recently serviced repositories first, using existing ledger receipts.
-    entries.sort(key=lambda e: (not has_p0(led, e["repo"]), latest(led, "work.serviced", e["repo"]).get("at", 0)))
+    # A webhook's `work.discovery_requested` newer than the last service moves its repo to the front.
+    entries.sort(key=lambda e: (not has_p0(led, e["repo"]), not requested_since(led, e["repo"], "work.serviced"),
+                                latest(led, "work.serviced", e["repo"]).get("at", 0)))
     deadline = time.monotonic() + budget_s
     passive = ("held", "owned", "ineligible", "closed", "backoff", "blocked", "reopened")
     for index, entry in enumerate(entries):
@@ -1055,6 +1067,49 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
             led.event("work.serviced", entry["repo"], {"at": time.time()}, "work")
             _deadline.reset(token)
     return report
+
+
+REQUESTED = "work.discovery_requested"   # written by the Office webhook, one per GitHub delivery
+DISCOVERY_EVERY_S = 300                  # the existing per-repo poll interval; the GitHub budget rests on it
+DISCOVERY_PER_TICK = 1                   # one REST list per tick, so a slow GitHub never stalls the controller
+
+
+def _last_id(led, repo, *kinds):
+    row = led.conn.execute(f"SELECT MAX(id), MAX(ts) FROM events WHERE subject=? AND kind IN"
+                           f" ({','.join('?' * len(kinds))})", (repo, *kinds)).fetchone()
+    return row[0] or 0, row[1] or 0
+
+
+def requested_since(led, repo, *kinds):
+    """A discovery request newer than the latest of these events for the repo."""
+    return _last_id(led, repo, REQUESTED)[0] > _last_id(led, repo, *kinds)[0]
+
+
+def discovery_pass(led, entries, now=None, limit=DISCOVERY_PER_TICK):
+    """Discovery only: capture issues and record intake dispositions. Never claims, never executes.
+
+    Runs from the tower tick, so a long github-work execution cannot starve capture in any repo.
+    A repo is due when a webhook requested it or its last discovery is DISCOVERY_EVERY_S old;
+    a failed discovery counts as one, so an outage is retried at the poll rate, not every tick."""
+    now = time.time() if now is None else now
+    switch = led.plan_by_name("code-work")
+    if not switch or not switch["enabled"]:
+        return 0
+    seen = ("work.discovered", "work.discovery_failed")
+    rows = [e for e in entries if e["enabled"] and tower_row(e)]
+    due = [e for e in rows if requested_since(led, e["repo"], *seen)
+           or now - _last_id(led, e["repo"], *seen)[1] >= DISCOVERY_EVERY_S]
+    due.sort(key=lambda e: (not requested_since(led, e["repo"], *seen), _last_id(led, e["repo"], *seen)[1]))
+    for entry in due[:limit]:
+        token = _deadline.set(time.monotonic() + 60)
+        try:
+            discover(led, entry)
+            selection_queue(led, entry)
+        except (OSError, ValueError, KeyError, TypeError, LedgerError, subprocess.SubprocessError) as exc:
+            led.event("work.discovery_failed", entry["repo"], {"error": str(exc), "pass": "discovery"}, "work")
+        finally:
+            _deadline.reset(token)
+    return min(len(due), limit)
 
 
 def has_p0(led, repo):

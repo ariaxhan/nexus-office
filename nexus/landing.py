@@ -190,9 +190,20 @@ def hold(repo, record, paths, collisions, reason, comment=None):
     branch = HELD_PREFIX + record["flight"]
     if not push_ref(repo, sha, branch):
         raise LandingError("held_push_failed", branch)
-    url = comment(f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {sha}.") if comment else None
-    restore(repo, [p for p in paths if p not in collisions], head)
-    return _record("HELD", record, reason=reason, sha=sha, branch=branch, comment_url=url, paths=paths)
+    restore(repo, [p for p in paths if p not in collisions], head)  # the push made the bytes durable
+    url, why = notify(comment, f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {sha}.")
+    return _record("HELD", record, reason=reason, sha=sha, branch=branch, comment_url=url,
+                   comment_error=why, paths=paths)
+
+
+def notify(comment, body):
+    """Best effort: (url, None) or (None, reason). A failed comment never undoes a durable HELD."""
+    if not comment:
+        return None, None
+    try:
+        return comment(body), None
+    except Exception as exc:  # noqa: BLE001 - the notification is not the outcome
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 def direct(repo, record, message, comment=None):
@@ -226,10 +237,9 @@ def review(repo, record, message, issue, pr_create, comment=None, reason="in_rev
     if not push_ref(repo, sha, branch):
         return hold(repo, record, paths, collisions, "branch_push_rejected", comment)
     url = pr_create(branch, record["branch"], f"{message}\n\nCloses #{issue}")
-    if reason != "in_review" and comment:
-        comment(f"needs Aria: {reason}. PR {url}")
     restore(repo, paths, head)
-    return _record("HELD", record, reason=reason, sha=sha, branch=branch, pr_url=url, paths=paths)
+    _, why = notify(comment, f"needs Aria: {reason}. PR {url}") if reason != "in_review" else (None, None)
+    return _record("HELD", record, reason=reason, sha=sha, branch=branch, pr_url=url, comment_error=why, paths=paths)
 
 
 def _flight_paths(repo, record):

@@ -20,17 +20,20 @@ its bound.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import pathlib
-import subprocess
+import sqlite3
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
+sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import webhook as wh  # noqa: E402
 
@@ -358,109 +361,47 @@ class MailboxTest(unittest.TestCase):
         self.assertEqual(self.box.last_events(5), [], "and never mixed with events")
 
 
-class RemoteUrlTest(unittest.TestCase):
-    def test_the_four_shapes_git_hands_back(self):
-        for url in ("git@github.com:acme/thing.git",
-                    "https://github.com/acme/thing",
-                    "https://github.com/acme/thing.git",
-                    "ssh://git@github.com/acme/thing.git"):
-            self.assertEqual(wh.normalise_remote(url), "acme/thing", url)
-
-    def test_a_trailing_slash_and_a_missing_dot_git_are_both_fine(self):
-        self.assertEqual(wh.normalise_remote("https://github.com/acme/thing/"), "acme/thing")
-        self.assertEqual(wh.normalise_remote("git@github.com:acme/thing"), "acme/thing")
-
-    def test_a_remote_that_is_not_github_is_not_a_match(self):
-        """This map answers "which checkout is the repo GitHub told me about".
-        A GitLab remote at the same owner/name would answer it wrongly, and the
-        pipeline would run against the wrong tree."""
-        for url in ("git@gitlab.com:acme/thing.git", "https://bitbucket.org/acme/thing",
-                    "/srv/mirrors/acme/thing.git", "", "not a url"):
-            self.assertEqual(wh.normalise_remote(url), "", repr(url))
-
-
-def git(*args, cwd):
-    subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, check=True)
-
-
-class RepoMapTest(unittest.TestCase):
-    """owner/name to a checkout, by dispatch.sh's own two skip rules."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.vault = pathlib.Path(self.tmp.name)
-
-    def repo(self, rel, url):
-        p = self.vault / rel
-        p.mkdir(parents=True, exist_ok=True)
-        git("init", "-q", cwd=p)
-        git("remote", "add", "origin", url, cwd=p)
-        return p
-
-    def test_a_checkout_is_found_by_its_origin(self):
-        want = self.repo("code/thing", "git@github.com:acme/thing.git")
-        self.repo("code/other", "https://github.com/acme/other")
-        m = wh.build_repo_map(self.vault)
-        self.assertEqual(m["acme/thing"].resolve(), want.resolve())
-        self.assertIn("acme/other", m)
-
-    def test_a_checkout_its_parent_gitignores_is_skipped(self):
-        """A vendored or cached clone. The parent repo already declared it
-        disposable, so running a pipeline lane in it would be a lane in a copy."""
-        parent = self.repo("outer", "https://github.com/acme/outer")
-        (parent / ".gitignore").write_text("vendor/\n")
-        self.repo("outer/vendor/thing", "git@github.com:acme/thing.git")
-        m = wh.build_repo_map(self.vault)
-        self.assertIn("acme/outer", m)
-        self.assertNotIn("acme/thing", m, "the gitignored clone is not a desk's checkout")
-
-    def test_the_origin_comes_from_the_pipelines_own_resolver(self):
-        """`pipeline-config.py origin` is that subsystem's single answer to
-        "where do this repo's issues live". Re-deriving it here would be a
-        second answer, and the two would drift the day a convention changes."""
-        fake = self.vault / "pipeline-config.py"
-        fake.write_text("print('acme/renamed')\n")
-        self.repo("code/thing", "git@github.com:acme/thing.git")
-        m = wh.build_repo_map(self.vault, fake)
-        self.assertIn("acme/renamed", m)
-        self.assertNotIn("acme/thing", m, "the resolver wins over the URL")
-
-    def test_without_the_resolver_the_remote_is_read_directly(self):
-        """A machine with no pipeline installed still gets a working map."""
-        self.repo("code/thing", "git@github.com:acme/thing.git")
-        m = wh.build_repo_map(self.vault, self.vault / "not-installed.py")
-        self.assertIn("acme/thing", m)
-
-    def test_a_resolver_that_prints_nonsense_is_ignored(self):
-        fake = self.vault / "pipeline-config.py"
-        fake.write_text("print('../../etc/passwd')\n")
-        self.repo("code/thing", "git@github.com:acme/thing.git")
-        self.assertEqual(wh.build_repo_map(self.vault, fake), {})
-
-    def test_a_repo_with_no_github_origin_is_not_in_the_map(self):
-        self.repo("code/elsewhere", "git@gitlab.com:acme/elsewhere.git")
-        self.assertEqual(wh.build_repo_map(self.vault), {})
-
-    def test_a_vault_that_is_not_there_is_an_empty_map_not_a_crash(self):
-        self.assertEqual(wh.build_repo_map(self.vault / "nope"), {})
-
-
 class FakeRunner:
-    """dispatch.sh without dispatch.sh. Records what it was asked to run."""
+    """The Tower handoff without a ledger. Records what it was handed."""
 
-    def __init__(self, rc=0):
+    def __init__(self, fail=None):
         self.calls = []
-        self.rc = rc
+        self.fail = fail
         self.lock = threading.Lock()
 
-    def __call__(self, path):
+    def __call__(self, repo, events):
         with self.lock:
-            self.calls.append(pathlib.Path(path))
-        return self.rc, 0.4, ["a line", "another line"]
+            self.calls.append((repo, [ev.delivery for ev in events]))
+        if self.fail:
+            raise self.fail
+        return "handed to Tower"
 
 
-class TriggerTest(unittest.TestCase):
+class TowerFixture:
+    """A real Nexus ledger and a registry with one Tower-owned repo, all disposable."""
+
+    def make_tower(self, root):
+        from nexus.ledger import Ledger
+        self.ledger = root / "ledger.sqlite"
+        Ledger(str(self.ledger)).close()
+        checkout = root / "thing-checkout"
+        checkout.mkdir()
+        row = dict(repo="acme/thing", path=str(checkout), enabled=True, provider="local", account="t",
+                   executor=["true"], verify=["true"], risk={"paths": ["*"]})
+        self.registry = root / "registry.json"
+        self.registry.write_text(json.dumps({"repositories": [row, dict(row, repo="acme/other", path=None)]}))
+
+    def requested(self):
+        with closing(sqlite3.connect(self.ledger)) as db:
+            return [(s, json.loads(p), src) for s, p, src in db.execute(
+                "SELECT subject,payload,source FROM events WHERE kind='work.discovery_requested' ORDER BY id")]
+
+
+class HandoffFixtureError(RuntimeError):
+    pass
+
+
+class TriggerTest(TowerFixture, unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -470,15 +411,20 @@ class TriggerTest(unittest.TestCase):
         self.receipts = self.dir / "receipts.jsonl"
         self.refreshed = []
         wh.log = lambda m: None
+        self.make_tower(self.dir)
 
     def trigger(self, **over):
         kw = dict(debounce_s=0.05, runner=self.runner, receipts=self.receipts,
                   refresh=self.refreshed.append)
         kw.update(over)
         t = wh.Trigger(self.box, **kw)
-        t.local_path = lambda nwo: self.dir / "checkout" / nwo.replace("/", "-")
         self.addCleanup(t.cancel)
         return t
+
+    def real(self, **over):
+        """The default runner: the real handoff into this fixture's ledger."""
+        return self.trigger(runner=None, ledger=over.pop("ledger", self.ledger),
+                            registry=over.pop("registry", self.registry), **over)
 
     def until(self, fn, timeout=6.0):
         end = time.monotonic() + timeout
@@ -488,23 +434,107 @@ class TriggerTest(unittest.TestCase):
             time.sleep(0.02)
         return False
 
-    def test_accepted_before_notice_replays_after_restart(self):
-        ev = wh.parse("issue_comment", "durable-1", issue_comment(login="tim"))
-        self.box.accept(ev)  # service stops before notifying the drainer
-        self.assertFalse(wh.Mailbox(self.dir).claim(ev.delivery), "redelivery is deduplicated")
-        t = self.trigger()
-        self.assertTrue(self.until(lambda: len(self.runner.calls) == 1))
-        self.assertTrue(self.until(lambda: not self.box.pending_obligations()))
+    def owed(self):
+        return [ev.delivery for ev in self.box.pending_obligations()]
 
-    def test_pending_debounce_survives_restart_without_duplicate_dispatch(self):
+    # ── settlement: only a durable downstream record settles ────────────────
+    def test_successful_handoff_settles_and_writes_one_discovery_request(self):
+        t = self.real()
+        t.notice(wh.parse("issue_comment", "d1", issue_comment(login="tim")))
+        self.assertTrue(self.until(lambda: not self.owed()))
+        rows = self.requested()
+        self.assertEqual(len(rows), 1)
+        subject, payload, source = rows[0]
+        self.assertEqual((subject, source), ("acme/thing", "office-webhook"))
+        self.assertEqual((payload["delivery"], payload["event"], payload["number"]), ("d1", "issue_comment", 42))
+        self.assertIn("requested_at", payload)
+        self.assertEqual(self.box.last_runs(5)[-1]["rc"], 0)
+
+    def test_missing_downstream_cannot_settle(self):
+        t = self.real(ledger=self.dir / "no-ledger.sqlite", requeue_s=0.05)
+        t.notice(wh.parse("issue_comment", "d1", issue_comment(login="tim")))
+        self.assertTrue(self.until(lambda: t.requeued >= 1))
+        self.assertEqual(self.owed(), ["d1"])
+        row = self.box.last_runs(5)[0]
+        self.assertEqual((row["rc"], row["attempt"]), (1, 1))
+        self.assertIn("no Nexus ledger", row["note"])
+        self.assertFalse((self.dir / "no-ledger.sqlite").exists(), "never creates a ledger")
+
+    def test_missing_registry_cannot_settle(self):
+        env = patch_env(OFFICE_WORK_REGISTRY="", NEXUS_WORK_REGISTRY="")
+        self.addCleanup(env.stop)
+        t = self.real(registry=None, requeue_s=0.05)
+        t.notice(wh.parse("issue_comment", "d1", issue_comment(login="tim")))
+        self.assertTrue(self.until(lambda: t.requeued >= 1))
+        self.assertEqual(self.owed(), ["d1"])
+
+    def test_downstream_sqlite_failure_cannot_settle(self):
+        broken = self.dir / "broken.sqlite"
+        broken.write_bytes(b"this is not a database" * 100)
+        t = self.real(ledger=broken, requeue_s=0.05)
+        t.notice(wh.parse("issue_comment", "d1", issue_comment(login="tim")))
+        self.assertTrue(self.until(lambda: t.requeued >= 1))
+        self.assertEqual(self.owed(), ["d1"])
+        self.assertIn("ledger write failed", self.box.last_runs(5)[0]["note"])
+
+    def test_unknown_outcome_cannot_settle_and_backs_off(self):
+        t = self.trigger(runner=FakeRunner(fail=TimeoutError("mid-insert")), requeue_s=0.05)
+        t.notice(wh.parse("issue_comment", "d1", issue_comment(login="tim")))
+        self.assertTrue(self.until(lambda: t.requeued >= 3))
+        self.assertEqual(self.owed(), ["d1"])
+        runs = self.box.last_runs(10)
+        self.assertEqual([r["attempt"] for r in runs[:3]], [1, 2, 3])
+        self.assertEqual([r["retry_in_s"] for r in runs[:3]], [0.05, 0.1, 0.2], "exponential")
+        t.failures["acme/thing"] = 99
+        self.assertEqual(t.backoff("acme/thing"), wh.RETRY_CAP_S, "capped, never a hot loop")
+
+    def test_a_recovered_downstream_settles_the_owed_delivery(self):
+        missing = self.dir / "later.sqlite"
+        t = self.real(ledger=missing, requeue_s=0.05)
+        t.notice(wh.parse("issue_comment", "d1", issue_comment(login="tim")))
+        self.assertTrue(self.until(lambda: t.requeued >= 1))
+        self.ledger.rename(missing)
+        self.ledger = missing
+        self.assertTrue(self.until(lambda: not self.owed()))
+        self.assertEqual([p["delivery"] for _, p, _ in self.requested()], ["d1"])
+
+    def test_duplicate_delivery_is_one_event_and_one_settlement(self):
+        ev = wh.parse("issue_comment", "dup", issue_comment(login="tim"))
+        wh.handoff("acme/thing", [ev], self.ledger, self.registry)
+        t = self.real()
+        t.notice(ev)
+        self.assertTrue(self.until(lambda: not self.owed()))
+        self.assertEqual(len(self.requested()), 1)
+        self.assertIn("1 already recorded", self.box.last_runs(5)[0]["note"])
+        self.assertFalse(wh.Mailbox(self.dir).claim("dup"), "and redelivery stays deduplicated")
+
+    def test_a_repo_with_no_tower_owner_settles_with_the_reason(self):
+        t = self.real()
+        t.notice(wh.parse("issue_comment", "d1", issue_comment(repo="acme/other")))
+        self.assertTrue(self.until(lambda: not self.owed()))
+        self.assertEqual(self.requested(), [])
+        self.assertEqual(self.box.last_runs(5)[0]["note"], "no Tower owner for acme/other; desk refreshed")
+        self.assertTrue(self.until(lambda: self.refreshed == ["acme/other"]))
+
+    def test_restart_between_acceptance_and_handoff_hands_off_once(self):
+        ev = wh.parse("issue_comment", "durable-1", issue_comment(login="tim"))
+        self.box.accept(ev)  # the service stops before the drainer sees it
+        self.assertFalse(wh.Mailbox(self.dir).claim(ev.delivery), "redelivery is deduplicated")
+        self.real()
+        self.assertTrue(self.until(lambda: not self.owed()))
+        self.real()  # a second restart finds nothing owed
+        time.sleep(0.3)
+        self.assertEqual([p["delivery"] for _, p, _ in self.requested()], ["durable-1"])
+
+    def test_pending_debounce_survives_restart_without_duplicate_handoff(self):
         first = self.trigger(debounce_s=30)
         for delivery in ("durable-1", "durable-2"):
             first.notice(wh.parse("issue_comment", delivery, issue_comment(login="tim")))
         first.stop()
         self.assertEqual(len(wh.Mailbox(self.dir).pending_obligations()), 2)
-        second = self.trigger()
+        self.trigger()
         self.assertTrue(self.until(lambda: len(self.runner.calls) == 1))
-        self.assertTrue(self.until(lambda: not self.box.pending_obligations()))
+        self.assertTrue(self.until(lambda: not self.owed()))
         self.assertEqual(len(self.box.last_runs(10)), 1)
 
     def test_acceptance_failure_cannot_be_recorded_as_handled(self):
@@ -516,9 +546,26 @@ class TriggerTest(unittest.TestCase):
         self.box.obligations_path.rmdir()
         self.assertTrue(wh.Mailbox(self.dir).claim(ev.delivery), "GitHub may retry a failed durable commit")
 
+    # ── reconciliation of historical obligations ─────────────────────────────
+    def test_reconciliation_settles_only_what_tower_later_covered(self):
+        from nexus.ledger import Ledger
+        from nexus import work
+        ev = wh.Event(delivery="old", event="issues", action="opened", repo="acme/thing", number=7,
+                      login="tim", merged=False, at="2026-09-01T00:00:00Z", body_marker=False)
+        self.assertIsNone(wh.reconcile_obligation(ev, self.ledger), "nothing proves it yet")
+        led = Ledger(str(self.ledger))
+        self.addCleanup(led.close)
+        work.capture(led, "acme/thing", dict(number=7, title="t", state="open", labels=[]))
+        self.assertIn("captured acme/thing#7", wh.reconcile_obligation(ev, self.ledger))
+        pr = dataclasses.replace(ev, event="pull_request", number=99)
+        self.assertIsNone(wh.reconcile_obligation(pr, self.ledger))
+        led.event("work.serviced", "acme/thing", {"at": time.time()}, "work")
+        self.assertIn("serviced acme/thing", wh.reconcile_obligation(pr, self.ledger))
+        late = dataclasses.replace(pr, at="2099-01-01T00:00:00Z")
+        self.assertIsNone(wh.reconcile_obligation(late, self.ledger), "coverage must come after the delivery")
+
+    # ── debounce, receipts, desk ─────────────────────────────────────────────
     def test_three_events_in_one_window_are_one_act(self):
-        """A push, a PR and a comment inside two seconds are the same news.
-        Without the window that is three lanes racing over one working tree."""
         t = self.trigger()
         for i in range(3):
             t.notice(wh.parse("issue_comment", f"d{i}", issue_comment(login="tim")))
@@ -526,14 +573,13 @@ class TriggerTest(unittest.TestCase):
         self.assertTrue(self.until(lambda: t.acts >= 1))
         time.sleep(0.3)
         self.assertEqual(t.acts, 1)
-        self.assertEqual(len(self.runner.calls), 1)
+        self.assertEqual(self.runner.calls, [("acme/thing", ["d0", "d1", "d2"])])
         runs = self.box.last_runs(10)
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]["events"], 3)
         self.assertEqual(runs[0]["delivery"], "d2", "the newest one, not the oldest")
         self.assertEqual(runs[0]["trigger"], "webhook")
         self.assertEqual(runs[0]["rc"], 0)
-        self.assertEqual(runs[0]["log"], ["a line", "another line"])
 
     def test_two_repos_are_two_acts(self):
         t = self.trigger()
@@ -541,25 +587,12 @@ class TriggerTest(unittest.TestCase):
         t.notice(wh.parse("issue_comment", "d2", issue_comment(repo="acme/two")))
         self.assertEqual(t.queued(), ["acme/one", "acme/two"])
         self.assertTrue(self.until(lambda: t.acts >= 2))
-        self.assertEqual({p.name for p in self.runner.calls}, {"acme-one", "acme-two"})
+        self.assertEqual({r for r, _ in self.runner.calls}, {"acme/one", "acme/two"})
 
     def test_the_desk_is_refreshed_once_per_act(self):
         t = self.trigger()
         t.notice(wh.parse("issue_comment", "d1", issue_comment()))
         self.assertTrue(self.until(lambda: self.refreshed == ["acme/thing"]))
-
-    def test_a_repo_with_no_checkout_still_refreshes_its_desk(self):
-        """The news came from GitHub and a desk is a picture of GitHub. Not
-        every repo you can push to lives under this vault."""
-        t = self.trigger()
-        t.local_path = lambda nwo: None
-        t.notice(wh.parse("issue_comment", "d1", issue_comment()))
-        self.assertTrue(self.until(lambda: self.refreshed == ["acme/thing"]))
-        self.assertEqual(self.runner.calls, [], "and nothing was dispatched")
-        self.assertTrue(self.until(lambda: bool(self.box.last_runs(5))))
-        row = self.box.last_runs(5)[0]
-        self.assertIsNone(row["rc"])
-        self.assertEqual(row["path"], "")
 
     def test_a_merged_pull_request_writes_a_receipt_for_the_issue_it_closes(self):
         t = self.trigger()
@@ -585,14 +618,12 @@ class TriggerTest(unittest.TestCase):
         self.assertTrue(self.until(lambda: t.acts >= 1))
         self.assertFalse(self.receipts.exists())
 
-    def test_the_receipt_is_written_before_the_dispatch_runs(self):
-        """A lane can take half an hour. A desk that says "in pr" for half an
-        hour after the PR merged is the stale this path exists to remove."""
+    def test_the_receipt_is_written_before_the_handoff(self):
         seen = {}
 
-        def slow(path):
+        def slow(repo, events):
             seen["receipt_first"] = self.receipts.exists()
-            return 0, 0.1, []
+            return "ok"
 
         t = self.trigger(runner=slow)
         t.notice(wh.parse("pull_request", "d1", pull_request()))
@@ -601,31 +632,34 @@ class TriggerTest(unittest.TestCase):
 
     def test_no_receipts_file_configured_is_not_a_crash(self):
         # `receipts=None` means "read OFFICE_RECEIPTS", and a shell that has it
-        # set would send this fixture's acme/thing merge into the real wall
-        # (it did, 2026-08-28: a fixture desk sat on the office for a day).
+        # set would send this fixture's acme/thing merge into the real wall.
         self.env = patch_env(OFFICE_RECEIPTS="")
         self.addCleanup(self.env.stop)
         t = self.trigger(receipts=None)
         t.notice(wh.parse("pull_request", "d1", pull_request()))
         self.assertTrue(self.until(lambda: t.acts >= 1))
 
+    def test_a_retry_does_not_write_the_receipt_twice(self):
+        """Receipts and the desk are about the delivery; only the handoff is retried."""
+        t = self.trigger(runner=FakeRunner(fail=HandoffFixtureError("down")), requeue_s=0.05)
+        t.notice(wh.parse("pull_request", "d1", pull_request()))
+        self.assertTrue(self.until(lambda: t.requeued >= 3, timeout=8))
+        self.assertEqual(len(self.receipts.read_text().splitlines()), 1)
+        self.assertEqual(self.refreshed, ["acme/thing"], "and the desk is refetched once")
+
     def test_nothing_ever_runs_two_at_once(self):
-        """Not a load choice. dispatch.sh holds ONE global lock for the whole
-        pipeline, and a second run finding it held exits 0 having done nothing,
-        so a pool would silently drop events behind a green exit code."""
-        live = []
-        peak = []
+        live, peak = [], []
         lock = threading.Lock()
         release = threading.Event()
 
-        def blocking(path):
+        def blocking(repo, events):
             with lock:
                 live.append(1)
                 peak.append(len(live))
             release.wait(5)
             with lock:
                 live.pop()
-            return 0, 3.0, []
+            return "ok"
 
         t = self.trigger(runner=blocking)
         for i in range(5):
@@ -635,111 +669,7 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(max(peak), 1, "one drainer, serial, always")
         release.set()
         self.assertTrue(self.until(lambda: t.acts >= 5, timeout=15))
-        self.assertEqual(max(peak), 1, "and still one, all five of them")
-
-    def test_a_second_event_for_a_running_repo_waits_its_turn(self):
-        started = threading.Event()
-        release = threading.Event()
-        overlap = []
-        live = []
-
-        def blocking(path):
-            live.append(1)
-            overlap.append(len(live))
-            started.set()
-            release.wait(5)
-            live.pop()
-            return 0, 3.0, []
-
-        t = self.trigger(runner=blocking)
-        t.notice(wh.parse("issue_comment", "d1", issue_comment()))
-        self.assertTrue(started.wait(5))
-        for i in range(3):
-            t.notice(wh.parse("issue_comment", f"e{i}", issue_comment()))
-        time.sleep(0.3)
-        self.assertEqual(max(overlap), 1)
-        release.set()
-        self.assertTrue(self.until(lambda: t.acts >= 2), "and then it runs")
-
-    # ── the lock dispatch.sh actually takes ─────────────────────────────────
-    def test_a_held_pipeline_lock_means_nothing_is_spawned_at_all(self):
-        """dispatch.sh:472-476 would log one line and exit 0. Spawning into that
-        does not queue the work, it loses it."""
-        lock = self.dir / "pid"
-        lock.write_text(str(os.getppid()))
-        t = self.trigger(lock_path=lock, requeue_s=0.05)
-        t.notice(wh.parse("issue_comment", "d1", issue_comment(login="tim")))
-        self.assertTrue(self.until(lambda: t.requeued >= 1))
-        self.assertEqual(self.runner.calls, [], "nothing was spawned")
-        row = self.box.last_runs(5)[0]
-        self.assertIsNone(row["rc"])
-        self.assertIn("already running", row["note"])
-        self.assertIn("acme/thing", t.queued(), "and it is still owed")
-
-        # and when the lock goes, the next drain runs it
-        lock.unlink()
-        self.assertTrue(self.until(lambda: len(self.runner.calls) == 1, timeout=8))
-        self.assertEqual(t.queued(), [])
-
-    def test_a_dead_pid_in_the_lock_file_is_not_busy(self):
-        """Exactly how dispatch.sh reads it: `kill -0`, not "the file exists"."""
-        lock = self.dir / "pid"
-        lock.write_text("999999")
-        t = self.trigger(lock_path=lock)
-        self.assertIsNone(t.pipeline_busy())
-        t.notice(wh.parse("issue_comment", "d1", issue_comment()))
-        self.assertTrue(self.until(lambda: len(self.runner.calls) == 1))
-        self.assertEqual(t.requeued, 0)
-
-    def test_a_torn_or_missing_lock_file_is_not_busy(self):
-        lock = self.dir / "pid"
-        t = self.trigger(lock_path=lock)
-        self.assertIsNone(t.pipeline_busy())
-        lock.write_text("not a pid\n")
-        self.assertIsNone(t.pipeline_busy())
-        lock.write_text("")
-        self.assertIsNone(t.pipeline_busy())
-
-    def test_an_exit_zero_that_did_nothing_is_not_believed(self):
-        """The silent no-op: dispatch.sh's guard exits 0 in well under a second.
-        Believing that green code would drop the event on the floor."""
-        lock = self.dir / "pid"
-
-        def quick(path):
-            # the lock appears while this "run" is going: somebody else has it
-            lock.write_text(str(os.getppid()))
-            self.runner.calls.append(pathlib.Path(path))
-            return 0, 0.2, ["another run holds the lock (pid 123); exiting."]
-
-        t = self.trigger(runner=quick, lock_path=lock, requeue_s=0.05)
-        t.notice(wh.parse("issue_comment", "d1", issue_comment()))
-        self.assertTrue(self.until(lambda: t.requeued >= 1))
-        row = self.box.last_runs(5)[0]
-        self.assertEqual(row["rc"], 0)
-        self.assertIn("did nothing", row["note"])
-        self.assertIn("acme/thing", t.queued())
-
-    def test_a_real_run_that_exits_zero_quickly_is_believed(self):
-        """The tell is exit 0 AND under two seconds AND the lock held by
-        somebody else. Two out of three is a run that simply had nothing to do."""
-        lock = self.dir / "pid"
-        t = self.trigger(lock_path=lock)
-        t.notice(wh.parse("issue_comment", "d1", issue_comment()))
-        self.assertTrue(self.until(lambda: len(self.runner.calls) == 1))
-        time.sleep(0.3)
-        self.assertEqual(t.requeued, 0)
-        self.assertEqual(t.queued(), [])
-
-    def test_a_requeue_does_not_write_the_receipt_twice(self):
-        """Receipts are about the delivery; the dispatch is about the pipeline.
-        Only the second one is ever retried."""
-        lock = self.dir / "pid"
-        lock.write_text(str(os.getppid()))
-        t = self.trigger(lock_path=lock, requeue_s=0.05)
-        t.notice(wh.parse("pull_request", "d1", pull_request()))
-        self.assertTrue(self.until(lambda: t.requeued >= 3, timeout=8))
-        self.assertEqual(len(self.receipts.read_text().splitlines()), 1)
-        self.assertEqual(self.refreshed, ["acme/thing"], "and the desk is refetched once")
+        self.assertEqual(max(peak), 1)
 
     def test_a_malformed_repo_is_never_queued(self):
         t = self.trigger()
@@ -750,58 +680,14 @@ class TriggerTest(unittest.TestCase):
         time.sleep(0.2)
         self.assertEqual(t.acts, 0)
 
-    def test_a_dispatch_that_blows_up_does_not_take_the_office_with_it(self):
-        def boom(path):
-            raise RuntimeError("no")
-
-        t = self.trigger(runner=boom, requeue_s=0.05)
+    def test_a_handoff_that_blows_up_does_not_take_the_office_with_it(self):
+        t = self.trigger(runner=FakeRunner(fail=RuntimeError("no")), requeue_s=0.05)
         t.notice(wh.parse("issue_comment", "d1", issue_comment()))
         self.assertTrue(self.until(lambda: t.acts >= 1))
-        self.assertEqual([ev.delivery for ev in self.box.pending_obligations()], ["d1"],
-                         "failed dispatch remains owed")
-        t.notice(wh.parse("issue_comment", "d2", issue_comment()))
-        self.assertTrue(self.until(lambda: t.acts >= 2), "and the next one still runs")
+        self.assertEqual(self.owed(), ["d1"], "failed handoff remains owed")
+        t.notice(wh.parse("issue_comment", "d2", issue_comment(repo="acme/two")))
+        self.assertTrue(self.until(lambda: t.acts >= 3), "and the next one still runs")
 
-
-class DispatchCommandTest(unittest.TestCase):
-    """What is actually exec'd, checked against a script that reports itself."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.dir = pathlib.Path(self.tmp.name)
-        wh.log = lambda m: None
-
-    def test_it_runs_dispatch_with_repo_and_never_without(self):
-        """Without `--repo` the runner sweeps every repo under the vault. A
-        comment on one issue must never be able to start a full sweep."""
-        script = self.dir / "dispatch.sh"
-        script.write_text('#!/bin/bash\necho "argv: $*"\nexit 3\n')
-        script.chmod(0o755)
-        t = wh.Trigger(wh.Mailbox(self.dir), dispatch=script, debounce_s=0.05)
-        self.addCleanup(t.cancel)
-        rc, seconds, tail = t._run_dispatch(self.dir / "code" / "thing")
-        self.assertEqual(rc, 3)
-        self.assertEqual(tail, [f"argv: --repo {self.dir}/code/thing"])
-        self.assertGreaterEqual(seconds, 0)
-
-    def test_a_missing_script_is_reported_rather_than_pretended(self):
-        t = wh.Trigger(wh.Mailbox(self.dir), dispatch=self.dir / "nope.sh", debounce_s=0.05)
-        self.addCleanup(t.cancel)
-        rc, _, tail = t._run_dispatch(self.dir)
-        self.assertIsNone(rc, "no exit code, because nothing ran")
-        self.assertIn("no dispatch script", tail[0])
-
-    def test_only_the_last_lines_of_a_long_log_are_kept(self):
-        script = self.dir / "dispatch.sh"
-        script.write_text('#!/bin/bash\nfor i in $(seq 1 200); do echo "line $i"; done\n')
-        script.chmod(0o755)
-        t = wh.Trigger(wh.Mailbox(self.dir), dispatch=script, debounce_s=0.05)
-        self.addCleanup(t.cancel)
-        rc, _, tail = t._run_dispatch(self.dir)
-        self.assertEqual(rc, 0)
-        self.assertEqual(len(tail), wh.LOG_LINES)
-        self.assertEqual(tail[-1], "line 200")
 
 
 class SectionTest(unittest.TestCase):
@@ -929,7 +815,7 @@ class SectionTest(unittest.TestCase):
         box.append(wh.parse("issue_comment", "d1", issue_comment()))
         src = self.source()
         self.assertEqual(src.read()["queued"], [])
-        t = wh.Trigger(box, debounce_s=30, runner=lambda p: (0, 0, []))
+        t = wh.Trigger(box, debounce_s=30, runner=lambda r, e: "ok")
         self.addCleanup(t.cancel)
         t.notice(wh.parse("issue_comment", "d2", issue_comment()))
         self.assertEqual(src.read()["queued"], ["acme/thing"])
