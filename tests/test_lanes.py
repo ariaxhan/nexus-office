@@ -121,6 +121,7 @@ class Lanes(unittest.TestCase):
         self.assertEqual(("HELD", "check_failed"), (result["state"], result["reason"]))
         self.assertIn("`npm test` exited 2", said[0])
         self.assertIn("FAIL test_gate", result["detail"])
+        self.assertNotIn("FAIL test_gate", said[0])
 
     def test_both_provider_failures_requeue_retained_edits(self):
         def run(argv, cwd=None, **kw):

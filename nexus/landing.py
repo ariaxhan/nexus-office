@@ -193,8 +193,9 @@ def failed_check(check, repo, run):
 
 
 def _body(record, reason, branch, sha, detail):
+    """Only the detail's first line goes public: check output can carry environment values."""
     body = f"Nexus flight {record['flight']} HELD ({reason}): work on `{branch}` at {sha}."
-    return f"{body}\n\n{detail}" if detail else body
+    return f"{body} {detail.splitlines()[0]}; output in the ledger." if detail else body
 
 
 def hold(repo, record, paths, collisions, reason, comment=None, detail=None):
