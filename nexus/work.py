@@ -264,6 +264,11 @@ def issue_now(led, entry, task):
     return issue
 
 
+def _lane_mismatch(issue):
+    labels = {label["name"].lower() for label in issue.get("labels", [])}
+    return TOWER_LABEL in labels and _lane.get() != TOWER_LABEL
+
+
 def eligibility(issue):
     if issue["state"] == "closed":
         return "closed"
@@ -563,8 +568,11 @@ def selection_queue(led, entry):
             continue
         if state == "closed" and latest(led, "work.disposition", task["id"]).get("state") == "closed":
             continue
-        reason = f"{state}: current intake labels " + ", ".join(l["name"] for l in issue.get("labels", []))
-        disposition(led, task, state, reason)
+        if state == "owned" and _lane_mismatch(issue):
+            continue  # another lane's issue: not this pass's decision to record (#210: owned/backoff flapping)
+        names = [l["name"] for l in issue.get("labels", [])]
+        disposition(led, task, state, f"{state}: current intake labels " + ", ".join(names),
+                    labels=sorted(n.lower() for n in names))
         report.append(dict(repo=name, task=task["id"], state=state))
     return sorted(queue, key=lambda task: selection_priority(led, task)), report
 
@@ -936,7 +944,8 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                                   "comment_error": result.get("comment_error"),
                                   "evidence": [result.get("pr_url") or result.get("comment_url")]})
     from . import contract
-    done, why = contract.done_receipt(result, contract_, entry["path"])
+    review = review_verdict(led, result.get("pr_url"), result.get("reviewed_head"))  # the ledger, never caller text
+    done, why = contract.done_receipt(result, contract_, entry["path"], review=review)
     if not done:  # an executor exit is never proof: no_change, a failed check or no commit stays open
         lifecycle_observe.for_flight(led, fid, "lifecycle.verification_finished",
                                      verification_id=verification_id, result="failed",
@@ -1061,7 +1070,7 @@ def _merge(led, fid, entry, task, issue, pr, pr_url, gh):
     if now and now.get("state") == "MERGED" and oid:
         return _settle(led, fid, entry, task, issue,
                        {"state": "LANDED", "flight": fid, "sha": oid, "branch": pr["baseRefName"],
-                        "review": f"{fid} PASS at {pr['headRefOid']}"},
+                        "pr_url": pr_url, "reviewed_head": pr["headRefOid"]},
                        tower_gate(entry, issue)[0])
     known = bool(now and now.get("state"))
     why = ("merge failed: " + (merged.stderr or "").strip()[:200] if known

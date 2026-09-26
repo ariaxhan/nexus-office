@@ -67,7 +67,7 @@ def test_tower_observations_join_source_flight_proof_and_office_api(tmp_path, mo
         ledger.set_state(flight_id, "verified", source="fixture", evidence=landed_evidence(result, result["sha"]))
 
     monkeypatch.setattr(tower, "land_write_flight", terminal)
-    monkeypatch.setattr(contract, "done_receipt", lambda result, contract_, repo: (True, "fixture proof " + result["sha"]))
+    monkeypatch.setattr(contract, "done_receipt", lambda result, contract_, repo, **_: (True, "fixture proof " + result["sha"]))
     monkeypatch.setattr(work, "close_issue", lambda ledger, payload: "closed")
     result = {"state": "LANDED", "sha": "a" * 40, "flight": fid}
     assert work._settle(led, fid, {"repo": "sample/app", "path": str(tmp_path)},

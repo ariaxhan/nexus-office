@@ -42,6 +42,10 @@ class GithubReconcile(unittest.TestCase):
             return real(argv, **kw)
         patch("nexus.work.subprocess.run", side_effect=gh).start()
         patch("nexus.work._sensitive_hold", return_value=None).start()
+        patch("nexus.contract.reviewed_receipt",  # no real git here; the LEDGER's recorded PASS still decides
+              side_effect=lambda sha, review, checkout, run=None:
+                  (True, f"landed {sha}; fixture review PASS") if review and review.get("verdict") == "PASS"
+                  else (False, f"unverified: landed {sha} fixture: no recorded PASS")).start()
 
         def landing(ledger, fid, repo, result):
             self.terminals.append(result)

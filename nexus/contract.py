@@ -88,7 +88,30 @@ def gate(issue, *, required=True, window_open=None, gh=_gh):
 UNVERIFIED = "unverified:"
 
 
-def done_receipt(result, contract_, checkout, run=subprocess.run):
+def _patch_id(git, *diff_args):
+    diff = git("diff", "--binary", *diff_args)
+    if diff.returncode or not diff.stdout:
+        return None
+    out = subprocess.run(["git", "patch-id", "--stable"], input=diff.stdout, capture_output=True, text=True)
+    return out.stdout.split()[0] if out.stdout.split() else None
+
+
+def reviewed_receipt(sha, review, checkout, run=subprocess.run):
+    """(done, reason) from a DURABLE review record: a PASS for head H, and the landed commit carries
+    exactly H's change (same patch-id), so a base that moved under the review cannot slip through."""
+    if not review or review.get("verdict") != "PASS" or not review.get("head"):
+        return False, f"{UNVERIFIED} landed {sha} with no contract check and no recorded review PASS"
+    head = review["head"]
+    git = lambda *a: run(["git", *a], cwd=checkout, capture_output=True, text=True, timeout=300)  # noqa: E731
+    git("fetch", "--quiet", "origin", sha, head)
+    base = git("merge-base", f"{sha}^", head).stdout.strip()
+    landed, reviewed = _patch_id(git, f"{sha}^", sha), base and _patch_id(git, base, head)
+    if not landed or landed != reviewed:
+        return False, f"{UNVERIFIED} landed {sha} is not the change reviewed at {head}"
+    return True, f"landed {sha}; review PASS recorded for {head}, same change"
+
+
+def done_receipt(result, contract_, checkout, run=subprocess.run, review=None):
     """(done, reason). Done needs a landed commit AND the contract CHECK passing at that exact sha.
 
     The check runs in a throwaway detached worktree of the landed sha, never the canonical checkout,
@@ -97,10 +120,8 @@ def done_receipt(result, contract_, checkout, run=subprocess.run):
         return False, f"no landed commit ({result.get('state')}: {result.get('reason')})"
     sha = result["sha"]
     check = (contract_ or {}).get("check")
-    if not check:  # a missing verifier is not a passing one; a separate review flight's PASS is
-        if result.get("review"):
-            return True, f"landed {sha}; review flight passed: {result['review']}"[:300]
-        return False, f"{UNVERIFIED} landed {sha} with no contract check and no review"
+    if not check:  # a missing verifier is not a passing one; a recorded review PASS of this change is
+        return reviewed_receipt(sha, review, checkout, run)
     tmp = tempfile.mkdtemp(prefix="nexus-receipt-")
     tree = os.path.join(tmp, "tree")
     git = lambda *a: run(["git", *a], cwd=checkout, capture_output=True, text=True, timeout=300)  # noqa: E731
