@@ -187,13 +187,23 @@ def claim(led, repo, number, owner_pid, *, runner=False):
     return fid
 
 
+def _unconfirmed_session(led, fid, process, owner):
+    """Executed with no recorded session pid (a Tower lane): gone only if its owner is dead
+    and no process still carries its NEXUS_FLIGHT. Unknown (ps failed) is never gone."""
+    if process or not latest(led, "work.executing", fid):
+        return False
+    if not owner or flights.alive(owner) is not False:
+        return True
+    return flights.flight_env_pids(fid) != []
+
+
 def stop(led, flight):
     """Stop recorded execution sessions; a direct claim never owns its desktop PID."""
     fid = flight["id"]
     process = latest(led, "work.process", fid).get("pid")
     runner = bool(led.events(kind="work.runner", subject=fid))
     owner = flight["pid"]
-    if latest(led, "work.executing", fid) and not process:
+    if _unconfirmed_session(led, fid, process, owner):
         return False
     if runner and owner and owner != os.getpid() and flights.alive(owner):
         try:

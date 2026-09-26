@@ -79,7 +79,7 @@ nexus/ledger.py	312	_fold_v2	16	34
 nexus/ledger.py	877	integrity_check	16	38
 nexus/tower.py	577	accept_tasks	19	34
 nexus/work.py	50	registry	27	35
-nexus/work.py	185	stop	18	30
+nexus/work.py	200	stop	17	30
 nexus/work.py	423	execute	26	62
 nexus/work.py	605	wave_candidates	27	39
 nexus/work.py	750	cut_idle	18	34

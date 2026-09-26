@@ -12,6 +12,7 @@ import glob
 import json
 import os
 import signal
+import re
 import subprocess
 import time
 
@@ -292,6 +293,20 @@ def _owned_members(session_id):
         return result
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
+
+
+def flight_env_pids(flight_id):
+    """Live processes whose environment names this flight (executors inherit NEXUS_FLIGHT)."""
+    try:
+        result = subprocess.run(["ps", "-Eww", "-axo", "pid=,command="],
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    marker = re.compile(rf"(?:^|\s)NEXUS_FLIGHT={re.escape(flight_id)}(?:\s|$)")
+    return [int(row.split(None, 1)[0]) for row in result.stdout.splitlines()
+            if row.strip() and marker.search(row)]
 
 
 def _live_pids(pids):
