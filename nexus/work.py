@@ -928,8 +928,8 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                             "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
         retry_s = result.get("retry_s") or (60 if result.get("reason") == "in_review" or result.get("requeue") else 3600)
         return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + retry_s,
-                                  "hold": result.get("hold"), "pr_url"
-: result.get("pr_url"),
+                                  "hold": result.get("hold"), "pr_url": result.get("pr_url"),
+                                  "comment_error": result.get("comment_error"),
                                   "evidence": [result.get("pr_url") or result.get("comment_url")]})
     from . import contract
     done, why = contract.done_receipt(result, contract_, entry["path"])
@@ -1011,28 +1011,49 @@ def tower_review(led, entry, task, pr_url):
                                        "cached": bool(cached)}, "work")
         held = verdict == "PASS" and _sensitive_hold(entry, pr)
         if held:  # outside the TBS KST window: stay in review, re-flown after the window opens
-            url = gh("pr", "comment", pr_url, "--body", f"Nexus review flight {fid}: HELD. {held}").stdout.strip()
             return _settle(led, fid, entry, task, issue,
-                           {"state": "HELD", "flight": fid, "reason": "in_review", "retry_s": 3600, "hold": held[:300],
-                            "pr_url": pr_url, "sha": pr["headRefOid"], "branch": pr["headRefName"],
-                            "comment_url": url or pr_url})
+                           dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: HELD. {held}"),
+                                state="HELD", flight=fid, reason="in_review", retry_s=3600, hold=held[:300],
+                                pr_url=pr_url, sha=pr["headRefOid"], branch=pr["headRefName"]))
         if verdict == "PASS":
-
-            merged = gh("pr", "merge", pr_url, "--squash", "--delete-branch")
-            sha = json.loads(gh("pr", "view", pr_url, "--json", "mergeCommit").stdout or "{}").get(
-                "mergeCommit") or {}
-            if merged.returncode == 0 and sha.get("oid"):
-                return _settle(led, fid, entry, task, issue,
-                               {"state": "LANDED", "flight": fid, "sha": sha["oid"], "branch": pr["baseRefName"]},
-                               tower_gate(entry, issue)[0])
-            why = "merge failed: " + (merged.stderr or "").strip()[:200]
-        url = gh("pr", "comment", pr_url, "--body", f"Nexus review flight {fid}: HELD. {why}").stdout.strip()
+            return _merge(led, fid, entry, task, issue, pr, pr_url, gh)
         return _settle(led, fid, entry, task, issue,
-                       {"state": "HELD", "flight": fid, "reason": f"review_fail: {why}"[:300],
-                        "sha": pr["headRefOid"], "branch": pr["headRefName"], "comment_url": url or pr_url})
+                       dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: HELD. {why}"),
+                            state="HELD", flight=fid, reason=f"review_fail: {why}"[:300], pr_url=pr_url,
+                            sha=pr["headRefOid"], branch=pr["headRefName"]))
     except Exception as exc:  # noqa: BLE001
         fail(led, fid, exc)
         return "failed"
+
+
+def _pr_comment(gh, pr_url, body):
+    """The comment's own url, or the error. A PR url is never the comment."""
+    proc = gh("pr", "comment", pr_url, "--body", body)
+    url = proc.stdout.strip() if proc.returncode == 0 else ""
+    return {"comment_url": url} if url else {"comment_url": None, "comment_error": (proc.stderr or "no url").strip()[:200]}
+
+
+MERGE_RETRY_S = 600
+
+
+def _merge(led, fid, entry, task, issue, pr, pr_url, gh):
+    """Merge, then believe GitHub's PR state, not the merge command's exit. Never parks for a person."""
+    merged = gh("pr", "merge", pr_url, "--squash", "--delete-branch")
+    view = gh("pr", "view", pr_url, "--json", "state,mergeCommit")
+    try:
+        now = json.loads(view.stdout) if view.returncode == 0 else None
+    except ValueError:
+        now = None
+    oid = ((now or {}).get("mergeCommit") or {}).get("oid")
+    if now and now.get("state") == "MERGED" and oid:
+        return _settle(led, fid, entry, task, issue,
+                       {"state": "LANDED", "flight": fid, "sha": oid, "branch": pr["baseRefName"]},
+                       tower_gate(entry, issue)[0])
+    known = bool(now and now.get("state"))
+    why = ("merge failed: " + (merged.stderr or "").strip()[:200] if known
+           else "merge state unknown: " + (view.stderr or "unreadable PR").strip()[:200])
+    return pending(led, fid, {"reason": why, "pr_url": pr_url, "requeue": "merge", "evidence": [pr_url],
+                              "retry_at": time.time() + (MERGE_RETRY_S if known else WAIT_S)})
 
 
 def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
@@ -1234,7 +1255,7 @@ def tower_step(led, entry, task, current):
         led.event("work.pending", task["id"], {"reason": f"gate: {why}", "next_retry": time.time() + 1800}, "work")
         return "blocked"
     waiting = latest(led, "work.pending", task["id"])
-    if waiting.get("reason") == "in_review" and waiting.get("pr_url"):
+    if waiting.get("pr_url") and (waiting.get("reason") == "in_review" or waiting.get("requeue") == "merge"):
         return tower_review(led, entry, task, waiting["pr_url"])
     return tower_execute(led, entry, task)
 

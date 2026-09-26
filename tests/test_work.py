@@ -482,7 +482,7 @@ else:
         work.discover(self.led, self.entry)
         task = self.led.tasks()[0]
         pr = dict(headRefName="fix", headRefOid="abc", baseRefName="main", labels=[{"name": "sensitive"}],
-                  files=[{"path": "README.md"}], mergeCommit={"oid": "def"})
+                  files=[{"path": "README.md"}], state="MERGED", mergeCommit={"oid": "def"})
         github, merges = self.github, []
 
         def fake(argv, **kwargs):
