@@ -183,6 +183,18 @@ class TowerYield(unittest.TestCase):
             work.tower_review(self.led, self.entry, self.task, "https://pr/10")
         self.assertIn("hold", held[0])
 
+    def test_a_failed_close_is_retried_never_recorded_as_a_redesign(self):
+        fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
+        for n in range(work.MAX_REVIEW_REPAIRS):
+            self.led.event("work.repair", fid, {"pr": "https://pr/9"}, "work")
+        failing = lambda *a: subprocess.CompletedProcess(a, 1, "", "HTTP 502")  # noqa: E731
+        self.assertEqual((True, "repairs exhausted; closing the PR for a redesign failed, retrying"),
+                         work.after_fail(self.led, failing, self.task, "https://pr/9"))
+        self.assertEqual([], self.led.events(kind="work.redesign"))
+        closing = lambda *a: subprocess.CompletedProcess(a, 0, "", "")  # noqa: E731
+        self.assertTrue(work.after_fail(self.led, closing, self.task, "https://pr/9")[0])
+        self.assertEqual(1, len(self.led.events(kind="work.redesign")))
+
     def test_a_repair_that_changes_nothing_still_spends_its_attempt(self):
         fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
         self.led.event("work.review", fid, {"pr": "https://pr/9", "head": "h1", "verdict": "FAIL", "reason": "x"}, "work")

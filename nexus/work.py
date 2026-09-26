@@ -1057,8 +1057,9 @@ def after_fail(led, gh, task, pr_url):
         return True, "the next flight repairs it"
     if led.events(kind="work.redesign", subject=task["id"]):
         return False, "repairs and a redesign exhausted, waiting for a person"
+    if gh("pr", "close", pr_url, "--comment", "Repairs exhausted: the next Tower flight rebuilds from every finding.").returncode:
+        return True, "repairs exhausted; closing the PR for a redesign failed, retrying"  # owed, never recorded as done
     led.event("work.redesign", task["id"], {"pr": pr_url, "findings": findings(led, pr_url)}, "work")
-    gh("pr", "close", pr_url, "--comment", "Repairs exhausted: the next Tower flight rebuilds from every finding.")
     return True, "repairs exhausted, the next flight redesigns from every finding"
 
 
