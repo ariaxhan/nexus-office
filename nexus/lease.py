@@ -174,6 +174,25 @@ def heartbeat(now=None):
     return renewed
 
 
+def catch_up(repo, branch):
+    """Bring the checkout to origin, moving only files nobody has dirty. None, or why it cannot."""
+    if landing._git(repo, "fetch", "--quiet", "origin", branch, check=False).returncode:
+        return None  # origin unreachable: fly on what we have; landing proves against origin anyway
+    head = landing._git(repo, "rev-parse", "HEAD").stdout.strip()
+    tip = landing._git(repo, "rev-parse", f"origin/{branch}").stdout.strip()
+    if head == tip:
+        return None
+    if landing._git(repo, "merge-base", "--is-ancestor", head, tip, check=False).returncode:
+        return "behind_origin:not_fast_forward"
+    moved = [p for p in landing._git(repo, "diff", "--name-only", "--no-renames", head, tip).stdout.split("\n") if p]
+    blocked = sorted(set(moved) & set(dirty(repo)))
+    if blocked:  # someone's uncommitted bytes sit on files origin changed: a person decides, never us
+        return "behind_origin:dirty " + ", ".join(blocked[:5])
+    landing._locked(repo, "update-ref", f"refs/heads/{branch}", tip, head)
+    landing.restore(repo, moved, tip)
+    return None
+
+
 def acquire(repo, branch, flight, pid, ttl_s):
     """Refuse unless on `branch` and not mid-operation; fast-forward only a clean tree."""
     if landing._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != branch:
@@ -193,11 +212,10 @@ def acquire(repo, branch, flight, pid, ttl_s):
     rc, err = lane_lock("acquire", repo, flight, pid)
     if rc:
         raise Owned(f"lane_lock:{err[:200]}")
-    landing._git(repo, "fetch", "--quiet", "origin", branch, check=False)
-    clean = not landing._git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip()
-    behind = landing._git(repo, "merge-base", "--is-ancestor", "HEAD", f"origin/{branch}", check=False)
-    if clean and behind.returncode == 0:
-        landing._git(repo, "merge", "--ff-only", "--quiet", f"origin/{branch}", check=False)
+    why = catch_up(repo, branch)
+    if why:  # flying a stale checkout builds on code origin already replaced (#210: #183 flew on a base 11 merges old)
+        lane_lock("release", repo, flight, pid)
+        raise Owned(why)
     record = {**stamp(flight, pid, ttl_s, "whole_repo", None), "branch": branch,
               "head": landing._git(repo, "rev-parse", "HEAD").stdout.strip(), "baseline": dirty(repo)}
     with open(path(repo), "w") as f:
