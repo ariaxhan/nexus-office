@@ -358,6 +358,19 @@ def owning_issue_comment(ledger, flight):
                                        capture_output=True, text=True, timeout=60, check=True).stdout.strip()
 
 
+def _hold_once(repo, record, paths, comment):
+    """Push to the flight's held branch once. A branch already there is the durable outcome: re-holding
+    would be a non-fast-forward push forever, so only the announcement is retried (best effort)."""
+    branch = ld.HELD_PREFIX + record["flight"]
+    tip = ld.remote_tip(ld.target_key(repo, branch))
+    if tip:
+        url, why = ld.notify(comment, f"Nexus flight {record['flight']} HELD (owner_exited): work on `{branch}` at {tip}.")
+        return {"state": "HELD", "reason": "already_held", "flight": record["flight"], "sha": tip, "branch": branch,
+                "comment_url": url, "comment_error": why}
+    result = ld.hold(repo, record, paths, list(paths), "owner_exited", comment)
+    return result if ld.terminal(repo, result) else None
+
+
 def _recover_work_checkout(ledger, flight, repo, now):
     """[held results] once the dead flight no longer owns the checkout; None while it still must.
 
@@ -376,8 +389,8 @@ def _recover_work_checkout(ledger, flight, repo, now):
             mine = [p for p in changed if p not in collisions]
             moved = ld._git(repo, "rev-parse", "HEAD").stdout.strip() != record.get("head")
             if mine or moved:
-                result = ld.hold(repo, record, mine, list(mine), "owner_exited", comment)
-                if not ld.terminal(repo, result):
+                result = _hold_once(repo, record, mine, comment)
+                if result is None:
                     return _ambiguous_work_checkout(ledger, flight, repo, "held work not yet announced", now)
                 held.append(result)
             if collisions:
