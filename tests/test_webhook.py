@@ -418,7 +418,8 @@ class TriggerTest(TowerFixture, unittest.TestCase):
                   refresh=self.refreshed.append)
         kw.update(over)
         t = wh.Trigger(self.box, **kw)
-        self.addCleanup(t.cancel)
+        # join, not just cancel: a drainer mid-handoff still writes into the tempdir being removed
+        self.addCleanup(lambda: (t.cancel(), t.thread.join(5)))
         return t
 
     def real(self, **over):
@@ -816,7 +817,7 @@ class SectionTest(unittest.TestCase):
         src = self.source()
         self.assertEqual(src.read()["queued"], [])
         t = wh.Trigger(box, debounce_s=30, runner=lambda r, e: "ok")
-        self.addCleanup(t.cancel)
+        self.addCleanup(lambda: (t.cancel(), t.thread.join(5)))
         t.notice(wh.parse("issue_comment", "d2", issue_comment()))
         self.assertEqual(src.read()["queued"], ["acme/thing"])
         card = src.card(src.read())
