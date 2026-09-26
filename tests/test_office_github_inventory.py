@@ -58,6 +58,14 @@ class Sets(unittest.TestCase):
         self.assertEqual({},fresh)
         self.assertIn('timed out',errors['ariaxhan/app'])
 
+    def test_an_archived_registry_repo_is_excluded_not_counted(self):
+        spec=inventory.tower_set(ROWS,set())
+        cache={'ariaxhan/app':{'total':2,'issues':[issue(1),issue(2)],'archived':True,'fetched_at':'now'}}
+        with patch.object(inventory,'active_issues',return_value=(set(),{})):
+            group=inventory.assemble({'Tower':spec},cache,cache,{},'','t')['groups'][0]
+        self.assertEqual(0,sum(row['open'] or 0 for row in group['repos']))
+        self.assertIn({'repo':'ariaxhan/app','reason':'archived'},group['excluded'])
+
     def test_failed_org_listing_with_no_last_good_uses_registry_and_is_incomplete(self):
         spec=inventory.tbs_set(ROWS,None,'HTTP 502')
         self.assertEqual(spec['included'],['thinking-brain-school/tbs'])

@@ -287,7 +287,10 @@ def decorate(repo, issue, group, active, now):
 
 def group_summary(name, spec, repos_state, active, now):
     rows, issues = [], []
-    for repo in spec['included']:
+    archived = [repo for repo in spec['included'] if (repos_state.get(repo) or {}).get('archived')]
+    spec = dict(spec, included=[repo for repo in spec['included'] if repo not in archived],
+                excluded=spec['excluded'] + [{'repo': repo, 'reason': 'archived'} for repo in archived])
+    for repo in spec['included']:  # GitHub says archived: not active work, whatever the registry row says
         state = repos_state.get(repo, {'status': 'never fetched'})
         issues += [decorate(repo, issue, name, active, now) for issue in state.get('issues') or []]
         rows.append({'repo': repo, 'open': state.get('total'), 'status': state['status'],
