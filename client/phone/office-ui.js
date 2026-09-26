@@ -18,7 +18,10 @@ export async function api(path, body) {
   return data;
 }
 export function notice(text){const node=$('#notice');node.textContent=text;node.hidden=false;clearTimeout(notice.timer);notice.timer=setTimeout(()=>node.hidden=true,6000);}
-export function sheet(title){$('#detail-title').textContent=title;const body=$('#detail-body');body.transcriptCleanup?.();body.onscroll=null;body.replaceChildren();body.dataset.taskId='';if(!$('#detail').open)$('#detail').showModal();return body;}
+import {viewer} from './office-active.js';
+export const active=viewer(body=>api('/api/objects/active',body));
+// `file` is the {repo,path} this sheet shows, or null: the viewer's active document follows every sheet.
+export function sheet(title,file=null){active.show(file);$('#detail-title').textContent=title;const body=$('#detail-body');body.transcriptCleanup?.();body.onscroll=null;body.replaceChildren();body.dataset.taskId='';if(!$('#detail').open)$('#detail').showModal();return body;}
 export function section(parent,title){const part=el('section','section');part.append(el('h2','section-head',title));const body=el('div','stack');part.append(body);parent.append(part);return body;}
 export function card(title,detail,action){const node=action?button('',action,'card'):el('article','card');node.append(el('h3','',title));if(detail)node.append(el('p','muted',detail));return node;}
 export function intro(parent,eyebrow,title,description){const node=el('div','intro');node.append(el('div','eyebrow',eyebrow),el('h1','',title));if(description)node.append(el('p','',description));parent.append(node);}

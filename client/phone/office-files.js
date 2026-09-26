@@ -1,5 +1,5 @@
 import * as userState from './office-state.js';
-import {rememberDetail,saveObject,api,el,button,sheet,section,card,empty,link,notice} from './office-ui.js';
+import {rememberDetail,saveObject,api,active,el,button,sheet,section,card,empty,link,notice} from './office-ui.js';
 import {markdownView} from './office-markdown.js';
 import {prefs} from './office-settings.js';
 export async function browse(parent,id='',cursor=0){
@@ -11,19 +11,23 @@ export async function browse(parent,id='',cursor=0){
  if(data.next_cursor!==null)parent.append(button('More files',()=>browse(parent,id,data.next_cursor)));
 }
 function draft(id){try{return JSON.parse(localStorage.getItem(`office-draft:${id}`)||'null');}catch{return null;}}
-export async function openFile(id,offset=0){
- rememberDetail('file',id);
- const data=await api(`/api/objects/detail?id=${encodeURIComponent(id)}&offset=${offset}`);const body=sheet(data.name);
+// A caller that already claimed the navigation (the document route) passes its claim, so a failed read
+// still belongs to it and shows the missing state instead of leaving the old document acknowledged.
+export async function openFile(id,offset=0,claimed=active.claim()){
+ const data=await api(`/api/objects/detail?id=${encodeURIComponent(id)}&offset=${offset}`);if(!active.current(claimed))return false;
+ const file=active.label(id,{repo:data.project,path:data.path});
+ rememberDetail('file',id);const body=sheet(data.name,file);
  body.append(el('p','muted',`${data.project} / ${data.path}`),el('p','muted',`Revision ${data.revision.slice(0,12)}${data.is_text?` · lines ${data.line_start}–${data.line_end}`:''}`));
  checkoutDetails(body,id);
  const actions=el('div','actions');actions.append(link('Download',data.content_url),button('Save to Library',()=>saveObject('file',id,data.name)),button('Ask an agent',()=>document.dispatchEvent(new CustomEvent('office-file-task',{detail:data}))));body.append(actions);
- if(data.mime==='text/html')actions.append(button('Preview',()=>preview(sheet(data.name),data)));
+ if(data.mime==='text/html')actions.append(button('Preview',()=>preview(sheet(data.name,file),data)));
  if(data.editable)actions.append(button('Edit file',()=>editFile(data)));
- if(data.is_text){actions.append(button('View source',()=>{const source=sheet(data.name+' source');source.append(numberedSource(data));source.append(contextSelection(data));}));const text=data.name.endsWith('.md')?markdownView(data.text):el('pre','',data.text);text.classList.add('reading');body.append(text);restoreReading(body,id);}
+ if(data.is_text){actions.append(button('View source',()=>{const source=sheet(data.name+' source',file);source.append(numberedSource(data));source.append(contextSelection(data));}));const text=data.name.endsWith('.md')?markdownView(data.text):el('pre','',data.text);text.classList.add('reading');body.append(text);restoreReading(body,id);}
  else preview(body,data);
  if(data.is_text)body.append(contextSelection(data));
  if(data.next_offset!==null)body.append(button('Next part',()=>openFile(id,data.next_offset)));
  if(offset>0)body.append(button('Start of file',()=>openFile(id)));
+ return true;
 }
 function preview(body,data){
  if(data.mime.startsWith('image/')){const image=el('img');image.src=data.content_url;image.alt=data.name;image.style.maxWidth='100%';body.append(image);return;}
