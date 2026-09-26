@@ -1,5 +1,7 @@
 """One durable Office chat backed by the personal Codex app-server session."""
 import json
+import hashlib
+import os
 import random
 import re
 import selectors
@@ -13,6 +15,7 @@ from pathlib import Path
 
 import office_preferences as preferences
 import office_profiles as profiles
+import office_uploads as uploads
 import private_state
 
 DEFAULT_MODEL = 'gpt-6-sol'
@@ -21,6 +24,10 @@ CATALOG = (0, [])
 AUTO_CHOICE = {'engine': 'office', 'id': 'auto', 'name': 'Auto · learns from feedback'}
 REQUEST_ID_RE = re.compile(r'[A-Za-z0-9_-]{16,80}\Z', re.ASCII)
 INTERRUPTED = 'Office restarted before this answer finished.'
+
+
+class UnsafeReplay(RuntimeError):
+    """An interrupted provider turn cannot be safely executed again."""
 
 
 class Connection(sqlite3.Connection):
@@ -42,8 +49,6 @@ def claude_environment():
     allowed = ('HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'SHELL', 'LANG', 'LC_ALL',
                'SSH_AUTH_SOCK', 'XDG_CONFIG_HOME')
     return {name: selected[name] for name in allowed if name in selected}
-WORKER = None
-RETRY_TIMER = None
 OFFICE_DIR = Path(__file__).resolve().parents[1]
 MANAGER_INSTRUCTIONS = (
     'You are the user\'s Office manager in one continuous chat. Primarily answer questions about '
@@ -81,13 +86,22 @@ def connect():
         CREATE TABLE IF NOT EXISTS ratings (
             reply_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, updated_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, reply_id INTEGER NOT NULL,
+            turn_id TEXT, text TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            UNIQUE(reply_id, fingerprint)
+        );
+        CREATE INDEX IF NOT EXISTS activity_reply ON activity(reply_id, id);
     ''')
     columns = {row['name'] for row in db.execute('PRAGMA table_info(messages)')}
     for name, definition in (('request_id', 'TEXT'), ('parent_id', 'INTEGER'),
                              ('requested_model', 'TEXT'), ('provider_turn_id', 'TEXT'),
                              ('recovering', 'INTEGER NOT NULL DEFAULT 0'),
                              ('next_attempt_at', 'REAL NOT NULL DEFAULT 0'),
-                             ('failure_count', 'INTEGER NOT NULL DEFAULT 0')):
+                             ('failure_count', 'INTEGER NOT NULL DEFAULT 0'),
+                             ('images_json', "TEXT NOT NULL DEFAULT '[]'"),
+                             ('claimed_at', 'REAL')):
         if name not in columns:
             db.execute(f'ALTER TABLE messages ADD COLUMN {name} {definition}')
     db.execute("UPDATE messages SET status='completed' WHERE status='complete'")
@@ -116,13 +130,20 @@ def read():
     with connect() as db:
         messages = [dict(row) for row in db.execute('''SELECT * FROM (
                                                        SELECT id,role,text,model,status,created_at,completed_at,
-                                                              request_id,parent_id
+                                                              request_id,parent_id,images_json
                                                        FROM messages ORDER BY id DESC LIMIT 500
                                                      ) ORDER BY id''')]
         ratings = {row['reply_id']: row['kind'] for row in db.execute('SELECT reply_id,kind FROM ratings')}
         for message in messages:
+            message['images'] = json.loads(message.pop('images_json') or '[]')
             if message['id'] in ratings:
                 message['rating'] = ratings[message['id']]
+        by_reply = {message['id']: message for message in messages if message['role'] == 'office'}
+        if by_reply:
+            placeholders = ','.join('?' for _ in by_reply)
+            for row in db.execute(f'''SELECT reply_id,turn_id,text,created_at FROM activity
+                                      WHERE reply_id IN ({placeholders}) ORDER BY id''', tuple(by_reply)):
+                by_reply[row['reply_id']].setdefault('activity', []).append(dict(row))
         counts = {row['status']: row['count'] for row in db.execute(
             "SELECT status,COUNT(*) count FROM messages WHERE role='user' GROUP BY status")}
         queue = {'queued': counts.get('queued', 0), 'working': counts.get('working', 0)}
@@ -267,10 +288,15 @@ def models(fresh=False):
 
 def send(body):
     message = body.get('text')
+    references = body.get('images', [])
     requested = body.get('model', DEFAULT_MODEL)
     request_id = body.get('request_id')
-    if not isinstance(message, str) or not 1 <= len(message.strip()) <= 8000:
-        raise ValueError('Ask needs a message of at most 8000 characters')
+    if not isinstance(message, str) or len(message.strip()) > 8000:
+        raise ValueError('Ask message is limited to 8000 characters')
+    if not isinstance(references, list) or len(references) > 8:
+        raise ValueError('Attach at most eight images')
+    if not message.strip() and not references:
+        raise ValueError('Ask needs a message or image')
     if not isinstance(requested, str):
         raise ValueError('Ask needs a model')
     # Older cached Office clients send no request ID. Keep those sends working
@@ -280,11 +306,14 @@ def send(body):
     if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
         raise ValueError('Ask request_id must be 16 to 80 letters, numbers, underscores, or hyphens')
     message = message.strip()
+    images = [{key: image[key] for key in ('id', 'revision', 'name')}
+              for image in (uploads.image(reference) for reference in references)]
+    image_json = json.dumps(images, separators=(',', ':'))
     with LOCK, connect() as db:
         existing = db.execute("SELECT * FROM messages WHERE role='user' AND request_id=?",
                               (request_id,)).fetchone()
         if existing:
-            return _retry_receipt(db, existing, message, requested)
+            return _retry_receipt(db, existing, message, requested, images)
     available = {row['id'] for row in models()['items']}
     if requested not in available and requested != 'auto':
         raise ValueError('That model is not currently available in the selected personal account')
@@ -293,7 +322,7 @@ def send(body):
         existing = db.execute("SELECT * FROM messages WHERE role='user' AND request_id=?",
                               (request_id,)).fetchone()
         if existing:
-            receipt = _retry_receipt(db, existing, message, requested)
+            receipt = _retry_receipt(db, existing, message, requested, images)
             db.commit()
             return receipt
         model = auto_model(db, available) if requested == 'auto' else requested
@@ -303,9 +332,9 @@ def send(body):
                        ('system', f'Model changed from {previous} to {model}', model, 'completed', time.time()))
         _set(db, 'model', model)
         _set(db, 'selection', requested)
-        cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,request_id,requested_model)
-                               VALUES(?,?,?,?,?,?,?)''',
-                            ('user', message, model, 'queued', time.time(), request_id, requested))
+        cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,request_id,requested_model,images_json)
+                               VALUES(?,?,?,?,?,?,?,?)''',
+                            ('user', message, model, 'queued', time.time(), request_id, requested, image_json))
         user_id = cursor.lastrowid
         cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,parent_id)
                                VALUES(?,?,?,?,?,?)''',
@@ -313,7 +342,6 @@ def send(body):
         reply_id = cursor.lastrowid
         receipt = _receipt(request_id, user_id, reply_id, model)
         db.commit()
-    _ensure_worker()
     return receipt
 
 
@@ -322,8 +350,9 @@ def _receipt(request_id, user_id, reply_id, model):
             'reply_id': reply_id, 'model': model}
 
 
-def _retry_receipt(db, row, message, requested):
-    if row['text'] != message or (row['requested_model'] or row['model']) != requested:
+def _retry_receipt(db, row, message, requested, images=None):
+    if (row['text'] != message or (row['requested_model'] or row['model']) != requested
+            or json.loads(row['images_json'] or '[]') != (images or [])):
         raise ValueError('That request_id was already used for a different Ask message')
     reply = db.execute("SELECT id FROM messages WHERE role='office' AND parent_id=?", (row['id'],)).fetchone()
     if not reply:
@@ -331,42 +360,16 @@ def _retry_receipt(db, row, message, requested):
     return _receipt(row['request_id'], row['id'], reply['id'], row['model'])
 
 
-def _ensure_worker():
-    global WORKER
-    with LOCK:
-        if WORKER and WORKER.is_alive():
-            return
-        with connect() as db:
-            queued = db.execute("SELECT MIN(next_attempt_at) due FROM messages WHERE role='user' AND status='queued'").fetchone()['due']
-            working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
-        if queued is None or working:
-            return
-        if queued > time.time():
-            _schedule_retry(queued - time.time())
-            return
-        WORKER = threading.Thread(target=_drain, name='office-ask', daemon=True)
-        WORKER.start()
-
-
-def _schedule_retry(delay):
-    global RETRY_TIMER
-    if RETRY_TIMER:
-        RETRY_TIMER.cancel()
-    RETRY_TIMER = threading.Timer(max(.1, delay), _ensure_worker)
-    RETRY_TIMER.daemon = True
-    RETRY_TIMER.start()
-
-
 def _claim():
     with LOCK, connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        changed = db.execute('''UPDATE messages SET status='working' WHERE id=(
+        changed = db.execute('''UPDATE messages SET status='working',claimed_at=? WHERE id=(
                                    SELECT id FROM messages WHERE role='user' AND status='queued'
                                    AND next_attempt_at <= ?
                                    ORDER BY id LIMIT 1
                                 ) AND NOT EXISTS (
                                   SELECT 1 FROM messages WHERE role='user' AND status='working'
-                                 )''', (time.time(),)).rowcount
+                                 )''', (time.time(), time.time())).rowcount
         if changed != 1:
             db.commit()
             return None
@@ -384,6 +387,10 @@ def _claim():
 def _finish(turn, answer, status):
     with LOCK, connect() as db:
         now = time.time()
+        last = db.execute('SELECT id,text FROM activity WHERE reply_id=? ORDER BY id DESC LIMIT 1',
+                          (turn['reply_id'],)).fetchone()
+        if last and _activity_key(last['text']) == _activity_key(answer):
+            db.execute('DELETE FROM activity WHERE id=?', (last['id'],))
         db.execute("UPDATE messages SET status=?,completed_at=?,recovering=0 WHERE id=? AND status='working'",
                    (status, now, turn['user_id']))
         db.execute("UPDATE messages SET text=?,status=?,completed_at=? WHERE id=? AND status='working'",
@@ -395,20 +402,21 @@ def _retry(turn, error):
         row = db.execute('SELECT failure_count FROM messages WHERE id=?', (turn['user_id'],)).fetchone()
         failures = (row['failure_count'] if row else 0) + 1
         due = time.time() + min(3600, 60 * 3 ** min(failures - 1, 4))
-        db.execute("UPDATE messages SET status='queued',recovering=1,failure_count=?,next_attempt_at=? "
+        db.execute("UPDATE messages SET status='queued',recovering=1,claimed_at=NULL,failure_count=?,next_attempt_at=? "
                    "WHERE id=? AND status='working'", (failures, due, turn['user_id']))
         db.execute("UPDATE messages SET text=?,status='queued',completed_at=NULL WHERE id=? AND status='working'",
                    (f'Both providers failed; Office will retry automatically. {error}'[:1000], turn['reply_id']))
 
 
 def _drain():
-    global WORKER
     while True:
         turn = _claim()
         if turn:
             try:
                 answer = _answer_turn(turn['text'], turn['model'], turn['reply_id'])
                 _finish(turn, answer, 'completed')
+            except UnsafeReplay as exc:
+                _finish(turn, f'Execution stopped and was not replayed: {exc}', 'failed')
             except Exception as exc:
                 alternate = ('gpt-6-sol' if turn['model'].startswith('claude:') else
                              'claude:sonnet' if turn['model'].startswith('gpt-') else None)
@@ -438,10 +446,6 @@ def _drain():
                 working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
             if queued is not None and queued <= time.time() and not working:
                 continue
-            if WORKER is threading.current_thread():
-                WORKER = None
-            if queued is not None and not working:
-                _schedule_retry(queued - time.time())
             return
 
 
@@ -455,16 +459,41 @@ def recover():
                                     (o.status='failed' AND o.text=?))
                              ORDER BY u.id''', (INTERRUPTED,)).fetchall()
         for row in rows:
-            db.execute("UPDATE messages SET status='queued',completed_at=NULL,recovering=1 WHERE id=?",
+            db.execute("UPDATE messages SET status='queued',claimed_at=NULL,completed_at=NULL,recovering=1 WHERE id=?",
                        (row['user_id'],))
-            db.execute("UPDATE messages SET text='',status='queued',completed_at=NULL WHERE id=?",
+            db.execute("UPDATE messages SET status='queued',completed_at=NULL WHERE id=?",
                        (row['reply_id'],))
         db.execute('''UPDATE messages SET status='failed',completed_at=?
                       WHERE role='user' AND status='working' AND NOT EXISTS
                       (SELECT 1 FROM messages o WHERE o.parent_id=messages.id)''', (time.time(),))
         db.commit()
-    _ensure_worker()
     return {'resuming': len(rows)}
+
+
+def worker_heartbeat():
+    with connect() as db:
+        _set(db, 'worker_heartbeat', time.time())
+        _set(db, 'worker_pid', os.getpid())
+
+
+def worker_health():
+    with connect() as db:
+        heartbeat = float(_state(db, 'worker_heartbeat', '0'))
+        oldest = db.execute("SELECT MIN(claimed_at) FROM messages WHERE role='user' AND status='working'").fetchone()[0]
+    return time.time() - heartbeat < 20 and (oldest is None or time.time() - oldest < 2400)
+
+
+def worker_forever(stop=None):
+    """Only the independent Ask job calls this; the HTTP service only reads/enqueues."""
+    recover()
+    def pulse():
+        while True:
+            worker_heartbeat()
+            time.sleep(5)
+    threading.Thread(target=pulse, name='office-ask-heartbeat', daemon=True).start()
+    while not (stop and stop()):
+        _drain()
+        time.sleep(.5)
 
 
 def _bridge(db, model, before_id):
@@ -480,7 +509,7 @@ def _bridge(db, model, before_id):
         f"{row['role']}: {row['text'][:1600]}" for row in earlier) + '\n\nCurrent user message:\n'
 
 
-def _claude_answer(message, model, bridge):
+def _claude_answer(message, model, bridge, image_dir=None):
     alias = model.split(':', 1)[1]
     with connect() as db:
         session_id = _state(db, 'claude_session_id')
@@ -489,6 +518,8 @@ def _claude_answer(message, model, bridge):
         raise RuntimeError('Claude Code is not installed')
     args = [binary, '-p', '--setting-sources', 'project,local', '--output-format', 'json', '--model', alias,
             '--permission-mode', 'auto', '--append-system-prompt', MANAGER_INSTRUCTIONS]
+    if image_dir:
+        args.extend(['--add-dir', str(image_dir)])
     if session_id:
         args.extend(['--resume', session_id])
     else:
@@ -521,6 +552,33 @@ def _turn_answer(turn):
     return answers[-1] if answers else ''
 
 
+def _activity_key(text):
+    return ' '.join(text.split()).casefold()
+
+
+def _record_activity(reply_id, text, turn_id=None):
+    """Keep meaningful completed messages; the reply text remains the current status."""
+    text = text.strip()
+    if not text:
+        return
+    normalized = _activity_key(text)
+    fingerprint = hashlib.sha256(normalized.encode()).hexdigest()
+    with LOCK, connect() as db:
+        last = db.execute('SELECT text FROM activity WHERE reply_id=? ORDER BY id DESC LIMIT 1',
+                          (reply_id,)).fetchone()
+        if not last or normalized not in _activity_key(last['text']):
+            db.execute('''INSERT OR IGNORE INTO activity(reply_id,turn_id,text,fingerprint,created_at)
+                          VALUES(?,?,?,?,?)''', (reply_id, turn_id, text, fingerprint, time.time()))
+        db.execute("UPDATE messages SET text=? WHERE id=? AND status='working'", (text, reply_id))
+
+
+def _record_saved_activity(reply_id, turn):
+    if turn:
+        for item in turn.get('items', []):
+            if item.get('type') == 'agentMessage':
+                _record_activity(reply_id, item.get('text', ''), turn.get('id'))
+
+
 def _saved_turn(client, thread_id, user_id, message, request_id, provider_turn_id):
     turns = client.request('thread/read', {'threadId': thread_id, 'includeTurns': True}, 30)['thread'].get('turns', [])
     if provider_turn_id:
@@ -543,6 +601,25 @@ def _record_turn(user_id, turn_id):
                    (turn_id, user_id))
 
 
+def _recovered_answer(client, thread_id, user_id, reply_id, message, user):
+    previous = _saved_turn(client, thread_id, user_id, message, user['request_id'], user['provider_turn_id'])
+    if not previous:
+        raise UnsafeReplay('Codex turn could not be found in its durable thread; external effects are unknown.')
+    deadline = time.monotonic() + 1800
+    while previous.get('status') == 'inProgress' and time.monotonic() < deadline:
+        _record_saved_activity(reply_id, previous)
+        time.sleep(2)
+        previous = _saved_turn(client, thread_id, user_id, message, user['request_id'], previous['id'])
+        if not previous:
+            raise UnsafeReplay('Codex turn disappeared while reconnecting; external effects are unknown.')
+    if previous.get('status') == 'completed':
+        _record_saved_activity(reply_id, previous)
+        answer = _turn_answer(previous)
+        if answer:
+            return answer
+    raise UnsafeReplay(f'Codex turn is {previous.get("status", "unknown")}; external effects are unknown.')
+
+
 def _answer_turn(message, model, reply_id):
     client = None
     answer = ''
@@ -550,11 +627,18 @@ def _answer_turn(message, model, reply_id):
         with connect() as db:
             user_id = db.execute("SELECT parent_id FROM messages WHERE id=?", (reply_id,)).fetchone()['parent_id']
             bridge = _bridge(db, model, user_id)
-            user = db.execute("SELECT request_id,provider_turn_id,recovering FROM messages WHERE id=?", (user_id,)).fetchone()
+            user = db.execute("SELECT request_id,provider_turn_id,recovering,images_json FROM messages WHERE id=?", (user_id,)).fetchone()
+        images = [uploads.image({key: item[key] for key in ('id', 'revision')})
+                  for item in json.loads(user['images_json'] or '[]')]
         if model.startswith('claude:'):
+            if user['recovering']:
+                raise UnsafeReplay('Claude execution stopped before a final receipt; inspect the source state before retrying.')
             resume_note = ('Office restarted while this request was in progress. Inspect the existing session '
                            'and current external state, continue the unfinished work, and do not repeat completed actions.\n\n') if user['recovering'] else ''
-            answer = _claude_answer(resume_note + message, model, bridge)
+            image_note = ('\n\nAttached images: Read these local image files with the Read tool before answering:\n' +
+                          '\n'.join(f'- {item["name"]}: {item["path"]}' for item in images)) if images else ''
+            answer = _claude_answer(resume_note + message + image_note, model, bridge,
+                                    uploads.root() if images else None)
             if not answer:
                 raise RuntimeError('Claude Code returned an empty answer')
             return answer
@@ -574,33 +658,14 @@ def _answer_turn(message, model, reply_id):
             thread_id = result['thread']['id']
             with connect() as db:
                 _set(db, 'thread_id', thread_id)
-        previous = (_saved_turn(client, thread_id, user_id, message, user['request_id'],
-                                user['provider_turn_id']) if user['recovering'] else None)
-        if previous and previous.get('status') == 'completed':
-            answer = _turn_answer(previous)
-            if answer:
-                return answer
-        if previous and previous.get('status') == 'inProgress':
-            deadline = time.monotonic() + 1800
-            while time.monotonic() < deadline:
-                time.sleep(2)
-                previous = _saved_turn(client, thread_id, user_id, message, user['request_id'],
-                                       previous['id'])
-                if previous and previous.get('status') != 'inProgress':
-                    break
-            if previous and previous.get('status') == 'completed':
-                answer = _turn_answer(previous)
-                if answer:
-                    return answer
+        if user['recovering']:
+            return _recovered_answer(client, thread_id, user_id, reply_id, message, user)
         marker = f'[Office request: {user["request_id"]}]\n' if user['request_id'] else ''
-        if previous:
-            prompt = (marker + 'Office restarted during the preceding turn. Reconcile its recorded work and '
-                      'the current external state before continuing. Do not repeat completed actions. '
-                      'Answer the original request once the outcome is verified.\n\nOriginal request:\n' + message)
-        else:
-            prompt = marker + (bridge or '') + message
+        prompt = marker + (bridge or '') + message
+        turn_input = [{'type': 'text', 'text': prompt}]
+        turn_input.extend({'type': 'localImage', 'path': item['path']} for item in images)
         started = client.request('turn/start', {'threadId': thread_id,
-                                                'input': [{'type': 'text', 'text': prompt}], 'model': model}, 30)
+                                                'input': turn_input, 'model': model}, 30)
         _record_turn(user_id, started['turn']['id'])
         deadline = time.monotonic() + 1800
         while time.monotonic() < deadline:
@@ -613,20 +678,22 @@ def _answer_turn(message, model, reply_id):
                 saved = _saved_turn(client, thread_id, user_id, message,
                                     user['request_id'], started['turn']['id'])
                 if saved and saved.get('status') == 'completed':
+                    _record_saved_activity(reply_id, saved)
                     answer = _turn_answer(saved) or answer
                     if answer:
                         return answer
                 if saved and saved.get('status') in ('failed', 'interrupted', 'cancelled'):
+                    _record_saved_activity(reply_id, saved)
                     raise RuntimeError('Codex turn ' + saved['status'])
                 continue
             if item.get('method') == 'item/completed':
                 output = item.get('params', {}).get('item', {})
                 if output.get('type') == 'agentMessage':
                     answer = output.get('text', '')
-                    with connect() as db:
-                        db.execute("UPDATE messages SET text=? WHERE id=? AND status='working'", (answer, reply_id))
+                    _record_activity(reply_id, answer, started['turn']['id'])
             if item.get('method') == 'turn/completed':
                 turn = item.get('params', {}).get('turn', {})
+                _record_saved_activity(reply_id, turn)
                 if turn.get('status') != 'completed':
                     raise RuntimeError(str(turn.get('error') or turn.get('status'))[:500])
                 if not answer:

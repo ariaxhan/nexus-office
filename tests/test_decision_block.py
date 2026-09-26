@@ -70,6 +70,20 @@ class ParseDecisionTest(unittest.TestCase):
         self.assertIsNone(self.parse(None))
         self.assertIsNone(self.parse("❓\n- [ ] **1.** a: x\n- [ ] **2.** b: y"))
 
+    def test_unexplained_pass_is_a_failure_even_with_numbered_options(self):
+        comment = ("❓ The automated pass could not resolve this and did not say what to decide. What now?\n"
+                   "- [ ] **1.** Re-run with guidance (recommended)\n"
+                   "- [ ] **2.** Close\n<!-- pipeline-bot -->")
+        self.assertIsNone(self.parse(comment))
+        row = office_sync._issue_row({
+            "number": 7, "title": "t", "body": "", "url": "", "updatedAt": "",
+            "labels": {"nodes": []},
+            "comments": {"nodes": [{"body": comment, "url": "u",
+                                    "createdAt": "2026-09-01T00:00:00Z"}]},
+        })
+        self.assertEqual(row["automation_failure"], "missing_decision")
+        self.assertNotIn("decision", row)
+
     def test_options_that_do_not_count_from_one_are_refused(self):
         """Numbers out of order mean the human's '**2.**' would answer option 3."""
         self.assertIsNone(self.parse("❓ q\n- [ ] **2.** a: x\n- [ ] **3.** b: y"))

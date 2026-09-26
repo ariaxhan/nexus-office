@@ -174,10 +174,30 @@ def heartbeat(now=None):
     return renewed
 
 
+def on_branch(repo, branch):
+    """Lanes run on `branch` only. A checkout a person left on a clean, fully pushed side branch goes back
+    (nothing is lost: every commit is on a remote); dirty, unpushed or mid-operation stays and waits."""
+    current = landing._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    if current == branch:
+        return None
+    gd = _gitdir(repo)
+    if any(os.path.exists(os.path.join(gd, m)) for m in MID_OPS):
+        raise Owned("mid_operation")
+    if landing._git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+        raise Owned(f"other_branch:{current}:dirty")
+    unpushed = landing._git(repo, "rev-list", "--count", "HEAD", "--not", "--remotes", check=False)
+    if unpushed.returncode or unpushed.stdout.strip() != "0":
+        raise Owned(f"other_branch:{current}:unpushed")
+    if landing._git(repo, "switch", "--quiet", branch, check=False).returncode:
+        raise Owned(f"other_branch:{current}:switch_failed")
+    return current
+
+
 def acquire(repo, branch, flight, pid, ttl_s):
     """Refuse unless on `branch` and not mid-operation; fast-forward only a clean tree."""
-    if landing._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != branch:
-        raise Owned("other_branch")
+    rc, err = lane_lock("check", repo, flight, pid, "--write-set")  # a repo-wide (branch/release) lease first
+    if rc:
+        raise Owned(f"lane_lock:{err[:200]}")
     gd = _gitdir(repo)
     if any(os.path.exists(os.path.join(gd, m)) for m in MID_OPS):
         raise Owned("mid_operation")
@@ -187,9 +207,7 @@ def acquire(repo, branch, flight, pid, ttl_s):
     from . import lanes
     if lanes.records(repo):
         raise Owned("write_set_lanes:" + ",".join(r["flight"] for r in lanes.records(repo)))
-    rc, err = lane_lock("check", repo, flight, pid, "--write-set")  # no session holds any file
-    if rc:
-        raise Owned(f"lane_lock:{err[:200]}")
+    on_branch(repo, branch)
     rc, err = lane_lock("acquire", repo, flight, pid)
     if rc:
         raise Owned(f"lane_lock:{err[:200]}")

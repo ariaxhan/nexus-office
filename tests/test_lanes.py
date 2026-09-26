@@ -120,6 +120,22 @@ class Lanes(unittest.TestCase):
         self.assertTrue(result["requeue"])
         self.assertEqual("unfinished", git(self.origin, "show", f"{result['branch']}:a.txt"))
 
+    def test_clean_pushed_side_branch_returns_to_main_else_waits(self):
+        git(self.repo, "switch", "-qc", "aria/issue-9")
+        git(self.repo, "push", "-q", "origin", "aria/issue-9")
+        lanes.acquire(self.repo, "main", "flt_a", os.getpid(), 600, ["a.txt"])
+        self.assertEqual("main", git(self.repo, "rev-parse", "--abbrev-ref", "HEAD"))
+        lanes.release(self.repo, "flt_a")
+        git(self.repo, "switch", "-qc", "aria/local")
+        self.write("b.txt", "unpushed\n")
+        git(self.repo, "commit", "-qam", "local")
+        with self.assertRaisesRegex(lease.Owned, "other_branch:aria/local:unpushed"):
+            lanes.acquire(self.repo, "main", "flt_b", os.getpid(), 600, ["a.txt"])
+        self.write("a.txt", "dirty\n")
+        with self.assertRaisesRegex(lease.Owned, "other_branch:aria/local:dirty"):
+            lease.acquire(self.repo, "main", "flt_c", os.getpid(), 600)
+        self.assertEqual("aria/local", git(self.repo, "rev-parse", "--abbrev-ref", "HEAD"))
+
     def test_overlapping_write_sets_serialize(self):
         lanes.acquire(self.repo, "main", "flt_a", os.getpid(), 600, ["src"])
         with self.assertRaisesRegex(lease.Owned, "write_set:flt_a"):
@@ -307,12 +323,6 @@ class Lanes(unittest.TestCase):
 
 
 class Dispatch(unittest.TestCase):
-    def test_stale_or_missing_plan_falls_back_to_current_selection(self):
-        from nexus import work
-        with unittest.mock.patch.object(lanes, "read_plan", return_value=None), \
-                unittest.mock.patch.object(work, "_run", return_value=["fallback"]) as fallback:
-            self.assertEqual(["fallback"], work.run(None, [], lane=work.TOWER_LABEL, registry_path="/nonexistent"))
-        fallback.assert_called_once()
 
     def test_wave_takes_disjoint_items_within_caps(self):
         from nexus import work

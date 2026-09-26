@@ -1076,7 +1076,6 @@ def main(argv=None) -> int:
         return 0
 
     httpd = make_server(world, a.port)
-    office_api.ask.recover()
     threading.Thread(target=world.keep_fresh, daemon=True).start()
     threading.Thread(target=buzz.watch, args=(rt.read_gates, office_sync.RECEIPTS), daemon=True).start()
     log(f"http://127.0.0.1:{a.port}/  (loopback only; the door is this machine)")

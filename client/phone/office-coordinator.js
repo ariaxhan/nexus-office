@@ -50,7 +50,7 @@ function conversation(parent,data){
  for(const item of data.items){
   if(item.kind==='message'){
    const node=el('article','coord-you');rich(node.appendChild(el('div','coord-text')),item.segments);
-   node.append(el('small','',`You · ${clock(item.at)} · ${item.read_at?'read by the coordinator '+clock(item.read_at):'waiting for the coordinator'}`));
+    node.append(el('small','',`You · ${clock(item.at)} · ${item.acted_at?`acted ${clock(item.acted_at)}: ${item.action}`:item.read_at?'read by the coordinator '+clock(item.read_at):'queued for the coordinator'}`));
    parent.append(node);continue;
   }
   parent.append(runHead(item));
@@ -77,26 +77,33 @@ function changes(parent,data){
  }
  if(!any)parent.append(el('p','empty','No landed commits, publishes or issue changes in the recorded runs.'));
 }
-const SYSTEM_NAME={tbs:'Thinking Brain School',matra:'Matra'};
-const SYSTEM_OUTCOME={tbs:'Keeping lessons healthy and ready for families.',matra:'Fixing app issues and delivering tested improvements.'};
+const SYSTEM_NAME={tbs:'Thinking Brain School',matra:'Matra',office:'Office'};
+const SYSTEM_OUTCOME={tbs:'Keeping lessons healthy and ready for families.',matra:'Fixing app issues and delivering tested improvements.',office:'Moving Office issues, releases, failures and stabilization through Tower.'};
 const needsAttention=row=>row.thrashing||['failing','stalled','error'].includes(row.health);
 const systemName=row=>SYSTEM_NAME[row.id]||row.name;
 const systemOutcome=row=>SYSTEM_OUTCOME[row.id]||'Moving its assigned work forward.';
 export function healthLine(row){
  const node=el('span','coord-health');node.dataset.health=needsAttention(row)?'error':'ok';
- node.textContent=needsAttention(row)?'Needs attention':'Working normally';
+  node.textContent=needsAttention(row)?'Needs attention':row.health==='idle'?'Idle':row.health==='running'?'Working':'Working normally';
  return node;
 }
 function detail(parent,row){
- parent.replaceChildren();if(!row)return;
- if(row.error){parent.append(el('p','error',row.error));return;}
- const summary=el('div','coord-outcome');summary.append(el('h1','coord-system-name',systemName(row)),el('p','coord-outcome-title',systemOutcome(row)),healthLine(row),el('p','muted',needsAttention(row)?'I’m checking what needs attention.':'Nothing needed from you.'));parent.append(summary);
+  parent.replaceChildren();if(!row)return;
+  if(row.error){parent.append(el('p','error',row.error));return;}
+  parent.append(coordinatorSummary(row));
  const evidence=el('details','coord-evidence');evidence.append(el('summary','','Coordinator notes and work'));parent.append(evidence);
  const doing=section(evidence,'Latest coordinator notes');doing.append(row.working_on?markdownView(row.working_on):el('p','empty','No output from the latest run yet.'));
  const lanes=section(evidence,'Open lanes');for(const lane of row.lanes||[])lanes.append(el('p','coord-tool',lane));if(!(row.lanes||[]).length)lanes.append(el('p','empty','No lanes named in the latest run.'));
  const shipped=section(evidence,'Recent changes');
  for(const c of row.commits||[]){const node=el('p','coord-change');node.append(el('span','coord-tag',c.checkout));segments(node,[{kind:'sha',sha:c.sha,checkout:c.checkout,text:c.sha.slice(0,8)},{text:` ${c.subject} · ${clock(c.at)}`}]);shipped.append(node);}
  if(!(row.commits||[]).length)shipped.append(el('p','empty','No recent changes recorded.'));
+}
+function coordinatorSummary(row){
+  const summary=el('div','coord-outcome');
+  const note=row.id==='office'?`Last run ${row.age_s==null?'never':Math.max(0,Math.floor(row.age_s/60))+' min ago'} · ${row.failures||0} recent failures · ${row.changes||0} recent changes · ${row.unread||0} queued messages`:needsAttention(row)?'I’m checking what needs attention.':'Nothing needed from you.';
+  summary.append(el('h1','coord-system-name',systemName(row)),el('p','coord-outcome-title',systemOutcome(row)),healthLine(row),el('p','muted',note));
+  if(row.id==='office'){const inspect=el('a','','Inspect Office');inspect.href='#system';summary.append(inspect);}
+  return summary;
 }
 export async function coordinator(parent){
  try{pick=localStorage.getItem(PICK)||pick;}catch{}

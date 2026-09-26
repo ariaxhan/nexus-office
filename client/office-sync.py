@@ -516,7 +516,7 @@ fragment Desk on Repository {
     nodes {
       number title body url updatedAt
       labels(first: 20) { nodes { name } }
-      comments(last: 1) { nodes { body url createdAt } }
+      comments(last: 5) { nodes { body url createdAt } }
     }
   }
   pullRequests(first: 100, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -567,7 +567,8 @@ def _bot_last_word(node) -> dict:
     what turns "the pipeline commented on #284 an hour ago" into a link that
     lands on that comment rather than on the top of a thread with ninety others.
     """
-    comments = ((node.get("comments") or {}).get("nodes")) or []
+    comments = [row for row in (((node.get("comments") or {}).get("nodes")) or [])
+                if "<!-- nexus-stability-diagnosis -->" not in str((row or {}).get("body") or "")]
     if not comments:
         return {}
     last = comments[-1] or {}
@@ -593,11 +594,22 @@ def _bot_last_word(node) -> dict:
 # unparsed park still gets its comment box, so nothing is ever hidden.
 
 DECISION_MARK = "❓"
+UNEXPLAINED_PASS = "The automated pass could not resolve this and did not say what to decide."
 DECISION_MIN, DECISION_MAX = 2, 4
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 OPTION_RE = re.compile(r"^\s*[-*]\s*\[[ xX]?\]\s*\*\*(\d+)\.\*\*\s*(\S.*?)\s*$")
 RECOMMENDED_RE = re.compile(r"\s*\(recommended\)\s*$", re.I)
 LANDED_PR_RE = re.compile(r"merging\s+PR\s+#(\d+)", re.I)
+
+
+def _previous_decision_context(issue):
+    comments = ((issue.get("comments") or {}).get("nodes")) or []
+    marker = "## What a person has to decide"
+    for previous in reversed(comments[:-1]):
+        report = str((previous or {}).get("body") or "")
+        if marker in report:
+            return report.split(marker, 1)[1].split("\n## ", 1)[0].strip()[:1800]
+    return ""
 
 
 def parse_decision(text):
@@ -614,7 +626,7 @@ def parse_decision(text):
     if not lines or not lines[0].startswith(DECISION_MARK):
         return None
     question = lines[0][len(DECISION_MARK):].strip()
-    if not question:
+    if not question or question.startswith(UNEXPLAINED_PASS):
         return None
 
     options = []
@@ -652,6 +664,8 @@ def _issue_row(i) -> dict:
     # Parsed from the WHOLE comment, never from the 1500-character copy below:
     # a block that fell off the end of a trim is a question with no buttons.
     decision = parse_decision(full)
+    automation_failure = full.lstrip().startswith(DECISION_MARK + " " + UNEXPLAINED_PASS)
+    decision_context = _previous_decision_context(i) if automation_failure else ""
     landed_pr = parse_landed_pr(full)
     return {
         "number": i.get("number"),
@@ -671,6 +685,8 @@ def _issue_row(i) -> dict:
         # Present only when the comment really is one, so "has a decision" is a
         # key test on the phone and not a truthiness dance over an empty shape.
         **({"decision": decision} if decision else {}),
+        **({"automation_failure": "missing_decision"} if automation_failure else {}),
+        **({"decision_context": decision_context} if decision_context else {}),
         **({"landed_pr": landed_pr} if landed_pr else {}),
     }
 

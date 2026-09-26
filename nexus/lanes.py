@@ -134,16 +134,15 @@ def live(repo):
 
 def acquire(repo, branch, flight, pid, ttl_s, write_set, per_repo=PER_REPO):
     """Lease `write_set` in the canonical checkout. Owned when it cannot run now; nothing is switched."""
-    if landing._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != branch:
-        raise lease.Owned("other_branch")
-    if any(os.path.exists(os.path.join(lease._gitdir(repo), m)) for m in lease.MID_OPS):
-        raise lease.Owned("mid_operation")
     whole = lease.read(repo)
     if whole:
         raise lease.Owned(f"owned:{whole['flight']}")
     rc, err = lease.lane_lock("check", repo, flight, pid, "--write-set", *write_set)  # whole-repo locks and session files
     if rc:
         raise lease.Owned(f"lane_lock:{err[:200]}")
+    if live(repo) and landing._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != branch:
+        raise lease.Owned("other_branch")  # never switch under a running lane
+    lease.on_branch(repo, branch)
     with mutex(repo) as d:
         others = live(repo)
         if len(others) >= per_repo:

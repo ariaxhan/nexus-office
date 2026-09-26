@@ -123,6 +123,7 @@ def _source(value):
     url = value.get('url', '')
     parsed = urlparse(url)
     local_path = ((url.startswith('/api/media/detail?id=') and len(url) < 500)
+                  or (url.startswith('/api/buzz/detail?id=') and len(url) < 500)
                   or url == '/#watch')
     if not local_path and (parsed.scheme not in ('https', 'http') or not parsed.netloc):
         raise ValueError('Source URL must be HTTP, HTTPS, or an Office detail')
@@ -132,7 +133,7 @@ def _source(value):
     return {'title': title.strip(), 'url': url, 'published_at': value.get('published_at')}
 
 
-def publish(item):
+def publish(item, replace=False):
     """Accept only locally authored posts with traceable source records."""
     if not isinstance(item, dict):
         raise ValueError('Invalid post')
@@ -170,10 +171,20 @@ def publish(item):
     payload = dict(item, sources=sources, media=media)
     payload['published_at'] = now
     with connect() as db:
+        _store_post(db, identifier, now, category, format_, title, body, payload, model, source_hash, replace)
+    return payload
+
+
+def _store_post(db, identifier, now, category, format_, title, body, payload, model, source_hash, replace):
+    existing = db.execute('SELECT id FROM posts WHERE id=?', (identifier,)).fetchone() if replace else None
+    if existing:
+        db.execute('''UPDATE posts SET published_at=?,updated_at=?,category=?,format=?,title=?,body=?,payload=?,model=?,source_hash=?
+                      WHERE id=?''',
+                   (now, now, category, format_, title.strip(), body.strip(), json.dumps(payload), model, source_hash, identifier))
+    else:
         db.execute('''INSERT INTO posts(id,published_at,updated_at,category,format,title,body,payload,model,source_hash)
                       VALUES(?,?,?,?,?,?,?,?,?,?)''',
                    (identifier, now, now, category, format_, title.strip(), body.strip(), json.dumps(payload), model, source_hash))
-    return payload
 
 
 def listing(category='all', cursor=0, limit=40):

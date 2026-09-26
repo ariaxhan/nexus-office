@@ -72,6 +72,8 @@ class TowerContract(unittest.TestCase):
         newest = self.led.conn.execute("SELECT state FROM tasks WHERE dedupe_key=? ORDER BY created_at DESC LIMIT 1",
                                        (self.task["dedupe_key"],)).fetchone()[0]
         self.assertEqual("accepted", newest)
+        self.assertEqual([], self.led.integrity_check())
+
 
 
 class TowerYield(unittest.TestCase):

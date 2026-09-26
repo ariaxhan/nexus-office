@@ -6,6 +6,8 @@ import mimetypes
 import urllib.parse
 from pathlib import Path
 import re
+import os
+import tempfile
 
 import private_state
 import run_board
@@ -50,6 +52,32 @@ def attachments(references):
     if references is None:return []
     if not isinstance(references,list) or len(references)>8:raise ValueError('Attach at most eight files per message')
     return [resolve(reference) for reference in references]
+
+
+def image(reference):
+    """Validate an uploaded image and provide a stable path for local model readers."""
+    item=resolve(reference)
+    record=json.loads(Path(item['snapshot_path']).read_text())
+    raw=base64.b64decode(record['base64'],validate=True)
+    if hashlib.sha256(raw).hexdigest()!=item['revision']:
+        raise ValueError('Stored image failed integrity verification')
+    if raw.startswith(b'\x89PNG\r\n\x1a\n'):ext='.png'
+    elif raw.startswith(b'\xff\xd8\xff'):ext='.jpg'
+    elif raw[:6] in (b'GIF87a',b'GIF89a'):ext='.gif'
+    elif raw.startswith(b'RIFF') and raw[8:12]==b'WEBP':ext='.webp'
+    else:raise ValueError('Ask accepts PNG, JPEG, GIF, or WebP images')
+    directory=private_state.ensure_dir(root(),anchor=run_board.LEDGER.parent)
+    target=directory/(item['upload_id'][7:]+ext)
+    if target.is_symlink():raise PermissionError('Linked image storage is unavailable')
+    if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest()!=item['revision']:
+        fd,name=tempfile.mkstemp(prefix='image-',suffix='.tmp',dir=directory)
+        try:
+            with os.fdopen(fd,'wb') as handle:handle.write(raw)
+            os.chmod(name,0o600)
+            os.replace(name,target)
+        finally:
+            if os.path.exists(name):os.unlink(name)
+    return {'id':item['upload_id'],'revision':item['revision'],'name':item['source'],'path':str(target)}
 
 
 def content(handler,reference):

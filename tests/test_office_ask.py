@@ -1,5 +1,6 @@
 """Durable FIFO behavior for the shared Office Ask conversation."""
 import pathlib
+import base64
 import tempfile
 import threading
 import unittest
@@ -24,20 +25,17 @@ class AskQueueTest(unittest.TestCase):
         self.models_patch.start()
         self.addCleanup(self.path_patch.stop)
         self.addCleanup(self.models_patch.stop)
-        ask.WORKER = None
-        if ask.RETRY_TIMER:
-            ask.RETRY_TIMER.cancel()
-        ask.RETRY_TIMER = None
+        self.workers = []
         self.addCleanup(self._finish_worker)
 
+    def _start_drain(self):
+        worker = threading.Thread(target=ask._drain, daemon=True)
+        self.workers.append(worker)
+        worker.start()
+
     def _finish_worker(self):
-        if ask.RETRY_TIMER:
-            ask.RETRY_TIMER.cancel()
-            ask.RETRY_TIMER = None
-        worker = ask.WORKER
-        if worker and worker.is_alive():
+        for worker in self.workers:
             worker.join(3)
-        ask.WORKER = None
 
     def _wait_for(self, predicate):
         for _ in range(200):
@@ -45,6 +43,59 @@ class AskQueueTest(unittest.TestCase):
                 return
             threading.Event().wait(0.01)
         self.fail("timed out waiting for Ask queue")
+
+    def test_image_only_message_is_durable_and_reaches_codex_as_image_input(self):
+        image = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9M0wAAAABJRU5ErkJggg==')
+        with tempfile.TemporaryDirectory(dir=pathlib.Path(__file__).resolve().parents[1]) as directory, patch.object(
+                ask.uploads.run_board, 'LEDGER', pathlib.Path(directory) / 'runs.jsonl'):
+            uploaded = ask.uploads.upload({'name': 'screen.png', 'base64': base64.b64encode(image).decode()})
+            reference = {key: uploaded[key] for key in ('id', 'revision')}
+            with patch.object(ask, '_ensure_worker', create=True):
+                receipt = ask.send({'request_id': 'image-request-0001', 'text': '',
+                                    'images': [reference], 'model': 'model-a'})
+            user = next(row for row in ask.read()['messages'] if row['id'] == receipt['user_id'])
+            self.assertEqual(user['images'][0]['name'], 'screen.png')
+            with patch.object(ask, '_ensure_worker', create=True):
+                self.assertEqual(ask.send({'request_id': 'image-request-0001', 'text': '',
+                                           'images': [reference], 'model': 'model-a'}), receipt)
+                with self.assertRaisesRegex(ValueError, 'different Ask message'):
+                    ask.send({'request_id': 'image-request-0001', 'text': 'changed',
+                              'images': [reference], 'model': 'model-a'})
+
+            class ImageServer:
+                calls = []
+                def request(self, method, params, timeout=20):
+                    self.calls.append((method, params))
+                    if method == 'thread/start':
+                        return {'thread': {'id': 'thread-image'}}
+                    if method == 'turn/start':
+                        return {'turn': {'id': 'turn-image'}}
+                    return {}
+                def receive(self, timeout):
+                    return {'method': 'turn/completed', 'params': {'turn': {
+                        'status': 'completed', 'items': [{'type': 'agentMessage', 'text': 'Saw the image'}]}}}
+                def close(self):
+                    pass
+
+            fake = ImageServer()
+            with patch.object(ask, 'AppServer', return_value=fake):
+                self.assertEqual(ask._answer_turn('', 'model-a', receipt['reply_id']), 'Saw the image')
+            content = next(params['input'] for method, params in fake.calls if method == 'turn/start')
+            self.assertEqual(content[1]['type'], 'localImage')
+            self.assertEqual(pathlib.Path(content[1]['path']).read_bytes(), image)
+            with patch.object(ask, '_claude_answer', return_value='Saw the image') as claude:
+                self.assertEqual(ask._answer_turn('', 'claude:sonnet', receipt['reply_id']), 'Saw the image')
+            self.assertIn(content[1]['path'], claude.call_args.args[0])
+            self.assertEqual(claude.call_args.args[3], ask.uploads.root())
+
+    def test_ask_rejects_non_image_upload(self):
+        with tempfile.TemporaryDirectory(dir=pathlib.Path(__file__).resolve().parents[1]) as directory, patch.object(
+                ask.uploads.run_board, 'LEDGER', pathlib.Path(directory) / 'runs.jsonl'):
+            uploaded = ask.uploads.upload({'name': 'notes.png', 'base64': base64.b64encode(b'not an image').decode()})
+            with self.assertRaisesRegex(ValueError, 'Ask accepts PNG'):
+                ask.send({'request_id': 'bad-image-request-001', 'text': 'Look',
+                          'images': [{key: uploaded[key] for key in ('id', 'revision')}],
+                          'model': 'model-a'})
 
     def test_fifo_preserves_each_model_and_runs_one_turn_at_a_time(self):
         releases = {text: threading.Event() for text in ("A", "B", "C")}
@@ -66,6 +117,7 @@ class AskQueueTest(unittest.TestCase):
 
         with patch.object(ask, "_answer_turn", side_effect=provider):
             ask.send({"request_id": "request-00000001", "text": "A", "model": "model-a"})
+            self._start_drain()
             self.assertTrue(started["A"].wait(1))
             ask.send({"request_id": "request-00000002", "text": "B", "model": "model-b"})
             ask.send({"request_id": "request-00000003", "text": "C", "model": "model-c"})
@@ -86,7 +138,7 @@ class AskQueueTest(unittest.TestCase):
         self.assertTrue(all(row["status"] == "completed" for row in users + answers))
 
     def test_restart_requeues_turn_then_continues_fifo_after_provider_failure(self):
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipts = [ask.send({"request_id": f"restart-request-{n:02d}", "text": text,
                                   "model": "model-a"})
                         for n, text in enumerate(("A", "B", "C"), 1)]
@@ -104,10 +156,11 @@ class AskQueueTest(unittest.TestCase):
         with patch.object(ask, "_answer_turn", side_effect=provider):
             recovered = ask.recover()
             self.assertEqual(recovered["resuming"], 1)
+            self._start_drain()
             self._wait_for(lambda: any(row['text'] == 'answer C' for row in ask.read()['messages']))
             with ask.connect() as db:
                 db.execute("UPDATE messages SET next_attempt_at=0 WHERE role='user' AND text='B'")
-            ask._ensure_worker()
+            self._start_drain()
             self._wait_for(lambda: not ask.read()["busy"])
 
         state = ask.read()
@@ -133,6 +186,7 @@ class AskQueueTest(unittest.TestCase):
             with patch.object(ask, "models", return_value=available), patch.object(ask, "_answer_turn", side_effect=provider):
                 receipt = ask.send({"request_id": f"fallback-{primary.replace(':', '-')}-001",
                                     "text": "Complete the request", "model": primary})
+                self._start_drain()
                 self._wait_for(lambda: not ask.read()["busy"])
             reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
             self.assertEqual(reply["status"], "completed")
@@ -147,6 +201,7 @@ class AskQueueTest(unittest.TestCase):
                 ask, "_answer_turn", side_effect=RuntimeError("provider unavailable")):
             receipt = ask.send({"request_id": "both-provider-failure-001",
                                 "text": "Keep going", "model": "gpt-6-sol"})
+            self._start_drain()
             self._wait_for(lambda: any(row['id'] == receipt['reply_id'] and 'retry automatically' in row['text']
                                        for row in ask.read()['messages']))
         reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
@@ -155,7 +210,7 @@ class AskQueueTest(unittest.TestCase):
         with ask.connect() as db:
             db.execute("UPDATE messages SET next_attempt_at=0 WHERE id=?", (receipt["user_id"],))
         with patch.object(ask, "_answer_turn", return_value="Recovered answer"):
-            ask._ensure_worker()
+            self._start_drain()
             self._wait_for(lambda: not ask.read()["busy"])
         reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
         self.assertEqual(reply["status"], "completed")
@@ -163,7 +218,7 @@ class AskQueueTest(unittest.TestCase):
 
     def test_restart_restores_completed_codex_turn_without_starting_it_again(self):
         body = {"request_id": "recover-request-0001", "text": "Inspect the work", "model": "model-a"}
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipt = ask.send(body)
         with ask.connect() as db:
             ask._set(db, "thread_id", "thread-1")
@@ -187,6 +242,7 @@ class AskQueueTest(unittest.TestCase):
         fake = SavedServer()
         with patch.object(ask, "AppServer", return_value=fake):
             self.assertEqual(ask.recover(), {"resuming": 1})
+            self._start_drain()
             self._wait_for(lambda: not ask.read()["busy"])
         answer = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
         self.assertEqual(answer["text"], "The verified answer")
@@ -194,7 +250,7 @@ class AskQueueTest(unittest.TestCase):
         self.assertNotIn("turn/start", fake.calls)
 
     def test_lost_completion_notification_reads_finished_turn_and_unblocks_queue(self):
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipt = ask.send({"request_id": "lost-event-request-001", "text": "Check the work",
                                 "model": "model-a"})
         turn = {"id": "turn-1", "status": "completed", "items": [
@@ -218,9 +274,41 @@ class AskQueueTest(unittest.TestCase):
             self.assertEqual(ask._answer_turn("Check the work", "model-a", receipt["reply_id"]),
                              "Saved answer")
 
-    def test_restart_continues_interrupted_codex_turn_without_resending_instruction(self):
+    def test_working_activity_survives_later_updates_and_collapses_under_final_answer(self):
+        with patch.object(ask, "_ensure_worker", create=True):
+            receipt = ask.send({"request_id": "activity-request-001", "text": "Check three steps",
+                                "model": "model-a"})
+        turn = ask._claim()
+        for update in ("First finding", "Second finding", "Second finding", "Third finding"):
+            ask._record_activity(receipt["reply_id"], update, "turn-1")
+        working = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(working["text"], "Third finding")
+        self.assertEqual([item["text"] for item in working["activity"]],
+                         ["First finding", "Second finding", "Third finding"])
+        self.assertTrue(all(item["created_at"] and item["turn_id"] == "turn-1"
+                            for item in working["activity"]))
+        ask._record_activity(receipt["reply_id"], "Final result", "turn-1")
+        ask._finish(turn, "Final result", "completed")
+        completed = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(completed["text"], "Final result")
+        self.assertEqual([item["text"] for item in completed["activity"]],
+                         ["First finding", "Second finding", "Third finding"])
+
+    def test_failed_attempt_retains_its_activity_for_retry(self):
+        with patch.object(ask, "_ensure_worker", create=True):
+            receipt = ask.send({"request_id": "activity-failure-001", "text": "Check two steps",
+                                "model": "model-a"})
+        turn = ask._claim()
+        ask._record_activity(receipt["reply_id"], "Found the first result", "turn-failed")
+        ask._record_activity(receipt["reply_id"], "Found the second result", "turn-failed")
+        ask._retry(turn, "provider failed")
+        queued = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(len(queued["activity"]), 2)
+
+    def test_interrupted_codex_turn_is_not_replayed(self):
         body = {"request_id": "recover-request-0002", "text": "Do the work", "model": "model-a"}
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipt = ask.send(body)
         with ask.connect() as db:
             ask._set(db, "thread_id", "thread-1")
@@ -250,15 +338,16 @@ class AskQueueTest(unittest.TestCase):
         fake = InterruptedServer()
         with patch.object(ask, "AppServer", return_value=fake):
             self.assertEqual(ask.recover(), {"resuming": 1})
+            self._start_drain()
             self._wait_for(lambda: not ask.read()["busy"])
         answer = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
-        self.assertEqual(answer["text"], "Recovered answer")
-        self.assertEqual(len(fake.prompts), 1)
-        self.assertIn("Do not repeat completed actions", fake.prompts[0])
+        self.assertEqual(answer["status"], "failed")
+        self.assertIn("was not replayed", answer["text"])
+        self.assertEqual(fake.prompts, [])
 
     def test_request_retry_is_idempotent_and_conflicts_are_rejected(self):
         body = {"request_id": "retry-request-0001", "text": "Keep this", "model": "model-a"}
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             first = ask.send(body)
             self.assertEqual(ask.send(dict(body)), first)
             with self.assertRaisesRegex(ValueError, "request_id"):
@@ -272,7 +361,7 @@ class AskQueueTest(unittest.TestCase):
         self.assertEqual(state["queue"], {"queued": 1, "working": 0})
 
     def test_cached_client_without_request_id_can_send(self):
-        with patch.object(ask, "_ensure_worker"):
+        with patch.object(ask, "_ensure_worker", create=True):
             receipt = ask.send({"text": "From old client", "model": "model-a"})
         self.assertRegex(receipt["request_id"], r"^[a-f0-9-]{36}$")
         self.assertEqual([row["text"] for row in ask.read()["messages"] if row["role"] == "user"],
