@@ -1,6 +1,6 @@
 import * as userState from './office-state.js';
 import {attachments} from './office-attachments.js';
-import {restoreDraft,transcriptNavigation,rememberDetail,clearDetail,backDetail,$,api,el,button,sheet,section,card,intro,empty,failure,field,select,notice,link} from './office-ui.js';
+import {restoreDraft,transcriptNavigation,rememberDetail,clearDetail,backDetail,$,api,el,button,sheet,active,section,card,intro,empty,failure,field,select,notice,link} from './office-ui.js';
 import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
 import {browse,openFile,numberedSource} from './office-files.js';
@@ -570,10 +570,28 @@ async function issues(parent){
  intro(parent,'Issues','Everything still open.','Every open issue across TBS, Matra and Tower, counted against the repos that should be there.');
  const box=el('div','stack');parent.append(box);await guarded(box,()=>issueInventory(box,(repo,item)=>githubDetail(repo,item,'issues')));
 }
+async function documentView(parent,params){
+ const repo=params.get('repo')||'',path=params.get('path')||'',claimed=active.claim();
+ intro(parent,repo||'Document',path||'No document was requested.','Opened from an agent handoff.');
+ const box=el('div','stack');parent.append(box);
+ try{
+  if(!repo||!path)throw Error('No document was requested.');
+  const found=await api(`/api/objects/locate?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+  if(!active.current(claimed))return;
+  active.name(found.id,{repo,path});
+  box.append(card(`${found.project} / ${found.path}`,'Open this document again',()=>openFile(found.id).catch(error=>failure(box,error))));
+  await openFile(found.id,0,claimed);
+ }catch(error){
+  if(!active.current(claimed))return;
+  failure(box,error);if($('#detail').open)$('#detail').close();await active.missing({repo,path},error.message);
+ }
+}
 async function route(){
+  // Any navigation abandons a document still loading: its late response must not reopen or ack it.
+  active.claim();
   const [pageRaw,parameters]=location.hash.slice(1).split('?');const page=pageRaw||'watch';const params=new URLSearchParams(parameters||'');
   if(page==='coordinator'&&['tbs','matra'].includes(params.get('id')))localStorage.setItem('office-coordinator-pick',params.get('id'));
-  const views={watch,feed,ask,find,today,work,coordinator,library,system,issues};const parent=$('#content');parent.replaceChildren();
+  const views={watch,feed,ask,find,today,work,coordinator,library,system,issues,document:view=>documentView(view,params)};const parent=$('#content');parent.replaceChildren();
   document.body.dataset.page=page;
  for(const item of document.querySelectorAll('.tabs a'))item.setAttribute('aria-current',item.hash===`#${page}`?'page':'false');
   const view=el('div');parent.append(view);await guarded(view,()=> (views[page]||watch)(view));
@@ -690,6 +708,7 @@ async function restoreFromURL(){const value=new URL(location.href).searchParams.
 window.addEventListener('popstate',()=>{route();restoreFromURL();});
 document.addEventListener('office-file-task',event=>newTask(event.detail.project,event.detail).catch(error=>notice(error.message)));
 $('#detail').addEventListener('cancel',clearDetail);
+$('#detail').addEventListener('close',()=>active.show(null));
 
 document.addEventListener('office-github-detail',event=>githubDetail(event.detail.repo,{number:event.detail.number},'issues').catch(error=>notice(error.message)));
 document.addEventListener('office-flight-detail',event=>flightDetail(event.detail).catch(error=>notice(error.message)));

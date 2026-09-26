@@ -1121,11 +1121,13 @@ public struct OfficeURL: Equatable {
     public let repo: String
     public let path: String
 
-    public func webDestination(from base: URL) -> URL {
+    /// `request` makes a second open of the same file a new URL, so the page routes again and acks it.
+    public func webDestination(from base: URL, request: Int = 0) -> URL {
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
         var query = URLComponents()
         query.queryItems = [URLQueryItem(name: "repo", value: repo),
-                            URLQueryItem(name: "path", value: path)]
+                            URLQueryItem(name: "path", value: path),
+                            URLQueryItem(name: "n", value: String(request))]
         components.percentEncodedFragment = "document?" + (query.percentEncodedQuery ?? "")
         return components.url ?? base
     }

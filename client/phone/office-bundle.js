@@ -109,6 +109,43 @@ var init_office_state = __esm({
   }
 });
 
+// client/phone/office-active.js
+function viewer(post) {
+  let token2 = 0, last = null, chain = Promise.resolve();
+  const names = /* @__PURE__ */ new Map();
+  const send = (body) => {
+    chain = chain.then(() => post(body)).catch(() => {
+    });
+    return chain;
+  };
+  return {
+    claim: () => ++token2,
+    current: (claimed) => claimed === token2,
+    // A document route asks by repo+path; the viewer reports it back under the same names.
+    name: (id, requested) => names.set(id, requested),
+    label: (id, fallback) => names.get(id) || fallback,
+    show(file) {
+      token2++;
+      if (file) {
+        last = file;
+        return send({ ...file, state: "open" });
+      }
+      const gone = last;
+      last = null;
+      return gone ? send({ ...gone, state: "closed" }) : chain;
+    },
+    missing(requested, error) {
+      token2++;
+      last = null;
+      return send({ ...requested, state: "missing", error });
+    }
+  };
+}
+var init_office_active = __esm({
+  "client/phone/office-active.js"() {
+  }
+});
+
 // client/phone/office-ui.js
 function el(tag, className = "", text = "") {
   const node = document.createElement(tag);
@@ -148,7 +185,8 @@ function notice(text) {
   clearTimeout(notice.timer);
   notice.timer = setTimeout(() => node.hidden = true, 6e3);
 }
-function sheet(title) {
+function sheet(title, file = null) {
+  active.show(file);
   $("#detail-title").textContent = title;
   const body = $("#detail-body");
   body.transcriptCleanup?.();
@@ -329,11 +367,13 @@ function restoreDraft(input, identity) {
     localStorage.removeItem(key);
   };
 }
-var $, rememberObjects;
+var $, active, rememberObjects;
 var init_office_ui = __esm({
   "client/phone/office-ui.js"() {
     init_office_state();
+    init_office_active();
     $ = (selector) => document.querySelector(selector);
+    active = viewer((body) => api("/api/objects/active", body));
     rememberObjects = true;
     document.addEventListener("office-preferences", (event) => {
       rememberObjects = event.detail.remember;
@@ -719,20 +759,22 @@ function draft(id) {
     return null;
   }
 }
-async function openFile(id, offset = 0) {
-  rememberDetail("file", id);
+async function openFile(id, offset = 0, claimed = active.claim()) {
   const data = await api(`/api/objects/detail?id=${encodeURIComponent(id)}&offset=${offset}`);
-  const body = sheet(data.name);
+  if (!active.current(claimed)) return false;
+  const file = active.label(id, { repo: data.project, path: data.path });
+  rememberDetail("file", id);
+  const body = sheet(data.name, file);
   body.append(el("p", "muted", `${data.project} / ${data.path}`), el("p", "muted", `Revision ${data.revision.slice(0, 12)}${data.is_text ? ` \xB7 lines ${data.line_start}\u2013${data.line_end}` : ""}`));
   checkoutDetails(body, id);
   const actions = el("div", "actions");
   actions.append(link("Download", data.content_url), button("Save to Library", () => saveObject("file", id, data.name)), button("Ask an agent", () => document.dispatchEvent(new CustomEvent("office-file-task", { detail: data }))));
   body.append(actions);
-  if (data.mime === "text/html") actions.append(button("Preview", () => preview(sheet(data.name), data)));
+  if (data.mime === "text/html") actions.append(button("Preview", () => preview(sheet(data.name, file), data)));
   if (data.editable) actions.append(button("Edit file", () => editFile(data)));
   if (data.is_text) {
     actions.append(button("View source", () => {
-      const source = sheet(data.name + " source");
+      const source = sheet(data.name + " source", file);
       source.append(numberedSource(data));
       source.append(contextSelection(data));
     }));
@@ -744,6 +786,7 @@ async function openFile(id, offset = 0) {
   if (data.is_text) body.append(contextSelection(data));
   if (data.next_offset !== null) body.append(button("Next part", () => openFile(id, data.next_offset)));
   if (offset > 0) body.append(button("Start of file", () => openFile(id)));
+  return true;
 }
 function preview(body, data) {
   if (data.mime.startsWith("image/")) {
@@ -1995,8 +2038,8 @@ async function today(parent) {
   const needs = section(parent, "Needs you");
   needs.id = "needs-list";
   await guarded(needs, () => attentionList(needs));
-  const active = section(parent, "Running now");
-  await runningNow(active);
+  const active2 = section(parent, "Running now");
+  await runningNow(active2);
   const recent = section(parent, "Since you were here");
   await guarded(recent, () => podcastNotifications(recent));
   await guarded(recent, () => activitySinceVisit(recent));
@@ -2033,8 +2076,8 @@ async function dailyReports(parent) {
 }
 async function work(parent) {
   intro(parent, "Work", "Pick up the thread.", "Projects, conversations, and the files behind them.");
-  const active = section(parent, "Running now");
-  await runningNow(active);
+  const active2 = section(parent, "Running now");
+  await runningNow(active2);
   const history2 = section(parent, "Office conversations");
   await guarded(history2, () => taskList(history2));
   const bots = section(parent, "Your office voices");
@@ -2046,7 +2089,7 @@ async function work(parent) {
   const archive = section(parent, "All retained conversations");
   archive.append(button("Browse all retained conversations", () => archives(archive)));
   const projects = section(parent, "Projects");
-  parent.insertBefore(projects.parentElement, active.parentElement);
+  parent.insertBefore(projects.parentElement, active2.parentElement);
   await guarded(projects, () => projectRoster(projects));
 }
 async function projectRoster(parent) {
@@ -2641,12 +2684,12 @@ function formatAge(milliseconds) {
   if (hours < 48) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
 }
-function feedAction(label, active, fn, glyph) {
-  const control = button("", fn, "feed-icon" + (active ? " active" : ""));
+function feedAction(label, active2, fn, glyph) {
+  const control = button("", fn, "feed-icon" + (active2 ? " active" : ""));
   control.innerHTML = glyph;
   control.title = label;
   control.setAttribute("aria-label", label);
-  control.setAttribute("aria-pressed", String(active));
+  control.setAttribute("aria-pressed", String(active2));
   return control;
 }
 async function feedDetail(post) {
@@ -2778,8 +2821,8 @@ function renderFeedPost(parent, post) {
     for (const [kind2, label, glyph] of [["save", "Save", '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.75h11A1.75 1.75 0 0 1 19.25 5.5v15L12 16.2l-7.25 4.3v-15A1.75 1.75 0 0 1 6.5 3.75Z"/></svg>'], ["love", "Love", "\u2661\uFE0E"], ["dislike", "Not for me", "\u2193\uFE0E"]]) {
       actions.append(feedAction(label, !!post.feedback?.reactions?.[kind2], async () => {
         try {
-          const active = !post.feedback?.reactions?.[kind2];
-          const result = await api("/api/feed/react", { id: post.id, kind: kind2, active });
+          const active2 = !post.feedback?.reactions?.[kind2];
+          const result = await api("/api/feed/react", { id: post.id, kind: kind2, active: active2 });
           post.feedback = result.feedback;
           drawActions();
         } catch (error) {
@@ -3051,12 +3094,32 @@ async function issues(parent) {
   parent.append(box);
   await guarded(box, () => issueInventory(box, (repo, item) => githubDetail(repo, item, "issues")));
 }
+async function documentView(parent, params) {
+  const repo = params.get("repo") || "", path = params.get("path") || "", claimed = active.claim();
+  intro(parent, repo || "Document", path || "No document was requested.", "Opened from an agent handoff.");
+  const box = el("div", "stack");
+  parent.append(box);
+  try {
+    if (!repo || !path) throw Error("No document was requested.");
+    const found = await api(`/api/objects/locate?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+    if (!active.current(claimed)) return;
+    active.name(found.id, { repo, path });
+    box.append(card(`${found.project} / ${found.path}`, "Open this document again", () => openFile(found.id).catch((error) => failure(box, error))));
+    await openFile(found.id, 0, claimed);
+  } catch (error) {
+    if (!active.current(claimed)) return;
+    failure(box, error);
+    if ($("#detail").open) $("#detail").close();
+    await active.missing({ repo, path }, error.message);
+  }
+}
 async function route() {
+  active.claim();
   const [pageRaw, parameters] = location.hash.slice(1).split("?");
   const page = pageRaw || "watch";
   const params = new URLSearchParams(parameters || "");
   if (page === "coordinator" && ["tbs", "matra"].includes(params.get("id"))) localStorage.setItem("office-coordinator-pick", params.get("id"));
-  const views = { watch, feed, ask, find, today, work, coordinator, library, system, issues };
+  const views = { watch, feed, ask, find, today, work, coordinator, library, system, issues, document: (view2) => documentView(view2, params) };
   const parent = $("#content");
   parent.replaceChildren();
   document.body.dataset.page = page;
@@ -3319,6 +3382,7 @@ window.addEventListener("popstate", () => {
 });
 document.addEventListener("office-file-task", (event) => newTask(event.detail.project, event.detail).catch((error) => notice(error.message)));
 $("#detail").addEventListener("cancel", clearDetail);
+$("#detail").addEventListener("close", () => active.show(null));
 document.addEventListener("office-github-detail", (event) => githubDetail(event.detail.repo, { number: event.detail.number }, "issues").catch((error) => notice(error.message)));
 document.addEventListener("office-flight-detail", (event) => flightDetail(event.detail).catch((error) => notice(error.message)));
 async function githubCollection(repo, kind, cursor = 1, parent = null) {
