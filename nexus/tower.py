@@ -384,7 +384,10 @@ def _hold_once(repo, record, paths, comment):
         url, why = ld.notify(comment, f"Nexus flight {record['flight']} HELD (owner_exited): work on `{branch}` at {tip}.")
         return {"state": "HELD", "reason": "already_held", "flight": record["flight"], "sha": tip, "branch": branch,
                 "comment_url": url, "comment_error": why}
-    result = ld.hold(repo, record, paths, list(paths), "owner_exited", comment)
+    # The flight provably wrote these bytes and the push makes them durable, so the checkout goes back
+    # to its baseline: left in place, the next flight on this issue read them as a person's and held
+    # on `collision` (#187, flt_6c0d351fb025).
+    result = ld.hold(repo, record, paths, [], "owner_exited", comment)
     return result if ld.terminal(repo, result) else None
 
 
@@ -392,7 +395,7 @@ def _recover_work_checkout(ledger, flight, repo, now):
     """[held results] once the dead flight no longer owns the checkout; None while it still must.
 
     Bytes the flight provably wrote (clean at its baseline) go to its own held branch, announced on
-    its own issue; nothing is restored. Bytes already dirty at its baseline may be a person's: they
+    its own issue, then leave the checkout. Bytes already dirty at its baseline may be a person's: they
     are never captured, only left in place and named, and ownership is released (#210 D3)."""
     from . import lease, lanes
     held = []

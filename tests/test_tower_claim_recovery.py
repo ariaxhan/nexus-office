@@ -89,7 +89,7 @@ class TowerClaimRecovery(unittest.TestCase):
             git.return_value.stdout = 'original\n'
             self.assertEqual(tower._reconcile_vanished(self.led, time.time(), self.entry['path']), 1)
         repo, rec, paths, collisions, reason, comment = hold.call_args.args
-        self.assertEqual((paths, collisions), (['mine.py'], ['mine.py']))  # captured, nothing restored
+        self.assertEqual((paths, collisions), (['mine.py'], []))  # captured, then restored to baseline
         self.assertIsNotNone(comment)
         task = self.led.task(self.led.flight(fid)['task_id'])
         with patch('nexus.tower.subprocess.run') as run:
