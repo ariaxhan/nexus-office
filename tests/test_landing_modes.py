@@ -123,7 +123,7 @@ class Case(unittest.TestCase):
 
     def test_held_notice_gets_a_timeout_floor_after_the_deadline_is_spent(self):
         from nexus import work
-        token = work._deadline.set(work.time.monotonic() - 5)
+        token = work._deadline.set(work.flights.clock() - 5)
         try:
             self.assertEqual(work.notify_timeout(), work.NOTIFY_FLOOR_S)
         finally:

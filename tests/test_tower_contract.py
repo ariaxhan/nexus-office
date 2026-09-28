@@ -121,7 +121,7 @@ class TowerYield(unittest.TestCase):
         self.assertEqual([], self.led.events(kind="work.failure"))
 
     def test_short_budget_never_starts_an_executor(self):
-        token = work._deadline.set(work.time.monotonic() + 30)
+        token = work._deadline.set(work.flights.clock() + 30)
         try:
             with patch("nexus.executor.fly") as fly:
                 self.assertEqual("backoff", work.tower_execute(self.led, self.entry, self.task))

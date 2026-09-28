@@ -12,9 +12,8 @@ import os
 import re
 import signal
 import subprocess
-import time
 
-from . import landing, lanes, lease, risk
+from . import flights, landing, lanes, lease, risk
 
 ROUTER = os.path.expanduser("~/Developer/Vaults/_meta/services/tbs/account-router.sh")
 
@@ -161,7 +160,7 @@ def invoke(argv, *, cwd, env, input, timeout, run):
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input else subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
-        stdout, stderr = proc.communicate(input, timeout=timeout)
+        stdout, stderr = flights.communicate(proc, input, timeout)
         return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
     except subprocess.TimeoutExpired:
         try:
@@ -193,13 +192,13 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
     if write_set:
         env["NEXUS_WRITE_SET"] = json.dumps(write_set)
         argv = [prompt if a == base else a for a in argv]
-    started = time.monotonic()
+    started = flights.clock()
     proc = invoke(argv, cwd=repo, env=env, input=prompt if road else None,
                   timeout=max(1, timeout_s * .65), run=run)
     fallback = provider_fallback(argv, prompt, repo) if proc.returncode else None
     if fallback:
         proc = invoke(fallback, cwd=repo, env=env, input=None,
-                      timeout=max(1, timeout_s - (time.monotonic() - started) - 5), run=run)
+                      timeout=max(1, timeout_s - (flights.clock() - started) - 5), run=run)
     if write_set:
         result = lanes.land(entry, issue, record, proc, forced, pr_create, comment, run, risk.classify, _lines)
         landing.require_terminal(repo, result)
@@ -232,7 +231,7 @@ def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
         out = os.path.join(tmp, "verdict.txt")
         model = run([ROUTER, "model", "review"], capture_output=True, text=True).stdout.strip()
         env = dict(os.environ, ACCOUNT_SCOPE=entry.get("account", ""), NEXUS_FLIGHT=flight)
-        started = time.monotonic()
+        started = flights.clock()
         primary = [ROUTER, "run", "review", "--", "exec", "--ephemeral", "--ignore-user-config",
                    "--model", model, "--sandbox", "danger-full-access", "--skip-git-repo-check",
                    "-C", tmp, "-o", out, prompt]
@@ -244,7 +243,7 @@ def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
                         "Do not edit, comment, merge or publish.\n\n" + prompt,
                         "--tools", "Bash,Read,Glob,Grep"]
             proc = invoke(fallback, cwd=tmp, env=env, input=None,
-                          timeout=max(1, timeout_s - (time.monotonic() - started) - 5), run=run)
+                          timeout=max(1, timeout_s - (flights.clock() - started) - 5), run=run)
             text = proc.stdout if not proc.returncode else ""
     verdict = re.findall(r"VERDICT:\s*(PASS|FAIL)(.*)", text)
     if not verdict:

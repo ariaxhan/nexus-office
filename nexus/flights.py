@@ -25,6 +25,27 @@ READY_NAME = "runner-ready.json"
 KILL_GRACE_S = 5.0
 KILL_POLL_S = 0.02
 SESSION_KILL_S = 2.0
+# Tower charges a plan's budget in wall seconds, sleep included. `time.monotonic()` on macOS is
+# mach_absolute_time and stops while the Mac sleeps, so a runner timing itself with it still
+# believed it had time when tower killed it, and its flight read as owner_exited (#235, 2026-09-28).
+_SLEEP_CLOCK = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)  # Darwin's CLOCK_MONOTONIC counts sleep
+
+
+def clock() -> float:
+    """Monotonic seconds that keep counting while the machine sleeps: the clock budgets are paid in."""
+    return time.clock_gettime(_SLEEP_CLOCK)
+
+
+def communicate(proc, input, timeout, slice_s=30.0):
+    """`proc.communicate` bounded by `clock()`: Popen's own timeout waits in time that stops asleep."""
+    end = clock() + timeout
+    while True:
+        try:
+            return proc.communicate(input, timeout=max(0.01, min(slice_s, end - clock())))
+        except subprocess.TimeoutExpired:
+            if clock() >= end:
+                raise
+            input = None  # already handed to Popen; a retry resumes it and loses no output
 
 
 class _Cancelled(Exception):

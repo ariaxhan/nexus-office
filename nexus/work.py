@@ -35,7 +35,7 @@ NOTIFY_FLOOR_S = 20  # a HELD notice after the flight spent its deadline still g
 
 def notify_timeout(limit=120):
     deadline = _deadline.get()
-    left = limit if deadline is None else deadline - time.monotonic()
+    left = limit if deadline is None else deadline - flights.clock()
     return max(NOTIFY_FLOOR_S, min(limit, left))
 
 
@@ -43,7 +43,7 @@ def remaining(limit):
     deadline = _deadline.get()
     if deadline is None:
         return limit
-    left = deadline - time.monotonic()
+    left = deadline - flights.clock()
     if left <= 0:
         raise WorkError("command budget exhausted")
     return min(limit, left)
@@ -310,7 +310,7 @@ def adapter(argv, entry, payload, log, started=None):
         try:
             if started:
                 started(proc.pid)
-            output, _ = proc.communicate(json.dumps(payload).encode(), timeout=remaining(timeout))
+            output, _ = flights.communicate(proc, json.dumps(payload).encode(), remaining(timeout))
         except BaseException:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -786,6 +786,8 @@ def dispatch_wave(led, entries, registry_path, budget_s, caps):
 
 
 MIN_FLIGHT_S = 300   # an executor started with less budget than this only times out (25s runs, 2026-09-14)
+LAND_RESERVE_S = 300  # kept back from the executor so checks, push and hold finish inside the runner's budget;
+                      # given all of it, tower's kill landed first and the flight read as owner_exited (#235)
 WAIT_S = 120         # a lane lock, a leased path or an unpushable hold: retried after this, never an attempt
 
 
@@ -855,12 +857,20 @@ def cut_idle(led, entries, now=None):
     return cut
 
 
+def executor_budget(limit):
+    """The executor's share of the runner's budget: what is left, less the landing reserve."""
+    deadline = _deadline.get()
+    if deadline is None:
+        return limit
+    return max(1, min(limit, deadline - flights.clock() - LAND_RESERVE_S))
+
+
 def tower_execute(led, entry, task):
     """Tower v2: lease the canonical checkout, run, land in place, prove a terminal state."""
     from . import executor, tower
     entry = dict(entry, path=entry.get("canonical_path") or entry["path"])
     deadline = _deadline.get()
-    if deadline is not None and deadline - time.monotonic() < MIN_FLIGHT_S:
+    if deadline is not None and deadline - flights.clock() < MIN_FLIGHT_S + LAND_RESERVE_S:
         return "backoff"  # no claim, no flight: the next tick has a full budget
     issue = issue_now(led, entry, task)
     repo, number = entry["repo"], issue["number"]
@@ -905,7 +915,7 @@ def tower_execute(led, entry, task):
         lifecycle_observe.for_flight(led, fid, "lifecycle.execution_started",
                                      execution_started_at=time.time(), runner_kind="tower", flight_id=fid)
         result = executor.fly(
-            entry, issue, fid, timeout_s=remaining(float(entry.get("timeout_s", 900))),
+            entry, issue, fid, timeout_s=executor_budget(float(entry.get("timeout_s", 900))),
             pr_create=pr_create,
             comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body,
                                     timeout=notify_timeout()),
@@ -1174,14 +1184,14 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
     # A webhook's `work.discovery_requested` newer than the last service moves its repo to the front.
     entries.sort(key=lambda e: (not has_p0(led, e["repo"]), not requested_since(led, e["repo"], "work.serviced"),
                                 latest(led, "work.serviced", e["repo"]).get("at", 0)))
-    deadline = time.monotonic() + budget_s
+    deadline = flights.clock() + budget_s
     passive = ("held", "owned", "ineligible", "closed", "backoff", "blocked", "reopened")
     for index, entry in enumerate(entries):
-        if time.monotonic() >= deadline:
+        if flights.clock() >= deadline:
             break
         # A tower flight needs the whole budget; queue fairness comes from least-recently-serviced order.
         share = 1 if _lane.get() == TOWER_LABEL else len(entries) - index
-        token = _deadline.set(min(deadline, time.monotonic() + (deadline - time.monotonic()) / share))
+        token = _deadline.set(min(deadline, flights.clock() + (deadline - flights.clock()) / share))
         try:
             name = entry["repo"]
             discover(led, entry)
@@ -1190,7 +1200,7 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
             if issue is not None:  # one lane of a dispatched wave
                 queue = [t for t in queue if t["dedupe_key"] == f"github:{name}#{int(issue)}"]
             taken = 0
-            while queue and taken < max_items and time.monotonic() < deadline:
+            while queue and taken < max_items and flights.clock() < deadline:
                 while (queue and eligibility(latest(led, "work.issue", queue[0]["id"])) in ("ready", "resume")
                        and next_retry(led, queue[0]) > time.time()):
                     task = queue.pop(0)
@@ -1246,7 +1256,7 @@ def discovery_pass(led, entries, now=None, limit=DISCOVERY_PER_TICK):
            or now - _last_id(led, e["repo"], *seen)[1] >= DISCOVERY_EVERY_S]
     due.sort(key=lambda e: (not requested_since(led, e["repo"], *seen), _last_id(led, e["repo"], *seen)[1]))
     for entry in due[:limit]:
-        token = _deadline.set(time.monotonic() + 60)
+        token = _deadline.set(flights.clock() + 60)
         try:
             discover(led, entry)
             selection_queue(led, entry)
