@@ -16,6 +16,9 @@ class EvidencePacket(unittest.TestCase):
         test_work.WorkTests.setUp(self)
         work.discover(self.led, self.entry)
         self.task = self.led.tasks()[0]
+        patcher = unittest.mock.patch.object(evidence, "semantic", side_effect=OSError("no ollama"))
+        patcher.start()  # the lexical path; the semantic one is tested with a stub index below
+        self.addCleanup(patcher.stop)
 
     def recall(self, ids, rc=0):
         return lambda argv, **k: subprocess.CompletedProcess(argv, rc, "".join(f"{i}\t2\n" for i in ids), "")
@@ -55,6 +58,16 @@ class EvidencePacket(unittest.TestCase):
         with unittest.mock.patch.object(evidence, "_insight", side_effect=lambda dbs, lid: ("gotcha", lid)):
             found, _ = evidence.scars("office selection copy paste", None, run=run)
         self.assertEqual(["agentdb:strong"], [s["id"] for s in found])
+
+    def test_semantic_precedent_is_a_gated_packet_and_skips_recall(self):
+        class Stub:
+            texts = {"L1": "sync fails because the token expired; fix by refreshing before the call\nevidence",
+                     "L2": "unrelated"}
+        with unittest.mock.patch.object(evidence, "semantic", return_value=([("L1", 0.8), ("L2", 0.1)], Stub())):
+            found, error = evidence.scars("sync fails", None, run=self.recall(["never"]))
+        self.assertIsNone(error)
+        self.assertEqual(["agentdb:L1"], [s["id"] for s in found])
+        self.assertIn("repair: fix by refreshing", found[0]["insight"])
 
     def test_nothing_known_adds_nothing(self):
         recorded, text = evidence.packet(self.led, self.task, {"title": ""}, None, run=self.recall([]))

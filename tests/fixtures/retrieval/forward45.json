@@ -1,0 +1,231 @@
+{
+ "generator": "qwen2.5:7b-instruct via ollama, seed 7, lowest-overlap of up to 3 samples",
+ "prompt": "A lesson was written after an engineering incident was fixed:\n\n{g}\n\nWrite the incident report the engineer would have written when the failure was first seen, BEFORE anyone knew the cause. Describe only what was observed: which job, command, page or tool, and what went wrong or what error appeared. Do not state the cause, the fix, or the lesson. Avoid the lesson's own wording. One or two sentences, plain text only.",
+ "cases": [
+  {
+   "id": "learn_c05710d59cc2",
+   "query": "The CI build for the tbs-www project failed with an error related to conflicting bundle names when trying to merge the staging branch. The error message indicated issues with the mommyai/*/index.html and tbs-source.json files.",
+   "term_overlap": 0.12
+  },
+  {
+   "id": "learn_835e76166edf",
+   "query": "During the nightly build process, the assets check job failed to flag the missing filename declared in `hc-blocks/art`, and an index-only rebuild resulted in the orphan-assets gate remaining red despite removing old subject art from the markup.",
+   "term_overlap": 0.12
+  },
+  {
+   "id": "learn_43700521896f",
+   "query": "The job to deploy the latest changes encountered an issue, as it shipped 472 local media files despite the staged Git tree and lesson-media bucket metadata audit showing no duplicate eTags.",
+   "term_overlap": 0.28
+  },
+  {
+   "id": "learn_39f0dd50ce7d",
+   "query": "During the automated testing job, the Playwright Chromium and WebKit launches failed with anAbort trap error when trying to render pages on macOS.",
+   "term_overlap": 0.24
+  },
+  {
+   "id": "learn_7dda91c1b2c1",
+   "query": "The pipeline job for the Korean lesson copy rendered identical content on all five pages, despite passing all intermediate checks.",
+   "term_overlap": 0.67
+  },
+  {
+   "id": "learn_f3b40ce1f32f",
+   "query": "The `tbs-www client-push-guard` rejected a push to `refs/heads/main` from multiple contributors, blocking commits across the repository. The error message indicated issues with untracked pages in `scripts/verify-fixtures/lesson-hashes.json`.",
+   "term_overlap": 0.33
+  },
+  {
+   "id": "learn_7deef2306ffa",
+   "query": "Job 12345 used ImageGen to render a locomotive for the 1829 Rainhill scene, but the output displayed an oversized later-era locomotive model.",
+   "term_overlap": 0.47
+  },
+  {
+   "id": "learn_284605b66848",
+   "query": "The CI job for HomeClass rewrite lanes failed with an error indicating that the generated lessons exceeded the maximum sentence limit and lacked required presence checks for the \"frame-header\" ID.",
+   "term_overlap": 0.31
+  },
+  {
+   "id": "learn_8198afb86269",
+   "query": "The UI gallery job failed due to identical before and after screenshots, suggesting that the timing for capturing the screenshots was not allowing the UI transitions to complete properly.",
+   "term_overlap": 0.25
+  },
+  {
+   "id": "learn_538188f0ecfb",
+   "query": "The restore job using the latest replacement package www.sha failed to complete, resulting in a corrupted database on the controller files.",
+   "term_overlap": 0.33
+  },
+  {
+   "id": "learn_8a82a19014d8",
+   "query": "The `bin/sensitive_window.py check` command ran as part of the nightly build verification process and failed to produce any output or errors, exiting with status 0 for both sensitive and non-sensitive paths. This is unusual as it does not match expected behavior.",
+   "term_overlap": 0.19
+  },
+  {
+   "id": "learn_c0998fb7a7e9",
+   "query": "The `lesson-locate` command failed to find any lessons for MommyAI L001-L020, returning \"NOTHING FOUND.\"",
+   "term_overlap": 0.45
+  },
+  {
+   "id": "learn_fa289b7a397f",
+   "query": "The Mythic /back command was failing to teleport players, resulting in an error message indicating a cooldown issue that did not match the expected settings.",
+   "term_overlap": 0.17
+  },
+  {
+   "id": "learn_028036f649d1",
+   "query": "The raw SSH endpoint for the Mac mini was failing with a connection refused error when running the bin/tbs-mini.sh script during the nightly regression test.",
+   "term_overlap": 0.44
+  },
+  {
+   "id": "learn_9b1127a13934",
+   "query": "The Jenkins job for building the TBS curriculum lesson failed, reporting 6 out of 7 provenance checks as failed, while the actual logs showed all 7 checks passed.",
+   "term_overlap": 0.06
+  },
+  {
+   "id": "learn_e538425a0768",
+   "query": "The build for the shared frame job failed with an error indicating that point labels were not rendering at the required 14px size in Korean, despite the minimum threshold being set to 16px.",
+   "term_overlap": 0.37
+  },
+  {
+   "id": "learn_c4c3eae28444",
+   "query": "The deployment of the latest version of MommyAI resulted in a failure to load cover mp4 files for lessons l01 and l02, while other lessons loaded normally.",
+   "term_overlap": 0.24
+  },
+  {
+   "id": "learn_82b2762a45ff",
+   "query": "The cron job `cron/renew.js` failed to process charges, resulting in an error message indicating that the `api/admin/charge-retry.js` script was not correctly handling the transaction verbs.",
+   "term_overlap": 0.33
+  },
+  {
+   "id": "learn_7ff291b56757",
+   "query": "The CI/CD pipeline deployed a new version to the tbs-www environment, and the application started returning a SyntaxError for the inline-script on the lesson/session pages.",
+   "term_overlap": 0.31
+  },
+  {
+   "id": "learn_137599939356",
+   "query": "The CI build for LittleHello catalog title validation failed with an error message indicating the wrong source was being used, specifically pointing to tbs-www origin/main instead of curriculum mirror pages.",
+   "term_overlap": 0.25
+  },
+  {
+   "id": "learn_4255450f4c89",
+   "query": "During the execution of the tbs-preview-verify job, the stepWalk process encountered an error, failing to complete the traversal as expected.",
+   "term_overlap": 0.25
+  },
+  {
+   "id": "learn_8a54b12eabea",
+   "query": "The tbs-coordinator job failed with the error \"com.aria.tbs-coordinator rc=2 'tbs-coordinator.sh: line 175: unexpected\" during an autopush edit, causing an interruption in service.",
+   "term_overlap": 0.4
+  },
+  {
+   "id": "learn_7ec25dbb99fb",
+   "query": "The Too Big HeyGen render job failed, displaying an error related to stale curriculum source data, despite using the latest data at the time.",
+   "term_overlap": 0.41
+  },
+  {
+   "id": "learn_92ea0ab5b43b",
+   "query": "During the nightly CI job for the tbs-www repository, the `git checkout` command failed to switch branches as expected. The job encountered an error message indicating that an uncommitted file in another session was aborting the checkout, leaving the working directory on the main branch instead of the intended branch.",
+   "term_overlap": 0.25
+  },
+  {
+   "id": "learn_97e660dec057",
+   "query": "The CI pipeline for the media-regression-gate.mjs job failed, showing \"CHECKER_BROKEN\" and exiting with code 0.",
+   "term_overlap": 0.33
+  },
+  {
+   "id": "learn_2b1daf175545",
+   "query": "The local job using the lessonview tool reported \"DEAD NARRATION\" when trying to load media from localhost, despite the tbs preview server intentionally returning a local 404 for absent lesson media.",
+   "term_overlap": 0.39
+  },
+  {
+   "id": "learn_2109301ceb2d",
+   "query": "During the full-run test with 768kr CPU load, the HomeClass page 6 became unreachable, showing only 5 pages instead of the expected 6 when taking screenshots.",
+   "term_overlap": 0.17
+  },
+  {
+   "id": "learn_1bad0ecc104e",
+   "query": "The MommyAI freeze job failed to process the most recent PASS receipt, instead prioritizing older v1/v2 directory contents lexicographically.",
+   "term_overlap": 0.33
+  },
+  {
+   "id": "learn_75e763a2afa8",
+   "query": "The CI pipeline for the feature branch failed with an \"unmerged paths\" error when trying to build the project, indicating conflicts with the latest changes from the main branch.",
+   "term_overlap": 0.12
+  },
+  {
+   "id": "learn_6217571de58c",
+   "query": "The `update-system` job failed with an error message indicating a permission issue when trying to rewrite an existing file.",
+   "term_overlap": 0.0
+  },
+  {
+   "id": "learn_7f302f58d71b",
+   "query": "During the recent update of the ImageGen compass settings for Job 12345, the dial displayed prohibited letters and degree-like marks even when the \"no-text\" prompt was selected.",
+   "term_overlap": 0.41
+  },
+  {
+   "id": "learn_f72050b2b573",
+   "query": "The build job for Issue 491 failed when attempting to write to the `thinking-brain-school/.git/tbs-end.lock` file, resulting in the source remaining uncommitted and the issue staying open.",
+   "term_overlap": 0.19
+  },
+  {
+   "id": "learn_e2b6dcbd7d2c",
+   "query": "The `npm test` job failed, indicating changes in `assets/audio-lesson-widget.js` and `assets/tbs-app.js` after a clean baseline. The error message suggested a validation collision issue.",
+   "term_overlap": 0.5
+  },
+  {
+   "id": "learn_cf5258dc05af",
+   "query": "During the nightly build process, the HomeClass custom frame failed to pass the bilingual body review, displaying Korean age and navigation chrome elements instead.",
+   "term_overlap": 0.59
+  },
+  {
+   "id": "learn_f527f8bf0082",
+   "query": "During the nightly build job, the \"ship\" command was executed, but it resulted in the deletion of a populated SuperPower waveform without any new waveform being specified as an argument. The operation caused an unexpected loss of data.",
+   "term_overlap": 0.33
+  },
+  {
+   "id": "learn_a9a3a90afc9a",
+   "query": "The video processing job failed with an error indicating that the HeyGen MCP rail was missing. The error message stated there was no entry for HeyGen in the ~/.claude.json mcpServers and no .mcp.json file in the tbs-video-pipeline directory.",
+   "term_overlap": 0.33
+  },
+  {
+   "id": "learn_5c5a27688b54",
+   "query": "During the execution of the `formatting` job using the `preview-hub/lessons` command, the expected formatting changes for `HomeClass` were not applied, and the report indicated no changes despite an explicit path set for the modifications.",
+   "term_overlap": 0.25
+  },
+  {
+   "id": "learn_afc3db9cc534",
+   "query": "During the nightly maintenance job at 23:45, the TBS LittleHello live avatar/voice update command failed, resulting in an error message indicating a connection timeout.",
+   "term_overlap": 0.31
+  },
+  {
+   "id": "learn_6f77bbb325d9",
+   "query": "The TBS checkout job failed with an error indicating that the feed script path could not be found. The specified path was incorrect, pointing to /Users/slowember/Developer/Vaults/_meta/services/board.py instead of the correct path.",
+   "term_overlap": 0.37
+  },
+  {
+   "id": "learn_dee9e3b01dd5",
+   "query": "During the build process for job 12345, the system reported an error at lines 213 and 296 on the 8c62d6cc2535fcb3293ac909a9ad5ee95e9ded49 commit, specifically mentioning issues with an inline raster and an empty speech balloon.",
+   "term_overlap": 0.21
+  },
+  {
+   "id": "learn_39b1c6a70778",
+   "query": "During the nightly batch processing job, the API request using the key ID 64 hex failed with a 400 error indicating that the API key ID was used as an API key.",
+   "term_overlap": 0.18
+  },
+  {
+   "id": "learn_ec5b10f56288",
+   "query": "The tbs hold probe triggered on the command `grep -q refunded_at` failed to release, indicating an issue with how the probe was handling the ledger file `2026-09-16_421_charges_refunded_amount.sql`.",
+   "term_overlap": 0.29
+  },
+  {
+   "id": "learn_572e903f603a",
+   "query": "The production environment encountered a 404 error when attempting to serve audio files from the relative path `audio/*.mp3`, despite the files existing and being tracked in the repository.",
+   "term_overlap": 0.25
+  },
+  {
+   "id": "learn_18d6f0adf6b0",
+   "query": "During the nightly build process, Job 12345 failed with an error message indicating that the SuperPower AI L017-L026 hub kits were byte-identical to the stale Lesson 15 branching-adventure files.",
+   "term_overlap": 0.29
+  },
+  {
+   "id": "learn_5e733d1e65c9",
+   "query": "During the ledger test run, Job 12345 failed with an error message indicating a missing table named \"objectives\" in the SQLite database.",
+   "term_overlap": 0.25
+  }
+ ]
+}

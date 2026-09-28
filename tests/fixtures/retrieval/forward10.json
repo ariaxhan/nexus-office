@@ -1,0 +1,62 @@
+[
+ {
+  "case": "homeclass-floor",
+  "query": "HomeClass lesson rewrite lanes are shipping lessons that pass every automated gate (max-sentence ceiling, no-repetition check, presence check for id=\"frame-header\") but reviewers keep rejecting them as thin/wrong. The gate is green on every rejected lesson. Why does the gate pass content that is actually broken, and what should the gate check instead?",
+  "gold": "learn_284605b66848",
+  "verified_fix": "The gate only enforced ceilings (max sentences, no repetition) and a presence check (does id=\"frame-header\" exist), never a floor or a sameness check (does the header actually match the canonical _frame/frame.js). Fix: add a floor (minimum content requirement) and change the header check from existence to equality against _frame/frame.js."
+ },
+ {
+  "case": "restore-supersede-key",
+  "query": "A superseding restore flow is validating controller files and evidence against the WRONG package version after a restore chain with multiple supersessions. Symptom: journal shows the restore succeeded, but controller/evidence checks reference stale package data. What key should the restore validation use?",
+  "gold": "learn_538188f0ecfb",
+  "verified_fix": "Superseding restore must key controller files and evidence validation by journal.data.www_sha (the sha recorded in the journal at restore time), not by the current replacement package's www.sha, which can have moved on by the time validation runs."
+ },
+ {
+  "case": "lesson-locate-mommyai",
+  "query": "`tbs lesson locate` returns NOTHING FOUND for MommyAI lessons L001 through L020, even though the lesson content clearly exists in the repo. Other products' lessons locate fine. What's different about MommyAI that breaks lesson-locate?",
+  "gold": "learn_c0998fb7a7e9",
+  "verified_fix": "lesson-locate requires lesson-number tokens to appear inside product-matching paths (e.g. .../L003/...), but MommyAI is a single SPA bundle whose source components live in tbs-landing with no per-lesson path segment, so the path-based lesson-number match never fires. Fix: special-case SPA products or match lesson number against component names, not path segments."
+ },
+ {
+  "case": "charge-retry-guard-miss",
+  "query": "A guard meant to catch code paths that charge money by scanning for money-related verbs passed a file that DOES charge money: api/admin/charge-retry.js. The regex found no money verb in that file directly. How did a real charging code path get past a money-verb guard?",
+  "gold": "learn_82b2762a45ff",
+  "verified_fix": "The guard was graded only against fixtures the author wrote, so it never covered the case where the file charges money indirectly: api/admin/charge-retry.js charges by importing and calling cron/renew.js, and never names a money verb itself. A regex of literal verbs in the file's own text passed it. Fix: trace imports/call graph, not just literal text, or add fixtures for indirect-charge patterns."
+ },
+ {
+  "case": "inline-script-prod-syntax",
+  "query": "A production lesson page shipped with a hard inline-script SyntaxError for days, and the CI syntax check (scripts/inline-script-syntax.test.mjs) was green the whole time. The syntax checker exists specifically to catch this. Why did it not catch it?",
+  "gold": "learn_7ff291b56757",
+  "verified_fix": "scripts/inline-script-syntax.test.mjs in tbs-www only parsed app pages, never the 114 published lesson/session pages, so any inline-script syntax error on a lesson page was structurally invisible to the check. Fix: extend the syntax check to cover all published lesson/session pages, not just app pages."
+ },
+ {
+  "case": "coordinator-rc2-race",
+  "query": "com.aria.tbs-coordinator launchd job fails with rc=2 and a log line 'tbs-coordinator.sh: line 175: unexpected'. This looks like a bash syntax error at line 175. `bash -n` on HEAD passes cleanly, and it also passes on all 8 recent commits of that file. Where is the syntax error?",
+  "gold": "learn_8a54b12eabea",
+  "verified_fix": "There is no syntax error in the committed script. launchd ran the script while an unrelated autopush process was mid-write to the same file on disk, so launchd read a transiently truncated/corrupt version of the file, not the syntax-clean committed version. The watchdog's kickstart recovers it automatically. Fix: don't hunt for a syntax error in the repo; the real issue is a read-during-write race between autopush and launchd's script invocation."
+ },
+ {
+  "case": "A-esbuild-npm-ci",
+  "query": "Tower's done-receipt verification checked out the merged sha into a fresh git worktree and ran\nthe repo's contract check (`npm test` variant) there. It failed:\n  esbuild: command not found (exit 127)\nThe worktree has package.json and package-lock.json but no node_modules \u2014 no npm install/ci was\nrun before the check.\n",
+  "gold": "n/a (commit-derived, no single agentdb id)",
+  "verified_fix": "commit f54ff03: in nexus/contract.py done_receipt(), before running the contract check, if the\nchecked-out tree has package-lock.json, run `npm ci --prefer-offline --no-audit --no-fund` in\nthat tree first; fail with a clear \"cannot install dependencies\" error if that fails.\n"
+ },
+ {
+  "case": "B-login-shell-pypath",
+  "query": "Tower's done-receipt contract check intermittently fails or behaves differently than the same\ncheck run during normal CI/dev flow, even at a commit that passed all its own checks pre-merge.\nThe check is invoked as: subprocess.run([\"bash\", \"-lc\", check], cwd=tree, ...)\n",
+  "gold": "n/a (commit-derived, no single agentdb id)",
+  "verified_fix": "commit 5071f8a: run the contract check with `bash -c` (not `bash -lc`, no login shell) so it\ninherits Tower's own environment/PATH instead of a login shell's, matching the toolchain\nversions (python3.11) that the rest of Tower and pre-merge checks already used.\n"
+ },
+ {
+  "case": "C-tempdir-race",
+  "query": "`env -u CLAUDE_CONFIG_DIR npm test` (actually the repo's python suite) fails intermittently:\nERROR: test_a_merged_pull_request_writes_a_receipt_for_the_issue_it_closes\n  File \".../tempfile.py\", line 954, in cleanup\n    self._rmtree(self.name, ...)\n  OSError: [Errno 66] Directory not empty: '/var/folders/.../tmp1k8u4i78'\nRan 71 tests in 6.955s; FAILED (errors=1)\n",
+  "gold": "n/a (commit-derived, no single agentdb id)",
+  "verified_fix": "commit 39efc44: in tests/test_webhook.py, change addCleanup(t.cancel) to\naddCleanup(lambda: (t.cancel(), t.thread.join(5))) in both TriggerTest and SectionTest so the\ndrainer thread finishes before the tempdir is removed.\n"
+ },
+ {
+  "case": "matra-chatdb-wal",
+  "query": "Matra iMessage read integration intermittently fails to read chat.db: reads that work when run interactively fail when run from the scheduled/automated path, with errors that look like a permissions or sandbox problem (FDA/TCC-shaped), not a straightforward crash.",
+  "gold": "LRN-20260927041409-34145-16574",
+  "verified_fix": "Matra iMessage read failures were a chat.db-wal TOCTOU race (ENOENT), not FDA/TCC or codex sandbox: reading chat.db while Messages is mid-checkpoint of the WAL can race and produce a transient ENOENT/open failure that looks like a permissions problem. Fix: retry the open on that failure class instead of chasing FDA/TCC or sandbox permissions."
+ }
+]

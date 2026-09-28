@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import time
 
 LIMIT = 1200  # characters of packet text: small enough that noise costs nothing measurable
 GLOBAL_DB = os.environ.get("NEXUS_AGENTDB_GLOBAL", os.path.expanduser("~/Developer/Vaults/_meta/agentdb/global.db"))
@@ -54,11 +55,44 @@ def _insight(dbs, lid):
 MIN_SCORE = 3  # 2026-09-26: every score-2 hit on #183/#190/#191 shared only "make"/"office"; empty beats noise
 
 
-def scars(query, repo, limit=3, run=subprocess.run):
-    """([{id, type, insight}], error|None) from `agentdb recall --scores`: ids only, no hit_count bump."""
+_INDEX = {}
+REFRESH = 600  # seconds between re-reads of agentdb for learnings not yet embedded
+
+
+def semantic(query):
+    """[(id, cosine)] from the local embedding index (#235 B): 98% recall@5 on the frozen corpus
+    where lexical recall gets 18%. Raises when the local model or index is unavailable."""
+    from . import precedent
+    index = _INDEX.get("index")
+    if index is None or time.time() - _INDEX["at"] > REFRESH:
+        index = index or precedent.Index()
+        index.refresh(budget=200)
+        _INDEX.update(index=index, at=time.time())
+    return index.search(query, 8), index
+
+
+def scars(query, repo, limit=2, run=subprocess.run):
+    """([{id, type, insight}], error|None): semantic precedent first, `agentdb recall --scores` as the
+    fallback. Read-only either way: ids only, no hit_count bump."""
     terms = _terms(query)
     if not terms:
         return [], None
+    try:
+        from . import precedent
+        hits, index = semantic(query)
+    except Exception as exc:  # any local-model failure degrades to lexical, never blocks a flight
+        fallback = f"precedent unavailable: {type(exc).__name__}"
+    else:
+        out = []
+        for lid in precedent.gate([h for h, _ in hits], [], hits, query, index.texts, limit=limit, structure=False):
+            p = precedent.packet(lid, index.texts[lid].split("\n")[0])
+            out.append({"id": p["id"], "type": "precedent", "insight": precedent.render(p)[:300]})
+        return out, None
+    found, error = _lexical(terms, repo, limit, run)
+    return found, error or fallback
+
+
+def _lexical(terms, repo, limit, run):
     repo = repo or os.getcwd()  # recall reads the project db of its cwd; resolve ids against the same one
     try:
         proc = run(["agentdb", "recall", terms, "--global", "--scores"], cwd=repo,
