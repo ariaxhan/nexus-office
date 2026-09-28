@@ -1,0 +1,6 @@
+{"task": "What does the landed #187 decision-plane benchmark conclude, and which Office release is live (as of 2026-09-27 07:23Z)",
+ "steps": [
+  {"id": "verdict", "op": "read", "repo": "~/Developer/Vaults/CodingVault/nexus-office", "rev": "8074c94", "path": "docs/decision-plane-benchmark.md", "section": "## Verdict"},
+  {"id": "headings", "op": "git", "repo": "~/Developer/Vaults/CodingVault/nexus-office", "args": ["grep", "-n", "^## ", "8074c94", "--", "docs/decision-plane-benchmark.md"]},
+  {"id": "release", "op": "read", "repo": "~/Developer/Vaults", "rev": "a48b6b695", "path": "_meta/services/office/office", "around": "release-[0-9a-f]+", "ctx": 0}
+ ]}

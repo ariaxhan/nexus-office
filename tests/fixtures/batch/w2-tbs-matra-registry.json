@@ -1,0 +1,9 @@
+{"task": "Which TBS / Matra repos are enabled for Tower, and are their coordinator jobs registered (as of 2026-09-26 23:00Z)",
+ "steps": [
+  {"id": "registry", "op": "json", "repo": "~/Developer/Vaults", "rev": "d81387776", "path": "_meta/services/nexus-work-registry.json",
+   "select": "repositories", "match": "matra|thinking-brain|tradition", "fields": ["repo", "enabled"]},
+  {"id": "registry_changes", "op": "git", "repo": "~/Developer/Vaults", "args": ["log", "-4", "--format=%h %cI %s", "d81387776", "--", "_meta/services/nexus-work-registry.json"]},
+  {"id": "jobs", "op": "grep", "path": "~/Developer/Vaults/_meta/services/jobs/registry.jsonl", "pattern": "\"id\": \"com\\.aria\\.(tbs-coordinator|matra-coordinator)\""},
+  {"id": "open_issues_seen", "op": "sqlite", "db": "ledger",
+   "sql": "select replace(json_extract(payload,'$.repository_url'),'https://api.github.com/repos/','') repo, count(distinct subject) issues from events where kind='work.issue' and ts <= 1790463600 and (payload like '%api.github.com/repos/jessstrom/matra%' or payload like '%api.github.com/repos/thinking-brain-school/%' or payload like '%api.github.com/repos/ariablinkbuild/matra-suite%') group by 1"}
+ ]}

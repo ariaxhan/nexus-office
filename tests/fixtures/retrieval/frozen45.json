@@ -1,0 +1,478 @@
+[
+ {
+  "id": "learn_c05710d59cc2",
+  "ts": "2026-09-08T05:00:10.524326Z",
+  "type": "gotcha",
+  "gold_insight": "tbs-www lesson PRs must target main, not staging: release-controller ships only ancestors of origin/main and the conveyor cannot auto-merge staging when generated bundle refs (mommyai/*/index.html, tbs-source.json) conflict. Fix = take the built output onto a branch cut from origin/main (PR #280 pattern), never hand-resolve bundle names.",
+  "query": "tbs-www lesson PRs must target main, not staging: release-controller ships only ancestors of origin/main and the conveyor cannot auto-merge staging when generated bundle",
+  "distinctive": [
+   "index.html",
+   "source.json"
+  ]
+ },
+ {
+  "id": "learn_835e76166edf",
+  "ts": "2026-09-20T05:00:31.297261Z",
+  "type": "gotcha",
+  "gold_insight": "HomeClass lesson-assets-check flags retired image files left beside a replacement lesson but does not flag a missing filename declared in hc-blocks art; an index-only rebuild cannot both remove old subject art from markup and make the orphan-assets gate green.",
+  "query": "HomeClass lesson-assets-check flags retired image files left beside a replacement lesson but does not flag a missing filename decl",
+  "distinctive": [
+   "HomeClass"
+  ]
+ },
+ {
+  "id": "learn_43700521896f",
+  "ts": "2026-09-23T05:00:06.682405Z",
+  "type": "gotcha",
+  "gold_insight": "HomeClass one-copy audit must scan the staged Git tree as well as lesson-media bucket metadata: branch 22db18c had zero duplicate eTags but still shipped 472 local media files and retained two *_v2-staged bucket objects.",
+  "query": "HomeClass one-copy audit must scan the staged Git tree as well as lesson-media bucket metadata: branch 22db18c",
+  "distinctive": [
+   "HomeClass"
+  ]
+ },
+ {
+  "id": "learn_39f0dd50ce7d",
+  "ts": "2026-09-23T05:00:06.679716Z",
+  "type": "failure",
+  "gold_insight": "Codex managed sandbox blocks local Playwright Chromium and WebKit launch with macOS MachPortRendezvous/Abort trap, so rendered lesson tools cannot execute inside this lane",
+  "query": "Codex managed sandbox blocks local Playwright Chromium and WebKit launch with macOS MachPortRendezvous/Abort trap",
+  "distinctive": [
+   "MachPortRendezvous",
+   "WebKit"
+  ]
+ },
+ {
+  "id": "learn_7dda91c1b2c1",
+  "ts": "2026-09-17T05:00:09.079519Z",
+  "type": "failure",
+  "gold_insight": "HomeClass L015 age toggle rendered identical Korean lesson copy on all five pages despite pipeline passes",
+  "query": "HomeClass L015 age toggle rendered identical Korean",
+  "distinctive": [
+   "HomeClass"
+  ]
+ },
+ {
+  "id": "learn_f3b40ce1f32f",
+  "ts": "2026-09-22T05:00:11.293414Z",
+  "type": "gotcha",
+  "gold_insight": "tbs-www client-push-guard refuses refs/heads/main for EVERYONE when scripts/verify-fixtures/lesson-hashes.json locks pages that are untracked; a lane relocking before committing its pages blocks the whole repo",
+  "query": "tbs-www client-push-guard refuses refs/heads/main for EVERYONE when scripts/verify-fixtures/lesson-hashe",
+  "distinctive": [
+   "EVERYONE",
+   "hashes.json"
+  ]
+ },
+ {
+  "id": "learn_7deef2306ffa",
+  "ts": "2026-09-18T05:00:14.289262Z",
+  "type": "gotcha",
+  "gold_insight": "Built-in ImageGen rendered an oversized later-era locomotive for an explicitly dated 1829 Rainhill scene.",
+  "query": "Built-in ImageGen rendered an oversized later-era lo",
+  "distinctive": [
+   "ImageGen"
+  ]
+ },
+ {
+  "id": "learn_284605b66848",
+  "ts": "2026-09-19T05:00:16.991147Z",
+  "type": "failure",
+  "gold_insight": "HomeClass rewrite lanes produced thin lessons that passed every gate: the gate had ceilings (max sentences, no repetition) and no floor, and checked presence (id=\"frame-header\" exists) rather than sameness (header matches _frame/frame.js)",
+  "query": "HomeClass rewrite lanes produced thin lessons that passed every gate: the gate had ceilings (max sentences, no repetiti",
+  "distinctive": [
+   "HomeClass",
+   "frame.js"
+  ]
+ },
+ {
+  "id": "learn_8198afb86269",
+  "ts": "2026-09-19T05:00:08.033821Z",
+  "type": "gotcha",
+  "gold_insight": "scripts/ui-gallery.mjs waited a hard-coded 400ms after each --click before the screenshot, so any transition shorter than that was over before the shutter opened and before/after frames looked identical. Use --settle <ms> (added 2026-09-18) to capture mid-flight.",
+  "query": "scripts/ui-gallery.mjs waited a hard-coded 400ms after each --click before the screenshot",
+  "distinctive": [
+   "gallery.mjs"
+  ]
+ },
+ {
+  "id": "learn_538188f0ecfb",
+  "ts": "2026-09-21T05:00:09.867553Z",
+  "type": "gotcha",
+  "gold_insight": "Superseding restore must key controller files and evidence validation by journal.data.www_sha, not the current replacement package www.sha",
+  "query": "Superseding restore must key controller files and evidence validation",
+  "distinctive": [
+   "journal.data",
+   "www_sha"
+  ]
+ },
+ {
+  "id": "learn_8a82a19014d8",
+  "ts": "2026-09-26T05:00:06.839052Z",
+  "type": "gotcha",
+  "gold_insight": "bin/sensitive_window.py check prints nothing and exits 0 for both sensitive and non-sensitive paths (api/portone/issue.js too); it is not a classifier probe. Read the SENSITIVE regex at line ~41 instead.",
+  "query": "bin/sensitive_window.py check prints nothing and exits 0 for both sensitive and non-sensitive paths (",
+  "distinctive": [
+   "SENSITIVE",
+   "issue.js",
+   "sensitive_window",
+   "sensitive_window.py"
+  ]
+ },
+ {
+  "id": "learn_c0998fb7a7e9",
+  "ts": "2026-09-06T05:00:10.985725Z",
+  "type": "failure",
+  "gold_insight": "tbs lesson locate returns NOTHING FOUND for MommyAI L001-L020 because lesson-locate requires lesson-number tokens inside product-matching paths, while MommyAI is one SPA bundle with source components in tbs-landing",
+  "query": "tbs lesson locate returns NOTHING FOUND for MommyAI L001-L020",
+  "distinctive": [
+   "FOUND",
+   "MommyAI",
+   "NOTHING"
+  ]
+ },
+ {
+  "id": "learn_fa289b7a397f",
+  "ts": "2026-09-12T05:00:07.611875Z",
+  "type": "gotcha",
+  "gold_insight": "Mythic /back cooldown remained 30 seconds because seed/defaultconfigs/ftbessentials-server.snbt never overrode FTB Essentials and existing world/serverconfig retained the upstream default",
+  "query": "Mythic /back cooldown remained 30 seconds",
+  "distinctive": [
+   "server.snbt"
+  ]
+ },
+ {
+  "id": "learn_028036f649d1",
+  "ts": "2026-09-20T05:00:38.979199Z",
+  "type": "failure",
+  "gold_insight": "Mac mini raw SSH endpoint was hard-coded to the .ts.net hostname in bin/tbs-mini.sh and its regression test",
+  "query": "Mac mini raw SSH endpoint was hard-coded to the .ts.n",
+  "distinctive": [
+   "mini.sh"
+  ]
+ },
+ {
+  "id": "learn_9b1127a13934",
+  "ts": "2026-09-03T05:00:37.245039Z",
+  "type": "failure",
+  "gold_insight": "In the TBS multi-repo tree, repos/ clones are push-disabled audit copies and CodingVault/<repo> are the write-capable ones. A lane read repos/tbs-curriculum, found no L012 _build branch, and reported the lesson failing 6 of 7 provenance checks that actually passed 7/7.",
+  "query": "In the TBS multi-repo tree, repos/ clones are push-disabled audit copies and CodingVault/<repo> are the write-capable ones. A lane rea",
+  "distinctive": [
+   "CodingVault"
+  ]
+ },
+ {
+  "id": "learn_e538425a0768",
+  "ts": "2026-09-20T05:00:31.725026Z",
+  "type": "gotcha",
+  "gold_insight": "HomeClass required point labels render at 14px in Korean under the shared frame, so the board flags them below 16px even when lesson edits are restricted to frame classes and prohibit CSS.",
+  "query": "HomeClass required point labels render at 14px in Korean under the shared frame",
+  "distinctive": [
+   "HomeClass"
+  ]
+ },
+ {
+  "id": "learn_c4c3eae28444",
+  "ts": "2026-09-06T05:00:10.989950Z",
+  "type": "gotcha",
+  "gold_insight": "SPA (superpowerai) lessons have no per-lesson cover mp4 anywhere (only spa-intro-apex.mp4); MommyAI covers exist l03-l20 on tbs-www origin/main 947cdd0, l01/l02 absent",
+  "query": "SPA (superpowerai) lessons have no per-lesson cover mp4 anywhere (only spa-intro-ap",
+  "distinctive": [
+   "MommyAI",
+   "apex.mp"
+  ]
+ },
+ {
+  "id": "learn_82b2762a45ff",
+  "ts": "2026-09-17T05:00:09.044760Z",
+  "type": "gotcha",
+  "gold_insight": "A guard graded only against fixtures the author wrote will miss the real case: api/admin/charge-retry.js charges by importing cron/renew.js, names no money verb, and a regex of verbs passed it",
+  "query": "A guard graded only against fixtures the author wrote will miss the real case: api/admin/charge-",
+  "distinctive": [
+   "renew.js",
+   "retry.js"
+  ]
+ },
+ {
+  "id": "learn_7ff291b56757",
+  "ts": "2026-09-19T05:00:16.900207Z",
+  "type": "gotcha",
+  "gold_insight": "A lesson page shipped a hard inline-script SyntaxError to production for days: scripts/inline-script-syntax.test.mjs in tbs-www only parsed app pages, never the 114 published lesson/session pages",
+  "query": "A lesson page shipped a hard inline-script SyntaxError to production for days: scripts/inline-scr",
+  "distinctive": [
+   "SyntaxError",
+   "syntax.test"
+  ]
+ },
+ {
+  "id": "learn_137599939356",
+  "ts": "2026-09-19T05:00:11.822129Z",
+  "type": "gotcha",
+  "gold_insight": "LittleHello catalog title validation must read tbs-www origin/main, not curriculum mirror pages",
+  "query": "LittleHello catalog title validation must read",
+  "distinctive": [
+   "LittleHello"
+  ]
+ },
+ {
+  "id": "learn_4255450f4c89",
+  "ts": "2026-09-05T05:00:34.468977Z",
+  "type": "gotcha",
+  "gold_insight": "tbs-preview-verify runs generic MommyAI traversal before its stepWalk, so stepWalk may contain only the stable final control; inspect traversal.states and traversal.completed for the actual full-state proof",
+  "query": "tbs-preview-verify runs generic MommyAI traversal before its stepWalk",
+  "distinctive": [
+   "MommyAI",
+   "traversal.comp",
+   "traversal.stat"
+  ]
+ },
+ {
+  "id": "learn_8a54b12eabea",
+  "ts": "2026-09-18T05:00:14.242167Z",
+  "type": "gotcha",
+  "gold_insight": "com.aria.tbs-coordinator rc=2 'tbs-coordinator.sh: line 175: unexpected' is NOT a script defect: bash -n passes on HEAD and on all 8 recent commits of that file. launchd ran the script while an autopush edit was mid-write. The watchdog's kickstart recovers it. Do not go hunting for a syntax error.",
+  "query": "com.aria.tbs-coordinator rc=2 'tbs-coordinator.sh: line 175: unexpected' is NOT a script defect: bash -n passes on HEAD and on all 8 recent commits o",
+  "distinctive": [
+   "aria.tbs",
+   "coordinator.sh"
+  ]
+ },
+ {
+  "id": "learn_7ec25dbb99fb",
+  "ts": "2026-09-26T05:00:06.836514Z",
+  "type": "failure",
+  "gold_insight": "LittleHello L033 stale curriculum source generated wrong Too Big HeyGen render, spending 55 premium credits",
+  "query": "LittleHello L033 stale curriculum source generated wr",
+  "distinctive": [
+   "HeyGen",
+   "LittleHello"
+  ]
+ },
+ {
+  "id": "learn_92ea0ab5b43b",
+  "ts": "2026-09-20T05:00:38.963563Z",
+  "type": "gotcha",
+  "gold_insight": "The shared tbs-www checkout often cannot switch branches: another session's uncommitted file (scripts/admin-refund-dunning.test.mjs) aborts git checkout, and git checkout printing an abort still leaves you on main while the next command in the same && chain runs and looks like it ran on the branch. Verify a branch's tests with 'git archive origin/<branch> | tar -x -C /tmp/dir' plus a node_modules symlink, then rev-parse the commit you are quoting.",
+  "query": "The shared tbs-www checkout often cannot switch branches: another session's uncommitted file (scripts/admin-refund-dunning.test.mjs) aborts git checkout, and git checkout printing an abort still leaves you on main while the n",
+  "distinctive": [
+   "dunning.test",
+   "node_modules"
+  ]
+ },
+ {
+  "id": "learn_97e660dec057",
+  "ts": "2026-09-25T05:00:06.790763Z",
+  "type": "gotcha",
+  "gold_insight": "media-regression-gate.mjs without SUPABASE_SECRET_KEY/VITE_SUPABASE_URL prints CHECKER_BROKEN and exits 0",
+  "query": "media-regression-gate.mjs without SUPABASE_SECRET_KE",
+  "distinctive": [
+   "gate.mjs"
+  ]
+ },
+ {
+  "id": "learn_2b1daf175545",
+  "ts": "2026-09-23T05:00:06.676055Z",
+  "type": "gotcha",
+  "gold_insight": "L009 local lessonview against localhost reports DEAD NARRATION because tbs preview serve intentionally returns local 404 for absent lesson media; deployed hub succeeds through production fallback and prints narration plays via production.",
+  "query": "L009 local lessonview against localhost reports DEAD NARRATION",
+  "distinctive": [
+   "NARRATION"
+  ]
+ },
+ {
+  "id": "learn_2109301ceb2d",
+  "ts": "2026-09-22T05:00:11.286479Z",
+  "type": "gotcha",
+  "gold_insight": "tbs-www#584 (HomeClass lesson040 page 6 unreachable at 768 kr) was a tbs-board miscount, not a product defect: state()/check() read the DOM mid page-transition under full-run CPU load and saw 5 pages where 6 screenshots were correct. Fixed in 6be502a2d, which names this exact case.",
+  "query": "tbs-www#584 (HomeClass lesson040 page 6 unreachable at 768 kr) was a tbs-board miscount, not a product defect: state()/check() read the DOM m",
+  "distinctive": [
+   "HomeClass"
+  ]
+ },
+ {
+  "id": "learn_1bad0ecc104e",
+  "ts": "2026-09-07T05:00:10.604253Z",
+  "type": "failure",
+  "gold_insight": "MommyAI freeze selected preview receipts lexicographically, so legacy v1/v2 directory names outranked a fresh dated PASS receipt",
+  "query": "MommyAI freeze selected preview receipts lexicographically",
+  "distinctive": [
+   "MommyAI"
+  ]
+ },
+ {
+  "id": "learn_75e763a2afa8",
+  "ts": "2026-09-17T05:00:09.039337Z",
+  "type": "gotcha",
+  "gold_insight": "Rebasing your branch onto a teammate branch silently folds their commits into your PR diff against main; merging yours then lands their code carrying only their own standalone verification. Retarget your PR base to their branch so the diff is only your files; GitHub auto-retargets to main when theirs merges.",
+  "query": "Rebasing your branch onto a teammate branch silently folds their commits into your PR diff against main; merging yours then lands their code carrying only their own standalone verification. Retarget your PR base to their branch",
+  "distinctive": [
+   "GitHub"
+  ]
+ },
+ {
+  "id": "learn_6217571de58c",
+  "ts": "2026-09-14T05:00:07.519798Z",
+  "type": "failure",
+  "gold_insight": "Hypothesis A: lesson-ship treats every .rewrite-existing as a retrofit and requires a course drops field MommyAI does not define",
+  "query": "Hypothesis A: lesson-ship treats every .rewrite-existing as a re",
+  "distinctive": [
+   "MommyAI"
+  ]
+ },
+ {
+  "id": "learn_7f302f58d71b",
+  "ts": "2026-09-18T05:00:14.265815Z",
+  "type": "gotcha",
+  "gold_insight": "Built-in ImageGen compass faces can retain prohibited letters and degree-like marks despite a no-text prompt; edit the whole dial to an unlabeled geometric rose and re-inspect.",
+  "query": "Built-in ImageGen compass faces can retain prohibited letters and degree-like marks desp",
+  "distinctive": [
+   "ImageGen"
+  ]
+ },
+ {
+  "id": "learn_f72050b2b573",
+  "ts": "2026-09-23T05:00:06.658868Z",
+  "type": "failure",
+  "gold_insight": "Issue 491 completed source, narration, bucket, hub, and independent rendered review but managed Codex/Antigravity shells abort lessonview Chromium at MachPortRendezvousServer and tbs end cannot write thinking-brain-school/.git/tbs-end.lock; source remains uncommitted and issue open",
+  "query": "Issue 491 completed source, narration, bucket, hub, and independent rendered review but managed Codex/Antigravity shells abort lessonview Chr",
+  "distinctive": [
+   "MachPortRendezvousServer"
+  ]
+ },
+ {
+  "id": "learn_e2b6dcbd7d2c",
+  "ts": "2026-09-15T05:00:04.808631Z",
+  "type": "failure",
+  "gold_insight": "Issue 350 validation collision: npm test changed assets/audio-lesson-widget.js and assets/tbs-app.js after clean baseline; stopped before staging, branch, commit, push, label, or PR as required",
+  "query": "Issue 350 validation collision: npm test changed assets/audio-lesson-widget.js and assets/tbs-ap",
+  "distinctive": [
+   "widget.js"
+  ]
+ },
+ {
+  "id": "learn_cf5258dc05af",
+  "ts": "2026-09-19T05:00:16.932296Z",
+  "type": "gotcha",
+  "gold_insight": "HomeClass custom frame can pass bilingual body review while leaking Korean age and navigation chrome",
+  "query": "HomeClass custom frame can pass bilingual body rev",
+  "distinctive": [
+   "HomeClass"
+  ]
+ },
+ {
+  "id": "learn_f527f8bf0082",
+  "ts": "2026-09-14T05:00:07.530280Z",
+  "type": "failure",
+  "gold_insight": "lesson ship erased a populated SuperPower waveform when no new waveform argument was supplied",
+  "query": "lesson ship erased a populated SuperPower wave",
+  "distinctive": [
+   "SuperPower"
+  ]
+ },
+ {
+  "id": "learn_a9a3a90afc9a",
+  "ts": "2026-09-20T05:00:38.970565Z",
+  "type": "gotcha",
+  "gold_insight": "This machine has no HeyGen MCP rail: no heygen entry in ~/.claude.json mcpServers and no .mcp.json in tbs-video-pipeline (gitignored at 4a41c9e). Restoring it needs interactive OAuth to Tim's HeyGen account.",
+  "query": "This machine has no HeyGen MCP rail: no heygen entry in ~/.claude.json mcpServers and no .mcp.json in t",
+  "distinctive": [
+   "HeyGen",
+   "OAuth",
+   "claude.json"
+  ]
+ },
+ {
+  "id": "learn_5c5a27688b54",
+  "ts": "2026-09-17T05:00:09.053069Z",
+  "type": "gotcha",
+  "gold_insight": "HomeClass formatting target L018v2 is ignored under preview-hub/lessons and receipt under output; tbs end explicit path set reports no changes",
+  "query": "HomeClass formatting target L018v2 is ignored under preview-hub/lessons",
+  "distinctive": [
+   "HomeClass"
+  ]
+ },
+ {
+  "id": "learn_afc3db9cc534",
+  "ts": "2026-09-05T05:00:34.513302Z",
+  "type": "gotcha",
+  "gold_insight": "TBS LittleHello live avatar/voice = Zephyr 60e1c2ba\u2026 / a9e2edaf\u2026; Honey ed3e40ab\u2026 / zdZu8wRg\u2026 retired 2026-07-15 but still documented in tbs-shared PRODUCTION_PLAYBOOK and part-2 of Caleb's manual",
+  "query": "TBS LittleHello live avatar/voice = Zephyr 60e1c2ba\u2026 / a9e2edaf\u2026; Honey ed3e40ab\u2026 / zdZu8wRg\u2026 reti",
+  "distinctive": [
+   "LittleHello"
+  ]
+ },
+ {
+  "id": "learn_6f77bbb325d9",
+  "ts": "2026-09-19T05:00:16.907572Z",
+  "type": "gotcha",
+  "gold_insight": "The feed script path in a TBS checkout is /Users/slowember/Developer/Vaults/_meta/services/board.py, not thinking-brain-school/_meta/services/board.py.",
+  "query": "The feed script path in a TBS checkout is /Users/slowember/Developer/Vaults",
+  "distinctive": [
+   "board.py"
+  ]
+ },
+ {
+  "id": "learn_dee9e3b01dd5",
+  "ts": "2026-09-08T05:00:10.526990Z",
+  "type": "gotcha",
+  "gold_insight": "SuperPower retrofit lesson010 reuses an inline raster with an empty speech balloon at lines 213 and 296 on 8c62d6cc2535fcb3293ac909a9ad5ee95e9ded49",
+  "query": "SuperPower retrofit lesson010 reuses an inline raster with an empty speec",
+  "distinctive": [
+   "SuperPower"
+  ]
+ },
+ {
+  "id": "learn_39b1c6a70778",
+  "ts": "2026-09-03T05:00:37.224876Z",
+  "type": "gotcha",
+  "gold_insight": "An ElevenLabs key ID (64 hex, no sk_ prefix) fails with 400 api_key_id_used_as_api_key; real keys start with sk_ and are shown only at creation or rotation, so re-copying from the dashboard listing never yields the secret.",
+  "query": "An ElevenLabs key ID (64 hex, no sk_ prefix) fails with 400 api_key_id_used_as_api_key; real keys start with sk_ and are shown only at creation or rotation",
+  "distinctive": [
+   "ElevenLabs",
+   "api_key_id_used_as_api_key"
+  ]
+ },
+ {
+  "id": "learn_ec5b10f56288",
+  "ts": "2026-09-18T05:00:14.231970Z",
+  "type": "gotcha",
+  "gold_insight": "A tbs hold probe that greps _meta/ledgers/prod-migrations.jsonl for a COLUMN name can never close: the ledger records the migration FILE name. tbs-www#428 held twice on 'grep -q refunded_at' while the file is 2026-09-16_421_charges_refunded_amount.sql. Probe production directly (information_schema against aqvpsfrexpxtysfqcntj) or grep the file name.",
+  "query": "A tbs hold probe that greps _meta/ledgers/prod-migrations.jsonl for a COLUMN name can never close: the ledger records the migration FILE name. tbs-www#428 held twice on 'grep",
+  "distinctive": [
+   "COLUMN",
+   "_421_charges_refunded_amount.sql",
+   "information_schema",
+   "migrations.json",
+   "refunded_at"
+  ]
+ },
+ {
+  "id": "learn_572e903f603a",
+  "ts": "2026-09-19T05:00:17.012716Z",
+  "type": "failure",
+  "gold_insight": "HomeClass L008 production music interaction requests relative audio/*.mp3 but .vercelignore excludes every MP3; all four young/old KR/EN examples return 404 although tracked files exist",
+  "query": "HomeClass L008 production music interaction requests relative audio/*.mp3 but .vercelignore",
+  "distinctive": [
+   "HomeClass"
+  ]
+ },
+ {
+  "id": "learn_18d6f0adf6b0",
+  "ts": "2026-09-12T05:00:10.510822Z",
+  "type": "failure",
+  "gold_insight": "SuperPower AI L017-L026 hub kits were byte-identical stale Lesson 15 branching-adventure files",
+  "query": "SuperPower AI L017-L026 hub kits were byte-iden",
+  "distinctive": [
+   "SuperPower"
+  ]
+ },
+ {
+  "id": "learn_5e733d1e65c9",
+  "ts": "2026-09-05T05:00:34.470671Z",
+  "type": "failure",
+  "gold_insight": "SQLite plain connections default foreign_keys OFF, hiding the missing objectives-table failure in an early-v2 ledger test",
+  "query": "SQLite plain connections default foreign_keys OFF, hiding th",
+  "distinctive": [
+   "SQLite",
+   "foreign_keys"
+  ]
+ }
+]

@@ -1,0 +1,7 @@
+{"task": "Why is Tower not picking up nexus-office #187 / #202 / #197 (as of 2026-09-26 22:59Z)",
+ "steps": [
+  {"id": "tasks", "op": "sqlite", "db": "ledger",
+   "sql": "select id, origin, substr(title,1,60) title from tasks where title like '%fast decision plane%' or title like '%Hands-off autonomy%' or title like '%Scope the next autonomy%'"},
+  {"id": "disposition", "op": "sqlite", "db": "ledger",
+   "sql": "select t.id, substr(t.title,1,40) title, datetime(e.ts,'unixepoch') at, json_extract(e.payload,'$.state') state, json_extract(e.payload,'$.reason') reason from tasks t join events e on e.subject = t.id and e.kind = 'work.disposition' where (t.title like '%fast decision plane%' or t.title like '%Hands-off autonomy%' or t.title like '%Scope the next autonomy%') and e.id = (select max(id) from events where subject = t.id and kind = 'work.disposition' and ts <= 1790463560)"}
+ ]}
