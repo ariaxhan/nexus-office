@@ -139,5 +139,23 @@ class TowerClaimRecovery(unittest.TestCase):
         self.assertEqual(self.led.flight(fid)['state'], 'failed')
         self.assertTrue(self.led.conn.execute("SELECT 1 FROM leases WHERE holder_flight=?", (fid,)).fetchone() is None)
 
+    def test_unconfirmed_operator_kill_exits_once_the_owner_is_dead(self):
+        """#235 flt_e2682b5d19b1: `nexus kill` could not see the tree go, and the flight sat 7 h in resolving."""
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        self.led.set_state(fid, 'resolving', expect='running', resolution_step='teardown_unconfirmed')
+        with patch.dict(os.environ, {'NEXUS_WORK_REGISTRY': 'fixture'}), \
+             patch('nexus.flights.alive', return_value=False), \
+             patch('nexus.work.registry', return_value=[self.entry]), \
+             patch('nexus.lease.read', return_value=None), \
+             patch('nexus.lanes.recover', return_value=[]), patch('nexus.lanes.read', return_value=None):
+            with patch('nexus.flights.flight_env_pids', return_value=[4242]):  # its executor outlived the kill
+                self.assertEqual(tower._resolve_ambiguous(self.led, time.time()), 0)
+            with patch('nexus.flights.flight_env_pids', return_value=None):  # cannot tell: stay parked
+                self.assertEqual(tower._resolve_ambiguous(self.led, time.time()), 0)
+            self.assertEqual(self.led.flight(fid)['state'], 'resolving')
+            with patch('nexus.flights.flight_env_pids', return_value=[]):
+                self.assertEqual(tower._resolve_ambiguous(self.led, time.time()), 1)
+        self.assertEqual(self.led.flight(fid)['state'], 'failed')
+
 if __name__ == '__main__':
     unittest.main()

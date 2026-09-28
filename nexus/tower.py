@@ -297,6 +297,11 @@ def _release_dead_owner(ledger, flight, held, expect, now):
     return 1
 
 
+# A work flight parked on either step is waiting only for its owner to die. `teardown_unconfirmed` is an
+# operator kill that could not see the tree go (#235 flt_e2682b5d19b1 sat 7 h blocking every deploy).
+RESOLVABLE_WHEN_DEAD = ("checkout_ownership_ambiguous", "teardown_unconfirmed")
+
+
 def _resolve_ambiguous(ledger, now):
     """A dead owner's `resolving` flight gets the same recovery as a running one, every tick, until it exits.
 
@@ -306,9 +311,10 @@ def _resolve_ambiguous(ledger, now):
     from . import work
     resolved = 0
     for flight in ledger.flights(states=("resolving",)):
-        if (flight["resolution_step"] != "checkout_ownership_ambiguous"
+        if (flight["resolution_step"] not in RESOLVABLE_WHEN_DEAD
                 or ledger.plan(flight["plan_id"])["kind"] != "work"
-                or fl.alive(flight["pid"]) or fl.alive(work.latest(ledger, "work.process", flight["id"]).get("pid"))):
+                or fl.alive(flight["pid"]) or fl.alive(work.latest(ledger, "work.process", flight["id"]).get("pid"))
+                or fl.flight_env_pids(flight["id"]) != []):  # an executor that outlived the kill, or unknown
             continue
         try:
             repo = _work_repo(ledger, flight, now)
