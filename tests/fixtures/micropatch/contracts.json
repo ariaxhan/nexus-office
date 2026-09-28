@@ -1,0 +1,163 @@
+{
+  "0975062cecef15fd8540a68c57be8c4543682729": {
+    "target": "nexus/tower.py, function _resolve_ambiguous",
+    "mechanism": "This function currently only recovers a resolving flight when resolution_step equals checkout_ownership_ambiguous. Introduce a small tuple/set of resolution_step values that qualify for this dead-owner recovery path and include the existing teardown_unconfirmed step alongside checkout_ownership_ambiguous, updating the membership check accordingly. Also strengthen the liveness check: besides fl.alive on flight pid and the latest work.process pid, verify no NEXUS_FLIGHT executor process for this flight id is still running (there is a helper in nexus/flights for enumerating a flight's env-tagged pids) before treating the owner as dead.",
+    "behavior": "A flight parked in resolving with resolution_step=teardown_unconfirmed and a confirmed-dead owner (no live pid, no live process, no live executor) resolves via the same path as checkout_ownership_ambiguous.",
+    "constraints": "Do not change behavior for flights whose owner is still alive, or for resolution_step values outside the new allowed set.",
+    "acceptance": "python -m unittest tests/test_tower_claim_recovery.py"
+  },
+  "158ec3112f09244b519d8fdcc4dd1be404293022": {
+    "target": "nexus/work.py, function after_fail",
+    "mechanism": "Currently the code records a work.redesign event unconditionally and then calls gh(\"pr\",\"close\",...) without checking its result. Reorder: call the gh close first, check its returncode, and only record the work.redesign event if the close succeeded. If the close call returns nonzero, return the same True/retrying-style tuple used elsewhere in this function for transient failures instead of recording the redesign event, so the next invocation retries the close.",
+    "behavior": "When gh pr close fails (nonzero returncode), no work.redesign event is recorded and the function signals a retryable outcome; when it succeeds, the event is recorded as before.",
+    "constraints": "Do not change the exhausted-repairs / redesign-already-recorded early returns above this point.",
+    "acceptance": "python -m unittest tests/test_tower_contract.py"
+  },
+  "f54ff037dd2e9b2216f4bbe68f699f6a4ae806c9": {
+    "target": "nexus/contract.py, function done_receipt",
+    "mechanism": "After the worktree for the landed sha is checked out (git worktree add) and before running the contract check via run([...], cwd=tree, ...), detect whether this is an npm project by checking for a package-lock.json in the checked-out tree. If present, run an npm dependency install (use run(...) with the same subprocess helper, cwd=tree, a reasonable timeout) before the contract check runs, and if that install fails, return the same False/error-message tuple shape used elsewhere in this function (mentioning the sha and that dependencies could not be installed) instead of proceeding to the check.",
+    "behavior": "For an npm-based checkout, dependencies are installed before the contract check subprocess runs; if the install fails, done_receipt returns a failure tuple without executing the check.",
+    "constraints": "Do not change behavior for a checkout without package-lock.json; do not alter the existing worktree-add failure handling.",
+    "acceptance": "python -m unittest tests/test_terminal_evidence.py"
+  },
+  "c91a5d46c8dec3af7020f8239ad9ce77ca484041": {
+    "target": "nexus/lease.py, function acquire (and a new helper near heartbeat)",
+    "mechanism": "acquire fetches origin and fast-forward merges only if the tree is clean and HEAD is an ancestor, but proceeds regardless when the merge is skipped, so a stale checkout can still fly. Extract this into a helper: fetch origin (None if unreachable); if HEAD equals or is a fast-forward ancestor of origin's tip, move the branch ref and restore only paths not locally dirty, returning None; if not an ancestor, return a reason like 'behind_origin:not_fast_forward'; if the changed paths overlap the dirty set, return 'behind_origin:dirty <paths>'. In acquire, call this helper after the lane lock; on a non-None reason, release the lock and raise Owned with that reason.",
+    "behavior": "acquire refuses (raises Owned) with a descriptive reason when the checkout cannot be fast-forwarded cleanly to origin, instead of flying a stale checkout; when it can be fast-forwarded it does so before recording the lease.",
+    "constraints": "Do not change acquire's branch/mid-operation checks earlier in the function, or the lease record fields written on success.",
+    "acceptance": "python -m unittest tests/test_lanes.py"
+  },
+  "8d18e6d50394c7cfc5134d4d013d6d8db84588e3": {
+    "target": "nexus/tower.py, function _recover_work_checkout",
+    "mechanism": "This function calls ld.hold(...) directly and, if the result isn't terminal, falls into ambiguous handling. A held branch already on origin can't be re-held (a repeat push is non-fast-forward). Add a helper: check whether the flight's held branch (ld.HELD_PREFIX + flight id) already has a remote tip; if so, skip the push and only retry the best-effort comment via ld.notify, returning a HELD-shaped result built from the existing tip. If the branch doesn't exist remotely yet, fall through to the normal ld.hold call, returning its result only if terminal, else None. Call this helper in place of the direct ld.hold call; treat a None return the same as before (fall into the 'held work not yet announced' path).",
+    "behavior": "When the held branch already exists on origin (prior push succeeded but the comment failed), the next tick retries only the announcement and returns a HELD result instead of attempting another push.",
+    "constraints": "Do not change behavior when the held branch does not yet exist -- the original push-then-check-terminal flow must still run.",
+    "acceptance": "python -m unittest tests/test_tower_claim_recovery.py"
+  },
+  "288b5473e9873aa830ac65f6c197d1c80ea3cc10": {
+    "target": "nexus/tower.py, function tick (and a new helper near _reconcile_vanished)",
+    "mechanism": "tick already calls _reconcile_vanished and stores its count in report['vanished']. Add a sibling helper for orphan checkout leases: iterate known repos (lease's index plus, if NEXUS_WORK_REGISTRY is set, the work registry's paths, tolerating read errors as a ledger event); for each repo whose lease is stale, whose holder pid is dead, and which has no matching ledger flight, record a work.orphan_lease event (repo, changed-path count, whether HEAD moved, that ownership was released without touching files) and release the lease -- never run any git command that moves or discards working-tree changes. Call this helper from tick and add its count under a new 'orphan_leases' report key, alongside 'vanished'.",
+    "behavior": "A stale lease with a dead holder and no matching ledger flight gets its ownership released (lease.release) and a work.orphan_lease event recorded, without any file content changing; tick's report includes an orphan_leases count.",
+    "constraints": "Do not touch or restore any dirty files in the repo; do not release a lease that still has a matching ledger flight.",
+    "acceptance": "python -m unittest tests/test_tower_orphan_lease.py"
+  },
+  "e5098d69a77a2c6e98dedfaff77af73e4d75ae00": {
+    "target": "nexus/work.py, functions pending, _settle, run, and a new recover_terminal",
+    "mechanism": "Three gaps: (1) pending() unconditionally sets the flight to 'cancelled' expecting 'running'; a flight settling from another state shouldn't be force-downgraded through an invalid expected-state transition -- read the flight's current state first, only set_state to 'cancelled' if not already terminal, using that actual state as expect; raise WorkError on failure. (2) _settle ends after close_issue without moving the flight out of 'verified'; add 'verified'->'landing'->'landed' transitions via set_state with explicit expect values, raising WorkError if the first fails. (3) Add a new function, taking the ledger, that scans 'verified' work-kind flights whose owning pid is dead; if the latest flight.terminal event's state is 'CLOSED', transition to 'cancelled' (expect='verified', source 'work-recovery') and record a work.recovered event, returning repaired flight ids. Call it near the top of run(), gated on the Tower lane.",
+    "behavior": "A flight whose no-change result (CLOSED) was recorded before its lease/claim state fully settled, and whose owner process is gone, gets its stale Tower claim released on the next Tower run; a normally-settled flight now ends in 'landed' rather than stopping at 'verified'.",
+    "constraints": "Do not affect flights that are already in a terminal state, or 'verified' flights whose owner is still alive.",
+    "acceptance": "python -m unittest tests/test_tower_claim_recovery.py"
+  },
+  "fa53eec2e8d67949fa694ed82777877c8886f74a": {
+    "target": "nexus/podcast_daily.py, function editorial_pass",
+    "mechanism": "The function runs the codex subprocess with check=True and no fallback; a raise or empty output fails the whole run. Wrap the codex subprocess.run call in try/except (OSError, subprocess.SubprocessError, ValueError); after success, raise ValueError if raw.txt is empty, so empty Codex output also counts as failure. In the except branch, log the reason and continue on Claude: use the existing office_profiles helper (already used elsewhere for a per-agent environment) to build a Claude environment, invoke the claude CLI with the same prompt and web-search tool permission, and write its stdout into raw.txt. Leave the existing tail (reading/stripping/de-fencing raw.txt) unchanged.",
+    "behavior": "When the Codex editorial pass fails (subprocess error, OS error, or empty output), the same prompt is retried through the Claude CLI and raw.txt ends up populated from that fallback instead of the run failing outright.",
+    "constraints": "Do not change behavior when Codex succeeds with non-empty output -- no fallback should be invoked in that case.",
+    "acceptance": "python -m unittest tests/test_podcast_nightly.py"
+  },
+  "0e6645eb9347b578528b54e8c9a1fd5d027255d3": {
+    "target": "nexus/lease.py, module-level INDEX constant, functions _index_add and indexed (and heartbeat)",
+    "mechanism": "INDEX is computed once at import time from os.environ.get('NEXUS_LEASE_INDEX'), so a test setting that env var after import never affects it and can end up touching the real index file. Change INDEX to a fixed default path only (no env lookup at module load); add a small function reading os.environ.get('NEXUS_LEASE_INDEX') at call time, falling back to INDEX. Replace every use of module-level INDEX inside _index_add, indexed, and heartbeat with a call to this new function.",
+    "behavior": "Setting NEXUS_LEASE_INDEX in the environment during a test (e.g. via patch.dict or monkeypatch) changes which file _index_add/indexed/heartbeat read and write, even though the module was already imported.",
+    "constraints": "Do not change the default path used when NEXUS_LEASE_INDEX is unset, and do not change the file formats read/written.",
+    "acceptance": "python -m unittest tests/test_landing_modes.py tests/test_lanes.py"
+  },
+  "cabb0d1852d4d9c9f4e63e52940279082be592a9": {
+    "target": "nexus/work.py, function selection_priority",
+    "mechanism": "selection_priority currently marks a task 'stalled' purely from whether the latest work.disposition event's state is 'pending', with no regard for how long ago that happened. Look up the task's recorded retry deadline (there is a next_retry helper already used elsewhere in this module that computes when a pending item becomes eligible again) and only treat the task as stalled if that deadline is still in the future (compare against the current time). Once the deadline has passed, the task should rank the same as any non-stalled task, competing purely on age/bonus like normal.",
+    "behavior": "A task marked pending whose retry deadline has already passed is no longer treated as stalled in the priority tuple; one still before its deadline is.",
+    "constraints": "Do not change the 'resuming' or bonus/age components of the priority tuple, or how work.disposition events are recorded.",
+    "acceptance": "python -m unittest tests/test_work.py"
+  },
+  "af34f1540b975728783184d1f095b196f32a4e01": {
+    "target": "client/lesson_outlines.py, functions _entry and HEADER_KEYS (add a new helper)",
+    "mechanism": "_entry builds its dict purely from _parse(lesson_status._read(path)) plus a few derived fields, with no notion of a proposed idea awaiting decision. Add a helper that, given a lesson folder, looks for a sibling OPTIONS.md (named from the folder name's first 4 characters plus '-OPTIONS.md'), reads it if present, and extracts 'decision-proposed', 'decision', and 'value' via regex. Return the resolved decision (explicit 'decision' preferred over 'decision-proposed'), a 'proposed' boolean (true only when decision-proposed exists and decision does not), the value text, and the options filename. In _entry, merge this in: decision falls back to the header's own field, proposed also requires the header not already approved, value falls back similarly, include the options filename. Add 'source' and 'value' to HEADER_KEYS so the header parser captures them too.",
+    "behavior": "A lesson entry whose folder has an OPTIONS.md with a proposed (not yet decided) decision surfaces decision/value/proposed/options fields sourced from that file; approving the outline (bin/lesson-outline.py approve) clears the proposed flag by setting the header's own decision/approved fields.",
+    "constraints": "Do not change parsing for lessons with no OPTIONS.md sibling file; preserve existing header-derived fields (product, lesson, source path) as before.",
+    "acceptance": "python -m unittest tests/test_lesson_outlines.py"
+  },
+  "dfac998dedb8117d6c96235f4774af6d35ee310b": {
+    "target": "nexus/podcast_daily.py, function schedule_nightly_now",
+    "mechanism": "The dedupe key used to find/create today's podcast task is currently built purely from the literal string 'podcast-nightly-now:' plus the date, which does not tie it to a specific plan or scheduled time, so an immediate run and the nightly schedule for the same date can each get their own task instead of being recognized as the same unit of work. Change the key construction to incorporate the plan_id already in scope and the scheduled nightly time (NIGHTLY_TIME) alongside the date, so both the immediate-run path and the nightly schedule path compute the identical key for the same plan/date/time combination.",
+    "behavior": "Triggering an immediate podcast run on the same date the nightly schedule would also fire produces exactly one live task (found via live_task_with_key), not two.",
+    "constraints": "Do not change the task fields passed to add_task, or the plan.schedule_updated event logic above this line.",
+    "acceptance": "python -m unittest tests/test_podcast_nightly.py"
+  },
+  "74d0762ef2d27b2aa3149d80777a122cd49f56c5": {
+    "target": "client/lesson_status.py, function steer",
+    "mechanism": "The line steer() writes to the steering section currently joins the timestamp and text with an em dash character. Replace that separator with a plain ASCII hyphen surrounded by spaces, matching the rest of the codebase's no-em-dash convention.",
+    "behavior": "A steering line written by steer() uses a plain hyphen '-' between the ISO timestamp and the text, never a Unicode em dash.",
+    "constraints": "Do not change the timestamp format, the heading-reopen logic, or the fsync/flush behavior.",
+    "acceptance": "python -m unittest tests/test_lesson_status.py"
+  },
+  "ee11162afa9a2c693b510e277f79237a087f2291": {
+    "target": "nexus/work.py, function execute (add helpers near select_executor)",
+    "mechanism": "execute treats a result as pending only via state == 'pending', with no notion of what an 'absent' result might mean. Add two helpers: one validating a result's 'evidence' is a non-empty list of dicts, each with non-empty string 'url' and 'head'; another deciding whether a result is a resumable source-review stage -- true only when state is 'absent', retry_safe is True, idempotency_key matches the payload's, resume_kind is 'review' or 'repair', and evidence passes the first helper. After computing result = proof(...), if the second helper is true, rewrite result to state='pending' (keep other fields, default the reason to mention resume_kind) before the existing pending branch runs.",
+    "behavior": "A verified source-review result reported as 'absent' with retry_safe True, a matching idempotency key, resume_kind review/repair, and valid evidence is converted to 'pending' and kept alive instead of being treated as done/closed.",
+    "constraints": "Do not change handling of an 'absent' result that fails any of these checks, or of results already in 'pending' or 'delivered' state.",
+    "acceptance": "python -m unittest tests/test_work.py"
+  },
+  "8700851cab9ec592fbcca040816db95f930a558a": {
+    "target": "nexus/work.py, functions capture, claim, selection_queue",
+    "mechanism": "capture and claim look up a task by dedupe_key with a bare SELECT that can return an arbitrary/stale row when more than one task shares the key; add ORDER BY created_at DESC, rowid DESC LIMIT 1 to both. In claim, when the resolved task's state is 'abandoned', 'rejected_duplicate', or 'rejected_policy': for a runner claim, or any non-'abandoned' decided state, raise WorkError requiring explicit recovery; otherwise (explicit, non-runner claim on 'abandoned') insert a new task row (fresh id, state 'accepted', same dedupe_key), record a work.generation event linking the previous task id plus a copied work.issue event, and continue using the new task. Fix the flight 'attempt' count query to count across every task sharing the dedupe_key (subquery), not just the current row. In selection_queue, skip a candidate task that is not the newest for its dedupe_key.",
+    "behavior": "Claiming an abandoned issue's task with an explicit (non-runner) claim creates a new task generation linked to the old one via a work.generation event and proceeds; a runner claim or a claim on a rejected task still raises WorkError; selection_queue never surfaces a superseded task generation; attempt numbering counts across all generations sharing the dedupe key.",
+    "constraints": "Do not change behavior for tasks not in an abandoned/rejected state, or for dedupe keys with only one task.",
+    "acceptance": "python -m unittest tests/test_work.py"
+  },
+  "10047e5983402af00700c0d12fd50fbdb1dca8ed": {
+    "target": "client/bot_reports.py, module-level PROMPTS/BOTS, function run_report",
+    "mechanism": "run_report currently validates the bot name against the PROMPTS dict and sends that bot's full prompt text as the chat message to trigger a report. Replace the per-bot PROMPTS dict with a single shared trigger message constant (the bots now own their own system prompts elsewhere, triggered via their system identity), validate the bot name against the existing BOTS tuple instead of PROMPTS, and send the shared trigger constant as the chat message instead of a per-bot prompt string.",
+    "behavior": "run_report accepts any bot name in BOTS (raises ValueError only for names outside BOTS) and sends the same short trigger message regardless of which bot is being run.",
+    "constraints": "Do not change the polling loop that waits for a new assistant turn, or the fresh_evidence/before-turn bookkeeping.",
+    "acceptance": "python -m unittest tests/test_bot_reports.py"
+  },
+  "44aeb1f287b2570ea58b549004edb200566b64df": {
+    "target": "client/bot_reports.py, module-level PROMPTS dict",
+    "mechanism": "The five prompt strings in PROMPTS are currently generic 'run today's X report' instructions with no fixed heading or structural format, making the five bots' outputs read alike. Rewrite each bot's prompt to require it open with its own distinct fixed heading (matching the bot's report type, e.g. a trajectory/execution/discovery/decisions/patterns framing already implied by the bot's name), constrain it to a specific compact structural format per line/section appropriate to that bot's report kind, and give an explicit fallback sentence to output when nothing qualifies for that bot's report.",
+    "behavior": "Each bot's triggered report opens with that bot's distinct required heading and follows its distinct structural format; a bot with nothing to report emits its distinct fallback sentence.",
+    "constraints": "Do not change the BOTS tuple, request()/assistant_ids() helpers, or run_report's polling logic.",
+    "acceptance": "python -m unittest tests/test_bot_reports.py"
+  },
+  "54cb140d88deeec32a01ad166def41e83ec3927d": {
+    "target": "nexus/tower.py, function _schedule",
+    "mechanism": "_schedule checks due(ledger, plan, now) for every runnable plan and creates a task whenever the schedule says it's time, with no check for whether a previous execution is still outstanding. Before calling due(), query the ledger for any flight of this plan still in a non-terminal state (queued, running, verifying, verified, landing, resolving), or in 'produced' state while its task is still 'running'; if one exists, skip this plan for the tick without calling due() or creating a task.",
+    "behavior": "A plan with an unterminated flight from a previous scheduled execution does not accumulate a second queued flight when its interval elapses again; once that flight reaches a terminal outcome, the plan becomes eligible for scheduling again.",
+    "constraints": "Do not change the due()/key/trigger logic or task-creation fields for plans with no active flight.",
+    "acceptance": "python -m unittest tests/test_tower.py"
+  },
+  "572cdfa3d200c3f128792b26fc6f180aa4f3532d": {
+    "target": "nexus/tower.py, function _quarantine",
+    "mechanism": "_quarantine currently looks at the most recent `limit` flights for a plan and quarantines it if every one of them is terminal-failed, with no awareness of an earlier unquarantine event -- so a plan can be re-quarantined on the same run of failures that already triggered a release. Look up the plan's most recent plan.unquarantined event (if any) and use its timestamp as a floor; when filtering recent flights down to the terminal ones considered for quarantine, additionally require each flight's created_at to be after that floor timestamp (treat the floor as 0 if there was never a release).",
+    "behavior": "After a plan is released from quarantine, only flights created after that release count toward triggering quarantine again; flights from before the release are excluded even if they are still within the recent-flights window.",
+    "constraints": "Do not change the limit calculation from _budget, or the all-failed / mixed-outcome quarantine decision logic itself.",
+    "acceptance": "python -m unittest tests/test_tower.py"
+  },
+  "765aa1f130bd796ae251ab96de73d31ab20a3dc5": {
+    "target": "client/context.py, function _entry",
+    "mechanism": "_entry currently returns a dict with path, name, group, and bytes for each file candidate, with no notion of recency, so the desk's file listing has no way to prioritize recently-touched documents. Add the file's modification time (from the already-available stat result st, matching how bytes is derived from st.st_size) as an integer field in the returned dict, so downstream code building the desk's index/pane can sort or filter by recency.",
+    "behavior": "Each file entry in the index carries an integer mtime field reflecting the file's last-modified time; the desk pane can surface recently touched files first instead of relying on folder/alphabetical order.",
+    "constraints": "Do not change the existing path/name/group/bytes fields or how the entry is filtered/excluded upstream.",
+    "acceptance": "python -m unittest tests/test_context.py"
+  },
+  "60a3183eace1464b07cc14c47d0678400ac05e1c": {
+    "target": "client/office-sync.py, function receipts",
+    "mechanism": "receipts() currently sorts each repo's rows newest-first and simply truncates to the most recent 24 rows regardless of type, so frequent periodic 'survey' rows (with no issue attached) can crowd out real per-issue work rows once enough surveys accumulate in the window. Split each repo's sorted rows into two groups: rows with a non-empty 'issue' field ('work') and rows without ('surveys'). Keep the most recent 24 work rows and the most recent 2 survey rows, then recombine and re-sort the combined set newest-first before storing it back.",
+    "behavior": "A repo's receipt history retains up to 24 issue-attached rows even after many survey rows have occurred since, while still keeping the 2 most recent surveys; the combined list stays sorted newest-first.",
+    "constraints": "Do not change how counts (the 'counts' dict) are accumulated, or the by_repo grouping logic above this point.",
+    "acceptance": "python -m unittest tests/test_sync.py"
+  },
+  "bb385b4b256dffca843223724d184eec7f1b8ac1": {
+    "target": "client/serve.py, Handler method that applies a decision (around office_sync.apply_decision / self.world.record)",
+    "mechanism": "After apply_decision succeeds and the outcome is recorded via self.world.record, add a targeted refetch: if ok is True and the decision kind is one of the GitHub-affecting kinds (a GITHUB_KINDS collection covering close/merge-style kinds, excluding a runtime-only kind like 'permit'), call the world's refresh_desk(repo) for that repo so the snapshot reflects the change immediately. Wrap the call in try/except around any exception (log the repo and exception, never re-raise), since a refetch failure must not turn an already-successful decision into an error. This must run strictly after the decision is already recorded as successful, never gating or reversing that outcome.",
+    "behavior": "A successful GitHub-affecting decision (e.g. a close) causes that one desk's data to be refetched before the response is sent, so the next app refresh sees the updated state immediately rather than waiting for the next scheduled build; a failed decision or a non-GitHub (runtime) decision kind triggers no refetch; a refetch failure is logged but does not change the response for the already-successful decision.",
+    "constraints": "Do not change the response/permit-conflict handling that follows, or how self.world.record is called.",
+    "acceptance": "python -m unittest tests/test_serve.py"
+  },
+  "10364fb4cf0aaf5b4914337e4f524cbb9b8bbe86": {
+    "target": "client/office-sync.py, function _pr_rows",
+    "mechanism": "_pr_rows currently builds each PR's row dict from number, title, head, base, url, etc. but does not carry the PR body text, even though the raw GraphQL node includes it (referenced elsewhere in this function as `body`). Add a 'body' field to the row dict, truncated to a bounded length (a few thousand characters is enough for a UI preview) so the desk pane can render the PR's first paragraph and a 'closes' list without a second GitHub call.",
+    "behavior": "Each PR row returned by _pr_rows includes a 'body' string field (truncated, not the full unbounded text) sourced from the PR node's body.",
+    "constraints": "Do not change the other row fields (number, title, head, base, url) or how nodes are iterated.",
+    "acceptance": "python -m unittest tests/test_sync.py"
+  }
+}
