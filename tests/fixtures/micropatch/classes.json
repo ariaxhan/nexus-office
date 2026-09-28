@@ -1,0 +1,347 @@
+{
+  "0975062cecef15fd8540a68c57be8c4543682729": {
+    "class": "lifecycle",
+    "context": "file",
+    "why": "flight resolution depends on process/lease/executor death across module"
+  },
+  "4c3a146ed8c2c7f028cc041e724c855076cdb996": {
+    "class": "lifecycle",
+    "context": "file",
+    "why": "checkout retry-collision reasoning tied to flight death state"
+  },
+  "cc77a47707dfceeae7810dfe17e3e7ab3c52f0d9": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "filter recalled lessons sharing only generic words"
+  },
+  "158ec3112f09244b519d8fdcc4dd1be404293022": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "record redesign gated on PR close outcome, retry semantics"
+  },
+  "319f91c9087c98b397fb4c7b7539ec2e9593872e": {
+    "class": "lifecycle",
+    "context": "file",
+    "why": "exhausted review repair budget interacts with flight state machine"
+  },
+  "5071f8aa0763f8edf532472cf72659d8cb9c4b77": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "done receipt ran in wrong shell env, explicit fix"
+  },
+  "f54ff037dd2e9b2216f4bbe68f699f6a4ae806c9": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "missing npm ci step before check, explicit fix"
+  },
+  "bca2d748387e1c67083efd62ef8de41163a63139": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "bound repair attempts to stop infinite no-change loop"
+  },
+  "f107729becef9a69fd29be218c365bdb8796febc": {
+    "class": "wiring",
+    "context": "region",
+    "why": "route check output to flight result instead of public comment"
+  },
+  "c91a5d46c8dec3af7020f8239ad9ce77ca484041": {
+    "class": "lifecycle",
+    "context": "file",
+    "why": "whole-repo flight staleness vs origin, lease/checkout reasoning"
+  },
+  "1f5c9714f164a9ff2c45173c7492fa1a84fe325a": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "compare reviewed vs landed change without diff context"
+  },
+  "a35678ea5f72e6902192d1fb9cc8abda4e67fc88": {
+    "class": "wiring",
+    "context": "region",
+    "why": "board trusts Tower decision over stale label"
+  },
+  "8d18e6d50394c7cfc5134d4d013d6d8db84588e3": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "retry only announcement step for dead flight with held branch"
+  },
+  "70832746b35435e26a8400313db7ce8c91af99ee": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "attention flag only for real failure/stall condition"
+  },
+  "1575ae3b14b3eb2338e388542b28f8d3d7622a70": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "stability notes must not mask unresolved decisions"
+  },
+  "288b5473e9873aa830ac65f6c197d1c80ea3cc10": {
+    "class": "lifecycle",
+    "context": "file",
+    "why": "reconcile orphan checkout leases without touching dirty files"
+  },
+  "1f00e69905a5e5df27bd0e6aebe27bedb0707510": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "route only unanswered Buzz requests to Needs you"
+  },
+  "a761e8e31676efeb068dd231aae8ec192012365c": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "held-state summary accuracy fix"
+  },
+  "e5098d69a77a2c6e98dedfaff77af73e4d75ae00": {
+    "class": "lifecycle",
+    "context": "file",
+    "why": "release stalled Tower claims after no-change flights"
+  },
+  "2da05fd2b7a86d3176b2835743b375b5d4ff1984": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "fail over on reported provider turn errors"
+  },
+  "823b9e023dd0f003883c6dde1c7206e7898d6f95": {
+    "class": "wiring",
+    "context": "region",
+    "why": "enable cross-provider fallback for routed work"
+  },
+  "fa53eec2e8d67949fa694ed82777877c8886f74a": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "continue podcast writing on Claude when Codex fails"
+  },
+  "80156d51f7b5f995c48bb7fc6789717ef0ec2b5f": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "accept legacy sends, guard malformed links"
+  },
+  "7c3a53060ec294281df77172065571e4e7a0a546": {
+    "class": "mechanical",
+    "context": "region",
+    "why": "add local timestamp display to messages/events/runs"
+  },
+  "0e6645eb9347b578528b54e8c9a1fd5d027255d3": {
+    "class": "test_change",
+    "context": "region",
+    "why": "read env var at call time so tests don't write real index"
+  },
+  "590bbeaf27c9af9a05b89fd637b98b39749e1a42": {
+    "class": "wiring",
+    "context": "region",
+    "why": "route Antigravity-named issues through different router class"
+  },
+  "05766a070aa8bdeae74b7d6cd3ba1839f3f133fb": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "pushed held branch should release stale lease not re-hold"
+  },
+  "cabb0d1852d4d9c9f4e63e52940279082be592a9": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "pending item freshness after retry deadline"
+  },
+  "e70aea214995fd04f3691e3efa970ac97441810c": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "conveyor triage backpressure no longer backs off item"
+  },
+  "3bd90e85437c07c2b048d7272bac54848943c1f4": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "queue ordering: ready issues before in-PR resumption"
+  },
+  "af34f1540b975728783184d1f095b196f32a4e01": {
+    "class": "wiring",
+    "context": "file",
+    "why": "approve action queues factory via decision/value/chip flow"
+  },
+  "da092781c5fdb17ae6e0e8239355b4c95735ace9": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "budget narration for natural-speed duration"
+  },
+  "8749b1bb203fec9346c97e0032a06a8207c7531c": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "retry scheduling keeps original Pacific date"
+  },
+  "dfac998dedb8117d6c96235f4774af6d35ee310b": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "dedupe immediate runs against nightly schedule"
+  },
+  "320bf49889619f35875c8d573aee65f57ed17fc5": {
+    "class": "lifecycle",
+    "context": "file",
+    "why": "resume reviewed drafts and repair measured length, multi-step state"
+  },
+  "d48654301a9aa5ca6d48bfe34f7772dbe0f3ee28": {
+    "class": "schema",
+    "context": "file",
+    "why": "read production publication evidence fields for every lesson"
+  },
+  "74d0762ef2d27b2aa3149d80777a122cd49f56c5": {
+    "class": "mechanical",
+    "context": "region",
+    "why": "strip em dashes from steering lines"
+  },
+  "6f3ee3138e9905527e778eb9c92890b6bc22bc02": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "retry recovered sources during ongoing collection"
+  },
+  "a1977f138303a4c2c523ae85be6016d9f5612f81": {
+    "class": "wiring",
+    "context": "region",
+    "why": "use shared file/photo receipts in bot conversations"
+  },
+  "ee11162afa9a2c693b510e277f79237a087f2291": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "keep verified review stages pending"
+  },
+  "6a24e74be3cb238a44717a83fb6175bbde886f99": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "preserve execution budget for one-item runs"
+  },
+  "62c799f65f59c61f180580dbc6cd1c08eb917e2d": {
+    "class": "known_bugfix",
+    "context": "file",
+    "why": "correlate successful reply to exact request, explicit fix"
+  },
+  "8700851cab9ec592fbcca040816db95f930a558a": {
+    "class": "lifecycle",
+    "context": "file",
+    "why": "recover abandoned direct claims with new task generation"
+  },
+  "197ec1981d285d5fb869a9f4176b8a91f4768d00": {
+    "class": "wiring",
+    "context": "region",
+    "why": "show registered work coverage separately from desks"
+  },
+  "3f3027f33e5d4236b449fb6a64a0fd871550d8f8": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "remove cwd fallback for unmapped repos, explicit fix"
+  },
+  "10047e5983402af00700c0d12fd50fbdb1dca8ed": {
+    "class": "wiring",
+    "context": "region",
+    "why": "trigger bot reports through system identities"
+  },
+  "78c6757def8aaddd3c7b296e2db4f511be84a6de": {
+    "class": "mechanical",
+    "context": "region",
+    "why": "remove retired pipeline entry from evidence"
+  },
+  "6b0b248356d2c4a53dc82c544b235aee5c3d6a82": {
+    "class": "local_logic",
+    "context": "file",
+    "why": "simplify and differentiate report generation logic"
+  },
+  "44aeb1f287b2570ea58b549004edb200566b64df": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "differentiate scheduled bot reports"
+  },
+  "2b27039be2a997e9d3747c6ea8c898b0784f5265": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "fail probes on incomplete receipts, explicit fix"
+  },
+  "f544a3ddbac4c1df2090108bcd3938ad8f53e63a": {
+    "class": "local_logic",
+    "context": "file",
+    "why": "tighten probe identity and timeout evidence checks"
+  },
+  "54cb140d88deeec32a01ad166def41e83ec3927d": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "coalesce scheduled flights per plan"
+  },
+  "16de66472ec7bc8cdd2b28b10577f00c29510203": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "concurrency cap scoped per plan not global"
+  },
+  "0054ad5bdac61007bfe15a617dc2a88745973d89": {
+    "class": "schema",
+    "context": "file",
+    "why": "read previews from exact PR head state"
+  },
+  "572cdfa3d200c3f128792b26fc6f180aa4f3532d": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "quarantine counts only flights since last release"
+  },
+  "1eebe07cd5fb766f0e12f742f6cf62b37044dca3": {
+    "class": "wiring",
+    "context": "region",
+    "why": "picked option starting with Close closes issue"
+  },
+  "152f3aed1aa4782323cbc5d5c351f00c26ed77a4": {
+    "class": "mechanical",
+    "context": "region",
+    "why": "remove truncated desk index"
+  },
+  "765aa1f130bd796ae251ab96de73d31ab20a3dc5": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "recent document sorted to top of desk"
+  },
+  "c2ca350e05e1ddef493263e890769bc6557895c2": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "repo-inside-repo mistakenly treated as desk context"
+  },
+  "729e9c38b5c2d61465c03d315853e217d9f2ce99": {
+    "class": "wiring",
+    "context": "region",
+    "why": "start hcom agents from every desk"
+  },
+  "60a3183eace1464b07cc14c47d0678400ac05e1c": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "desk work survives a day of surveys"
+  },
+  "42825a18ecbc825ce98235b2256b780949556fcb": {
+    "class": "known_bugfix",
+    "context": "file",
+    "why": "checkout found by origin not guessed folder name"
+  },
+  "3deb415262420984547dffc9db0c3be22eafbc11": {
+    "class": "local_logic",
+    "context": "file",
+    "why": "evidence budget: raised hands first, exact counts, cut from back"
+  },
+  "bb385b4b256dffca843223724d184eec7f1b8ac1": {
+    "class": "wiring",
+    "context": "region",
+    "why": "detail pane refetch wiring on click/landed decision"
+  },
+  "18acfea8500f201ef69f9eeaf7f272f0d137352a": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "flow left registry treated as look not holding wall"
+  },
+  "f7c6c5f427bf9dbc2c52bd9f1ddd002cdb14746b": {
+    "class": "lifecycle",
+    "context": "region",
+    "why": "never-started lane is not a decision about the issue"
+  },
+  "10364fb4cf0aaf5b4914337e4f524cbb9b8bbe86": {
+    "class": "wiring",
+    "context": "region",
+    "why": "several small UX wiring tweaks bundled together"
+  },
+  "24e71b1c1ac3f57aa1b4270188de42362a1984d3": {
+    "class": "local_logic",
+    "context": "region",
+    "why": "photo downscaled under door limit, photo-only is a message"
+  },
+  "c4072ea0a83cf84490994489ffc5eba1a0be4636": {
+    "class": "known_bugfix",
+    "context": "region",
+    "why": "tailnet auth: forged loopback login ignored, explicit fix"
+  }
+}

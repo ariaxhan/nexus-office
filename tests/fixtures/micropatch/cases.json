@@ -1,0 +1,1112 @@
+[
+ {
+  "commit": "0975062cecef15fd8540a68c57be8c4543682729",
+  "path": "nexus/tower.py",
+  "tests": [
+   "tests/test_tower_claim_recovery.py"
+  ],
+  "overlay": [
+   "tests/test_tower_claim_recovery.py"
+  ],
+  "start": 259,
+  "end": 351,
+  "changed": 10,
+  "objective": "A work flight parked on an unconfirmed operator kill resolves once its owner is dead\n\n#235 flt_e2682b5d19b1: nexus kill at 03:31 could not confirm teardown, so the\nflight went to resolving/teardown_unconfirmed. _resolve_ambiguous only knew\ncheckout_ownership_ambiguous, so it sat 7 h and deploy-release refused every\nrun. Both steps now resolve once the owner, the recorded process and every\nNEXUS_FLIGHT executor are provably gone.",
+  "test_diff": "diff --git a/tests/test_tower_claim_recovery.py b/tests/test_tower_claim_recovery.py\nindex a2b42a8..2e59ab2 100644\n--- a/tests/test_tower_claim_recovery.py\n+++ b/tests/test_tower_claim_recovery.py\n@@ -139,5 +139,23 @@ class TowerClaimRecovery(unittest.TestCase):\n         self.assertEqual(self.led.flight(fid)['state'], 'failed')\n         self.assertTrue(self.led.conn.execute(\"SELECT 1 FROM leases WHERE holder_flight=?\", (fid,)).fetchone() is None)\n \n+    def test_unconfirmed_operator_kill_exits_once_the_owner_is_dead(self):\n+        \"\"\"#235 flt_e2682b5d19b1: `nexus kill` could not see the tree go, and the flight sat 7 h in resolving.\"\"\"\n+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)\n+        self.led.set_state(fid, 'resolving', expect='running', resolution_step='teardown_unconfirmed')\n+        with patch.dict(os.environ, {'NEXUS_WORK_REGISTRY': 'fixture'}), \\\n+             patch('nexus.flights.alive', return_value=False), \\\n+             patch('nexus.work.registry', return_value=[self.entry]), \\\n+             patch('nexus.lease.read', return_value=None), \\\n+             patch('nexus.lanes.recover', return_value=[]), patch('nexus.lanes.read', return_value=None):\n+            with patch('nexus.flights.flight_env_pids', return_value=[4242]):  # its executor outlived the kill\n+                self.assertEqual(tower._resolve_ambiguous(self.led, time.time()), 0)\n+            with patch('nexus.flights.flight_env_pids', return_value=None):  # cannot tell: stay parked\n+                self.assertEqual(tower._resolve_ambiguous(self.led, time.time()), 0)\n+            self.assertEqual(self.led.flight(fid)['state'], 'resolving')\n+            with patch('nexus.flights.flight_env_pids', return_value=[]):\n+                self.assertEqual(tower._resolve_ambiguous(self.led, time.time()), 1)\n+        self.assertEqual(self.led.flight(fid)['state'], 'failed')\n+\n if __name__ == '__main__':\n     unittest.main()\n"
+ },
+ {
+  "commit": "4c3a146ed8c2c7f028cc041e724c855076cdb996",
+  "path": "nexus/tower.py",
+  "tests": [
+   "tests/test_tower_claim_recovery.py"
+  ],
+  "overlay": [
+   "tests/test_tower_claim_recovery.py"
+  ],
+  "start": 346,
+  "end": 435,
+  "changed": 7,
+  "objective": "A dead flight's pushed bytes leave the checkout, so its retry does not hold on collision",
+  "test_diff": "diff --git a/tests/test_tower_claim_recovery.py b/tests/test_tower_claim_recovery.py\nindex 8b541c6..a2b42a8 100644\n--- a/tests/test_tower_claim_recovery.py\n+++ b/tests/test_tower_claim_recovery.py\n@@ -89,7 +89,7 @@ class TowerClaimRecovery(unittest.TestCase):\n             git.return_value.stdout = 'original\\n'\n             self.assertEqual(tower._reconcile_vanished(self.led, time.time(), self.entry['path']), 1)\n         repo, rec, paths, collisions, reason, comment = hold.call_args.args\n-        self.assertEqual((paths, collisions), (['mine.py'], ['mine.py']))  # captured, nothing restored\n+        self.assertEqual((paths, collisions), (['mine.py'], []))  # captured, then restored to baseline\n         self.assertIsNotNone(comment)\n         task = self.led.task(self.led.flight(fid)['task_id'])\n         with patch('nexus.tower.subprocess.run') as run:\n"
+ },
+ {
+  "commit": "cc77a47707dfceeae7810dfe17e3e7ab3c52f0d9",
+  "path": "nexus/evidence.py",
+  "tests": [
+   "tests/test_evidence.py"
+  ],
+  "overlay": [
+   "tests/test_evidence.py"
+  ],
+  "start": 13,
+  "end": 95,
+  "changed": 13,
+  "objective": "Flight evidence leaves out recalled lessons that share only generic words",
+  "test_diff": "diff --git a/tests/test_evidence.py b/tests/test_evidence.py\nindex 13090e3..57d73a4 100644\n--- a/tests/test_evidence.py\n+++ b/tests/test_evidence.py\n@@ -3,6 +3,7 @@\n import os\n import subprocess\n import unittest\n+import unittest.mock\n \n from nexus import evidence, work\n from tests import test_work\n@@ -49,6 +50,12 @@ class EvidencePacket(unittest.TestCase):\n             raise OSError(\"no agentdb\")\n         self.assertEqual(\"recall unavailable: OSError\", evidence.scars(\"dead owner\", None, run=down)[1])\n \n+    def test_a_hit_that_shares_only_generic_words_is_left_out(self):\n+        run = lambda argv, **k: subprocess.CompletedProcess(argv, 0, \"weak\\t2\\nstrong\\t4\\n\", \"\")  # noqa: E731\n+        with unittest.mock.patch.object(evidence, \"_insight\", side_effect=lambda dbs, lid: (\"gotcha\", lid)):\n+            found, _ = evidence.scars(\"office selection copy paste\", None, run=run)\n+        self.assertEqual([\"agentdb:strong\"], [s[\"id\"] for s in found])\n+\n     def test_nothing_known_adds_nothing(self):\n         recorded, text = evidence.packet(self.led, self.task, {\"title\": \"\"}, None, run=self.recall([]))\n         self.assertEqual(\"\", text)\n"
+ },
+ {
+  "commit": "158ec3112f09244b519d8fdcc4dd1be404293022",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_tower_contract.py"
+  ],
+  "overlay": [
+   "tests/test_tower_contract.py"
+  ],
+  "start": 1019,
+  "end": 1101,
+  "changed": 3,
+  "objective": "Record a redesign only once its PR is closed; a failed close retries",
+  "test_diff": "diff --git a/tests/test_tower_contract.py b/tests/test_tower_contract.py\nindex d2e639d..8c75763 100644\n--- a/tests/test_tower_contract.py\n+++ b/tests/test_tower_contract.py\n@@ -183,6 +183,18 @@ class TowerYield(unittest.TestCase):\n             work.tower_review(self.led, self.entry, self.task, \"https://pr/10\")\n         self.assertIn(\"hold\", held[0])\n \n+    def test_a_failed_close_is_retried_never_recorded_as_a_redesign(self):\n+        fid = work.claim(self.led, self.entry[\"repo\"], 60, os.getpid(), runner=True)\n+        for n in range(work.MAX_REVIEW_REPAIRS):\n+            self.led.event(\"work.repair\", fid, {\"pr\": \"https://pr/9\"}, \"work\")\n+        failing = lambda *a: subprocess.CompletedProcess(a, 1, \"\", \"HTTP 502\")  # noqa: E731\n+        self.assertEqual((True, \"repairs exhausted; closing the PR for a redesign failed, retrying\"),\n+                         work.after_fail(self.led, failing, self.task, \"https://pr/9\"))\n+        self.assertEqual([], self.led.events(kind=\"work.redesign\"))\n+        closing = lambda *a: subprocess.CompletedProcess(a, 0, \"\", \"\")  # noqa: E731\n+        self.assertTrue(work.after_fail(self.led, closing, self.task, \"https://pr/9\")[0])\n+        self.assertEqual(1, len(self.led.events(kind=\"work.redesign\")))\n+\n     def test_a_repair_that_changes_nothing_still_spends_its_attempt(self):\n         fid = work.claim(self.led, self.entry[\"repo\"], 60, os.getpid(), runner=True)\n         self.led.event(\"work.review\", fid, {\"pr\": \"https://pr/9\", \"head\": \"h1\", \"verdict\": \"FAIL\", \"reason\": \"x\"}, \"work\")\n"
+ },
+ {
+  "commit": "319f91c9087c98b397fb4c7b7539ec2e9593872e",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_tower_contract.py"
+  ],
+  "overlay": [
+   "tests/test_tower_contract.py"
+  ],
+  "start": 832,
+  "end": 1129,
+  "changed": 35,
+  "objective": "Exhausted review repairs get one redesign from every finding before a person",
+  "test_diff": "diff --git a/tests/test_tower_contract.py b/tests/test_tower_contract.py\nindex fb3abe3..d2e639d 100644\n--- a/tests/test_tower_contract.py\n+++ b/tests/test_tower_contract.py\n@@ -169,8 +169,19 @@ class TowerYield(unittest.TestCase):\n                 work.repair_brief(self.led, \"flt_r\", dict(repair, pr=\"https://pr/9\"))  # the rebuild flies\n             self.pr[\"headRefOid\"] = \"last\"\n             work.tower_review(self.led, self.entry, self.task, \"https://pr/9\")\n+            self.assertEqual([], held)  # repairs spent: one redesign before a person\n+            self.assertIsNone(work.review_repair(self.led, self.entry[\"repo\"], \"https://pr/9\"))\n+            brief = work.redesign_brief(self.led, \"flt_d\", self.task)\n+            self.assertEqual(work.MAX_REVIEW_REPAIRS + 1, brief.count(\"- hides a failure\"))\n+            self.assertEqual(\"\", work.redesign_brief(self.led, \"flt_e\", self.task))  # once\n+            for head in heads:  # the redesign's own PR spends its repairs too\n+                self.pr[\"headRefOid\"] = \"r\" + head\n+                work.tower_review(self.led, self.entry, self.task, \"https://pr/10\")\n+                work.repair_brief(self.led, \"flt_r\", dict(work.review_repair(\n+                    self.led, self.entry[\"repo\"], \"https://pr/10\"), pr=\"https://pr/10\"))\n+            self.pr[\"headRefOid\"] = \"rlast\"\n+            work.tower_review(self.led, self.entry, self.task, \"https://pr/10\")\n         self.assertIn(\"hold\", held[0])\n-        self.assertIsNone(work.review_repair(self.led, self.entry[\"repo\"], \"https://pr/9\"))\n \n     def test_a_repair_that_changes_nothing_still_spends_its_attempt(self):\n         fid = work.claim(self.led, self.entry[\"repo\"], 60, os.getpid(), runner=True)\n"
+ },
+ {
+  "commit": "5071f8aa0763f8edf532472cf72659d8cb9c4b77",
+  "path": "nexus/contract.py",
+  "tests": [
+   "tests/test_flights.py",
+   "tests/test_terminal_evidence.py"
+  ],
+  "overlay": [
+   ".complexity-baseline.tsv",
+   "tests/test_flights.py",
+   "tests/test_terminal_evidence.py"
+  ],
+  "start": 94,
+  "end": 144,
+  "changed": 6,
+  "objective": "The done receipt runs the contract check in Tower's environment, not a login shell",
+  "test_diff": "diff --git a/tests/test_flights.py b/tests/test_flights.py\nindex 8be0ec6..e799a05 100644\n--- a/tests/test_flights.py\n+++ b/tests/test_flights.py\n@@ -76,7 +76,7 @@ class RunnerCancellationTest(unittest.TestCase):\n         with tempfile.TemporaryDirectory() as tmp:\n             child_file = os.path.join(tmp, \"child\")\n             command = (\n-                \"python3 -c \\\"import subprocess; \"\n+                f\"{sys.executable} -c \\\"import subprocess; \"  # process_group needs 3.11; a login PATH's python3 is 3.9\n                 \"p=subprocess.Popen(['sleep','900'], process_group=0); \"\n                 f\"open('{child_file}','w').write(str(p.pid))\\\"\"\n             )\ndiff --git a/tests/test_terminal_evidence.py b/tests/test_terminal_evidence.py\nindex 7714509..c0d2edc 100644\n--- a/tests/test_terminal_evidence.py\n+++ b/tests/test_terminal_evidence.py\n@@ -67,6 +67,16 @@ class StaleCheckoutReceipt(unittest.TestCase):\n         self.assertTrue(done, why)\n         self.assertLess(seen.index(\"npm ci --prefer-offline --no-audit --no-fund\"), seen.index(\"test -f package.json\"))\n \n+    def test_the_check_sees_towers_path_not_a_login_path(self):\n+        bin_dir = Path(self.checkout).parent / \"bin\"\n+        bin_dir.mkdir()\n+        (bin_dir / \"python3\").write_text(\"#!/bin/sh\\necho tower\\n\")\n+        (bin_dir / \"python3\").chmod(0o755)\n+        with patch.dict(os.environ, PATH=f\"{bin_dir}:{os.environ['PATH']}\"):\n+            done, why = contract.done_receipt({\"state\": \"LANDED\", \"sha\": self.stale},\n+                                              {\"check\": 'test \"$(python3 -c 1 </dev/null)\" = tower'}, str(self.checkout))\n+        self.assertTrue(done, why)\n+\n     def test_unreachable_sha_fails_closed(self):\n         done, why = contract.done_receipt({\"state\": \"LANDED\", \"sha\": \"0\" * 40}, {\"check\": \"true\"}, str(self.checkout))\n         self.assertFalse(done, why)\n"
+ },
+ {
+  "commit": "f54ff037dd2e9b2216f4bbe68f699f6a4ae806c9",
+  "path": "nexus/contract.py",
+  "tests": [
+   "tests/test_terminal_evidence.py"
+  ],
+  "overlay": [
+   "tests/test_terminal_evidence.py"
+  ],
+  "start": 92,
+  "end": 139,
+  "changed": 5,
+  "objective": "The done receipt installs locked npm dependencies before running the contract check",
+  "test_diff": "diff --git a/tests/test_terminal_evidence.py b/tests/test_terminal_evidence.py\nindex cb1cb57..7714509 100644\n--- a/tests/test_terminal_evidence.py\n+++ b/tests/test_terminal_evidence.py\n@@ -50,6 +50,23 @@ class StaleCheckoutReceipt(unittest.TestCase):\n         self.assertIn(self.stale, why)\n         self.assertEqual(1, len(git(self.checkout, \"worktree\", \"list\").splitlines()))  # throwaway removed\n \n+    def test_an_npm_check_gets_its_dependencies_installed_first(self):\n+        (self.checkout / \"package.json\").write_text('{\"name\": \"t\", \"version\": \"1.0.0\"}')\n+        (self.checkout / \"package-lock.json\").write_text(\n+            '{\"name\": \"t\", \"version\": \"1.0.0\", \"lockfileVersion\": 3, \"requires\": true, '\n+            '\"packages\": {\"\": {\"name\": \"t\", \"version\": \"1.0.0\"}}}')\n+        git(self.checkout, \"add\", \"package.json\", \"package-lock.json\")\n+        git(self.checkout, \"commit\", \"--quiet\", \"-m\", \"npm\")\n+        git(self.checkout, \"push\", \"--quiet\", \"origin\", \"HEAD:refs/heads/npm\")\n+        sha, seen = git(self.checkout, \"rev-parse\", \"HEAD\"), []\n+        def run(argv, **kw):\n+            seen.append(argv[-1])\n+            return subprocess.run(argv, **kw)\n+        done, why = contract.done_receipt({\"state\": \"LANDED\", \"sha\": sha}, {\"check\": \"test -f package.json\"},\n+                                          str(self.checkout), run=run)\n+        self.assertTrue(done, why)\n+        self.assertLess(seen.index(\"npm ci --prefer-offline --no-audit --no-fund\"), seen.index(\"test -f package.json\"))\n+\n     def test_unreachable_sha_fails_closed(self):\n         done, why = contract.done_receipt({\"state\": \"LANDED\", \"sha\": \"0\" * 40}, {\"check\": \"true\"}, str(self.checkout))\n         self.assertFalse(done, why)\n"
+ },
+ {
+  "commit": "bca2d748387e1c67083efd62ef8de41163a63139",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_tower_contract.py"
+  ],
+  "overlay": [
+   "tests/test_tower_contract.py"
+  ],
+  "start": 977,
+  "end": 1127,
+  "changed": 13,
+  "objective": "Bound review repairs by rebuild attempts, so a no-change repair cannot loop",
+  "test_diff": "diff --git a/tests/test_tower_contract.py b/tests/test_tower_contract.py\nindex bb00572..6c48ad2 100644\n--- a/tests/test_tower_contract.py\n+++ b/tests/test_tower_contract.py\n@@ -165,11 +165,20 @@ class TowerYield(unittest.TestCase):\n                 self.assertEqual([], held, head)  # a finding to fix, not a person to wake\n                 repair = work.review_repair(self.led, self.entry[\"repo\"], \"https://pr/9\")\n                 self.assertEqual({\"branch\": \"aria/issue-60\", \"head\": head, \"reason\": \"hides a failure\"}, repair)\n+                work.repair_brief(self.led, \"flt_r\", dict(repair, pr=\"https://pr/9\"))  # the rebuild flies\n             self.pr[\"headRefOid\"] = \"h3\"\n             work.tower_review(self.led, self.entry, self.task, \"https://pr/9\")\n         self.assertIn(\"hold\", held[0])\n         self.assertIsNone(work.review_repair(self.led, self.entry[\"repo\"], \"https://pr/9\"))\n \n+    def test_a_repair_that_changes_nothing_still_spends_its_attempt(self):\n+        fid = work.claim(self.led, self.entry[\"repo\"], 60, os.getpid(), runner=True)\n+        self.led.event(\"work.review\", fid, {\"pr\": \"https://pr/9\", \"head\": \"h1\", \"verdict\": \"FAIL\", \"reason\": \"x\"}, \"work\")\n+        for _ in range(work.MAX_REVIEW_REPAIRS):  # each rebuild ends no_change: the head never moves\n+            repair = work.review_repair(self.led, self.entry[\"repo\"], \"https://pr/9\")\n+            work.repair_brief(self.led, fid, dict(repair, pr=\"https://pr/9\"))\n+        self.assertIsNone(work.review_repair(self.led, self.entry[\"repo\"], \"https://pr/9\"))\n+\n     def test_repair_flight_rebuilds_with_the_review_finding(self):\n         self.open_pr = \"https://pr/9\\n\"\n         fid = work.claim(self.led, self.entry[\"repo\"], 60, os.getpid(), runner=True)\n"
+ },
+ {
+  "commit": "f107729becef9a69fd29be218c365bdb8796febc",
+  "path": "nexus/landing.py",
+  "tests": [
+   "tests/test_lanes.py"
+  ],
+  "overlay": [
+   "tests/test_lanes.py"
+  ],
+  "start": 155,
+  "end": 237,
+  "changed": 3,
+  "objective": "Keep check output out of public issue comments; it stays in the flight result",
+  "test_diff": "diff --git a/tests/test_lanes.py b/tests/test_lanes.py\nindex 07f2dcd..7fe167a 100644\n--- a/tests/test_lanes.py\n+++ b/tests/test_lanes.py\n@@ -121,6 +121,7 @@ class Lanes(unittest.TestCase):\n         self.assertEqual((\"HELD\", \"check_failed\"), (result[\"state\"], result[\"reason\"]))\n         self.assertIn(\"`npm test` exited 2\", said[0])\n         self.assertIn(\"FAIL test_gate\", result[\"detail\"])\n+        self.assertNotIn(\"FAIL test_gate\", said[0])\n \n     def test_both_provider_failures_requeue_retained_edits(self):\n         def run(argv, cwd=None, **kw):\n"
+ },
+ {
+  "commit": "c91a5d46c8dec3af7020f8239ad9ce77ca484041",
+  "path": "nexus/lease.py",
+  "tests": [
+   "tests/test_lanes.py"
+  ],
+  "overlay": [
+   "tests/test_lanes.py"
+  ],
+  "start": 136,
+  "end": 240,
+  "changed": 28,
+  "objective": "A whole-repo flight catches up to origin or refuses, never flies a stale checkout",
+  "test_diff": "diff --git a/tests/test_lanes.py b/tests/test_lanes.py\nindex 07d31e6..b6aefca 100644\n--- a/tests/test_lanes.py\n+++ b/tests/test_lanes.py\n@@ -316,6 +316,37 @@ class Lanes(unittest.TestCase):\n         self.assertIsNone(lanes.read_plan(os.path.join(self.dir, \"missing.json\")))\n \n \n+class StaleCheckout(Lanes):\n+    \"\"\"#210: a whole-repo flight never builds on a checkout origin has moved past.\"\"\"\n+\n+    def advance_origin(self, rel, text):\n+        other = os.path.join(self.dir, \"other\")\n+        git(self.dir, \"clone\", \"-q\", self.origin, other)\n+        for k, v in ((\"user.name\", \"t\"), (\"user.email\", \"t@t\")):\n+            git(other, \"config\", k, v)\n+        with open(os.path.join(other, rel), \"w\") as f:\n+            f.write(text)\n+        git(other, \"commit\", \"-qam\", \"upstream\")\n+        git(other, \"push\", \"-q\", \"origin\", \"main\")\n+        return git(other, \"rev-parse\", \"HEAD\")\n+\n+    def test_behind_checkout_catches_up_and_keeps_unrelated_dirty_bytes(self):\n+        tip = self.advance_origin(\"a.txt\", \"upstream\\n\")\n+        self.write(\"human.txt\", \"a person's edit\\n\")\n+        record = lease.acquire(self.repo, \"main\", \"flt_new\", os.getpid(), 600)\n+        self.assertEqual(tip, record[\"head\"])\n+        self.assertEqual(\"upstream\\n\", self.read(\"a.txt\"))\n+        self.assertEqual(\"a person's edit\\n\", self.read(\"human.txt\"))\n+\n+    def test_dirty_bytes_on_a_file_origin_changed_refuse_the_flight_and_free_the_lock(self):\n+        self.advance_origin(\"a.txt\", \"upstream\\n\")\n+        self.write(\"a.txt\", \"a person's edit\\n\")\n+        with self.assertRaisesRegex(lease.Owned, \"behind_origin:dirty a.txt\"):\n+            lease.acquire(self.repo, \"main\", \"flt_new\", os.getpid(), 600)\n+        self.assertEqual(\"a person's edit\\n\", self.read(\"a.txt\"))\n+        self.assertIsNone(lease.read(self.repo))\n+\n+\n class Dispatch(unittest.TestCase):\n     def test_stale_or_missing_plan_falls_back_to_current_selection(self):\n         from nexus import work\n"
+ },
+ {
+  "commit": "1f5c9714f164a9ff2c45173c7492fa1a84fe325a",
+  "path": "nexus/contract.py",
+  "tests": [
+   "tests/test_contract.py"
+  ],
+  "overlay": [
+   "tests/test_contract.py"
+  ],
+  "start": 51,
+  "end": 138,
+  "changed": 5,
+  "objective": "Compare the reviewed and landed change without diff context\n\npatch-id hashes context lines, so main changing a line near the reviewed hunk\nafter review made a clean squash of the reviewed head look like a different\nchange. Diffs are compared at -U0. A failed fetch of either side is unverified,\nnot an empty diff. Found by the #213 verifier.",
+  "test_diff": "diff --git a/tests/test_contract.py b/tests/test_contract.py\nindex afcb005..01be56a 100644\n--- a/tests/test_contract.py\n+++ b/tests/test_contract.py\n@@ -99,6 +99,23 @@ class ReviewedChange(unittest.TestCase):\n         self.assertTrue(done, why)\n         self.assertIn(sha, why)\n \n+    def test_main_moving_near_the_reviewed_hunk_is_still_the_reviewed_change(self):\n+        lines = [str(n) for n in range(1, 21)]\n+        self.git(self.repo, \"switch\", \"-q\", \"main\")\n+        self.commit(\"f\", \"\\n\".join(lines) + \"\\n\")\n+        self.git(self.repo, \"switch\", \"-q\", \"-c\", \"pr2\")\n+        self.commit(\"f\", \"\\n\".join(lines[:9] + [\"TEN\"] + lines[10:]) + \"\\n\")\n+        head = self.git(self.repo, \"rev-parse\", \"HEAD\")\n+        self.git(self.repo, \"switch\", \"-q\", \"main\")\n+        self.commit(\"f\", \"\\n\".join(lines[:7] + [\"EIGHT\"] + lines[8:]) + \"\\n\")  # main moves 2 lines away\n+        self.git(self.repo, \"merge\", \"-q\", \"--squash\", \"pr2\")\n+        self.git(self.repo, \"commit\", \"-qm\", \"squash\")\n+        sha = self.git(self.repo, \"rev-parse\", \"HEAD\")\n+        self.git(self.repo, \"push\", \"-q\", \"origin\", \"main\", \"pr2\")\n+        done, why = contract.done_receipt({\"state\": \"LANDED\", \"sha\": sha}, None, str(self.repo),\n+                                          review={\"verdict\": \"PASS\", \"head\": head})\n+        self.assertTrue(done, why)\n+\n     def test_landed_change_that_differs_from_the_reviewed_one_is_not_done(self):\n         sha = self.squash(extra=\"c\")\n         done, why = contract.done_receipt({\"state\": \"LANDED\", \"sha\": sha}, None, str(self.repo),\n"
+ },
+ {
+  "commit": "a35678ea5f72e6902192d1fb9cc8abda4e67fc88",
+  "path": "client/tower_board.py",
+  "tests": [
+   "tests/test_terminal_evidence.py",
+   "tests/test_tower_board.py"
+  ],
+  "overlay": [
+   "tests/test_terminal_evidence.py",
+   "tests/test_tower_board.py"
+  ],
+  "start": 20,
+  "end": 117,
+  "changed": 9,
+  "objective": "Board trusts Tower's non-runnable decision over a leftover ready label\n\nA disposition records the labels it was decided from, and the board uses it while\nthose labels are unchanged: ineligible leaves the board, held or owned shows as\nheld. Discovery run from another lane no longer records a false owned disposition\nfor a tower-v2 issue (the owned/backoff flap). Adds the boundary regression: a\nheld tower issue is captured but never claimed. nexus-office #210 D4.",
+  "test_diff": "diff --git a/tests/test_terminal_evidence.py b/tests/test_terminal_evidence.py\nindex cb4feaf..cb1cb57 100644\n--- a/tests/test_terminal_evidence.py\n+++ b/tests/test_terminal_evidence.py\n@@ -101,10 +101,11 @@ class CloseBeforeDone(TowerFixture):\n         def landed(ledger, flight_id, repo, result):\n             ledger.set_state(flight_id, \"produced\"), ledger.set_state(flight_id, \"verified\", evidence=terminal.landed(result, result[\"sha\"]))\n         patch(\"nexus.tower.land_write_flight\", side_effect=landed).start()\n+        self.led.event(\"work.review\", fid, {\"pr\": \"https://pr/1\", \"head\": \"h1\", \"verdict\": \"PASS\"}, \"work\")\n         self.issues[0][\"labels\"] = [{\"name\": \"hold\"}]  # a person parked it mid-flight\n         state = work._settle(self.led, fid, self.entry, self.task, self.issues[0],\n                              {\"state\": \"LANDED\", \"flight\": fid, \"sha\": \"abc\", \"branch\": \"main\",\n-                              \"review\": \"flt_r PASS at abc\"}, None)\n+                              \"pr_url\": \"https://pr/1\", \"reviewed_head\": \"h1\"}, None)\n         self.assertEqual(\"pending\", state)\n         self.assertNotEqual(\"done\", self.task_state(self.task[\"id\"]))\n         self.assertIn(\"close_pending\", work.latest(self.led, \"work.pending\", self.task[\"id\"])[\"reason\"])\n@@ -136,10 +137,33 @@ class UnverifiedLandingIsHeld(TowerFixture):\n         self.assertNotEqual(\"done\", self.task_state(self.task[\"id\"]))\n         self.assertEqual([], self.closed)\n         pending = work.latest(self.led, \"work.pending\", self.task[\"id\"])\n-        self.assertIn(\"no contract check and no review\", pending[\"hold\"])\n+        self.assertTrue(pending[\"hold\"].startswith(contract.UNVERIFIED))\n         self.assertTrue(any(\"--add-label\" in a and \"hold\" in a for a in edits))\n \n \n+class DiscoveryKnowsEligibilityActs(TowerFixture):\n+    \"\"\"#210 boundary: a held Tower issue is captured but never claimed, even with ready still on it.\"\"\"\n+\n+    def test_held_tower_issue_is_captured_but_never_claimed(self):\n+        self.issues[0][\"labels\"] = [{\"name\": \"ready\"}, {\"name\": \"tower-v2\"}, {\"name\": \"hold\"}]\n+        work.discover(self.led, self.entry)\n+        task = self.led.tasks()[0]\n+        with patch(\"nexus.work.tower_execute\") as fly, patch(\"nexus.work.claim\") as claim:\n+            self.assertEqual(\"held\", work._run_task(self.led, self.entry, task))\n+        fly.assert_not_called(), claim.assert_not_called()\n+\n+    def test_another_lanes_issue_gets_no_owned_disposition(self):\n+        self.issues[0][\"labels\"] = [{\"name\": \"ready\"}, {\"name\": \"tower-v2\"}]\n+        work.discover(self.led, self.entry)\n+        task = self.led.tasks()[0]\n+        token = work._lane.set(None)\n+        try:\n+            work.selection_queue(self.led, self.entry)\n+        finally:\n+            work._lane.reset(token)\n+        self.assertEqual({}, work.latest(self.led, \"work.disposition\", task[\"id\"]))\n+\n+\n class CrashIsNotNoChange(unittest.TestCase):\n     \"\"\"A4: a nonzero executor exit with nothing changed is a failure, never CLOSED no_change.\"\"\"\n \ndiff --git a/tests/test_tower_board.py b/tests/test_tower_board.py\nindex a7f20ac..0564e1c 100644\n--- a/tests/test_tower_board.py\n+++ b/tests/test_tower_board.py\n@@ -79,5 +79,22 @@ class TowerBoard(unittest.TestCase):\n         self.assertEqual(60, len(board['issues']))\n         self.assertEqual(10, board['dropped'])\n \n+    def test_fresh_ineligible_disposition_beats_a_leftover_ready_label(self):\n+        work.discover(self.led, self.entry)\n+        task = self.led.tasks()[0]\n+        self.led.event('work.disposition', task['id'],\n+                       {'state': 'ineligible', 'reason': 'x', 'labels': ['ready']}, 'work')\n+        self.assertEqual([], tower_board.read(self.root / 'ledger.sqlite')['issues'])\n+        self.led.event('work.disposition', task['id'], {'state': 'held', 'reason': 'held: hold', 'labels': ['ready']}, 'work')\n+        [issue] = tower_board.read(self.root / 'ledger.sqlite')['issues']\n+        self.assertEqual('held', issue['state'])\n+\n+    def test_disposition_about_older_labels_is_not_authoritative(self):\n+        work.discover(self.led, self.entry)\n+        task = self.led.tasks()[0]\n+        self.led.event('work.disposition', task['id'], {'state': 'ineligible', 'reason': 'x', 'labels': []}, 'work')\n+        [issue] = tower_board.read(self.root / 'ledger.sqlite')['issues']  # ready was added after that decision\n+        self.assertEqual('ready', issue['state'])\n+\n if __name__ == '__main__':\n     unittest.main()\n"
+ },
+ {
+  "commit": "8d18e6d50394c7cfc5134d4d013d6d8db84588e3",
+  "path": "nexus/tower.py",
+  "tests": [
+   "tests/test_tower_claim_recovery.py"
+  ],
+  "overlay": [
+   "tests/test_tower_claim_recovery.py"
+  ],
+  "start": 320,
+  "end": 420,
+  "changed": 17,
+  "objective": "Retry only the announcement once a dead flight's held branch exists\n\nIf the held push succeeded and the issue comment failed, the next tick re-held\nwith a fresh commit, which origin rejects as non-fast-forward, and the flight\nsat in resolving forever with no event. A held branch already on origin is the\ndurable outcome: the comment is retried best effort and the lease released,\nas lease.recover already does. Found by the #210 independent verifier.",
+  "test_diff": "diff --git a/tests/test_tower_claim_recovery.py b/tests/test_tower_claim_recovery.py\nindex 17cd81b..8b541c6 100644\n--- a/tests/test_tower_claim_recovery.py\n+++ b/tests/test_tower_claim_recovery.py\n@@ -81,6 +81,8 @@ class TowerClaimRecovery(unittest.TestCase):\n              patch('nexus.lease.read', return_value=record), \\\n              patch('nexus.lease.flight_paths', return_value=(['mine.py', 'human.txt'], ['human.txt'])), \\\n              patch('nexus.lease.release'), \\\n+             patch('nexus.landing.remote_tip', return_value=None), \\\n+             patch('nexus.lanes.recover', return_value=[]), patch('nexus.lanes.read', return_value=None), \\\n              patch('nexus.landing.hold', return_value=held) as hold, \\\n              patch('nexus.landing.terminal', return_value=True), \\\n              patch('nexus.landing._git') as git:\n@@ -97,6 +99,32 @@ class TowerClaimRecovery(unittest.TestCase):\n         [artifact] = self.led.conn.execute(\"SELECT kind, ref FROM artifacts WHERE flight_id=?\", (fid,)).fetchall()\n         self.assertEqual(tuple(artifact), ('held_branch', 'aria/held/' + fid))\n \n+    def test_failed_announcement_does_not_strand_the_flight(self):\n+        \"\"\"The push landed but the comment failed: the next tick must not re-push (non-fast-forward).\"\"\"\n+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)\n+        record = {'flight': fid, 'head': 'original'}\n+        unannounced = {'state': 'HELD', 'flight': fid, 'branch': 'aria/held/' + fid, 'sha': 'h', 'comment_url': None}\n+        tips = iter([None, 'h'])\n+        with patch.dict(os.environ, {'NEXUS_WORK_REGISTRY': 'fixture'}), \\\n+             patch('nexus.flights.alive', return_value=False), \\\n+             patch('nexus.work.registry', return_value=[self.entry]), \\\n+             patch('nexus.lease.read', return_value=record), \\\n+             patch('nexus.lease.flight_paths', return_value=(['mine.py'], [])), \\\n+             patch('nexus.lease.release') as release, \\\n+             patch('nexus.lanes.recover', return_value=[]), patch('nexus.lanes.read', return_value=None), \\\n+             patch('nexus.landing.remote_tip', side_effect=lambda key: next(tips)), \\\n+             patch('nexus.landing.hold', return_value=unannounced) as hold, \\\n+             patch('nexus.landing.terminal', return_value=False), \\\n+             patch('nexus.landing.notify', return_value=('u', None)), \\\n+             patch('nexus.landing._git') as git:\n+            git.return_value.stdout = 'original\\n'\n+            self.assertEqual(tower._reconcile_vanished(self.led, time.time(), self.entry['path']), 0)\n+            self.assertEqual(self.led.flight(fid)['state'], 'resolving')\n+            self.assertEqual(tower._resolve_ambiguous(self.led, time.time()), 1)\n+        hold.assert_called_once()\n+        release.assert_called_once()\n+        self.assertEqual(self.led.flight(fid)['state'], 'failed')\n+\n     def test_resolving_dead_owner_with_no_lease_left_exits(self):\n         \"\"\"The live #183 shape: the flight sat in `resolving` and its lease is gone. Nothing is attributable.\"\"\"\n         fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)\n"
+ },
+ {
+  "commit": "70832746b35435e26a8400313db7ce8c91af99ee",
+  "path": "client/coordinator_chat.py",
+  "tests": [
+   "tests/test_coordinator_chat.py"
+  ],
+  "overlay": [
+   "client/phone/office-bundle.js",
+   "client/phone/office-coordinator.js",
+   "client/phone/office.js",
+   "tests/test_coordinator_chat.py"
+  ],
+  "start": 496,
+  "end": 637,
+  "changed": 11,
+  "objective": "Show coordinator attention only for real failure or stall",
+  "test_diff": "diff --git a/tests/test_coordinator_chat.py b/tests/test_coordinator_chat.py\nindex 0d7def4..ec2d215 100644\n--- a/tests/test_coordinator_chat.py\n+++ b/tests/test_coordinator_chat.py\n@@ -237,12 +237,12 @@ class OverviewTest(Fixture):\n             with self.assertRaises(FileNotFoundError):\n                 chat.root_path(\"nope\")\n \n-    def test_runs_that_ship_nothing_read_as_thrashing(self):\n+    def test_successful_runs_that_ship_nothing_do_not_need_attention(self):\n         ends = [{\"event\": \"end\", \"at\": f\"2099-01-01T0{i}:10:00Z\", \"start\": f\"2099-01-01T0{i}:00:00Z\",\n                  \"rc\": 0, \"prod_changes\": 0, \"log\": f\"x{i}.log\"} for i in range(4)]\n         self.write(chat.RUNS, \"\".join(json.dumps(row) + \"\\n\" for row in ends))\n         with patch.object(chat, \"_age\", return_value=60):\n             row = chat.summary(dict(chat.TBS_DEFAULTS, path=self.root))\n-        self.assertTrue(row[\"thrashing\"])\n-        self.assertEqual(row[\"health\"], \"thrashing\")\n+        self.assertFalse(row[\"thrashing\"])\n+        self.assertEqual(row[\"health\"], \"ok\")\n         self.assertEqual(row[\"shipped_recent\"], [0, 0, 0, 0])\n"
+ },
+ {
+  "commit": "1575ae3b14b3eb2338e388542b28f8d3d7622a70",
+  "path": "client/office-sync.py",
+  "tests": [
+   "tests/test_decision_block.py"
+  ],
+  "overlay": [
+   "tests/test_decision_block.py"
+  ],
+  "start": 529,
+  "end": 610,
+  "changed": 3,
+  "objective": "Keep stability diagnosis notes from hiding unresolved decisions",
+  "test_diff": "diff --git a/tests/test_decision_block.py b/tests/test_decision_block.py\nindex 7a8fcfd..a1cb7d3 100644\n--- a/tests/test_decision_block.py\n+++ b/tests/test_decision_block.py\n@@ -137,7 +137,9 @@ class IssueRowTest(unittest.TestCase):\n                       \"url\": \"source\", \"createdAt\": \"2026-08-26T00:00:00Z\"},\n                      {\"body\": \"\u2753 The automated pass could not resolve this and did not say what to decide. What now?\\n\"\n                               \"- [ ] **1.** Re-run: guidance\\n- [ ] **2.** Close: done\\n<!-- pipeline-bot -->\",\n-                      \"url\": \"generic\", \"createdAt\": \"2026-09-02T00:00:00Z\"}]}}\n+                      \"url\": \"generic\", \"createdAt\": \"2026-09-02T00:00:00Z\"},\n+                     {\"body\": \"Nexus diagnosis, not a decision.\\n<!-- nexus-stability-diagnosis -->\",\n+                      \"url\": \"note\", \"createdAt\": \"2026-09-24T00:00:00Z\"}]}}\n         row = office_sync._issue_row(issue)\n         self.assertEqual(row[\"automation_failure\"], \"missing_decision\")\n         self.assertIn(\"Category mapping\", row[\"decision_context\"])\n"
+ },
+ {
+  "commit": "288b5473e9873aa830ac65f6c197d1c80ea3cc10",
+  "path": "nexus/tower.py",
+  "tests": [
+   "tests/test_tower_orphan_lease.py"
+  ],
+  "overlay": [
+   "tests/test_tower_orphan_lease.py"
+  ],
+  "start": 57,
+  "end": 279,
+  "changed": 35,
+  "objective": "Reconcile orphan Tower checkout leases without touching dirty files",
+  "test_diff": "diff --git a/tests/test_tower_orphan_lease.py b/tests/test_tower_orphan_lease.py\nnew file mode 100644\nindex 0000000..15c5b54\n--- /dev/null\n+++ b/tests/test_tower_orphan_lease.py\n@@ -0,0 +1,59 @@\n+\"\"\"A dead orphan lease may lose ownership without losing anyone's checkout bytes.\"\"\"\n+\n+import json\n+import os\n+import subprocess\n+import tempfile\n+import time\n+import unittest\n+from pathlib import Path\n+from unittest.mock import patch\n+\n+from nexus import lease, tower\n+from nexus.ledger import Ledger\n+\n+\n+class OrphanLeaseRecovery(unittest.TestCase):\n+    def setUp(self):\n+        self.tmp = tempfile.TemporaryDirectory()\n+        self.addCleanup(self.tmp.cleanup)\n+        self.repo = Path(self.tmp.name) / \"repo\"\n+        self.repo.mkdir()\n+        for args in ((\"init\", \"-q\"), (\"config\", \"user.email\", \"test@example.invalid\"),\n+                     (\"config\", \"user.name\", \"Test\")):\n+            subprocess.run((\"git\", *args), cwd=self.repo, check=True)\n+        (self.repo / \"human.txt\").write_text(\"before\\n\")\n+        subprocess.run((\"git\", \"add\", \".\"), cwd=self.repo, check=True)\n+        subprocess.run((\"git\", \"commit\", \"-qm\", \"base\"), cwd=self.repo, check=True)\n+        (self.repo / \"human.txt\").write_text(\"human edit\\n\")\n+        self.led = Ledger(str(Path(self.tmp.name) / \"ledger.sqlite\"))\n+        self.addCleanup(self.led.close)\n+        self.head = subprocess.check_output((\"git\", \"rev-parse\", \"HEAD\"), cwd=self.repo, text=True).strip()\n+\n+    def record(self, pid):\n+        row = dict(flight=\"flt_missing\", pid=pid, expires=time.time() - 1,\n+                   head=self.head, baseline=lease.dirty(str(self.repo)))\n+        Path(lease.path(str(self.repo))).write_text(json.dumps(row))\n+        return row\n+\n+    def test_dead_orphan_releases_ownership_and_preserves_dirty_file(self):\n+        self.record(2147483647)\n+        with patch.object(lease, \"indexed\", return_value=[str(self.repo)]), \\\n+             patch.object(lease, \"lane_lock\", return_value=(0, \"\")):\n+            self.assertEqual(tower._reconcile_orphan_leases(self.led, time.time()), 1)\n+        self.assertFalse(Path(lease.path(str(self.repo))).exists())\n+        self.assertEqual((self.repo / \"human.txt\").read_text(), \"human edit\\n\")\n+        events = self.led.events(kind=\"work.orphan_lease\")\n+        self.assertEqual(len(events), 1)\n+        self.assertEqual(json.loads(events[0][\"payload\"])[\"outcome\"],\n+                         \"ownership_released_files_preserved\")\n+\n+    def test_live_pid_is_not_released_even_if_expired(self):\n+        self.record(os.getpid())\n+        with patch.object(lease, \"indexed\", return_value=[str(self.repo)]):\n+            self.assertEqual(tower._reconcile_orphan_leases(self.led, time.time()), 0)\n+        self.assertTrue(Path(lease.path(str(self.repo))).exists())\n+\n+\n+if __name__ == \"__main__\":\n+    unittest.main()\n"
+ },
+ {
+  "commit": "1f00e69905a5e5df27bd0e6aebe27bedb0707510",
+  "path": "client/office_buzz.py",
+  "tests": [
+   "tests/test_office_buzz.py"
+  ],
+  "overlay": [
+   "client/phone/office-bundle.js",
+   "client/phone/office.js",
+   "tests/test_office_buzz.py"
+  ],
+  "start": 41,
+  "end": 130,
+  "changed": 26,
+  "objective": "Route only unanswered Buzz judgment requests to Needs you",
+  "test_diff": "diff --git a/tests/test_office_buzz.py b/tests/test_office_buzz.py\nnew file mode 100644\nindex 0000000..faf73e0\n--- /dev/null\n+++ b/tests/test_office_buzz.py\n@@ -0,0 +1,30 @@\n+import sys\n+import unittest\n+from pathlib import Path\n+\n+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'client'))\n+import office_buzz\n+\n+\n+class BuzzAttentionTest(unittest.TestCase):\n+    def test_unanswered_direct_judgment_and_replied_request(self):\n+        request = {'id': 'a' * 64, 'thread': 'a' * 64, 'at': '2026-09-24T10:00:00Z',\n+                   'author': 'Tim', 'channel': 'human-decisions', 'acted': False,\n+                   'text': 'Hey Aria, can you check this product and tell me what you think?\\n\\nDetails below.'}\n+        [pending] = office_buzz._annotate([dict(request)], [])\n+        self.assertTrue(pending['needs_you'])\n+        self.assertIn('what you think', pending['question'])\n+        reply = {'id': 'b' * 64, 'thread': request['thread'], 'at': '2026-09-24T11:00:00Z',\n+                 'author': 'Aria', 'channel': 'human-decisions', 'acted': False, 'text': 'I checked it.'}\n+        resolved = office_buzz._annotate([dict(request), reply], [])\n+        self.assertFalse(next(row for row in resolved if row['id'] == request['id'])['needs_you'])\n+\n+    def test_open_queue_instruction_is_not_human_authority(self):\n+        row = {'id': 'c' * 64, 'thread': 'c' * 64, 'at': '2026-09-24T10:00:00Z',\n+               'author': 'Caleb', 'channel': 'queue', 'acted': False,\n+               'text': 'ARIA \u00b7 tbs#169 Build the script? A. Build it B. Hold'}\n+        self.assertFalse(office_buzz._annotate([row], [])[0]['needs_you'])\n+\n+\n+if __name__ == '__main__':\n+    unittest.main()\n"
+ },
+ {
+  "commit": "a761e8e31676efeb068dd231aae8ec192012365c",
+  "path": "client/office_feed_runner.py",
+  "tests": [
+   "tests/test_office_feed_runner.py"
+  ],
+  "overlay": [
+   "tests/test_office_feed_runner.py"
+  ],
+  "start": 371,
+  "end": 452,
+  "changed": 5,
+  "objective": "Accept accurate held-state Buzz summaries",
+  "test_diff": "diff --git a/tests/test_office_feed_runner.py b/tests/test_office_feed_runner.py\nindex 90fa224..79809e6 100644\n--- a/tests/test_office_feed_runner.py\n+++ b/tests/test_office_feed_runner.py\n@@ -9,6 +9,15 @@ import office_feed_runner as runner\n \n \n class EditorialGateTest(unittest.TestCase):\n+    def test_buzz_held_state_rejects_false_release_but_accepts_negation(self):\n+        item = {'kind': 'buzz_development',\n+                'text': 'L044 is held, not published. The deployed page differs from the approved copy.'}\n+        approved = {'title': 'L044', 'body': 'L044 is currently held and not published.', 'evidence': []}\n+        runner.prepare_output(approved, [item])\n+        false_release = {'title': 'L044', 'body': 'L044 is published and live.', 'evidence': []}\n+        with self.assertRaisesRegex(ValueError, 'contradicts'):\n+            runner.prepare_output(false_release, [item])\n+\n     def test_buzz_is_grouped_before_feed_editorial_review(self):\n         stamp = datetime.now(timezone.utc).isoformat()\n         def row(ident, channel, text, issue=None):\n"
+ },
+ {
+  "commit": "e5098d69a77a2c6e98dedfaff77af73e4d75ae00",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_tower_claim_recovery.py"
+  ],
+  "overlay": [
+   "tests/test_tower_claim_recovery.py"
+  ],
+  "start": 337,
+  "end": 895,
+  "changed": 24,
+  "objective": "Release stalled Tower claims after no-change flights",
+  "test_diff": "diff --git a/tests/test_tower_claim_recovery.py b/tests/test_tower_claim_recovery.py\nnew file mode 100644\nindex 0000000..01a058d\n--- /dev/null\n+++ b/tests/test_tower_claim_recovery.py\n@@ -0,0 +1,42 @@\n+\"\"\"A no-change Tower result must release its issue claim for the next attempt.\"\"\"\n+\n+import os\n+import unittest\n+from unittest.mock import patch\n+\n+from nexus import tower, work\n+from tests import test_work\n+\n+\n+class TowerClaimRecovery(unittest.TestCase):\n+    github = test_work.WorkTests.github\n+\n+    def setUp(self):\n+        test_work.WorkTests.setUp(self)\n+        work.discover(self.led, self.entry)\n+        self.task = self.led.tasks()[0]\n+        token = work._lane.set(work.TOWER_LABEL)\n+        self.addCleanup(lambda: work._lane.reset(token))\n+\n+    def test_no_change_settlement_releases_claim(self):\n+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)\n+        state = work._settle(self.led, fid, self.entry, self.task, self.issues[0],\n+                             {'state': 'CLOSED', 'flight': fid, 'reason': 'no_change'})\n+        self.assertEqual(state, 'pending')\n+        self.assertEqual(self.led.flight(fid)['state'], 'cancelled')\n+        self.assertEqual(self.led.conn.execute('SELECT count(*) FROM leases WHERE holder_flight=?', (fid,)).fetchone()[0], 0)\n+        self.assertTrue(work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True))\n+\n+    def test_legacy_verified_no_change_is_recovered_after_owner_exits(self):\n+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)\n+        tower.land_write_flight(self.led, fid, self.entry['path'],\n+                                {'state': 'CLOSED', 'flight': fid, 'reason': 'no_change'})\n+        self.assertEqual(self.led.flight(fid)['state'], 'verified')\n+        with patch('nexus.work.flights.alive', return_value=False):\n+            self.assertEqual(work.recover_terminal(self.led), [fid])\n+        self.assertEqual(self.led.flight(fid)['state'], 'cancelled')\n+        self.assertEqual(self.led.conn.execute('SELECT count(*) FROM leases WHERE holder_flight=?', (fid,)).fetchone()[0], 0)\n+\n+\n+if __name__ == '__main__':\n+    unittest.main()\n"
+ },
+ {
+  "commit": "2da05fd2b7a86d3176b2835743b375b5d4ff1984",
+  "path": "nexus/office_agent.py",
+  "tests": [
+   "tests/test_office_tasks.py"
+  ],
+  "overlay": [
+   "tests/test_office_tasks.py"
+  ],
+  "start": 132,
+  "end": 212,
+  "changed": 2,
+  "objective": "Fail over reported Office provider turn errors",
+  "test_diff": "diff --git a/tests/test_office_tasks.py b/tests/test_office_tasks.py\nindex 2d4c74f..4aed00e 100644\n--- a/tests/test_office_tasks.py\n+++ b/tests/test_office_tasks.py\n@@ -112,6 +112,18 @@ class AccountIsolation(unittest.TestCase):\n             with self.assertRaises(FileNotFoundError):office_profiles.environment('codex','tbs')\n \n class PersistentConversation(unittest.TestCase):\n+    def test_failed_turn_requires_provider_continuation(self):\n+        from types import SimpleNamespace\n+        from nexus.office_agent import Conversation,ProviderFailure\n+        with tempfile.TemporaryDirectory() as directory:\n+            root=Path(directory)\n+            ledger=SimpleNamespace(event=lambda *args,**kwargs:None)\n+            conversation=Conversation(ledger,{'id':'flight','task_id':'task'},root,root,{'engine':'codex'})\n+            with self.assertRaises(ProviderFailure):\n+                conversation.provider({'method':'turn/failed','params':{'error':'limit'}})\n+            with self.assertRaises(ProviderFailure):\n+                conversation.provider({'method':'claude/ResultMessage','params':{'is_error':True}})\n+\n     def test_failed_codex_session_opens_claude_and_reconciles_pending_work(self):\n         import io\n         import json\n"
+ },
+ {
+  "commit": "823b9e023dd0f003883c6dde1c7206e7898d6f95",
+  "path": "nexus/executor.py",
+  "tests": [
+   "tests/test_executor_route.py"
+  ],
+  "overlay": [
+   "tests/test_executor_route.py"
+  ],
+  "start": 98,
+  "end": 179,
+  "changed": 2,
+  "objective": "Allow cross-provider fallback for routed Codex work",
+  "test_diff": "diff --git a/tests/test_executor_route.py b/tests/test_executor_route.py\nindex 9b6bccd..3146447 100644\n--- a/tests/test_executor_route.py\n+++ b/tests/test_executor_route.py\n@@ -27,13 +27,16 @@ class Route(unittest.TestCase):\n         for body in (\"fix a bug\", \"Background: Antigravity wrote this once.\\n- METHOD: edit the parser\"):\n             self.assertEqual(\"code-judgment\", executor.plan(ENTRY, self.issue(body))[0][2], body)\n \n-    def test_claude_failure_has_codex_continuation_and_copy_does_not(self):\n+    def test_claude_failure_has_codex_continuation_and_copy_has_claude(self):\n         argv, prompt, _, _ = executor.plan(ENTRY, self.issue(\"fix a bug\"))\n         fallback = executor.provider_fallback(argv, prompt, ENTRY[\"path\"])\n         self.assertEqual(fallback[1:4], [\"run-provider\", \"code-judgment\", \"codex\"])\n         self.assertIn(\"do not repeat completed sends\", fallback[-1])\n-        copy_argv, copy_prompt, _, _ = executor.plan(ENTRY, self.issue(\"\", [\"copy-authority\"]))\n-        self.assertIsNone(executor.provider_fallback(copy_argv, copy_prompt, ENTRY[\"path\"]))\n+        copy_argv=[executor.ROUTER,\"run\",\"customer-copy\",\"--\",\"exec\"]\n+        self.assertEqual(executor.provider_fallback(copy_argv, prompt, ENTRY[\"path\"])[1:4],\n+                         [\"run-provider\", \"customer-copy\", \"claude\"])\n+        antigravity, copy_prompt, _, _ = executor.plan(ENTRY, self.issue(\"\", [\"copy-authority\"]))\n+        self.assertIsNone(executor.provider_fallback(antigravity, copy_prompt, ENTRY[\"path\"]))\n \n     def test_codex_reviewer_failure_continues_on_claude(self):\n         calls = []\n"
+ },
+ {
+  "commit": "fa53eec2e8d67949fa694ed82777877c8886f74a",
+  "path": "nexus/podcast_daily.py",
+  "tests": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "overlay": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "start": 15,
+  "end": 99,
+  "changed": 20,
+  "objective": "Continue podcast writing on Claude when Codex fails",
+  "test_diff": "diff --git a/tests/test_podcast_nightly.py b/tests/test_podcast_nightly.py\nindex 02035d0..3d3e2b6 100644\n--- a/tests/test_podcast_nightly.py\n+++ b/tests/test_podcast_nightly.py\n@@ -1,7 +1,9 @@\n from contextlib import closing\n import json\n+import subprocess\n from pathlib import Path\n import tempfile\n+from types import SimpleNamespace\n import unittest\n from unittest.mock import patch\n from nexus import podcast_daily as daily\n@@ -9,6 +11,20 @@ from nexus.ledger import Ledger\n \n \n class NightlyPodcast(unittest.TestCase):\n+    def test_editorial_writer_continues_on_claude_when_codex_fails(self):\n+        with tempfile.TemporaryDirectory() as temporary:\n+            root=Path(temporary)\n+            calls=[]\n+            def run(argv,**kwargs):\n+                calls.append(argv)\n+                if argv[0]=='codex':\n+                    raise subprocess.CalledProcessError(1,argv)\n+                return subprocess.CompletedProcess(argv,0,'{\"title\":\"continued\"}','')\n+            with patch.object(daily.subprocess,'run',side_effect=run), \\\n+                 patch.dict('sys.modules',{'office_profiles':SimpleNamespace(environment=lambda *_:{})}):\n+                self.assertEqual(daily.editorial_pass(root,'Write JSON',{},temporary),'{\"title\":\"continued\"}')\n+            self.assertEqual([argv[0] for argv in calls],['codex','claude'])\n+\n     def test_now_changes_existing_morning_schedule_and_queues_once(self):\n         with tempfile.TemporaryDirectory() as temporary:\n             root=Path(temporary); database=str(root/'ledger.sqlite')\n"
+ },
+ {
+  "commit": "80156d51f7b5f995c48bb7fc6789717ef0ec2b5f",
+  "path": "client/office_ask.py",
+  "tests": [
+   "tests/test_office_ask.py"
+  ],
+  "overlay": [
+   "client/phone/office-bundle.js",
+   "client/phone/office-sw.js",
+   "client/phone/office-ui.js",
+   "tests/test_office_ask.py"
+  ],
+  "start": 231,
+  "end": 311,
+  "changed": 4,
+  "objective": "Accept legacy Ask sends and guard malformed links",
+  "test_diff": "diff --git a/tests/test_office_ask.py b/tests/test_office_ask.py\nindex ca76e2f..a21312c 100644\n--- a/tests/test_office_ask.py\n+++ b/tests/test_office_ask.py\n@@ -123,6 +123,13 @@ class AskQueueTest(unittest.TestCase):\n         self.assertEqual(len([row for row in state[\"messages\"] if row[\"role\"] == \"user\"]), 1)\n         self.assertEqual(state[\"queue\"], {\"queued\": 1, \"working\": 0})\n \n+    def test_cached_client_without_request_id_can_send(self):\n+        with patch.object(ask, \"_ensure_worker\"):\n+            receipt = ask.send({\"text\": \"From old client\", \"model\": \"model-a\"})\n+        self.assertRegex(receipt[\"request_id\"], r\"^[a-f0-9-]{36}$\")\n+        self.assertEqual([row[\"text\"] for row in ask.read()[\"messages\"] if row[\"role\"] == \"user\"],\n+                         [\"From old client\"])\n+\n     def test_read_keeps_newest_messages_and_auto_ignores_nonterminal_answers(self):\n         with ask.connect() as db:\n             db.executemany(\"INSERT INTO messages(role,text,status,created_at) VALUES('system',?,'completed',0)\",\n"
+ },
+ {
+  "commit": "7c3a53060ec294281df77172065571e4e7a0a546",
+  "path": "client/coordinator_chat.py",
+  "tests": [
+   "tests/test_coordinator_chat.py"
+  ],
+  "overlay": [
+   "client/phone/office-coordinator.js",
+   "client/phone/office.css",
+   "tests/test_coordinator_chat.py"
+  ],
+  "start": 104,
+  "end": 263,
+  "changed": 14,
+  "objective": "coordinator: show a local timestamp on every message, event and run",
+  "test_diff": "diff --git a/tests/test_coordinator_chat.py b/tests/test_coordinator_chat.py\nindex 833a360..3c03fd0 100644\n--- a/tests/test_coordinator_chat.py\n+++ b/tests/test_coordinator_chat.py\n@@ -76,6 +76,20 @@ class StreamTest(Fixture):\n         self.assertIn(\"tbs-www#382\", events[-1][\"text\"])\n         self.assertTrue(all(\"\\n\" not in event[\"text\"] for event in events if event[\"kind\"] == \"tool\"))\n         self.assertFalse(any(\"tool_result\" in event[\"text\"] for event in events))\n+        # each stream-json line carries its own timestamp through to the event\n+        self.assertEqual(events[0][\"at\"], \"2026-09-15T01:16:30.202Z\")\n+        self.assertEqual(events[1][\"at\"], \"2026-09-15T01:16:33.849Z\")\n+\n+    def test_result_row_dates_to_the_last_real_event_it_followed(self):\n+        log = ('{\"type\":\"assistant\",\"timestamp\":\"2026-09-15T01:16:33.849Z\",'\n+               '\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"landed it\"}]}}\\n'\n+               '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"landed it, and more\"}\\n')\n+        events = chat.parse_log(log)\n+        self.assertEqual([event[\"kind\"] for event in events], [\"text\", \"result\"])\n+        self.assertEqual(events[1][\"at\"], \"2026-09-15T01:16:33.849Z\")\n+\n+    def test_plain_lines_carry_no_timestamp_of_their_own(self):\n+        self.assertIsNone(chat.parse_log(\"old plain log\\n\")[0][\"at\"])\n \n     def test_plain_and_partial_logs(self):\n         self.assertEqual(chat.parse_log(\"\"), [])\n@@ -101,6 +115,9 @@ class StreamTest(Fixture):\n         self.assertEqual([item[\"kind\"] for item in items], [\"run\", \"message\"])  # the empty, unfinished log is dropped\n         self.assertEqual(items[0][\"end\"][\"rc\"], 0)\n         self.assertEqual(len(items[0][\"holds\"]), 1)\n+        # the tool event's own timestamp survives, and the run's start fills any event without one\n+        self.assertEqual(items[0][\"events\"][0][\"at\"], \"2026-09-15T01:16:30.202Z\")\n+        self.assertTrue(all(event.get(\"at\") for event in items[0][\"events\"]))\n \n \n class LinkTest(Fixture):\n"
+ },
+ {
+  "commit": "0e6645eb9347b578528b54e8c9a1fd5d027255d3",
+  "path": "nexus/lease.py",
+  "tests": [
+   "tests/test_landing_modes.py",
+   "tests/test_lanes.py"
+  ],
+  "overlay": [
+   "tests/test_landing_modes.py",
+   "tests/test_lanes.py"
+  ],
+  "start": 58,
+  "end": 210,
+  "changed": 15,
+  "objective": "Lease index: NEXUS_LEASE_INDEX read at call time so tests never write the real index",
+  "test_diff": "diff --git a/tests/test_landing_modes.py b/tests/test_landing_modes.py\nindex 55b80cd..ac6c257 100644\n--- a/tests/test_landing_modes.py\n+++ b/tests/test_landing_modes.py\n@@ -21,7 +21,7 @@ from nexus.ledger import Ledger  # noqa: E402\n \n landing.GIT_LOCK = \"/nonexistent\"  # fixtures stay out of the vault mutex\n lease.LANE_LOCK = os.environ[\"NEXUS_LANE_LOCK\"] = \"\"  # and out of the real tbs lane locks\n-lease.INDEX = os.path.join(tempfile.mkdtemp(prefix=\"nexus-index-\"), \"lease-repos.json\")  # never the real index\n+os.environ[\"NEXUS_LEASE_INDEX\"] = os.path.join(tempfile.mkdtemp(prefix=\"nexus-index-\"), \"lease-repos.json\")  # never the real index\n \n \n def git(cwd, *args):\ndiff --git a/tests/test_lanes.py b/tests/test_lanes.py\nindex f3fb30a..4531b00 100644\n--- a/tests/test_lanes.py\n+++ b/tests/test_lanes.py\n@@ -17,7 +17,7 @@ from nexus import executor, landing, lanes, lease  # noqa: E402\n \n landing.GIT_LOCK = \"/nonexistent\"\n lease.LANE_LOCK = os.environ[\"NEXUS_LANE_LOCK\"] = \"\"\n-lease.INDEX = os.path.join(tempfile.mkdtemp(prefix=\"nexus-index-\"), \"lease-repos.json\")  # never the real index\n+os.environ[\"NEXUS_LEASE_INDEX\"] = os.path.join(tempfile.mkdtemp(prefix=\"nexus-index-\"), \"lease-repos.json\")  # never the real index\n \n \n def git(cwd, *args):\n@@ -32,7 +32,7 @@ class Fake:\n class Lanes(unittest.TestCase):\n     def setUp(self):\n         self.dir = tempfile.mkdtemp(prefix=\"nexus-lanes-\")\n-        lease.INDEX = os.path.join(self.dir, \"lease-repos.json\")\n+        os.environ[\"NEXUS_LEASE_INDEX\"] = os.path.join(self.dir, \"lease-repos.json\")\n         self.origin = os.path.join(self.dir, \"origin.git\")\n         self.repo = os.path.join(self.dir, \"repo\")\n         git(self.dir, \"init\", \"-q\", \"--bare\", \"-b\", \"main\", self.origin)\n"
+ },
+ {
+  "commit": "590bbeaf27c9af9a05b89fd637b98b39749e1a42",
+  "path": "nexus/executor.py",
+  "tests": [
+   "tests/test_executor_route.py"
+  ],
+  "overlay": [
+   "tests/test_executor_route.py"
+  ],
+  "start": 56,
+  "end": 140,
+  "changed": 16,
+  "objective": "Tower: issues whose METHOD names Antigravity/tbs-agy (or copy-authority label) run through the router's customer-copy-antigravity class, not plain Claude",
+  "test_diff": "diff --git a/tests/test_executor_route.py b/tests/test_executor_route.py\nnew file mode 100644\nindex 0000000..49bdcc3\n--- /dev/null\n+++ b/tests/test_executor_route.py\n@@ -0,0 +1,31 @@\n+\"\"\"Issues whose METHOD names Antigravity are authored through the router's Antigravity class.\"\"\"\n+import sys\n+import unittest\n+from pathlib import Path\n+\n+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n+from nexus import executor  # noqa: E402\n+\n+ENTRY = {\"repo\": \"o/r\", \"path\": \"/tmp/r\"}\n+\n+\n+class Route(unittest.TestCase):\n+    def issue(self, body, labels=()):\n+        return {\"number\": 1, \"title\": \"t\", \"body\": body, \"labels\": [{\"name\": n} for n in labels]}\n+\n+    def test_method_naming_antigravity_routes_to_antigravity(self):\n+        argv, prompt, road, _ = executor.plan(ENTRY, self.issue(\"- METHOD: English authored by Antigravity via ./tbs-agy\"))\n+        self.assertEqual([\"run\", \"customer-copy-antigravity\", \"--\", \"-p\"], argv[1:5])\n+        self.assertIn(\"/tmp/r\", prompt)\n+        self.assertIsNone(road)\n+\n+    def test_copy_authority_label_routes_to_antigravity(self):\n+        self.assertEqual(\"customer-copy-antigravity\", executor.plan(ENTRY, self.issue(\"\", [\"copy-authority\"]))[0][2])\n+\n+    def test_plain_issue_and_non_method_mention_stay_claude(self):\n+        for body in (\"fix a bug\", \"Background: Antigravity wrote this once.\\n- METHOD: edit the parser\"):\n+            self.assertEqual(\"code-judgment\", executor.plan(ENTRY, self.issue(body))[0][2], body)\n+\n+\n+if __name__ == \"__main__\":\n+    unittest.main()\n"
+ },
+ {
+  "commit": "05766a070aa8bdeae74b7d6cd3ba1839f3f133fb",
+  "path": "nexus/lease.py",
+  "tests": [
+   "tests/test_landing_modes.py"
+  ],
+  "overlay": [
+   "tests/test_landing_modes.py"
+  ],
+  "start": 102,
+  "end": 150,
+  "changed": 5,
+  "objective": "lease.recover: an already-pushed held branch releases the stale lease instead of re-holding forever (5539 held_push_failed on thinking-brain-school since 05:27Z)",
+  "test_diff": "diff --git a/tests/test_landing_modes.py b/tests/test_landing_modes.py\nindex 75a8aac..d9f88e7 100644\n--- a/tests/test_landing_modes.py\n+++ b/tests/test_landing_modes.py\n@@ -91,6 +91,19 @@ class Case(unittest.TestCase):\n         self.assertIsNone(lease.read(self.repo))\n         self.assertEqual(git(self.repo, \"show\", f\"{result['sha']}:wip.txt\"), \"half\")\n \n+    def test_t6b_stale_lease_already_held_releases_without_rehold(self):\n+        rec = lease.acquire(self.repo, \"main\", \"f6b\", os.getpid(), 600)\n+        self.write(\"wip.txt\", \"half\\n\")\n+        first = landing.hold(self.repo, rec, [\"wip.txt\"], [], \"crashed\")  # pushed, then the lease was never released\n+        rec[\"pid\"] = 2 ** 22 + 1  # dead holder\n+        with open(lease.path(self.repo), \"w\") as f:\n+            import json; json.dump(rec, f)\n+        self.write(\"other-session.txt\", \"live\\n\")  # a person's later edit in the shared checkout\n+        result = lease.recover(self.repo, self.comment)\n+        self.assertEqual((result[\"state\"], result[\"reason\"], result[\"sha\"]), (\"HELD\", \"already_held\", first[\"sha\"]))\n+        self.assertIsNone(lease.read(self.repo))\n+        self.assertEqual(self.read(\"other-session.txt\"), \"live\\n\")\n+\n     def test_t8_review_pushes_branch_before_pr_and_never_switches(self):\n         self.write(\"human.txt\", \"human edit\\n\")\n         rec = lease.acquire(self.repo, \"main\", \"f8\", os.getpid(), 600)\n"
+ },
+ {
+  "commit": "cabb0d1852d4d9c9f4e63e52940279082be592a9",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_work.py"
+  ],
+  "overlay": [
+   "tests/test_work.py"
+  ],
+  "start": 467,
+  "end": 548,
+  "changed": 5,
+  "objective": "work: a pending item is fresh again once its retry deadline passes",
+  "test_diff": "diff --git a/tests/test_work.py b/tests/test_work.py\nindex 9860dad..86afced 100644\n--- a/tests/test_work.py\n+++ b/tests/test_work.py\n@@ -597,6 +597,20 @@ else:\n         self.assertEqual([2], numbers)\n         self.assertEqual('done', [row for row in second if row['state'] != 'backoff'][0]['state'])\n \n+    def test_pending_item_is_fresh_again_once_its_retry_deadline_passes(self):\n+        self.issues = [dict(number=1, title='Older', state='open', labels=[{'name': 'ready'}]),\n+                       dict(number=2, title='Newer', state='open', labels=[{'name': 'ready'}])]\n+        (self.root / 'pending').write_text(json.dumps(dict(state='pending', reason='waiting', evidence=[])))\n+        first = work.run(self.led, [self.entry], max_items=1)\n+        self.assertEqual(['pending'], [row['state'] for row in first])\n+        older = first[0]['task']\n+        # Once the deadline the pending pass recorded has passed, the older item leads again.\n+        (self.root / 'pending').unlink()\n+        with patch('nexus.work.time.time', return_value=work.time.time() + 10 ** 6):\n+            second = work.run(self.led, [self.entry], max_items=1)\n+        active = [row for row in second if row['state'] not in ('backoff',)]\n+        self.assertEqual([older], [row['task'] for row in active])\n+\n     def test_max_items_bounds_each_repository_not_the_run(self):\n         roots = [self.root / f'other-{i}' for i in range(3)]\n         for root in roots:\n"
+ },
+ {
+  "commit": "e70aea214995fd04f3691e3efa970ac97441810c",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_work.py"
+  ],
+  "overlay": [
+   "tests/test_work.py"
+  ],
+  "start": 540,
+  "end": 664,
+  "changed": 14,
+  "objective": "work: conveyor triage backpressure no longer backs off the item",
+  "test_diff": "diff --git a/tests/test_work.py b/tests/test_work.py\nindex 2b289ec..9860dad 100644\n--- a/tests/test_work.py\n+++ b/tests/test_work.py\n@@ -453,6 +453,11 @@ else:\n         self.assertEqual([], self.closed)\n         self.assertTrue(all(Path(a[\"ref\"]).exists() for a in self.led.artifacts()))\n \n+    def test_conveyor_triage_backpressure_does_not_back_off_the_item(self):\n+        self.led.event('work.item_attempt', 'sample/product#1',\n+                       dict(step='triage', status='failed', attempt=6, retry_at=10**12, evidence='log'), 'conveyor')\n+        self.assertEqual('done', self.run_work()[0]['state'])\n+\n     def test_conveyor_success_is_not_delivery_proof(self):\n         self.led.event(\"work.item_attempt\", \"sample/product#1\",\n                        dict(step=\"build\", status=\"succeeded\", attempt=0, retry_at=0, evidence=\"log\"), \"conveyor\")\n"
+ },
+ {
+  "commit": "3bd90e85437c07c2b048d7272bac54848943c1f4",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_work.py"
+  ],
+  "overlay": [
+   "tests/test_work.py"
+  ],
+  "start": 459,
+  "end": 547,
+  "changed": 9,
+  "objective": "work: ready issues precede in-PR resumption within a repository queue",
+  "test_diff": "diff --git a/tests/test_work.py b/tests/test_work.py\nindex fbf867f..2b289ec 100644\n--- a/tests/test_work.py\n+++ b/tests/test_work.py\n@@ -581,14 +581,10 @@ else:\n         self.assertEqual(2, len(self.calls()))\n \n     def test_fresh_ready_issue_outranks_stalled_in_pr_items(self):\n-        # Issue 1 is older and in PR (two bonuses) but its last pass reported pending;\n-        # issue 2 is new and ready and has never run. Issue 2 takes the single slot.\n-        self.issues = [dict(number=1, title='Stalled', state='open', labels=[{'name': 'in pr'}]),\n+        # Issue 1 is older and in PR (two bonuses): it waits on review, so the fresh ready\n+        # issue 2 takes the single slot; issue 1 runs only from a second slot.\n+        self.issues = [dict(number=1, title='In PR', state='open', labels=[{'name': 'in pr'}]),\n                        dict(number=2, title='Fresh', state='open', labels=[{'name': 'ready'}])]\n-        (self.root / 'pending').write_text(json.dumps(dict(state='pending', reason='waiting', evidence=[])))\n-        first = work.run(self.led, [self.entry], max_items=1)\n-        self.assertEqual(['pending'], [row['state'] for row in first])\n-        (self.root / 'pending').unlink()\n         second = work.run(self.led, [self.entry], max_items=1)\n         numbers = [json.loads(self.led.conn.execute(\n             \"SELECT payload FROM events WHERE kind='work.issue' AND subject=? ORDER BY id DESC LIMIT 1\",\n"
+ },
+ {
+  "commit": "af34f1540b975728783184d1f095b196f32a4e01",
+  "path": "client/lesson_outlines.py",
+  "tests": [
+   "tests/test_lesson_outlines.py"
+  ],
+  "overlay": [
+   "client/phone/outlines.html",
+   "client/phone/outlines.js",
+   "tests/test_lesson_outlines.py"
+  ],
+  "start": 0,
+  "end": 62,
+  "changed": 22,
+  "objective": "Outlines: decision, value, proposed chip, approve queues the factory",
+  "test_diff": "diff --git a/tests/test_lesson_outlines.py b/tests/test_lesson_outlines.py\nindex c970e61..2a4045f 100644\n--- a/tests/test_lesson_outlines.py\n+++ b/tests/test_lesson_outlines.py\n@@ -79,6 +79,31 @@ class BuildTest(OutlineFixture):\n         self.assertIn(\"status: approved by aria\", self.path.read_text())\n         self.assertEqual(outlines.approve({\"product\": \"superpowerai\", \"lesson\": \"L017-clubhouse-makeover-1\"}, self.root)[0], 409)\n \n+    def test_a_factory_proposal_is_marked_proposed_and_carries_its_value_sentence(self):\n+        self.write(\"proposed/tbs-curriculum/superkidsai/L021-OPTIONS.md\",\n+                   \"# L021\\ndecision-proposed: robot-pen; free tool, poster in 10 minutes\\n\"\n+                   \"value: after this, mom/kid can print a poster and she cares because it takes ten minutes\\n\"\n+                   \"proposed-by: factory 2026-09-09\\n\")\n+        self.write(\"proposed/tbs-curriculum/superkidsai/L021-robot-pen/OUTLINE.md\",\n+                   \"status: draft\\nproduct: superpowerai\\nlesson: L021-robot-pen\\n\"\n+                   \"decision: robot-pen; free tool, poster in 10 minutes\\nsource: proposed\\n\\n## Outline\\n- x\\n\")\n+        row = {r[\"lesson\"]: r for r in outlines.build(self.root)[\"outlines\"]}[\"L021-robot-pen\"]\n+        self.assertTrue(row[\"proposed\"])\n+        self.assertFalse(row[\"queued\"])\n+        self.assertEqual(row[\"decision\"], \"robot-pen; free tool, poster in 10 minutes\")\n+        self.assertTrue(row[\"value\"].startswith(\"after this, mom/kid can print a poster\"))\n+        self.assertEqual(row[\"options\"], \"L021-OPTIONS.md\")\n+\n+    def test_an_options_decision_outranks_a_stale_proposal_and_an_approved_row_is_queued(self):\n+        self.write(\"proposed/tbs-curriculum/superkidsai/L017-OPTIONS.md\",\n+                   \"decision: makeover; Aria ruled\\ndecision-proposed: old proposal\\nvalue: a sentence\\n\")\n+        row = {r[\"lesson\"]: r for r in outlines.build(self.root)[\"outlines\"]}[\"L017-clubhouse-makeover-1\"]\n+        self.assertFalse(row[\"proposed\"])\n+        self.assertEqual(row[\"decision\"], \"makeover; Aria ruled\")\n+        outlines.approve({\"product\": \"superpowerai\", \"lesson\": \"L017-clubhouse-makeover-1\"}, self.root)\n+        row = {r[\"lesson\"]: r for r in outlines.build(self.root)[\"outlines\"]}[\"L017-clubhouse-makeover-1\"]\n+        self.assertTrue(row[\"queued\"] and row[\"approved\"] and not row[\"proposed\"])\n+\n     def test_invalid_targets_rejected(self):\n         for body in ({\"product\": \"superpowerai\", \"lesson\": \"../L017\"}, {\"product\": \"nope\", \"lesson\": \"L017-x\"}, {\"product\": \"mommyai\", \"lesson\": \"L017\"}):\n             with self.assertRaises(ValueError):\n@@ -129,3 +154,13 @@ class RouteTest(OutlineFixture):\n         self.assertEqual(code, 200, raw)\n         self.assertTrue(json.loads(raw)[\"status\"].startswith(\"approved by aria\"))\n         self.assertTrue(json.loads(self.request(\"/api/lesson-outlines\")[1])[\"outlines\"][0][\"approved\"])\n+\n+    def test_the_list_api_carries_every_field_the_row_shows(self):\n+        row = json.loads(self.request(\"/api/lesson-outlines\")[1])[\"outlines\"][0]\n+        for key in (\"product\", \"lesson\", \"status\", \"decision\", \"proposed\", \"value\", \"queued\"):\n+            self.assertIn(key, row)\n+\n+    def test_the_page_renders_the_decision_the_value_and_the_queued_state(self):\n+        script = (pathlib.Path(__file__).resolve().parents[1] / \"client/phone/outlines.js\").read_text()\n+        for token in (\"proposed\", \"queued for the factory\", \"row.value\", \"row.decision\", \"approve-row\"):\n+            self.assertIn(token, script)\n"
+ },
+ {
+  "commit": "da092781c5fdb17ae6e0e8239355b4c95735ace9",
+  "path": "nexus/podcast_daily.py",
+  "tests": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "overlay": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "start": 0,
+  "end": 146,
+  "changed": 10,
+  "objective": "Budget nightly narration for natural-speed episode duration",
+  "test_diff": "diff --git a/tests/test_podcast_nightly.py b/tests/test_podcast_nightly.py\nindex bf61164..02035d0 100644\n--- a/tests/test_podcast_nightly.py\n+++ b/tests/test_podcast_nightly.py\n@@ -50,7 +50,7 @@ class NightlyPodcast(unittest.TestCase):\n     def test_length_repair_keeps_reviewed_draft_and_accepts_measured_words(self):\n         with tempfile.TemporaryDirectory() as temporary:\n             root=Path(temporary)\n-            too_long=json.dumps({'chapters':[{'text':'word '*4902}]})\n+            too_long=json.dumps({'chapters':[{'text':'word '*4618}]})\n             fitted=json.dumps({'chapters':[{'text':'word '*4300}]})\n             (root/'editorial-reviewed.json').write_text(too_long)\n             with patch.object(daily,'editorial_pass',return_value=fitted) as writer:\n"
+ },
+ {
+  "commit": "8749b1bb203fec9346c97e0032a06a8207c7531c",
+  "path": "nexus/podcast_daily.py",
+  "tests": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "overlay": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "start": 106,
+  "end": 191,
+  "changed": 13,
+  "objective": "Keep nightly podcast retries on the original Pacific date",
+  "test_diff": "diff --git a/tests/test_podcast_nightly.py b/tests/test_podcast_nightly.py\nindex d4b8aae..bf61164 100644\n--- a/tests/test_podcast_nightly.py\n+++ b/tests/test_podcast_nightly.py\n@@ -59,3 +59,17 @@ class NightlyPodcast(unittest.TestCase):\n                 self.assertEqual(daily.fit_editorial(root,too_long,{},''),fitted)\n                 writer.assert_called_once()\n             self.assertEqual((root/'editorial-reviewed.json').read_text(),too_long)\n+\n+    def test_retry_after_midnight_keeps_original_task_date(self):\n+        from datetime import datetime\n+        from zoneinfo import ZoneInfo\n+        with tempfile.TemporaryDirectory() as temporary:\n+            root=Path(temporary);database=str(root/'ledger.sqlite')\n+            with closing(Ledger(database)) as ledger:\n+                plan=ledger.add_plan('podcast')\n+                task=ledger.add_task('tonight',origin='user',plan_id=plan)\n+                stamp=datetime(2026,9,8,21,tzinfo=ZoneInfo('America/Los_Angeles')).timestamp()\n+                ledger.conn.execute('UPDATE tasks SET created_at=? WHERE id=?',(stamp,task));ledger.conn.commit()\n+                flight=ledger.create_flight(plan,task_id=task)\n+            with patch.dict('os.environ',{'OFFICE_NEXUS_LEDGER':database}),patch.object(daily.Path,'cwd',return_value=root/flight):\n+                self.assertEqual(daily.production_date(),'2026-09-08')\n"
+ },
+ {
+  "commit": "dfac998dedb8117d6c96235f4774af6d35ee310b",
+  "path": "nexus/podcast_daily.py",
+  "tests": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "overlay": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "start": 159,
+  "end": 223,
+  "changed": 2,
+  "objective": "Deduplicate immediate podcast runs against the nightly schedule",
+  "test_diff": "diff --git a/tests/test_podcast_nightly.py b/tests/test_podcast_nightly.py\nindex 099f0ff..d4b8aae 100644\n--- a/tests/test_podcast_nightly.py\n+++ b/tests/test_podcast_nightly.py\n@@ -24,6 +24,9 @@ class NightlyPodcast(unittest.TestCase):\n                 self.assertEqual(json.loads(ledger.plan(plan)['schedule']),{'at':'21:00'})\n                 self.assertTrue(ledger.plan(plan)['enabled'])\n                 self.assertEqual(ledger.task(first)['plan_id'],plan)\n+                self.assertTrue(ledger.task(first)['dedupe_key'].startswith('plan:'+plan+':at:'))\n+                self.assertTrue(ledger.task(first)['dedupe_key'].endswith('T21:00'))\n+                self.assertIsNone(ledger.add_scheduled_task(ledger.plan(plan),ledger.task(first)['dedupe_key'],0))\n \n     def test_old_daily_edition_does_not_suppress_nightly_production(self):\n         with tempfile.TemporaryDirectory() as temporary:\n"
+ },
+ {
+  "commit": "320bf49889619f35875c8d573aee65f57ed17fc5",
+  "path": "nexus/podcast_daily.py",
+  "tests": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "overlay": [
+   "tests/test_podcast_nightly.py"
+  ],
+  "start": 22,
+  "end": 120,
+  "changed": 40,
+  "objective": "Resume reviewed podcast drafts and repair measured length",
+  "test_diff": "diff --git a/tests/test_podcast_nightly.py b/tests/test_podcast_nightly.py\nindex 28c87b9..099f0ff 100644\n--- a/tests/test_podcast_nightly.py\n+++ b/tests/test_podcast_nightly.py\n@@ -43,3 +43,16 @@ class NightlyPodcast(unittest.TestCase):\n             (logs/'email-morning-2026-09-07.html').write_text('yesterday')\n             result=daily.today_evidence(root,'2026-09-08')\n             self.assertIn('today',result);self.assertNotIn('yesterday',result)\n+\n+    def test_length_repair_keeps_reviewed_draft_and_accepts_measured_words(self):\n+        with tempfile.TemporaryDirectory() as temporary:\n+            root=Path(temporary)\n+            too_long=json.dumps({'chapters':[{'text':'word '*4902}]})\n+            fitted=json.dumps({'chapters':[{'text':'word '*4300}]})\n+            (root/'editorial-reviewed.json').write_text(too_long)\n+            with patch.object(daily,'editorial_pass',return_value=fitted) as writer:\n+                self.assertEqual(daily.reviewed_editorial(root,'',{},'','2026-09-08'),too_long)\n+                writer.assert_not_called()\n+                self.assertEqual(daily.fit_editorial(root,too_long,{},''),fitted)\n+                writer.assert_called_once()\n+            self.assertEqual((root/'editorial-reviewed.json').read_text(),too_long)\n"
+ },
+ {
+  "commit": "d48654301a9aa5ca6d48bfe34f7772dbe0f3ee28",
+  "path": "client/lesson_status.py",
+  "tests": [
+   "tests/test_lesson_status.py"
+  ],
+  "overlay": [
+   "tests/test_lesson_status.py"
+  ],
+  "start": 0,
+  "end": 212,
+  "changed": 39,
+  "objective": "Read production publication evidence for every lesson",
+  "test_diff": "diff --git a/tests/test_lesson_status.py b/tests/test_lesson_status.py\nindex 52ffa99..3976cb3 100644\n--- a/tests/test_lesson_status.py\n+++ b/tests/test_lesson_status.py\n@@ -46,6 +46,28 @@ class StatusTest(LessonFixture):\n         self.assertEqual(row[\"continuity\"][\"state\"], \"unknown\")\n         self.assertEqual(row[\"planned\"][\"decision\"], \"\")\n \n+    def test_publication_true_false_and_stale_preserve_check_time(self):\n+        for hours, expected in [(0, \"current\"), (14, \"stale\")]:\n+            checked = (status.dt.datetime.now(status.dt.timezone.utc) - status.dt.timedelta(hours=hours)).isoformat()\n+            self.write(status.PUBLICATION_SOURCE, json.dumps({\"checked_at\": checked,\n+                       \"superpowerai\": {\"L001\": True, \"L014\": False}, \"mommyai\": {\"L024\": True, \"L025\": False}}))\n+            rows = {(r[\"product\"], r[\"lesson\"]): r[\"published\"] for r in self.build()[\"lessons\"]}\n+            for product, lesson, value in [(\"superpowerai\", \"L001\", True), (\"superpowerai\", \"L014\", False),\n+                                           (\"mommyai\", \"L024\", True), (\"mommyai\", \"L025\", False)]:\n+                self.assertIs(rows[product, lesson][\"present\"], value)\n+                self.assertEqual(rows[product, lesson][\"checked_at\"], checked)\n+                self.assertEqual(rows[product, lesson][\"state\"], expected)\n+            self.assertIsNone(rows[\"mommyai\", \"L096\"][\"present\"])\n+\n+    def test_invalid_publication_never_becomes_false(self):\n+        for receipt in [\"broken\", \"[]\", '{\"checked_at\":\"bad\"}',\n+                        json.dumps({\"checked_at\": status.dt.datetime.now(status.dt.timezone.utc).isoformat(),\n+                                    \"superpowerai\": {\"L001\": \"false\"}})]:\n+            self.write(status.PUBLICATION_SOURCE, receipt)\n+            value = self.build()[\"lessons\"][0][\"published\"]\n+            self.assertIsNone(value[\"present\"])\n+            self.assertEqual(value[\"state\"], \"unknown\")\n+\n     def test_independent_signals_and_latest_findings(self):\n         base = \"proposed/tbs-curriculum/superkidsai/L001\"\n         self.write(base + \"-OPTIONS.md\", \"decision: keep song\\n\")\n"
+ },
+ {
+  "commit": "74d0762ef2d27b2aa3149d80777a122cd49f56c5",
+  "path": "client/lesson_status.py",
+  "tests": [
+   "tests/test_lesson_status.py"
+  ],
+  "overlay": [
+   "tests/test_lesson_status.py"
+  ],
+  "start": 45,
+  "end": 126,
+  "changed": 2,
+  "objective": "Write steering lines without em dashes",
+  "test_diff": "diff --git a/tests/test_lesson_status.py b/tests/test_lesson_status.py\nindex f4b85e3..52ffa99 100644\n--- a/tests/test_lesson_status.py\n+++ b/tests/test_lesson_status.py\n@@ -102,7 +102,7 @@ class StatusTest(LessonFixture):\n         self.assertTrue(content.startswith(initial))\n         self.assertEqual(content.count(\"## steering\"), 1)\n         self.assertEqual(content.count(\"\\n decision:\"), 0)\n-        self.assertEqual(content.count(\" \u2014 note \"), 8)\n+        self.assertEqual(content.count(\" - note \"), 8)\n         self.assertEqual(status.report(str(path.relative_to(self.root)), self.root), content)\n \n     def test_invalid_targets_and_symlinks_cannot_escape(self):\n"
+ },
+ {
+  "commit": "6f3ee3138e9905527e778eb9c92890b6bc22bc02",
+  "path": "client/office_github_cache.py",
+  "tests": [
+   "tests/test_office_github_cache.py"
+  ],
+  "overlay": [
+   "docs/design/mobile-execution-progress.md",
+   "tests/test_office_github_cache.py"
+  ],
+  "start": 38,
+  "end": 138,
+  "changed": 8,
+  "objective": "Retry recovered GitHub sources during ongoing collection",
+  "test_diff": "diff --git a/tests/test_office_github_cache.py b/tests/test_office_github_cache.py\nindex e9db2a7..90b19da 100644\n--- a/tests/test_office_github_cache.py\n+++ b/tests/test_office_github_cache.py\n@@ -135,3 +135,21 @@ class Cache(unittest.TestCase):\n                 with db:db.execute('INSERT OR REPLACE INTO checkpoint VALUES (1,?)',(value,))\n                 self.assertEqual(cache.coverage(['a/b'],[])[0]['state'],'error')\n         finally:db.close()\n+\n+    def test_failed_repository_rejoins_live_queue_after_retry_cooldown(self):\n+        from types import SimpleNamespace\n+        clock=[10000];order=[];world=SimpleNamespace(access=lambda:None)\n+        def collect(access,known,repo):\n+            order.append(repo)\n+            if repo=='a/recover' and order.count(repo)==1:raise ConnectionError('temporary')\n+            if repo=='z/large':\n+                clock[0]+=150\n+                return {'state':'fetching' if order.count(repo)<4 else 'ready'}\n+            cache.STATUS[repo]={'state':'ready'}\n+            return {'state':'ready'}\n+        with patch.object(cache,'known',return_value=['a/recover','z/large']),patch.object(cache,'collect',side_effect=collect),patch.object(cache.time,'time',side_effect=lambda:clock[0]):\n+            cache.LOCK.acquire();cache.refresh_all(world)\n+        self.assertEqual(order.count('a/recover'),2)\n+        self.assertLess(order.index('a/recover',1),len(order)-1)\n+        self.assertEqual(order[:3],['a/recover','z/large','z/large'])\n+        self.assertFalse(cache.LOCK.locked())\n"
+ },
+ {
+  "commit": "a1977f138303a4c2c523ae85be6016d9f5612f81",
+  "path": "client/chat.py",
+  "tests": [
+   "tests/test_office_bot_uploads.py"
+  ],
+  "overlay": [
+   "client/phone/office.js",
+   "docs/design/mobile-execution-progress.md",
+   "tests/test_office_bot_uploads.py"
+  ],
+  "start": 328,
+  "end": 432,
+  "changed": 21,
+  "objective": "Use shared file and photo receipts in Office bot conversations",
+  "test_diff": "diff --git a/tests/test_office_bot_uploads.py b/tests/test_office_bot_uploads.py\nnew file mode 100644\nindex 0000000..8fd1075\n--- /dev/null\n+++ b/tests/test_office_bot_uploads.py\n@@ -0,0 +1,23 @@\n+from pathlib import Path\n+import sys\n+import unittest\n+from unittest.mock import patch\n+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'client'))\n+import chat,office_uploads\n+\n+class BotUploads(unittest.TestCase):\n+    def test_validated_receipts_are_forwarded_without_inline_file_bytes(self):\n+        room=chat.Chatroom();refs=[{'id':'upload:'+'a'*64,'revision':'b'*64}]\n+        with patch.object(office_uploads,'attachments',return_value=[{'name':'fixture.txt'}]),patch.object(chat,'read_bots',return_value=[{'id':'relay'}]),patch.object(chat.threading,'Thread') as thread:\n+            status,_=room.say({'bot':'relay','message':'','uploads':refs})\n+        self.assertEqual(status,202);self.assertEqual(thread.call_args.kwargs['args'][-1],refs)\n+        with patch.object(chat.rt,'post',return_value={}) as post:\n+            room._turn('relay','',(),refs)\n+        self.assertEqual(post.call_args.args[1]['uploads'],refs)\n+        self.assertNotIn('attachments',post.call_args.args[1])\n+\n+    def test_invalid_receipt_is_refused_before_queue(self):\n+        room=chat.Chatroom()\n+        with patch.object(office_uploads,'attachments',side_effect=ValueError('Invalid receipt')),patch.object(chat.threading,'Thread') as thread:\n+            status,data=room.say({'bot':'relay','message':'read','uploads':[{}]})\n+        self.assertEqual(status,400);self.assertIn('receipt',data['error']);thread.assert_not_called()\n"
+ },
+ {
+  "commit": "ee11162afa9a2c693b510e277f79237a087f2291",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_work.py"
+  ],
+  "overlay": [
+   "docs/work.md",
+   "tests/test_work.py"
+  ],
+  "start": 329,
+  "end": 460,
+  "changed": 18,
+  "objective": "Keep verified source review stages pending (#156)",
+  "test_diff": "diff --git a/tests/test_work.py b/tests/test_work.py\nindex 863f2b2..fff913c 100644\n--- a/tests/test_work.py\n+++ b/tests/test_work.py\n@@ -36,6 +36,10 @@ if mode == 'verify':\n         print((root / 'pending').read_text())\n     elif any(any(l['name'] == 'direct' for l in pr.get('labels', [])) for pr in data['pull_requests']):\n         print(json.dumps(dict(state='pending', reason='PR claimed', evidence=['claim'])))\n+    elif receipt.exists() and (root / 'source-stage').exists():\n+        result = json.loads((root / 'source-stage').read_text())\n+        result.setdefault('idempotency_key', data['idempotency_key'])\n+        print(json.dumps(result))\n     elif receipt.exists():\n         print(json.dumps(dict(state='delivered', verified=True,\n             evidence=[str(receipt)], idempotency_key=data['idempotency_key'])))\n@@ -492,6 +496,46 @@ else:\n         self.assertEqual('done', self.run_work()[0]['state'])\n         self.assertEqual(1, len(self.calls()))\n \n+    def test_verified_source_continuation_is_pending_not_failed(self):\n+        (self.root / 'source-stage').write_text(json.dumps(dict(\n+            state='absent', retry_safe=True, resume_kind='review',\n+            evidence=[{'url':'https://github.com/sample/product/pull/2', 'head':'exact-head'}])))\n+        self.assertEqual('pending', self.run_work()[0]['state'])\n+        self.assertEqual(1, len(self.calls()))\n+        self.assertEqual([], self.led.events(kind='work.failure'))\n+        self.assertEqual([], self.closed)\n+        self.assertNotEqual('done', self.led.tasks()[0]['state'])\n+        self.assertTrue(self.led.events(kind='work.pending'))\n+\n+    def test_source_continuation_with_foreign_identity_cannot_hide_failure(self):\n+        (self.root / 'source-stage').write_text(json.dumps(dict(\n+            state='absent', retry_safe=True, resume_kind='review',\n+            idempotency_key='github:other/repo#1',\n+            evidence=[{'url':'https://github.com/sample/product/pull/2', 'head':'exact-head'}])))\n+        self.assertEqual('failed', self.run_work()[0]['state'])\n+        self.assertEqual([], self.led.events(kind='work.pending'))\n+        self.assertEqual([], self.closed)\n+\n+    def test_source_continuation_without_evidence_cannot_hide_failure(self):\n+        (self.root / 'source-stage').write_text(json.dumps(dict(\n+            state='absent', retry_safe=True, resume_kind='review', evidence=[])))\n+        self.assertEqual('failed', self.run_work()[0]['state'])\n+        self.assertEqual([], self.led.events(kind='work.pending'))\n+        self.assertEqual([], self.closed)\n+\n+    def test_malformed_source_evidence_does_not_suppress_failures(self):\n+        for number, evidence in enumerate((True, ' ', [None], [{}],\n+                                          [{'url':' ', 'head':'sha'}],\n+                                          [{'url':'https://example.test/pr', 'head':False}]), 1):\n+            with self.subTest(evidence=evidence):\n+                self.issues = [dict(number=number, title='Source stage', state='open',\n+                                    labels=[{'name':'ready'}])]\n+                (self.root / 'source-stage').write_text(json.dumps(dict(\n+                    state='absent', retry_safe=True, resume_kind='review', evidence=evidence)))\n+                self.assertEqual('failed', self.run_work()[-1]['state'])\n+                self.assertEqual([], self.led.events(kind='work.pending'))\n+                self.assertEqual([], self.closed)\n+\n     def test_fair_bounded_selection_across_repositories(self):\n         self.issues += [dict(number=n, title=str(n), state='open', labels=[{'name': 'ready'}]) for n in range(2, 5)]\n         (self.root / 'fail-1').touch()\n"
+ },
+ {
+  "commit": "6a24e74be3cb238a44717a83fb6175bbde886f99",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_work.py"
+  ],
+  "overlay": [
+   "docs/work.md",
+   "tests/test_work.py"
+  ],
+  "start": 449,
+  "end": 530,
+  "changed": 2,
+  "objective": "Preserve the execution budget for one-item work runs (#155)",
+  "test_diff": "diff --git a/tests/test_work.py b/tests/test_work.py\nindex 50fc119..863f2b2 100644\n--- a/tests/test_work.py\n+++ b/tests/test_work.py\n@@ -500,6 +500,17 @@ else:\n         self.assertEqual(['sample/product', 'sample/other'], [r['repo'] for r in report])\n         self.assertEqual(2, len(self.calls()))\n \n+    def test_single_item_keeps_execution_budget_and_rotates_repositories(self):\n+        self.script.write_text('import time; time.sleep(0.6)\\n' + self.script.read_text())\n+        entries = [self.entry] + [dict(self.entry, repo=f'sample/other-{i}') for i in range(7)]\n+        report = work.run(self.led, entries, budget_s=3, max_items=1)\n+        self.assertEqual(['done'], [row['state'] for row in report])\n+        self.assertEqual('sample/product', report[0]['repo'])\n+        self.assertEqual(1, len(self.calls()))\n+        following = work.run(self.led, entries, budget_s=3, max_items=1)\n+        self.assertEqual('sample/other-0', following[0]['repo'])\n+        self.assertEqual('done', following[0]['state'])\n+\n     def test_budget_prevents_launch_and_reserves_other_repository_time(self):\n         other = dict(self.entry, repo='sample/other')\n         self.entry['executor'] = [sys.executable, '-c', 'import time; time.sleep(10)']\n"
+ },
+ {
+  "commit": "62c799f65f59c61f180580dbc6cd1c08eb917e2d",
+  "path": "client/bot_reports.py",
+  "tests": [
+   "tests/test_bot_reports.py"
+  ],
+  "overlay": [
+   "tests/test_bot_reports.py"
+  ],
+  "start": 0,
+  "end": 78,
+  "changed": 37,
+  "objective": "fix(reports): correlate successful reply to exact request (#153)",
+  "test_diff": "diff --git a/tests/test_bot_reports.py b/tests/test_bot_reports.py\nindex 9dd3f3d..fd0f0f7 100644\n--- a/tests/test_bot_reports.py\n+++ b/tests/test_bot_reports.py\n@@ -14,6 +14,7 @@ import bot_reports  # noqa: E402\n class Door(BaseHTTPRequestHandler):\n     turns = {bot: [] for bot in bot_reports.BOTS}\n     messages = []\n+    scenario = \"success\"\n     world = {\n         \"generated\": \"2026-09-04T08:00:00Z\",\n         \"stations\": [{\"repo\": \"owner/repo\"}],\n@@ -31,7 +32,13 @@ class Door(BaseHTTPRequestHandler):\n         body = json.loads(self.rfile.read(size))\n         bot = body[\"bot\"]\n         self.messages.append(body[\"message\"])\n-        self.turns[bot].append({\"id\": f\"reply-{bot}\", \"role\": \"assistant\", \"content\": \"done\"})\n+        group = None if self.scenario == \"missing-group\" else f\"group-{bot}\"\n+        self.turns[bot].append({\"id\": f\"user-{bot}\", \"role\": \"user\", \"content\": \"Daily report.\" if self.scenario == \"wrong-request\" else body[\"message\"], \"inference_group_id\": group})\n+        if self.scenario != \"unrelated-only\":\n+            self.turns[bot].append({\"id\": f\"reply-{bot}\", \"role\": \"assistant\", \"content\": \"done\",\n+                                    \"inference_group_id\": group, \"ok\": self.scenario != \"failed\"})\n+        self.turns[bot].append({\"id\": \"unrelated\", \"role\": \"assistant\", \"content\": \"other\",\n+                                \"inference_group_id\": \"other-group\", \"ok\": True})\n         self.reply(202, {\"ok\": True})\n \n     def reply(self, status, body):\n@@ -50,6 +57,7 @@ class BotReportsTest(unittest.TestCase):\n     def setUp(self):\n         Door.turns = {bot: [] for bot in bot_reports.BOTS}\n         Door.messages = []\n+        Door.scenario = \"success\"\n         Door.world = {\n             \"generated\": \"2026-09-04T08:00:00Z\",\n             \"stations\": [{\"repo\": \"owner/repo\"}],\n@@ -79,7 +87,26 @@ class BotReportsTest(unittest.TestCase):\n \n     def test_the_scheduler_triggers_identity_instead_of_puppeteering_the_voice(self):\n         bot_reports.run_report(\"north\", self.base, timeout_s=1)\n-        self.assertEqual(Door.messages, [bot_reports.REPORT_TRIGGER])\n+        self.assertEqual(len(Door.messages), 1)\n+        self.assertRegex(Door.messages[0], r\"^Daily report\\.\\n\\n<!-- office-report:[0-9a-f]{32} -->$\")\n+\n+    def test_failed_matching_inference_is_not_a_success(self):\n+        Door.scenario = \"failed\"\n+        with self.assertRaisesRegex(ValueError, \"inference did not succeed\"):\n+            bot_reports.run_report(\"north\", self.base, timeout_s=1)\n+\n+    def test_missing_group_and_wrong_request_fail_closed(self):\n+        for scenario in (\"missing-group\", \"wrong-request\"):\n+            with self.subTest(scenario=scenario):\n+                Door.turns = {bot: [] for bot in bot_reports.BOTS}\n+                Door.scenario = scenario\n+                with self.assertRaises(TimeoutError):\n+                    bot_reports.run_report(\"north\", self.base, timeout_s=0.05)\n+\n+    def test_unrelated_assistant_does_not_complete_report(self):\n+        Door.scenario = \"unrelated-only\"\n+        with self.assertRaises(TimeoutError):\n+            bot_reports.run_report(\"north\", self.base, timeout_s=0.05)\n \n \n if __name__ == \"__main__\":\n"
+ },
+ {
+  "commit": "8700851cab9ec592fbcca040816db95f930a558a",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_work.py"
+  ],
+  "overlay": [
+   "tests/test_work.py"
+  ],
+  "start": 59,
+  "end": 439,
+  "changed": 24,
+  "objective": "fix(work): recover abandoned direct claims with a new task generation",
+  "test_diff": "diff --git a/tests/test_work.py b/tests/test_work.py\nindex 17b6863..f59768b 100644\n--- a/tests/test_work.py\n+++ b/tests/test_work.py\n@@ -140,6 +140,30 @@ else:\n         self.assertEqual([], self.calls())\n         self.assertEqual(1, len(self.led.tasks()))\n \n+    def test_explicit_recovery_claim_preserves_abandoned_generation(self):\n+        work.discover(self.led, self.entry)\n+        old = work.claim(self.led, self.entry[\"repo\"], 1, os.getpid())\n+        old_task = self.led.flight(old)[\"task_id\"]\n+        self.led.fail(old, \"vanished\", \"legacy Tower reconciled direct claim\")\n+        self.led.conn.execute(\"UPDATE tasks SET state='abandoned' WHERE id=?\", (old_task,))\n+        self.led.event(\"task.state\", old_task, {\"to\": \"abandoned\"}, \"tower\")\n+        with self.assertRaises(work.WorkError):\n+            work.claim(self.led, self.entry[\"repo\"], 1, os.getpid(), runner=True)\n+        fresh = work.claim(self.led, self.entry[\"repo\"], 1, os.getpid())\n+        task = self.led.flight(fresh)[\"task_id\"]\n+        self.assertNotEqual(old_task, task)\n+        self.assertEqual(\"abandoned\", self.led.conn.execute(\"SELECT state FROM tasks WHERE id=?\", (old_task,)).fetchone()[0])\n+        self.assertEqual(\"failed\", self.led.flight(old)[\"state\"])\n+        self.assertEqual(2, self.led.flight(fresh)[\"attempt\"])\n+        self.assertEqual(old_task, work.latest(self.led, \"work.generation\", task)[\"previous_task\"])\n+        self.assertEqual(task, work.capture(self.led, self.entry[\"repo\"], self.issues[0]))\n+        queue, _ = work.selection_queue(self.led, self.entry)\n+        self.assertEqual([task], [t[\"id\"] for t in queue])\n+        with self.assertRaises(work.Owned):\n+            work.claim(self.led, self.entry[\"repo\"], 1, os.getpid())\n+        work.release(self.led, fresh, os.getpid())\n+        self.assertEqual([], self.led.integrity_check())\n+\n     def test_direct_claim_survives_expiry_and_tower_tick(self):\n         work.discover(self.led, self.entry)\n         fid = work.claim(self.led, self.entry[\"repo\"], 1, os.getpid())\n"
+ },
+ {
+  "commit": "197ec1981d285d5fb869a9f4176b8a91f4768d00",
+  "path": "client/sources/flows.py",
+  "tests": [
+   "tests/test_work.py"
+  ],
+  "overlay": [
+   "tests/test_work.py"
+  ],
+  "start": 301,
+  "end": 354,
+  "changed": 7,
+  "objective": "Show registered work coverage separately from Office desks",
+  "test_diff": "diff --git a/tests/test_work.py b/tests/test_work.py\nindex 361c0dc..17b6863 100644\n--- a/tests/test_work.py\n+++ b/tests/test_work.py\n@@ -225,6 +225,13 @@ else:\n         self.assertTrue(any(row[\"label\"] == \"Work failures\" and row[\"value\"] == \"1\"\n                             for row in card[\"facts\"]))\n \n+    def test_office_names_registry_coverage_separately_from_desks(self):\n+        from sources import flows\n+        report = work.status(self.led, [self.entry, dict(self.entry, repo=\"other/repo\", path=None)])\n+        card = flows.card({\"state\": \"unconfigured\", \"work\": report})\n+        self.assertIn({\"label\": \"Work coverage\", \"value\": \"2 registered \u00b7 1 local \u00b7 1 unavailable\", \"tone\": \"dim\"}, card[\"facts\"])\n+        self.assertTrue(any(f[\"label\"] == \"Work coverage gaps\" and f[\"value\"] == \"1\" for f in card[\"facts\"]))\n+\n     def test_capture_all_execute_only_ready(self):\n         for number, label in enumerate((None, \"hold\", \"direct\", \"cancelled\"), 2):\n             self.issues.append(dict(number=number, title=str(number), state=\"open\",\n"
+ },
+ {
+  "commit": "3f3027f33e5d4236b449fb6a64a0fd871550d8f8",
+  "path": "nexus/work.py",
+  "tests": [
+   "tests/test_work.py"
+  ],
+  "overlay": [
+   "tests/test_work.py"
+  ],
+  "start": 9,
+  "end": 555,
+  "changed": 21,
+  "objective": "Keep unmapped work repositories unavailable without cwd fallback (#149)",
+  "test_diff": "diff --git a/tests/test_work.py b/tests/test_work.py\nindex 546af12..361c0dc 100644\n--- a/tests/test_work.py\n+++ b/tests/test_work.py\n@@ -113,6 +113,25 @@ else:\n         self.assertEqual(1, len(work.registry(path)))\n         self.assertEqual(str(self.root.resolve()), work.registry(path)[0][\"path\"])\n \n+    def test_null_workspace_remains_unavailable_and_never_executes_in_cwd(self):\n+        entry = dict(self.entry, path=None)\n+        path = self.root / \"registry.json\"\n+        path.write_text(json.dumps({\"repositories\": [entry]}))\n+        loaded = work.registry(path)\n+        self.assertIsNone(loaded[0][\"path\"])\n+        self.assertFalse(work.status(self.led, loaded)[\"repositories\"][0][\"available\"])\n+        self.assertFalse(work.read_status(self.root / \"absent.sqlite\", loaded)[\"repositories\"][0][\"available\"])\n+        with patch(\"nexus.work.subprocess.Popen\") as spawn:\n+            with self.assertRaisesRegex(work.WorkError, \"checkout unavailable\"):\n+                work.adapter([sys.executable], entry, {}, self.root / \"adapter.log\")\n+            spawn.assert_not_called()\n+\n+    def test_inventory_offloaded_directory_is_not_a_checkout(self):\n+        entry = dict(self.entry, availability={\"local_git_at_inventory\": True})\n+        self.assertFalse(work.workspace_available(entry))\n+        (self.root / \".git\").mkdir()\n+        self.assertTrue(work.workspace_available(entry))\n+\n     def test_intake_survives_source_window(self):\n         work.discover(self.led, self.entry)\n         self.led.conn.execute(\"UPDATE tasks SET created_at=1\")\n"
+ },
+ {
+  "commit": "10047e5983402af00700c0d12fd50fbdb1dca8ed",
+  "path": "client/bot_reports.py",
+  "tests": [
+   "tests/test_bot_reports.py"
+  ],
+  "overlay": [
+   "tests/test_bot_reports.py"
+  ],
+  "start": 0,
+  "end": 84,
+  "changed": 12,
+  "objective": "Trigger bot reports through system identities",
+  "test_diff": "diff --git a/tests/test_bot_reports.py b/tests/test_bot_reports.py\nindex ac2f65b..9dd3f3d 100644\n--- a/tests/test_bot_reports.py\n+++ b/tests/test_bot_reports.py\n@@ -13,6 +13,7 @@ import bot_reports  # noqa: E402\n \n class Door(BaseHTTPRequestHandler):\n     turns = {bot: [] for bot in bot_reports.BOTS}\n+    messages = []\n     world = {\n         \"generated\": \"2026-09-04T08:00:00Z\",\n         \"stations\": [{\"repo\": \"owner/repo\"}],\n@@ -29,6 +30,7 @@ class Door(BaseHTTPRequestHandler):\n         size = int(self.headers.get(\"content-length\", \"0\"))\n         body = json.loads(self.rfile.read(size))\n         bot = body[\"bot\"]\n+        self.messages.append(body[\"message\"])\n         self.turns[bot].append({\"id\": f\"reply-{bot}\", \"role\": \"assistant\", \"content\": \"done\"})\n         self.reply(202, {\"ok\": True})\n \n@@ -47,6 +49,7 @@ class Door(BaseHTTPRequestHandler):\n class BotReportsTest(unittest.TestCase):\n     def setUp(self):\n         Door.turns = {bot: [] for bot in bot_reports.BOTS}\n+        Door.messages = []\n         Door.world = {\n             \"generated\": \"2026-09-04T08:00:00Z\",\n             \"stations\": [{\"repo\": \"owner/repo\"}],\n@@ -74,16 +77,9 @@ class BotReportsTest(unittest.TestCase):\n         with self.assertRaisesRegex(ValueError, \"no completed snapshot\"):\n             bot_reports.run_report(\"north\", self.base, timeout_s=1)\n \n-    def test_each_role_has_a_visibly_distinct_report_contract(self):\n-        headings = {\n-            prompt.split(\"Open with '\", 1)[1].split(\"'\", 1)[0]\n-            for prompt in bot_reports.PROMPTS.values()\n-        }\n-        self.assertEqual(len(headings), len(bot_reports.BOTS))\n-        for bot, prompt in bot_reports.PROMPTS.items():\n-            self.assertIn(bot.upper(), prompt)\n-            self.assertIn(\"Voice:\", prompt)\n-            self.assertIn(\"Open with '\", prompt)\n+    def test_the_scheduler_triggers_identity_instead_of_puppeteering_the_voice(self):\n+        bot_reports.run_report(\"north\", self.base, timeout_s=1)\n+        self.assertEqual(Door.messages, [bot_reports.REPORT_TRIGGER])\n \n \n if __name__ == \"__main__\":\n"
+ },
+ {
+  "commit": "78c6757def8aaddd3c7b296e2db4f511be84a6de",
+  "path": "client/sections.py",
+  "tests": [
+   "tests/test_sections.py"
+  ],
+  "overlay": [
+   "tests/test_sections.py"
+  ],
+  "start": 0,
+  "end": 61,
+  "changed": 4,
+  "objective": "Remove retired pipeline from Office evidence",
+  "test_diff": "diff --git a/tests/test_sections.py b/tests/test_sections.py\nindex cd34837..bb17f99 100644\n--- a/tests/test_sections.py\n+++ b/tests/test_sections.py\n@@ -146,6 +146,9 @@ class SectionsTest(unittest.TestCase):\n         for key, section in out.items():\n             self.assertIn(\"card\", section, key)\n \n+    def test_retired_dispatcher_is_not_published_as_current_pipeline_truth(self):\n+        self.assertNotIn(\"pipeline\", self.by_key())\n+\n     def test_every_card_holds_the_shape_both_renderers_code_against(self):\n         for key, section in self.sections.read_all().items():\n             assert_card(self, section[\"card\"], key)\n@@ -175,7 +178,7 @@ class SectionsTest(unittest.TestCase):\n         self.assertEqual(set(out[\"clock\"]) - {\"card\"}, set(self.by_key()[\"clock\"].read()))\n         self.assertEqual(out[\"clock\"][\"state\"], \"unconfigured\")\n         # One bad card, not a bad snapshot.\n-        for other in (\"cost\", \"library\", \"mail\", \"pipeline\"):\n+        for other in (\"cost\", \"library\", \"mail\"):\n             self.assertNotIn(\"card failed\", out[other][\"card\"][\"headline\"], other)\n \n     def test_a_source_that_raises_is_an_error_section_that_still_has_a_card(self):\n"
+ },
+ {
+  "commit": "6b0b248356d2c4a53dc82c544b235aee5c3d6a82",
+  "path": "client/bot_reports.py",
+  "tests": [
+   "tests/test_bot_reports.py"
+  ],
+  "overlay": [
+   "tests/test_bot_reports.py"
+  ],
+  "start": 0,
+  "end": 73,
+  "changed": 25,
+  "objective": "Simplify and differentiate Office reports",
+  "test_diff": "diff --git a/tests/test_bot_reports.py b/tests/test_bot_reports.py\nindex df31e82..ac2f65b 100644\n--- a/tests/test_bot_reports.py\n+++ b/tests/test_bot_reports.py\n@@ -13,8 +13,15 @@ import bot_reports  # noqa: E402\n \n class Door(BaseHTTPRequestHandler):\n     turns = {bot: [] for bot in bot_reports.BOTS}\n+    world = {\n+        \"generated\": \"2026-09-04T08:00:00Z\",\n+        \"stations\": [{\"repo\": \"owner/repo\"}],\n+        \"sections\": {\"clock\": {\"state\": \"ok\"}},\n+    }\n \n     def do_GET(self):\n+        if self.path.startswith(\"/api/world\"):\n+            return self.reply(200, {\"world\": self.world})\n         bot = self.path.split(\"bot=\", 1)[-1]\n         self.reply(200, {\"turns\": self.turns[bot]})\n \n@@ -40,6 +47,11 @@ class Door(BaseHTTPRequestHandler):\n class BotReportsTest(unittest.TestCase):\n     def setUp(self):\n         Door.turns = {bot: [] for bot in bot_reports.BOTS}\n+        Door.world = {\n+            \"generated\": \"2026-09-04T08:00:00Z\",\n+            \"stations\": [{\"repo\": \"owner/repo\"}],\n+            \"sections\": {\"clock\": {\"state\": \"ok\"}},\n+        }\n         self.server = ThreadingHTTPServer((\"127.0.0.1\", 0), Door)\n         threading.Thread(target=self.server.serve_forever, daemon=True).start()\n         self.base = f\"http://127.0.0.1:{self.server.server_port}\"\n@@ -57,15 +69,21 @@ class BotReportsTest(unittest.TestCase):\n         self.assertEqual(turn[\"id\"], \"reply-north\")\n         self.assertFalse(Door.turns[\"relay\"])\n \n+    def test_empty_evidence_and_unverified_results_fail_closed(self):\n+        Door.world = {}\n+        with self.assertRaisesRegex(ValueError, \"no completed snapshot\"):\n+            bot_reports.run_report(\"north\", self.base, timeout_s=1)\n+\n     def test_each_role_has_a_visibly_distinct_report_contract(self):\n         headings = {\n-            prompt.split(\"'\", 2)[1]\n+            prompt.split(\"Open with '\", 1)[1].split(\"'\", 1)[0]\n             for prompt in bot_reports.PROMPTS.values()\n         }\n         self.assertEqual(len(headings), len(bot_reports.BOTS))\n         for bot, prompt in bot_reports.PROMPTS.items():\n             self.assertIn(bot.upper(), prompt)\n-            self.assertIn(\"Start with the exact heading\", prompt)\n+            self.assertIn(\"Voice:\", prompt)\n+            self.assertIn(\"Open with '\", prompt)\n \n \n if __name__ == \"__main__\":\n"
+ },
+ {
+  "commit": "44aeb1f287b2570ea58b549004edb200566b64df",
+  "path": "client/bot_reports.py",
+  "tests": [
+   "tests/test_bot_reports.py"
+  ],
+  "overlay": [
+   "tests/test_bot_reports.py"
+  ],
+  "start": 0,
+  "end": 60,
+  "changed": 10,
+  "objective": "Differentiate scheduled bot reports",
+  "test_diff": "diff --git a/tests/test_bot_reports.py b/tests/test_bot_reports.py\nindex 4feb9c4..df31e82 100644\n--- a/tests/test_bot_reports.py\n+++ b/tests/test_bot_reports.py\n@@ -57,6 +57,16 @@ class BotReportsTest(unittest.TestCase):\n         self.assertEqual(turn[\"id\"], \"reply-north\")\n         self.assertFalse(Door.turns[\"relay\"])\n \n+    def test_each_role_has_a_visibly_distinct_report_contract(self):\n+        headings = {\n+            prompt.split(\"'\", 2)[1]\n+            for prompt in bot_reports.PROMPTS.values()\n+        }\n+        self.assertEqual(len(headings), len(bot_reports.BOTS))\n+        for bot, prompt in bot_reports.PROMPTS.items():\n+            self.assertIn(bot.upper(), prompt)\n+            self.assertIn(\"Start with the exact heading\", prompt)\n+\n \n if __name__ == \"__main__\":\n     unittest.main()\n"
+ },
+ {
+  "commit": "2b27039be2a997e9d3747c6ea8c898b0784f5265",
+  "path": "nexus/messaging.py",
+  "tests": [
+   "tests/test_messaging.py"
+  ],
+  "overlay": [
+   "tests/test_messaging.py"
+  ],
+  "start": 0,
+  "end": 141,
+  "changed": 17,
+  "objective": "Fail messaging probes on incomplete receipts",
+  "test_diff": "diff --git a/tests/test_messaging.py b/tests/test_messaging.py\nindex f26425f..82a585e 100644\n--- a/tests/test_messaging.py\n+++ b/tests/test_messaging.py\n@@ -82,6 +82,33 @@ class MessagingProbeTest(unittest.TestCase):\n         self.assertTrue(all(row.accepted_at for row in raised.exception.evidence))\n         self.assertTrue(all(row.timeout_at for row in raised.exception.evidence))\n \n+    def test_delivery_without_acceptance_fails(self):\n+        provider = Provider({\n+            f\"{channel}-id\": [ProviderReceipt(\"delivered\", f\"{channel}-delivered\")]\n+            for channel in DESTINATIONS\n+        })\n+\n+        with self.assertRaises(ProbeFailure) as raised:\n+            run_messaging_probe(provider, DESTINATIONS)\n+        self.assertTrue(all(row.delivered_at for row in raised.exception.evidence))\n+        self.assertTrue(all(row.accepted_at is None for row in raised.exception.evidence))\n+\n+    def test_short_destinations_are_fully_redacted(self):\n+        destinations = {\n+            \"kakao\": Destination(\"k\"),\n+            \"sms\": Destination(\"1\"),\n+        }\n+        evidence = run_messaging_probe(Provider(), destinations)\n+        self.assertEqual([\"***\", \"***\"], [row.destination for row in evidence])\n+\n+    def test_invalid_timeout_and_missing_destination_send_nothing(self):\n+        provider = Provider()\n+        with self.assertRaisesRegex(ValueError, \"timeout\"):\n+            run_messaging_probe(provider, DESTINATIONS, timeout_s=0)\n+        with self.assertRaisesRegex(ValueError, \"missing destinations: sms\"):\n+            run_messaging_probe(provider, {\"kakao\": DESTINATIONS[\"kakao\"]})\n+        self.assertEqual([], provider.sent)\n+\n     def test_send_cap_and_sandbox_gate_apply_before_sending(self):\n         provider = Provider()\n         with self.assertRaisesRegex(ValueError, \"send cap\"):\n"
+ },
+ {
+  "commit": "f544a3ddbac4c1df2090108bcd3938ad8f53e63a",
+  "path": "nexus/messaging.py",
+  "tests": [
+   "tests/test_messaging.py"
+  ],
+  "overlay": [
+   "tests/test_messaging.py"
+  ],
+  "start": 0,
+  "end": 128,
+  "changed": 39,
+  "objective": "Tighten probe identity and timeout evidence",
+  "test_diff": "diff --git a/tests/test_messaging.py b/tests/test_messaging.py\nindex 4742cde..f26425f 100644\n--- a/tests/test_messaging.py\n+++ b/tests/test_messaging.py\n@@ -43,9 +43,7 @@ class Provider:\n class MessagingProbeTest(unittest.TestCase):\n     def test_both_channels_deliver_with_redacted_evidence(self):\n         provider = Provider()\n-        evidence = run_messaging_probe(\n-            provider, DESTINATIONS, run_id=\"run-7\", timeout_s=8\n-        )\n+        evidence = run_messaging_probe(provider, DESTINATIONS, timeout_s=8)\n \n         self.assertEqual([\"kakao\", \"sms\"], [row.channel for row in evidence])\n         self.assertEqual([\"kakao-id\", \"sms-id\"],\n@@ -53,8 +51,10 @@ class MessagingProbeTest(unittest.TestCase):\n         self.assertEqual([\"***34\", \"***23\"],\n                          [row.destination for row in evidence])\n         self.assertTrue(all(row.accepted_at and row.delivered_at for row in evidence))\n-        self.assertTrue(all(\"run-7\" in row[2] for row in provider.sent))\n-        self.assertEqual({\"run-7\"}, {row[3] for row in provider.sent})\n+        run_ids = {row[3] for row in provider.sent}\n+        self.assertEqual(1, len(run_ids))\n+        self.assertTrue(next(iter(run_ids)).startswith(\"messaging-\"))\n+        self.assertTrue(all(row[3] in row[2] for row in provider.sent))\n \n     def test_terminal_failure_is_mapped_for_each_channel(self):\n         self.assertEqual(\"terminal_failure\", receipt_state(\"failed\"))\n@@ -65,7 +65,7 @@ class MessagingProbeTest(unittest.TestCase):\n         })\n \n         with self.assertRaises(ProbeFailure) as raised:\n-            run_messaging_probe(provider, DESTINATIONS, run_id=\"run-fail\")\n+            run_messaging_probe(provider, DESTINATIONS)\n         self.assertEqual([\"kakao-failed\", \"sms-failed\"],\n                          [row.failure_at for row in raised.exception.evidence])\n \n@@ -76,10 +76,11 @@ class MessagingProbeTest(unittest.TestCase):\n         })\n \n         with self.assertRaises(ProbeFailure) as raised:\n-            run_messaging_probe(provider, DESTINATIONS, run_id=\"run-timeout\")\n+            run_messaging_probe(provider, DESTINATIONS)\n         self.assertEqual([\"kakao-id\", \"sms-id\"],\n                          [row.provider_id for row in raised.exception.evidence])\n         self.assertTrue(all(row.accepted_at for row in raised.exception.evidence))\n+        self.assertTrue(all(row.timeout_at for row in raised.exception.evidence))\n \n     def test_send_cap_and_sandbox_gate_apply_before_sending(self):\n         provider = Provider()\n"
+ },
+ {
+  "commit": "54cb140d88deeec32a01ad166def41e83ec3927d",
+  "path": "nexus/tower.py",
+  "tests": [
+   "tests/test_tower.py"
+  ],
+  "overlay": [
+   "docs/foundation.md",
+   "tests/test_tower.py"
+  ],
+  "start": 436,
+  "end": 516,
+  "changed": 12,
+  "objective": "Coalesce scheduled flights per plan",
+  "test_diff": "diff --git a/tests/test_tower.py b/tests/test_tower.py\nindex 746a5b0..83dab6a 100644\n--- a/tests/test_tower.py\n+++ b/tests/test_tower.py\n@@ -90,8 +90,27 @@ class Scheduling(TowerCase):\n         now = time.time()\n         self.assertEqual(1, self.tick(now=now)[\"scheduled\"])\n         self.assertEqual(0, self.tick(now=now + 30)[\"scheduled\"])\n+        self.settle()\n         self.assertEqual(1, self.tick(now=now + 61)[\"scheduled\"])\n \n+    def test_elapsed_intervals_do_not_queue_behind_an_active_flight(self):\n+        self.plan(cmd=\"sleep 30\", outputs=[], schedule={\"every\": 1})\n+        now = time.time()\n+        self.assertEqual(1, self.tick(now=now)[\"scheduled\"])\n+        for elapsed in range(1, 10):\n+            self.assertEqual(0, self.tick(now=now + elapsed)[\"scheduled\"])\n+        self.assertEqual(1, len(self.led.flights()))\n+\n+    def test_crash_between_queued_flight_and_running_task_does_not_duplicate(self):\n+        plan = self.plan(cmd=\"sleep 30\", outputs=[], schedule={\"every\": 1})\n+        now = time.time()\n+        task = self.led.add_task(\"run job\", origin=\"plan\", plan_id=plan,\n+                                 dedupe_key=\"first\", now=now)\n+        self.led.set_task_state(task, \"accepted\", expect=\"candidate\", now=now)\n+        self.led.create_flight(plan, task_id=task, now=now)\n+        self.assertEqual(0, tower._schedule(self.led, now + 2))\n+        self.assertEqual(1, len(self.led.tasks()))\n+\n     def test_at_hhmm_is_due_once_that_day(self):\n         plan = self.plan(schedule={\"at\": \"03:00\"})\n         row = self.led.plan(plan)\n"
+ },
+ {
+  "commit": "16de66472ec7bc8cdd2b28b10577f00c29510203",
+  "path": "nexus/tower.py",
+  "tests": [
+   "tests/test_tower.py"
+  ],
+  "overlay": [
+   "tests/test_tower.py"
+  ],
+  "start": 494,
+  "end": 599,
+  "changed": 10,
+  "objective": "tower: concurrency cap is per plan, not global; one busy plan no longer blocks every other plan",
+  "test_diff": "diff --git a/tests/test_tower.py b/tests/test_tower.py\nindex 8275505..ca7c76e 100644\n--- a/tests/test_tower.py\n+++ b/tests/test_tower.py\n@@ -109,6 +109,15 @@ class Scheduling(TowerCase):\n             self.tick(now=now + i * 2)\n         self.assertLessEqual(len(self.led.flights(states=(\"running\",))), 2)\n \n+    def test_concurrency_is_per_plan_not_global(self):\n+        a = self.plan(name=\"a\", cmd=\"sleep 5\", outputs=[], budget={\"concurrency\": 1})\n+        b = self.plan(name=\"b\", cmd=\"sleep 5\", outputs=[], budget={\"concurrency\": 1})\n+        now = time.time()\n+        self.tick(now=now)\n+        self.tick(now=now + 1)\n+        in_air = {f[\"plan_id\"] for f in self.led.flights(states=(\"running\",))}\n+        self.assertEqual({a, b}, in_air)\n+\n \n class Acceptance(TowerCase):\n     def test_a_duplicate_dedupe_key_is_rejected_not_run_twice(self):\n"
+ },
+ {
+  "commit": "0054ad5bdac61007bfe15a617dc2a88745973d89",
+  "path": "client/lesson_previews.py",
+  "tests": [
+   "tests/test_lesson_previews.py"
+  ],
+  "overlay": [
+   "tests/test_lesson_previews.py"
+  ],
+  "start": 0,
+  "end": 150,
+  "changed": 36,
+  "objective": "Read lesson previews from exact PR head state",
+  "test_diff": "diff --git a/tests/test_lesson_previews.py b/tests/test_lesson_previews.py\nindex 88aad54..b3fe9be 100644\n--- a/tests/test_lesson_previews.py\n+++ b/tests/test_lesson_previews.py\n@@ -49,6 +49,17 @@ class HubTest(unittest.TestCase):\n         if prod is not None:\n             (folder / \"production.json\").write_text(json.dumps(prod))\n \n+    def test_canonical_head_state_rejects_ancestor_preview(self):\n+        path = self.root / \"heads.json\"\n+        path.write_text(json.dumps({\"schema_version\": \"tbs.lesson-preview-head-state/v1\", \"lessons\": [{\n+            \"product\": \"superpowerai\", \"lesson\": \"L012\", \"status\": \"current\",\n+            \"head_sha\": \"ce09473\" + \"0\" * 33, \"deployed_sha\": \"870f8fd\" + \"0\" * 33,\n+            \"preview_url\": \"https://old.example\", \"pr_url\": \"https://github.example/pr\", \"checked_at\": \"now\"\n+        }]}))\n+        result = lesson_previews._from_head_state(path)\n+        self.assertEqual(result[\"counts\"][\"failed\"], 1)\n+        self.assertEqual(result[\"lessons\"][0][\"candidate\"][\"url\"], \"\")\n+\n     def test_stale_candidate_is_red_and_its_url_is_not_exposed(self):\n         self.write(preview(source_committed_at=4000))\n         row = lesson_previews.build(self.root)[\"lessons\"][0]\n"
+ },
+ {
+  "commit": "572cdfa3d200c3f128792b26fc6f180aa4f3532d",
+  "path": "nexus/tower.py",
+  "tests": [
+   "tests/test_tower.py"
+  ],
+  "overlay": [
+   "tests/test_tower.py"
+  ],
+  "start": 388,
+  "end": 469,
+  "changed": 6,
+  "objective": "quarantine counts only flights since the last release",
+  "test_diff": "diff --git a/tests/test_tower.py b/tests/test_tower.py\nindex a8a5beb..f27b42d 100644\n--- a/tests/test_tower.py\n+++ b/tests/test_tower.py\n@@ -296,8 +296,33 @@ class KeptLogs(TowerCase):\n         self.settle()\n         failed = self.led.flights(states=(\"failed\",))\n         self.assertTrue(failed)\n-        kept = os.path.join(tower.logs_root(self.led), f\"{failed[0]['id']}.log\")\n-        self.assertTrue(os.path.exists(kept), \"log not kept\")\n-        with open(kept) as f:\n+        logs = [a for a in self.led.artifacts(failed[0][\"id\"]) if a[\"kind\"] == \"log\"]\n+        self.assertEqual(1, len(logs), \"log not recorded in the ledger\")\n+        with open(logs[0][\"ref\"]) as f:\n             self.assertIn(\"why-it-broke\", f.read())\n+        self.assertIn('\"exit_code\": 3', failed[0][\"result\"])\n         self.assertFalse(os.path.isdir(failed[0][\"workspace\"]))\n+\n+    def test_workspace_survives_when_evidence_cannot_be_kept(self):\n+        self.plan(cmd=\"echo evidence; exit 3\", outputs=[], budget={\"max_retries\": 0})\n+        root = tower.logs_root(self.led)\n+        with open(root, \"w\") as f:  # a file where the logs dir must go: persistence fails\n+            f.write(\"in the way\")\n+        self.settle()\n+        failed = self.led.flights(states=(\"failed\",))[0]\n+        self.assertTrue(os.path.isdir(failed[\"workspace\"]), \"workspace deleted without evidence\")\n+        self.assertTrue(self.led.events(kind=\"flight.evidence_not_kept\"))\n+        os.remove(root)\n+        self.tick()  # the sweep keeps the log now that it can, then clears the workspace\n+        self.assertTrue([a for a in self.led.artifacts(failed[\"id\"]) if a[\"kind\"] == \"log\"])\n+        self.assertFalse(os.path.isdir(failed[\"workspace\"]))\n+\n+\n+class Release(TowerCase):\n+    def test_a_released_plan_is_not_requarantined_for_the_same_failures(self):\n+        plan = self.plan(cmd=\"exit 1\", outputs=[], budget={\"max_retries\": 1})\n+        self.settle()\n+        self.assertIsNotNone(self.led.plan(plan)[\"quarantined_at\"])\n+        self.led.unquarantine_plan(plan)\n+        self.tick()\n+        self.assertIsNone(self.led.plan(plan)[\"quarantined_at\"], \"re-quarantined on old failures\")\n"
+ },
+ {
+  "commit": "1eebe07cd5fb766f0e12f742f6cf62b37044dca3",
+  "path": "client/office-sync.py",
+  "tests": [
+   "tests/test_sync.py"
+  ],
+  "overlay": [
+   "tests/test_sync.py"
+  ],
+  "start": 1355,
+  "end": 1440,
+  "changed": 8,
+  "objective": "door: a picked option that starts with Close closes the issue now\n\nA lane would read the word and run the same command fifteen minutes later.",
+  "test_diff": "diff --git a/tests/test_sync.py b/tests/test_sync.py\nindex 6f3b0f9..d7e361e 100644\n--- a/tests/test_sync.py\n+++ b/tests/test_sync.py\n@@ -643,6 +643,17 @@ class DecisionTest(SyncCase):\n         self.assertEqual(err, \"\")\n         self.assertEqual(cmd[-1], self.mod.REQUEUE_LINE)\n \n+    def test_a_close_pick_closes_the_issue_now(self):\n+        steps, err = self.mod._issue_steps(\"choose\", \"7\", \"acme/one\", \"**4.** Close as done\", {})\n+        self.assertEqual(err, \"\")\n+        self.assertEqual([s[:3] for s in steps],\n+                         [[\"gh\", \"issue\", \"comment\"], [\"gh\", \"issue\", \"close\"]])\n+        steps, _ = self.mod._issue_steps(\"choose\", \"7\", \"acme/one\", \"**1.** Trim PR #3\", {})\n+        self.assertEqual([s[:3] for s in steps], [[\"gh\", \"issue\", \"comment\"]])\n+        # \"Close\" inside the label is not a close; only the leading word decides.\n+        steps, _ = self.mod._issue_steps(\"choose\", \"7\", \"acme/one\", \"**2.** Do not close yet\", {})\n+        self.assertEqual([s[:3] for s in steps], [[\"gh\", \"issue\", \"comment\"]])\n+\n     def test_edit_steps_per_kind(self):\n         steps, err = self.mod._edit_steps(\"unblock\", \"7\", \"acme/one\", {})\n         self.assertEqual((err, len(steps)), (\"\", 1))\n"
+ },
+ {
+  "commit": "152f3aed1aa4782323cbc5d5c351f00c26ed77a4",
+  "path": "client/context.py",
+  "tests": [
+   "tests/test_context.py"
+  ],
+  "overlay": [
+   "tests/test_context.py"
+  ],
+  "start": 15,
+  "end": 236,
+  "changed": 25,
+  "objective": "context: remove truncated desk index",
+  "test_diff": "diff --git a/tests/test_context.py b/tests/test_context.py\nindex 06e0e7e..0cec34f 100644\n--- a/tests/test_context.py\n+++ b/tests/test_context.py\n@@ -217,18 +217,23 @@ class IndexTest(ContextBase):\n \n \n class LimitTest(ContextBase):\n-    def test_more_than_the_cap_are_capped_and_the_cap_is_admitted(self):\n-        \"\"\"A truncated list presented as a complete one is the defect this repo\n-        exists to prevent, so the cap travels with the data.\"\"\"\n-        for i in range(self.context.MAX_FILES + 25):\n+    def test_more_than_the_old_file_cap_are_all_indexed(self):\n+        \"\"\"A large checkout is still one desk, not its alphabetic first slice.\"\"\"\n+        for i in range(2025):\n             self.write(f\"_meta/many/n{i:04d}.md\", \"x\")\n         body = self.index()\n-        self.assertEqual(len(body[\"files\"]), self.context.MAX_FILES)\n-        self.assertTrue(body[\"capped\"])\n-\n-    def test_a_short_index_never_claims_to_be_capped(self):\n-        self.write(\"README.md\")\n-        self.assertFalse(self.index()[\"capped\"])\n+        self.assertEqual(len(body[\"files\"]), 2025)\n+        self.assertFalse(body[\"capped\"])\n+\n+    def test_scan_count_does_not_truncate_the_index(self):\n+        # Lower the former boundary so this catches truncation without creating\n+        # sixty thousand files. Once removed, this assignment has no effect.\n+        self.context.MAX_SCAN = 3\n+        for i in range(5):\n+            self.write(f\"docs/{i}.md\")\n+        body = self.index()\n+        self.assertEqual(len(body[\"files\"]), 5)\n+        self.assertFalse(body[\"capped\"])\n \n     def test_a_file_over_the_size_cap_is_not_listed_and_cannot_be_read(self):\n         \"\"\"Skipped at index time, so the oversize path is never opened at all\n"
+ },
+ {
+  "commit": "765aa1f130bd796ae251ab96de73d31ab20a3dc5",
+  "path": "client/context.py",
+  "tests": [
+   "tests/test_context.py"
+  ],
+  "overlay": [
+   "app/Demo/demo.json",
+   "app/Office/Model/Api.swift",
+   "app/Office/Model/Models.swift",
+   "app/Office/Views/DeskThreadView.swift",
+   "app/OfficeTests/FileTreeTests.swift",
+   "tests/test_context.py"
+  ],
+  "start": 108,
+  "end": 189,
+  "changed": 5,
+  "objective": "the document you wrote an hour ago is at the top of the desk\n\nA desk holds hundreds of Markdown files in folder order, so the brief written\nthis morning sits wherever the alphabet put it. The index now carries each\nfile's mtime and the pane opens with the handful touched in the last week,\nnewest first.\n\nSilent when it has nothing to say: no recent files, or an index short enough to\nread whole, draws nothing. A fixture cannot carry a fixed mtime and stay a\npicture of a working desk, so the demo says how many hours ago instead and the\nage is resolved at load.\n\nProof: tests/test_context.py, FileTreeTests, and shots/app-context.png.",
+  "test_diff": "diff --git a/tests/test_context.py b/tests/test_context.py\nindex fda56e0..06e0e7e 100644\n--- a/tests/test_context.py\n+++ b/tests/test_context.py\n@@ -192,10 +192,24 @@ class IndexTest(ContextBase):\n     def test_each_entry_carries_what_the_app_draws_and_nothing_more(self):\n         self.write(\"_meta/plans/one.md\", \"# one\\n\")\n         entry = self.index()[\"files\"][0]\n-        self.assertEqual(set(entry), {\"path\", \"name\", \"group\", \"bytes\"})\n+        self.assertEqual(set(entry), {\"path\", \"name\", \"group\", \"bytes\", \"mtime\"})\n         self.assertEqual(entry[\"name\"], \"one.md\")\n         self.assertEqual(entry[\"group\"], \"_meta/plans\")\n         self.assertEqual(entry[\"bytes\"], len(\"# one\\n\"))\n+        self.assertGreater(entry[\"mtime\"], 0)\n+\n+    def test_mtime_is_the_file_s_own_and_distinguishes_a_fresh_document(self):\n+        \"\"\"The index is folder-ordered, so without this the brief written an hour\n+        ago is indistinguishable from a note from March.\"\"\"\n+        import os\n+        self.write(\"_meta/plans/old.md\", \"# old\\n\")\n+        self.write(\"_meta/plans/new.md\", \"# new\\n\")\n+        old_path = pathlib.Path(self.root) / \"_meta/plans/old.md\"\n+        long_ago = old_path.stat().st_mtime - 90 * 24 * 3600\n+        os.utime(old_path, (long_ago, long_ago))\n+        by_path = {f[\"path\"]: f for f in self.index()[\"files\"]}\n+        self.assertLess(by_path[\"_meta/plans/old.md\"][\"mtime\"],\n+                        by_path[\"_meta/plans/new.md\"][\"mtime\"])\n \n     def test_a_root_readme_is_grouped_apart_from_the_meta_tree(self):\n         self.write(\"README.md\")\n"
+ },
+ {
+  "commit": "c2ca350e05e1ddef493263e890769bc6557895c2",
+  "path": "client/context.py",
+  "tests": [
+   "tests/test_context.py"
+  ],
+  "overlay": [
+   "tests/test_context.py"
+  ],
+  "start": 0,
+  "end": 206,
+  "changed": 12,
+  "objective": "a repo inside a repo is not this desk context",
+  "test_diff": "diff --git a/tests/test_context.py b/tests/test_context.py\nindex 7c403d1..fda56e0 100644\n--- a/tests/test_context.py\n+++ b/tests/test_context.py\n@@ -155,6 +155,19 @@ class IndexTest(ContextBase):\n         code, _ = self.context.read(REPO, \"node_modules/left-pad/README.md\")\n         self.assertEqual(code, 404)\n \n+    def test_a_folder_that_is_itself_a_checkout_is_not_this_desk_s_context(self):\n+        \"\"\"`matra` keeps 2,872 Markdown files under `.claude/worktrees`, each a\n+        second copy of a file it already lists. A repo inside a repo has its own\n+        desk; listing it here buries the README of the desk you are looking at.\n+        A worktree's `.git` is a file and a clone's is a folder; both count.\"\"\"\n+        self.write(\".claude/worktrees/one/docs/copy.md\")\n+        self.write(\".claude/worktrees/one/.git\", \"gitdir: /elsewhere\\n\")\n+        self.write(\"vendor/dep/README.md\")\n+        self.write(\"sub/nested/notes.md\")\n+        (pathlib.Path(self.root) / \"sub\" / \"nested\" / \".git\").mkdir()\n+        self.write(\"docs/real.md\")\n+        self.assertEqual(self.paths(), [\"docs/real.md\"])\n+\n     def test_a_readme_that_is_not_markdown_is_not_context(self):\n         self.write(\"README.rst\", \"not markdown\")\n         self.write(\"README.html\", \"<p>no</p>\")\n"
+ },
+ {
+  "commit": "729e9c38b5c2d61465c03d315853e217d9f2ce99",
+  "path": "client/sessions.py",
+  "tests": [
+   "tests/test_phone.py",
+   "tests/test_sessions.py"
+  ],
+  "overlay": [
+   "README.md",
+   "app/Office/Views/SessionsView.swift",
+   "client/phone/phone.css",
+   "client/phone/phone.js",
+   "tests/test_phone.py",
+   "tests/test_sessions.py"
+  ],
+  "start": 53,
+  "end": 525,
+  "changed": 11,
+  "objective": "start hcom agents from every Office desk",
+  "test_diff": "diff --git a/tests/test_phone.py b/tests/test_phone.py\nindex 806ec3a..b8efa9e 100644\n--- a/tests/test_phone.py\n+++ b/tests/test_phone.py\n@@ -405,6 +405,15 @@ class AutomationAndSessionsTest(unittest.TestCase):\n         window = js[at:at + 900]\n         self.assertIn(\"state.drafts[key] = words;\", window)\n \n+    def test_a_desk_can_start_either_agent_through_the_office(self):\n+        \"\"\"A pocket can start work, not only answer work already running.\"\"\"\n+        js = self.js()\n+        at = js.index(\"async function startDeskSession\")\n+        window = js[at:at + 800]\n+        self.assertIn('write(\"/api/session/start\", { tool: tool, repo: repo })', window)\n+        self.assertIn('[\"claude\", \"codex\"]', js)\n+        self.assertIn(\"got.body.error\", window)\n+\n     def test_not_being_able_to_see_never_draws_as_nothing_running(self):\n         \"\"\"An empty list is a claim that nothing is running. When hcom cannot be\n         asked, the office does not get to make that claim.\"\"\"\ndiff --git a/tests/test_sessions.py b/tests/test_sessions.py\nindex 7d44395..ac25e2e 100644\n--- a/tests/test_sessions.py\n+++ b/tests/test_sessions.py\n@@ -329,7 +329,8 @@ class StartTest(FakeHcom):\n         code, body = sessions.start({\"tool\": \"codex\", \"directory\": str(target)})\n         self.assertEqual(code, 200)\n         self.assertTrue(body[\"ok\"])\n-        self.assertEqual(self.argv()[-1][\"argv\"], [\"codex\", \"--dir\", str(target.resolve())])\n+        self.assertEqual(self.argv()[-1][\"argv\"],\n+                         [\"codex\", \"--headless\", \"--dir\", str(target.resolve())])\n \n     def test_a_folder_an_agent_already_runs_in_is_allowed_wherever_it_is(self):\n         \"\"\"This grants no reach the machine did not already have: something is\n@@ -402,6 +403,13 @@ class StartTest(FakeHcom):\n         self.assertEqual(code, 200)\n         self.assertEqual(self.argv()[-1][\"argv\"][-2:], [\"--hcom-prompt\", \"read the failing test\"])\n \n+    def test_an_office_launch_runs_headless_so_the_request_can_return(self):\n+        \"\"\"A terminal launch owns the hcom process until that terminal closes.\n+        The phone request must return while the new agent stays alive.\"\"\"\n+        code, _ = sessions.start({\"tool\": \"codex\", \"directory\": str(self.root)})\n+        self.assertEqual(code, 200)\n+        self.assertEqual(self.argv()[-1][\"argv\"][:3], [\"codex\", \"--headless\", \"--dir\"])\n+\n     def test_an_enormous_prompt_is_refused_rather_than_trimmed(self):\n         code, body = sessions.start({\"tool\": \"claude\", \"directory\": str(self.root),\n                                      \"prompt\": \"x\" * 9000})\n"
+ },
+ {
+  "commit": "60a3183eace1464b07cc14c47d0678400ac05e1c",
+  "path": "client/office-sync.py",
+  "tests": [
+   "tests/test_sync.py"
+  ],
+  "overlay": [
+   "tests/test_sync.py"
+  ],
+  "start": 190,
+  "end": 273,
+  "changed": 7,
+  "objective": "a desk's work survives a day of surveys",
+  "test_diff": "diff --git a/tests/test_sync.py b/tests/test_sync.py\nindex 559a658..d6e70ec 100644\n--- a/tests/test_sync.py\n+++ b/tests/test_sync.py\n@@ -766,3 +766,26 @@ class BatchPartsTest(SyncCase):\n \n if __name__ == \"__main__\":\n     unittest.main()\n+\n+\n+class ReceiptsKeepTheWorkTest(SyncCase):\n+    \"\"\"A survey every fifteen minutes must never push a desk's real work out of\n+    its 24 rows, which is what emptied the automation page on 2026-08-29.\"\"\"\n+\n+    def test_issue_rows_survive_a_day_of_surveys(self):\n+        path = pathlib.Path(self.tmp.name) / \"receipts.jsonl\"\n+        rows = [{\"at\": \"2026-08-28T09:00:00Z\", \"repo\": \"acme/thing\", \"issue\": \"7\",\n+                 \"outcome\": \"landed\", \"detail\": \"opened a PR\"}]\n+        rows += [{\"at\": f\"2026-08-29T{h:02d}:{m:02d}:00Z\", \"repo\": \"acme/thing\", \"issue\": \"\",\n+                  \"outcome\": \"survey\", \"detail\": \"\"} for h in range(24) for m in (0, 15, 30, 45)]\n+        path.write_text(\"\".join(json.dumps(r) + \"\\n\" for r in rows))\n+        import office_sync_shim\n+        mod = importlib.reload(office_sync_shim).mod  # setUp replaced receipts() with a fake\n+        mod.log = lambda m: None\n+        mod.RECEIPTS = path\n+        mod.NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)\n+        by_repo, _ = mod.receipts()\n+        kept = by_repo[\"acme/thing\"]\n+        self.assertEqual([r[\"issue\"] for r in kept if r[\"issue\"]], [\"7\"])\n+        self.assertLessEqual(sum(1 for r in kept if not r[\"issue\"]), 2)\n+        self.assertEqual(kept[0][\"outcome\"], \"survey\")  # newest first still\n"
+ },
+ {
+  "commit": "42825a18ecbc825ce98235b2256b780949556fcb",
+  "path": "client/sessions.py",
+  "tests": [
+   "tests/test_sessions.py"
+  ],
+  "overlay": [
+   "tests/test_sessions.py"
+  ],
+  "start": 538,
+  "end": 625,
+  "changed": 27,
+  "objective": "fix: a checkout is found by its origin, not by guessing a folder from the repo name",
+  "test_diff": "diff --git a/tests/test_sessions.py b/tests/test_sessions.py\nindex 213ca13..409a61b 100644\n--- a/tests/test_sessions.py\n+++ b/tests/test_sessions.py\n@@ -348,6 +348,31 @@ class StartTest(FakeHcom):\n         self.assertEqual(code, 200)\n         self.assertEqual(body[\"directory\"], str(outside))\n \n+    def test_a_checkout_whose_folder_is_not_named_after_the_repo_is_still_found(self):\n+        \"\"\"`ariacam` is `ariaxhan/aria-cam`. A folder is found by its origin, so\n+        a checkout does not vanish because somebody named the folder something\n+        shorter.\"\"\"\n+        folder = self.root / \"CodingVault\" / \"ariacam\"\n+        (folder / \".git\").mkdir(parents=True)\n+        sessions._origin_cache[str(folder)] = \"acme/aria-cam\"\n+        self.assertEqual(sessions.desk_dir(\"acme/aria-cam\"), str(folder.resolve()))\n+\n+    def test_a_folder_that_shares_a_name_but_not_an_origin_is_not_the_checkout(self):\n+        \"\"\"`CodingVault/site-spec` is somebody else's `site-spec-private`; the\n+        real `site-spec` sits in `site-spec-public`. The origin decides.\"\"\"\n+        decoy = self.root / \"CodingVault\" / \"site-spec\"\n+        real = self.root / \"CodingVault\" / \"site-spec-public\"\n+        for d in (decoy, real):\n+            (d / \".git\").mkdir(parents=True)\n+        sessions._origin_cache[str(decoy)] = \"acme/site-spec-private\"\n+        sessions._origin_cache[str(real)] = \"acme/site-spec\"\n+        self.assertEqual(sessions.desk_dir(\"acme/site-spec\"), str(real.resolve()))\n+\n+    def test_the_walk_still_refuses_a_folder_no_origin_claims(self):\n+        (self.root / \"CodingVault\" / \"unrelated\" / \".git\").mkdir(parents=True)\n+        sessions._origin_cache[str(self.root / \"CodingVault\" / \"unrelated\")] = \"acme/other\"\n+        self.assertEqual(sessions.desk_dir(\"acme/nothing\"), \"\")\n+\n     def test_a_desk_nobody_has_checked_out_says_so_rather_than_inventing_a_path(self):\n         code, body = sessions.start({\"tool\": \"claude\", \"repo\": \"acme/absent\"})\n         self.assertEqual(code, 400)\n"
+ },
+ {
+  "commit": "3deb415262420984547dffc9db0c3be22eafbc11",
+  "path": "client/chat.py",
+  "tests": [
+   "tests/test_serve.py"
+  ],
+  "overlay": [
+   "tests/test_serve.py"
+  ],
+  "start": 18,
+  "end": 261,
+  "changed": 34,
+  "objective": "evidence is a budget: raised hands first, counts exact, cut from the back",
+  "test_diff": "diff --git a/tests/test_serve.py b/tests/test_serve.py\nindex 4287c38..9f74dd5 100644\n--- a/tests/test_serve.py\n+++ b/tests/test_serve.py\n@@ -1700,3 +1700,38 @@ class WebhookTest(unittest.TestCase):\n     def test_a_malformed_repo_never_reaches_github(self):\n         for repo in (\"\", \"nope\", \"a/b/c\", \"../../etc/passwd\"):\n             self.assertFalse(self.world.refresh_desk(repo), repr(repo))\n+\n+\n+class OfficeEvidenceTest(unittest.TestCase):\n+    \"\"\"The evidence block is a token budget: counts stay exact, raised hands go first.\"\"\"\n+\n+    @classmethod\n+    def setUpClass(cls):\n+        import chat\n+\n+        cls.chat = chat\n+\n+    def world(self, n):\n+        return {\"generated\": \"2026-08-29T08:00:00Z\", \"owners\": [\"ariaxhan\"], \"sections\": {},\n+                \"stations\": [{\"repo\": \"ariaxhan/big\", \"hidden\": False, \"prs\": [], \"issues\": [\n+                    {\"number\": i, \"title\": f\"issue {i}\", \"body\": \"b\" * 240, \"last_word\": \"w\" * 200,\n+                     \"labels\": [\"waiting on human\"] if i % 3 == 0 else []}\n+                    for i in range(n)]}]}\n+\n+    def test_waiting_on_human_rows_come_first_and_counts_are_exact(self):\n+        evidence = self.chat.office_evidence(self.world(30), \"sphinx\", \"ariaxhan\")\n+        labels = [r[\"labels\"] for r in evidence[\"issues\"]]\n+        first_plain = next(i for i, l in enumerate(labels) if \"waiting on human\" not in l)\n+        self.assertTrue(all(\"waiting on human\" in l for l in labels[:first_plain]))\n+        self.assertEqual(evidence[\"counts\"], {\"issues\": 30, \"waiting_on_human\": 10, \"in_pr\": 0,\n+                                              \"clean_mergeable_prs\": 0, \"conflicting_prs\": 0})\n+        self.assertFalse(evidence[\"truncated\"])\n+\n+    def test_a_big_world_is_cut_to_budget_from_the_back(self):\n+        evidence = self.chat.office_evidence(self.world(400), \"sphinx\", \"ariaxhan\")\n+        self.assertTrue(evidence[\"truncated\"])\n+        self.assertLessEqual(len(json.dumps(evidence, ensure_ascii=False)), self.chat.EVIDENCE_MAX_CHARS)\n+        self.assertEqual(evidence[\"counts\"][\"issues\"], 400)\n+        # the cut ate from the back, so what survived is raised hands only\n+        self.assertTrue(evidence[\"issues\"])\n+        self.assertTrue(all(\"waiting on human\" in r[\"labels\"] for r in evidence[\"issues\"]))\n"
+ },
+ {
+  "commit": "bb385b4b256dffca843223724d184eec7f1b8ac1",
+  "path": "client/serve.py",
+  "tests": [
+   "tests/test_serve.py"
+  ],
+  "overlay": [
+   "app/Office/Model/Store.swift",
+   "app/OfficeTests/StoreTests.swift",
+   "tests/test_serve.py"
+  ],
+  "start": 548,
+  "end": 628,
+  "changed": 21,
+  "objective": "the automation page hands the detail pane back on any click, and a landed decision refetches its own desk\n\nSelecting a bot, a desk or a wall section while the automation page was open\nchanged a selection nobody could see: the page owns the whole detail pane, so\nthe room read as frozen until you found its close button. select() now closes\nit. Merely opening the page still decides nothing about what is underneath.\n\nA GitHub decision that applied now refetches that one desk before answering,\nabout two GraphQL points, so the app refresh that already follows decide() sees\nthe closed issue gone instead of waiting out the next minute build. A decision\nthat failed changed nothing on GitHub and a runtime kind never asked it\nanything, so neither spends a refresh.\n\nThe refetch can never unsay the decision. It reaches GitHub again on its own,\npast the one guard refresh_desk has, so a timeout or a throwing rate reader\nwould have turned an already-closed issue into a 500, and what a person does\nwith a button that failed is press it again. It is wrapped, the failure is\nlogged honestly, and the answer stays the one the decision earned.\n\nAll three regressions fail on the old code first: three XCTAssertFalse on\nautomationOpen, the desk list empty where it should hold one repo, and 500\nwhere the close still stands.",
+  "test_diff": "diff --git a/tests/test_serve.py b/tests/test_serve.py\nindex b19a52e..e0d9a54 100644\n--- a/tests/test_serve.py\n+++ b/tests/test_serve.py\n@@ -284,6 +284,78 @@ class ServeTest(unittest.TestCase):\n             self.assertIn(\"moved on\", body[\"result\"])\n             self.assertEqual(gate.read_bytes(), before)\n \n+    # \u2500\u2500 the desk is right the moment the decision lands \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n+    def decide_with_a_fake_github(self, body, applied=(True, \"done\"), raises=None):\n+        \"\"\"Post one decision with GitHub replaced, and report which desks were\n+        refetched. Nothing here may reach a network or a keychain.\"\"\"\n+        asked = []\n+\n+        def refresh(nwo):\n+            asked.append(nwo)\n+            if raises is not None:\n+                raise raises\n+            return True\n+\n+        was_apply = self.serve.office_sync.apply_decision\n+        self.serve.office_sync.apply_decision = lambda d, access, dry=False: applied\n+        self.world.refresh_desk = refresh\n+        try:\n+            code, out = self.post(\"/api/decision\", body)\n+        finally:\n+            self.serve.office_sync.apply_decision = was_apply\n+            del self.world.refresh_desk  # back to the real method on the class\n+        return code, out, asked\n+\n+    def test_a_decision_that_landed_refetches_that_one_desk_before_answering(self):\n+        \"\"\"Closing an issue and then watching it sit on the desk for another\n+        minute reads as a click that did nothing. The one desk it was about is\n+        refetched before the answer goes out, so the app's own refresh straight\n+        afterwards already sees the shorter list. One desk, about two GraphQL\n+        points, rather than the whole room.\"\"\"\n+        code, out, asked = self.decide_with_a_fake_github(\n+            {\"kind\": \"close\", \"repo\": \"acme/thing\", \"issue\": \"9\"})\n+        self.assertEqual(code, 200)\n+        self.assertTrue(out[\"ok\"])\n+        # The answer is already written by the time this list is read, so this\n+        # is also the proof that the refetch happened before the answer.\n+        self.assertEqual(asked, [\"acme/thing\"], \"that desk, once, and no other\")\n+\n+    def test_a_decision_that_failed_never_spends_a_desk_refresh(self):\n+        \"\"\"Nothing changed on GitHub, so there is nothing to go and read.\"\"\"\n+        code, out, asked = self.decide_with_a_fake_github(\n+            {\"kind\": \"close\", \"repo\": \"acme/thing\", \"issue\": \"9\"},\n+            applied=(False, \"no push access\"))\n+        self.assertEqual(code, 200)\n+        self.assertFalse(out[\"ok\"])\n+        self.assertEqual(asked, [])\n+\n+    def test_a_desk_refresh_that_blew_up_never_unsays_a_decision_that_landed(self):\n+        \"\"\"The sharp edge in refetching here at all. The issue is already closed\n+        on GitHub by the time the desk is refetched, and the refetch reaches\n+        GitHub again on its own: it can time out, or the rate reader can throw,\n+        neither of which is guarded inside `refresh_desk` past the token lookup.\n+\n+        Letting that become a 500 would tell a person their close failed when it\n+        did not, and the thing a person does with a button that failed is press\n+        it again. So the answer is the one the decision earned, and the desk\n+        being stale is the whole cost of the refetch going wrong.\"\"\"\n+        code, out, asked = self.decide_with_a_fake_github(\n+            {\"kind\": \"close\", \"repo\": \"acme/thing\", \"issue\": \"9\"},\n+            raises=RuntimeError(\"GitHub hung up\"))\n+        self.assertEqual(asked, [\"acme/thing\"], \"it was tried\")\n+        self.assertEqual(code, 200, \"and the close still stands\")\n+        self.assertTrue(out[\"ok\"])\n+        self.assertEqual(out[\"result\"], \"done\", \"the applied result is untouched\")\n+\n+    def test_a_runtime_decision_never_spends_a_desk_refresh(self):\n+        \"\"\"A runtime kind carries a repo so the room knows which desk it came\n+        from, not because it touched GitHub. It did not.\"\"\"\n+        code, out, asked = self.decide_with_a_fake_github(\n+            {\"kind\": \"chat\", \"repo\": \"acme/thing\", \"issue\": \"9\"})\n+        self.assertEqual(code, 200)\n+        self.assertTrue(out[\"ok\"])\n+        self.assertEqual(asked, [])\n+\n \n if __name__ == \"__main__\":\n     unittest.main()\n"
+ },
+ {
+  "commit": "18acfea8500f201ef69f9eeaf7f272f0d137352a",
+  "path": "client/sources/flows.py",
+  "tests": [
+   "tests/test_flows.py"
+  ],
+  "overlay": [
+   "tests/test_flows.py"
+  ],
+  "start": 197,
+  "end": 278,
+  "changed": 3,
+  "objective": "fix(flows): a flow that left the registry is a look, not a holding wall (#48)\n\n`unregistered` was computed, drawn warn and sorted first, then left out of\n`alarm`. The card read \"8 flows, all holding\" above a row saying \"not in the\nregistry\", with needs 0 and the menu-bar dot dark. Count it.\n\nRefs #34",
+  "test_diff": "diff --git a/tests/test_flows.py b/tests/test_flows.py\nindex cf97f8d..791d602 100644\n--- a/tests/test_flows.py\n+++ b/tests/test_flows.py\n@@ -230,6 +230,13 @@ class States(Base):\n         assert_card(self, c, \"unregistered\")\n         self.assertEqual(c[\"facts\"][0][\"value\"], \"not in the registry\")\n         self.assertEqual(c[\"facts\"][0][\"tone\"], \"warn\")\n+        # And it counts. A row nobody is asked to look at is the false-green\n+        # this card exists to refuse.\n+        self.assertEqual(d[\"alarm\"], 1)\n+        self.assertEqual(c[\"needs\"], 1)\n+        self.assertEqual(\n+            c[\"headline\"],\n+            \"1 of 8 flows needs a look: Mobile capture not in the registry\")\n \n     def test_precedence_broken_beats_stale(self):\n         \"\"\"A flow whose last success is past budget AND whose last run failed\n"
+ },
+ {
+  "commit": "f7c6c5f427bf9dbc2c52bd9f1ddd002cdb14746b",
+  "path": "client/automation.py",
+  "tests": [
+   "tests/test_automation.py"
+  ],
+  "overlay": [
+   "tests/test_automation.py"
+  ],
+  "start": 26,
+  "end": 106,
+  "changed": 5,
+  "objective": "the office learns `no-run`: a lane that never started is not a decision about the issue\n\nVaults#51. `dispatch.sh` now writes a `no-run` receipt when a lane returns in\nseconds against a cap measured in minutes, instead of calling it a considered\nrefusal.\n\nRed rather than amber, on purpose. `refused` is amber because a person has to\nlook at the issue. This is worse: the runner asserted a judgement nobody made,\nso the issue is untouched work AND the record of it was wrong.",
+  "test_diff": "diff --git a/tests/test_automation.py b/tests/test_automation.py\nindex 8b46b6f..baf9e44 100644\n--- a/tests/test_automation.py\n+++ b/tests/test_automation.py\n@@ -140,6 +140,24 @@ class ActivityTest(unittest.TestCase):\n             self.assertIn(row[\"tone\"], (\"ok\", \"warn\", \"bad\", \"dim\", \"\"))\n             self.assertTrue(row[\"means\"], f\"{outcome} has no plain-words meaning\")\n \n+    def test_a_lane_that_never_ran_is_never_described_as_a_decision(self):\n+        \"\"\"Vaults#51: a lane returning in one second against a twelve minute cap\n+        read nothing. The office must not repeat the runner's old claim that a\n+        person looked at it, and the row has to read worse than a real refusal,\n+        not better, because a refusal that never happened is the more expensive\n+        of the two.\"\"\"\n+        page = self.build({\"a/one\": [receipt(\"a/one\", \"5\", \"no-run\", \"2026-08-27T21:00:00Z\",\n+                                             \"codex returned in 1s against a 12m cap\")]})\n+        row = page[\"activity\"][0]\n+        self.assertIn(\"never started\", row[\"means\"])\n+        self.assertIn(\"nothing read\", row[\"means\"],\n+                      \"it has to deny the reading, not merely omit it\")\n+        # Worse than `refused`, never better. `refused` is amber because a person\n+        # has to look; this is red because the runner lied about having looked.\n+        self.assertEqual(row[\"tone\"], \"bad\")\n+        self.assertEqual(automation.OUTCOMES[\"refused\"][0], \"warn\",\n+                         \"the comparison this test rests on\")\n+\n     def test_an_outcome_nobody_has_seen_before_is_a_row_not_a_crash(self):\n         page = self.build({\"a/one\": [receipt(\"a/one\", \"1\", \"invented\", \"2026-08-27T21:00:00Z\")]})\n         self.assertEqual(page[\"activity\"][0][\"outcome\"], \"invented\")\n"
+ },
+ {
+  "commit": "10364fb4cf0aaf5b4914337e4f524cbb9b8bbe86",
+  "path": "client/office-sync.py",
+  "tests": [
+   "tests/test_sync.py"
+  ],
+  "overlay": [
+   "CLAUDE.md",
+   "README.md",
+   "app/Demo/demo.json",
+   "app/Office/Model/Models.swift",
+   "app/Office/Model/Palette.swift",
+   "app/Office/Model/StateRules.swift",
+   "app/Office/OfficeApp.swift",
+   "app/Office/Shot/ShotHarness.swift",
+   "app/Office/Views/BotThreadView.swift",
+   "app/Office/Views/DeskThreadView.swift",
+   "app/Office/Views/GateSheet.swift",
+   "app/Office/Views/Markdown.swift",
+   "app/Office/Views/RosterView.swift",
+   "app/Office/Views/SectionView.swift",
+   "app/Office/Views/Theme.swift",
+   "app/OfficeTests/PaletteTests.swift",
+   "app/OfficeTests/PullRequestTests.swift",
+   "app/OfficeTests/ThreadRulesTests.swift",
+   "app/project.yml",
+   "scripts/shoot.sh",
+   "tests/test_sync.py"
+  ],
+  "start": 425,
+  "end": 505,
+  "changed": 3,
+  "objective": "the office follows the system appearance, bots write in Markdown, the thread keeps your place, and a PR shows why\n\nEvery colour is a light and dark swatch behind a dynamic NSColor, the dark\nvalues unchanged so the seven framings stay what they were; the eighth,\napp-light.png, is the same room on paper. A headless test measures every\ntext-on-surface pair in both palettes and fails under 4.5:1, so contrast is a\nnumber, not an opinion. The shoot pins its own appearance both ways.\n\nA bot's turn renders as a page: paragraphs, lists, inline code, fenced code on\na recessed panel, quotes, links. Aria's turns stay plain. The roster's last\nline strips the syntax. The thread follows the newest turn only when you are\nalready at the bottom; otherwise a \"new reply below\" pill waits for you. The\ncomposer grows to six lines.\n\nThe desk pane shows a PR's body (first paragraph, more to expand), its closes\nlist as links to the issue cards on the same desk, and when it was updated;\nthe door now lets the body travel instead of using it only for the regex.\n\nEmoji reactions deliberately not built: this frontend has no emoji, and a\nreaction has nowhere to go. 380 python, 161 Swift, eight framings read.\n\nPart of #31.",
+  "test_diff": "diff --git a/tests/test_sync.py b/tests/test_sync.py\nindex c84870d..3f8ded2 100644\n--- a/tests/test_sync.py\n+++ b/tests/test_sync.py\n@@ -182,6 +182,8 @@ class MappingTest(SyncCase):\n         self.assertEqual(pr[\"head\"], \"pipeline/auto-issue-9\")\n         self.assertEqual(pr[\"base\"], \"main\")\n         self.assertEqual(pr[\"closes\"], [9])\n+        # The body travels with the PR so the desk pane can show why.\n+        self.assertIn(\"#9\", pr[\"body\"])\n         self.assertEqual(pr[\"mergeable\"], \"MERGEABLE\")\n         self.assertEqual(pr[\"state\"], \"CLEAN\")\n         self.assertFalse(pr[\"draft\"])\n"
+ },
+ {
+  "commit": "24e71b1c1ac3f57aa1b4270188de42362a1984d3",
+  "path": "client/chat.py",
+  "tests": [
+   "tests/test_phone.py",
+   "tests/test_serve.py"
+  ],
+  "overlay": [
+   "CLAUDE.md",
+   "README.md",
+   "app/Demo/demo.json",
+   "app/Office/Model/Api.swift",
+   "app/Office/Model/Attachment.swift",
+   "app/Office/Model/Models.swift",
+   "app/Office/Model/Store.swift",
+   "app/Office/Shot/ShotHarness.swift",
+   "app/Office/Views/BotThreadView.swift",
+   "app/OfficeTests/AttachmentTests.swift",
+   "app/OfficeTests/StoreTests.swift",
+   "app/project.yml",
+   "client/phone/phone.css",
+   "client/phone/phone.js",
+   "scripts/shoot.sh",
+   "tests/test_phone.py",
+   "tests/test_serve.py"
+  ],
+  "start": 160,
+  "end": 241,
+  "changed": 7,
+  "objective": "a photo rides a message: the app and the phone downscale it under the door's limit, and a picture alone is a message\n\nThe Mac composer takes an image by paperclip, drop or paste (text paste still\npastes), shows a chip with the size after downscale, and keeps it beside the\ndraft across threads. Attachment.prepare is pure ImageIO: longest side 1200,\nJPEG 0.8, PNG only when smaller and it fits, HEIC and TIFF to JPEG, a ladder\nuntil the base64 plus the words is under 480 KB, nil rather than a payload the\ndoor refuses. The phone does the same on a canvas with a file input and a\ncamera input, and says plainly when a format cannot be read. The sent turn\ncarries a \"with a photo\" mark. Seventh framing app-attach.png.\n\nThe door refused a picture with no words; now no words and no picture is the\nonly empty message. The phone's swap notice clears when the buttons re-arm.\nThe demo wall gains the flows card. 379 python, 132 Swift.\n\nPart of #31.",
+  "test_diff": "diff --git a/tests/test_phone.py b/tests/test_phone.py\nindex 8c0a1e7..2865b04 100644\n--- a/tests/test_phone.py\n+++ b/tests/test_phone.py\n@@ -245,6 +245,88 @@ if __name__ == \"__main__\":\n     unittest.main()\n \n \n+class PhotoTest(unittest.TestCase):\n+    \"\"\"A picture, from a pocket, through the same door.\n+\n+    The page has no build step and no test runner, so these are grep-level: they\n+    hold down the four things about this that would be silent if they broke. It\n+    posts `attachments` rather than some other shape. It offers the camera and\n+    the library rather than an accept nothing matches. It shrinks before it\n+    sends, because the door refuses half a megabyte. And it still writes to the\n+    DOM with textContent, because a page that grows an `innerHTML` is a page\n+    whose content policy has to be loosened to keep working.\n+    \"\"\"\n+\n+    def js(self):\n+        return JS.read_text(encoding=\"utf-8\")\n+\n+    def test_a_photo_rides_the_message_as_attachments(self):\n+        js = self.js()\n+        at = js.index(\"async function sayTo(\")\n+        body = js[at:at + 1400]\n+        self.assertIn(\"turn.attachments = [{\", body)\n+        self.assertIn(\"mime_type\", body)\n+        self.assertIn(\"data_base64\", body)\n+        # Through the one writer, which is what carries this page's Host and\n+        # Origin to the door. A photo posted any other way is a photo posted\n+        # past every check the door makes.\n+        self.assertIn('write(\"/api/chat\", turn)', body)\n+\n+    def test_the_picker_takes_a_picture_from_the_library_or_the_camera(self):\n+        js = self.js()\n+        self.assertIn('input.accept = \"image/*\"', js)\n+        self.assertIn('input.capture = \"environment\"', js)\n+        self.assertIn('input.type = \"file\"', js)\n+        # Created in script, not sitting in the markup, because it belongs to\n+        # whichever thread is open.\n+        self.assertIn('document.createElement(\"input\")', js)\n+\n+    def test_the_picture_is_shrunk_before_it_is_sent(self):\n+        js = self.js()\n+        # The door's ceiling is 512 KB for the whole request; the page aims\n+        # under that and measures the base64, not the bytes it encodes.\n+        self.assertIn(\"const PHOTO_CEILING = 480 * 1024\", js)\n+        self.assertIn(\"const PHOTO_LONGEST = 1200\", js)\n+        self.assertIn(\"function base64Length(bytes)\", js)\n+        self.assertIn('canvas.toBlob(', js)\n+        self.assertIn('\"image/jpeg\"', js)\n+        # And it comes down a rung at a time rather than giving up at 0.8.\n+        self.assertGreaterEqual(js.count(\"quality:\"), 5)\n+\n+    def test_a_format_the_page_cannot_read_is_said_out_loud(self):\n+        \"\"\"Safari hands over the photo library's own HEIC and no browser will\n+        decode one. A picture that silently did not go is worse than one that\n+        refused where a person can see it.\"\"\"\n+        js = self.js()\n+        self.assertIn(\"take the photo with the camera option\", js)\n+        at = js.index(\"createImageBitmap\")\n+        self.assertIn(\"catch\", js[at:at + 200])\n+        self.assertIn(\"CANNOT_READ\", js[at:at + 400])\n+\n+    def test_the_page_still_never_writes_markup(self):\n+        js = self.js()\n+        html = HTML.read_text(encoding=\"utf-8\")\n+        self.assertNotIn(\"innerHTML\", js)\n+        self.assertNotIn(\"innerHTML\", html)\n+        self.assertNotIn(\"outerHTML\", js)\n+        self.assertNotIn(\"insertAdjacentHTML\", js)\n+        # And no handler written into the markup, which is the other half of the\n+        # same policy: the page's only script is the file the door serves.\n+        self.assertNotIn(\"<input\", html)\n+        for handler in (\"onclick\", \"onchange\", \"onload\", \"oninput\", \"onerror\"):\n+            self.assertNotIn(handler + \"=\", html)\n+\n+    def test_a_turn_that_carried_a_photo_is_marked_in_the_thread(self):\n+        \"\"\"The bytes are ephemeral by design, so the mark is all there is. It\n+        comes off the wire when the harness echoes anything, and off this page's\n+        own record of what it sent when the harness echoes nothing.\"\"\"\n+        js = self.js()\n+        self.assertIn(\"function carriedPhoto(turn, botId)\", js)\n+        self.assertIn(\"turn.attachments\", js)\n+        self.assertIn(\"state.sentPhotos\", js)\n+        self.assertIn('\"with a photo\"', js)\n+\n+\n class DriftAndNoiseTest(unittest.TestCase):\n     def test_a_swapped_question_disarms_the_buttons_for_a_beat(self):\n         js = (PHONE / \"phone.js\").read_text()\ndiff --git a/tests/test_serve.py b/tests/test_serve.py\nindex 0dd8afc..2935cfd 100644\n--- a/tests/test_serve.py\n+++ b/tests/test_serve.py\n@@ -727,6 +727,16 @@ class ChatTest(unittest.TestCase):\n         self.assertEqual(code, 202)\n         self.assertEqual(self.last_body(\"chief\")[\"attachments\"], [shot])\n \n+    def test_a_picture_with_no_words_is_a_message(self):\n+        shot = self.shot(name=\"desk.png\", data_base64=\"QUJD\")\n+        code, _ = api_post(self.port, \"/api/chat\",\n+                           {\"bot\": \"chief\", \"message\": \"\", \"attachments\": [shot]})\n+        self.assertEqual(code, 202)\n+        self.assertEqual(self.last_body(\"chief\")[\"attachments\"], [shot])\n+        code, body = api_post(self.port, \"/api/chat\", {\"bot\": \"inbox\", \"message\": \"\"})\n+        self.assertEqual(code, 400)\n+        self.assertEqual(body[\"error\"], \"a message is required\")\n+\n     def test_an_empty_attachment_list_is_a_turn_with_no_picture(self):\n         code, _ = api_post(self.port, \"/api/chat\",\n                            {\"bot\": \"chief\", \"message\": \"hi\", \"attachments\": []})\n"
+ },
+ {
+  "commit": "c4072ea0a83cf84490994489ffc5eba1a0be4636",
+  "path": "client/serve.py",
+  "tests": [
+   "tests/test_serve.py"
+  ],
+  "overlay": [
+   "tests/test_serve.py"
+  ],
+  "start": 38,
+  "end": 383,
+  "changed": 29,
+  "objective": "a tailnet request is Aria or it is 403; a forged login on loopback is ignored",
+  "test_diff": "diff --git a/tests/test_serve.py b/tests/test_serve.py\nindex 19159bc..6f8c48c 100644\n--- a/tests/test_serve.py\n+++ b/tests/test_serve.py\n@@ -310,6 +310,64 @@ class DoorTest(ServeTest):\n         self.assertEqual(code, 403)\n         self.assertNotIn(\"hidden\", body)\n \n+    # \u2500\u2500 M2: the phone over Tailscale \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n+    # Tailscale Serve stamps Tailscale-User-Login on tailnet traffic, including\n+    # shared-device users. Loopback is the Mac app and has no such header; a\n+    # forged one there must not become a login.\n+\n+    TAILNET = \"this-mac.tailnet.ts.net\"\n+\n+    def _as_tailnet(self, login=\"aria\"):\n+        was_hosts, was_login = set(self.serve.TRUSTED_HOSTS), self.serve.LOGIN\n+        self.serve.TRUSTED_HOSTS = was_hosts | {self.TAILNET}\n+        self.serve.LOGIN = login\n+        return was_hosts, was_login\n+\n+    def test_a_tailnet_request_with_the_right_login_is_let_through(self):\n+        was_hosts, was_login = self._as_tailnet()\n+        try:\n+            code, body = self.raw(\"GET\", \"/api/health\", {\n+                \"host\": self.TAILNET, \"tailscale-user-login\": \"aria\"})\n+            self.assertEqual(code, 200)\n+            self.assertTrue(body[\"ok\"])\n+        finally:\n+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login\n+\n+    def test_a_tailnet_request_with_the_wrong_login_is_refused(self):\n+        was_hosts, was_login = self._as_tailnet()\n+        try:\n+            code, body = self.raw(\"GET\", \"/api/health\", {\n+                \"host\": self.TAILNET, \"tailscale-user-login\": \"tim\"})\n+            self.assertEqual(code, 403)\n+            self.assertNotIn(\"ok\", body)\n+        finally:\n+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login\n+\n+    def test_a_tailnet_request_without_a_login_is_refused(self):\n+        was_hosts, was_login = self._as_tailnet()\n+        try:\n+            code, body = self.raw(\"GET\", \"/api/health\", {\"host\": self.TAILNET})\n+            self.assertEqual(code, 403)\n+            self.assertEqual(body.get(\"error\"), \"not you\")\n+        finally:\n+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login\n+\n+    def test_a_forged_login_header_on_loopback_is_ignored(self):\n+        code, body = self.raw(\"GET\", \"/api/health\",\n+                              {\"tailscale-user-login\": \"not-aria\"})\n+        self.assertEqual(code, 200)\n+        self.assertTrue(body[\"ok\"])\n+\n+    def test_a_tailnet_write_without_a_login_is_refused(self):\n+        was_hosts, was_login = self._as_tailnet()\n+        try:\n+            code, _ = self.raw(\"POST\", \"/api/desks\", {\"host\": self.TAILNET},\n+                               {\"repo\": \"acme/thing\", \"hidden\": True})\n+            self.assertEqual(code, 403)\n+            self.assertEqual(self.get(\"/api/desks\")[1][\"hidden\"], [])\n+        finally:\n+            self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login\n+\n     def test_validation_matches_the_worker_not_python(self):\n         v = self.serve.validate\n         self.assertIsNotNone(v({\"kind\": \"comment\", \"repo\": \"a/b\\n\", \"issue\": 7, \"body\": \"x\"})[0])\n"
+ }
+]
