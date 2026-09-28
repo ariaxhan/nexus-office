@@ -6,7 +6,7 @@ verifier and scope check afterwards, so the two harnesses differ in the worker a
 
 Run with tradition's interpreter:
     "$HOME/Library/Application Support/tradition-harness/imessage-venv/bin/python" \\
-        scripts/micropatch_tradition.py MODEL cold|contract
+        scripts/micropatch_tradition.py MODEL cold|contract|packet
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import micropatch as mp  # noqa: E402
 from tradition_harness.executors import ProviderAgentExecutor  # noqa: E402
+from tradition_harness.implement import code_packet  # noqa: E402
 
 MAX_STEPS = int(os.environ.get("MAX_STEPS", 16))
 
@@ -41,14 +42,16 @@ def trace(transcript):
                 refusals=sum(str(t.get("observation", "")).startswith("refused") for t in turns))
 
 
-def contract_text(case, mode, failure):
+def contract_text(case, mode, failure, tree=None):
     test_cmd = "python -m unittest " + " ".join(case["tests"])
-    if mode == "contract":
+    if mode in ("contract", "packet"):
         c = json.loads((mp.CASES.parent / "contracts.json").read_text())[case["commit"]]
         body = (f"Target: {c['target']}\nMechanism: {c['mechanism']}\nRequired behavior: {c['behavior']}\n"
                 f"Constraints: {c['constraints']}")
     else:
         body = f"Objective:\n{case['objective']}"
+    if mode == "packet":  # the named code preloaded, as `tradition implement` does
+        body += "\n\nThe code this contract names, current on disk:\n" + code_packet(Path(tree), (case["path"],), body)
     return (f"Implementation contract. Edit ONLY {case['path']}; do not create or change any other file.\n\n"
             f"{body}\n\nAcceptance test (already written, do not change it): {test_cmd}\n"
             f"It currently fails with:\n{failure[-1500:]}\n\n"
@@ -67,7 +70,7 @@ def solve(case, model, mode):
                                          expect_mutation=True, require_investigation=True, allowed_paths=(case["path"],),
                                          spends_budget=False, max_tokens_per_turn=4096)
         try:
-            result = executor.run(contract_text(case, mode, failure), cwd=Path(tree),
+            result = executor.run(contract_text(case, mode, failure, tree), cwd=Path(tree),
                                   commission_slug=f"mp-{case['commit'][:8]}")
             ok, err = result.ok, None
             info = dict(parse_retries=result.parse_retries, files_written=list(result.files_written),
