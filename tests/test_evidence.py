@@ -1,5 +1,6 @@
 """#210 D5: a flight starts with its own history and the institution's scars, with provenance."""
 
+import json
 import os
 import subprocess
 import unittest
@@ -60,6 +61,23 @@ class EvidencePacket(unittest.TestCase):
         recorded, text = evidence.packet(self.led, self.task, {"title": ""}, None, run=self.recall([]))
         self.assertEqual("", text)
         self.assertEqual(0, recorded["chars"])
+
+    def test_last_three_comments_are_trimmed_and_attributed(self):
+        rows = [{"user": {"login": f"u{i}"}, "created_at": f"2026-09-2{i}T00:00:00Z", "body": f"note {i} " + "y" * 900}
+                for i in range(5)]
+        run = lambda argv, **k: subprocess.CompletedProcess(argv, 0, json.dumps(rows), "")  # noqa: E731
+        text, error = evidence.comments("sample/product", 60, run=run)
+        self.assertIsNone(error)
+        self.assertNotIn("note 1", text)
+        self.assertIn("- u4, 2026-09-24: note 4", text)
+        self.assertNotIn("y" * (evidence.COMMENT_CHARS), text)
+
+    def test_a_failed_comment_fetch_is_recorded_not_raised(self):
+        fail = lambda argv, **k: subprocess.CompletedProcess(argv, 1, "", "API down")  # noqa: E731
+        self.assertEqual(("", "comments exit 1"), evidence.comments("sample/product", 60, run=fail))
+        def down(argv, **k):
+            raise subprocess.TimeoutExpired(argv, 20)
+        self.assertEqual("comments unavailable: TimeoutExpired", evidence.comments("sample/product", 60, run=down)[1])
 
 
 if __name__ == "__main__":
