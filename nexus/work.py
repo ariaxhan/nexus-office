@@ -878,6 +878,10 @@ def tower_execute(led, entry, task):
     if reviewed:
         return reviewed
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
+    log = Path(led.path).resolve().parent / "logs" / f"{fid}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.touch()
+    led.add_artifact(fid, "log", str(log))
     from . import evidence
     recorded, issue["nexus_evidence"] = evidence.packet(led, task, issue, entry["path"], flight=fid)
     issue["nexus_evidence"] += repair_brief(led, fid, repair) + redesign_brief(led, fid, task)
@@ -920,7 +924,7 @@ def tower_execute(led, entry, task):
             comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body,
                                     timeout=notify_timeout()),
             comment_for=lambda flight: tower.owning_issue_comment(led, led.flight(flight)),
-            write_set=write_set, per_repo=per_repo)
+            write_set=write_set, per_repo=per_repo, log=str(log))
         led.event("work.lane", fid, {"repo": repo, "issue": number, "write_set": write_set, "state": result["state"],
                                      "sha": result.get("sha"), "ended": time.time()}, "work")
         state = _settle(led, fid, entry, task, issue, result, found)

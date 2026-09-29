@@ -158,18 +158,30 @@ def provider_fallback(argv, prompt, repo):
             "--dangerously-skip-permissions"]
 
 
-def invoke(argv, *, cwd, env, input, timeout, run):
-    """Bound the whole provider process group before starting its replacement."""
+def invoke(argv, *, cwd, env, input, timeout, run, log=None):
+    """Bound the whole provider process group before starting its replacement.
+
+    log: stderr streams to this file while the provider runs and stdout is appended after, so a
+    killed flight still leaves what it said (#235: two SIGKILLed flights left `nexus log` empty)."""
     if run is not subprocess.run:
         try:
             return run(argv, cwd=cwd, env=env, input=input, text=True,
                        capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(argv, 124, "", "provider timeout")
+    sink = open(log, "a") if log else None
+    offset = sink.tell() if sink else 0
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input else subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                            stdout=subprocess.PIPE, stderr=sink or subprocess.PIPE, text=True,
+                            start_new_session=True)
     try:
         stdout, stderr = flights.communicate(proc, input, timeout)
+        if sink:
+            sink.flush()
+            with open(log) as f:
+                f.seek(offset)
+                stderr = f.read()
+            sink.write(stdout or "")
         return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
     except subprocess.TimeoutExpired:
         try:
@@ -178,10 +190,13 @@ def invoke(argv, *, cwd, env, input, timeout, run):
             pass
         proc.communicate()
         return subprocess.CompletedProcess(argv, 124, "", "provider timeout")
+    finally:
+        if sink:
+            sink.close()
 
 
 def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subprocess.run, write_set=None,
-        per_repo=lanes.PER_REPO, comment_for=None):
+        per_repo=lanes.PER_REPO, comment_for=None, log=None):
     """write_set: this lane leases only those paths in the shared checkout; None leases the whole repo.
 
     comment_for(flight) comments on a recovered dead flight's OWN issue, never this one (#210 W5)."""
@@ -203,11 +218,11 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
         argv = [prompt if a == base else a for a in argv]
     started = flights.clock()
     proc = invoke(argv, cwd=repo, env=env, input=prompt if road else None,
-                  timeout=max(1, timeout_s * .65), run=run)
+                  timeout=max(1, timeout_s * .65), run=run, log=log)
     fallback = provider_fallback(argv, prompt, repo) if proc.returncode else None
     if fallback:
         proc = invoke(fallback, cwd=repo, env=env, input=None,
-                      timeout=max(1, timeout_s - (flights.clock() - started) - 5), run=run)
+                      timeout=max(1, timeout_s - (flights.clock() - started) - 5), run=run, log=log)
     if write_set:
         result = lanes.land(entry, issue, record, proc, forced, pr_create, comment, run, risk.classify, _lines)
         landing.require_terminal(repo, result)
