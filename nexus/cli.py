@@ -219,6 +219,14 @@ def cmd_sandbox_run(args):
     return sandbox_probes.main(dict(os.environ), args.timeout, pathlib.Path("evidence"))
 
 
+def cmd_tbs_shadow(args):
+    """One shadow TBS decision, or nothing when the snapshot is unchanged."""
+    import shlex
+    from . import tbs_decision
+    print(json.dumps(tbs_decision.shadow(_ledger(args), shlex.split(args.snapshot), shlex.split(args.decide))))
+    return 0
+
+
 def cmd_install(args):
     """Write the plist and load it. launchd only keeps tower alive; it decides nothing."""
     target_dir = os.path.expanduser("~/Library/LaunchAgents")
@@ -330,6 +338,11 @@ def build_parser():
     kill_p = subs.add_parser("kill", help="cancel a flight and its process")
     kill_p.add_argument("flight")
     kill_p.set_defaults(func=cmd_kill)
+
+    shadow_p = subs.add_parser("tbs-shadow", help="TBS coordinator decision in shadow mode (no task)")
+    shadow_p.add_argument("--snapshot", required=True, help="command printing a tbs.coordinator-snapshot/v1")
+    shadow_p.add_argument("--decide", required=True, help="command reading it on stdin, printing a decision")
+    shadow_p.set_defaults(func=cmd_tbs_shadow)
 
     log_p = subs.add_parser("log", help="a flight's log, kept after failure")
     log_p.add_argument("flight")

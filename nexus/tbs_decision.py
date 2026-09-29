@@ -11,7 +11,9 @@ Handoff: thinking-brain-school findings/tbs-nexus-central-worker-handoff.md
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 
 SCHEMA = "tbs.coordinator-decision/v1"
 DECISIONS = ("execute", "wait", "escalate", "idle")
@@ -130,3 +132,32 @@ def accept(led, decision, snapshot_id, plan_id=None, now=None):
     led.event("tbs.decision", task or plan_id,
               {"decision": d, "snapshot_id": snapshot_id, "duplicate_of": duplicate}, "tbs", now)
     return {"decision": kind, "task": task, "duplicate_of": duplicate, "refused": None}
+
+
+def shadow(led, snapshot_argv, decide_argv, run=subprocess.run):
+    """Shadow mode (handoff: legacy stays authoritative). Snapshot; if its id equals the last shadow
+    decision's, stop with no model call. Otherwise decide once and record a `tbs.decision` event with
+    shadow=true. Never a task, never a write outside the ledger."""
+    snap = run(snapshot_argv, capture_output=True, text=True, timeout=300)
+    if snap.returncode:
+        led.event("tbs.decision", None, {"shadow": True, "refused": f"snapshot exit {snap.returncode}: "
+                                         f"{snap.stderr.strip()[:200]}"}, "tbs")
+        return {"state": "refused"}
+    snapshot_id = json.loads(snap.stdout)["snapshot_id"]
+    last = [json.loads(e["payload"]) for e in led.events(kind="tbs.decision")]
+    last = [p for p in last if p.get("shadow") and p.get("snapshot_id")]
+    if last and last[-1]["snapshot_id"] == snapshot_id:
+        return {"state": "unchanged", "snapshot_id": snapshot_id}
+    done = run(decide_argv, input=snap.stdout, capture_output=True, text=True, timeout=600)
+    try:
+        out = json.loads(done.stdout)
+        decision = out.get("decision")
+        if decision:
+            parse(decision, snapshot_id)
+        refused = out.get("refused")
+    except (ValueError, AttributeError, Refused) as exc:
+        decision, refused, out = None, f"decide output rejected: {exc}", {}
+    led.event("tbs.decision", None, {"shadow": True, "snapshot_id": snapshot_id, "decision": decision,
+                                     "refused": refused, "usage": out.get("usage")}, "tbs")
+    return {"state": "decided" if decision else "refused", "snapshot_id": snapshot_id,
+            "decision": (decision or {}).get("decision")}

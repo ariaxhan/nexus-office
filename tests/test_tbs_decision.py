@@ -79,6 +79,22 @@ class Consumer(unittest.TestCase):
         self.assertEqual(self.led.task(task)["state"], "rejected_policy")
         self.assertEqual(self.led.flights(task_id=task), [])
 
+    def test_shadow_decides_once_per_snapshot_and_never_makes_a_task(self):
+        import subprocess
+        calls = []
+        snap = json.dumps({"snapshot_id": SNAP})
+        def run(argv, input=None, **kw):
+            calls.append(argv[0])
+            out = snap if argv[0] == "snap" else json.dumps({"decision": valid("execute"), "refused": None})
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        first = tbs_decision.shadow(self.led, ["snap"], ["decide"], run=run)
+        again = tbs_decision.shadow(self.led, ["snap"], ["decide"], run=run)
+        self.assertEqual((first["state"], again["state"]), ("decided", "unchanged"))
+        self.assertEqual(calls, ["snap", "decide", "snap"])  # unchanged facts: no model call
+        self.assertEqual(self.tasks(), [])
+        (ev,) = self.led.events(kind="tbs.decision")
+        self.assertTrue(json.loads(ev["payload"])["shadow"])
+
     def test_the_consumer_imports_nothing_from_tbs(self):
         src = Path(tbs_decision.__file__).read_text()
         self.assertNotIn("thinking-brain-school", src.split('"""', 2)[2])
