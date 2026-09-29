@@ -27,6 +27,10 @@ class Route(unittest.TestCase):
         for body in ("fix a bug", "Background: Antigravity wrote this once.\n- METHOD: edit the parser"):
             self.assertEqual("code-judgment", executor.plan(ENTRY, self.issue(body))[0][2], body)
 
+    def test_a_code_lane_hands_bounded_edits_to_the_local_worker(self):
+        _, prompt, _, _ = executor.plan(ENTRY, self.issue("fix a bug"))
+        self.assertIn("tradition implement --contract", prompt)
+
     def test_claude_failure_has_codex_continuation_and_copy_has_claude(self):
         argv, prompt, _, _ = executor.plan(ENTRY, self.issue("fix a bug"))
         fallback = executor.provider_fallback(argv, prompt, ENTRY["path"])

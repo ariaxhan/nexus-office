@@ -87,13 +87,22 @@ def road_prompt(repo, road, extra=""):
     return "\n\n".join(parts + [extra])
 
 
+# You reason and write contracts; a local model types bounded edits (#235: 10/12 non-lifecycle verified).
+LOCAL_IMPLEMENTATION = (
+    "Bounded edits go to the local worker: once you know exactly what one file must change and a test "
+    "proves it (write the failing test first), run `tradition implement --contract @<file> --path <file> "
+    "--test '<test command>'` with a contract naming target, mechanism, behavior and constraints. Exit 0: the "
+    "test passes and the edit is on disk; review the diff. Exit 1: nothing changed; do it yourself. Keep for "
+    "yourself: lifecycle, state-machine, concurrency and multi-file integration changes.")
+
+
 def issue_prompt(entry, issue):
     return (f"Resolve {entry['repo']} issue #{issue['number']}: {issue.get('title', '')}\n\n"
             f"{issue.get('body') or ''}\n\nEdit files in place in this checkout on "
             f"{entry.get('default_branch', 'main')}. Read the latest issue comments first. "
             "If Tower retained work on an aria/held branch, inspect and reuse it before editing. "
             "Do not commit, push, branch, clone, stash or "
-            f"open PRs; Nexus lands the change. Run the project's own checks.\n"
+            f"open PRs; Nexus lands the change. Run the project's own checks.\n{LOCAL_IMPLEMENTATION}\n"
             f"Product guidance: {entry.get('product_guidance', '')}{issue.get('nexus_evidence', '')}")
 
 
