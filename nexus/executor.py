@@ -99,7 +99,7 @@ LOCAL_IMPLEMENTATION = (
 def issue_prompt(entry, issue):
     return (f"Resolve {entry['repo']} issue #{issue['number']}: {issue.get('title', '')}\n\n"
             f"{issue.get('body') or ''}\n\nEdit files in place in this checkout on "
-            f"{entry.get('default_branch', 'main')}. Read the latest issue comments first. "
+            f"{entry.get('default_branch', 'main')}. "
             "If Tower retained work on an aria/held branch, inspect and reuse it before editing. "
             "Do not commit, push, branch, clone, stash or "
             f"open PRs; Nexus lands the change. Run the project's own checks.\n{LOCAL_IMPLEMENTATION}\n"

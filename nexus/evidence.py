@@ -88,6 +88,26 @@ def _score(text):
         return 0.0
 
 
+COMMENT_CHARS = 600  # per comment: the gist of a status note, not a transcript
+
+
+def comments(repo, number, limit=3, run=subprocess.run):
+    """(text, error|None): the issue's last `limit` comments, so no flight spends turns fetching them (#236)."""
+    try:
+        proc = run(["gh", "api", f"repos/{repo}/issues/{number}/comments?per_page=100"],
+                   capture_output=True, text=True, timeout=20)
+        if proc.returncode:
+            return "", f"comments exit {proc.returncode}"
+        rows = json.loads(proc.stdout)[-limit:]
+        lines = [f"- {(c.get('user') or {}).get('login', '?')}, {str(c.get('created_at', ''))[:10]}: "
+                 + " ".join(str(c.get("body") or "").split())[:COMMENT_CHARS] for c in rows]
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError) as exc:
+        return "", f"comments unavailable: {type(exc).__name__}"
+    if not lines:
+        return "\n\nIssue comments: none.", None
+    return "\n\nLatest issue comments (oldest first; already fetched, no need to re-read):\n" + "\n".join(lines), None
+
+
 def packet(led, task, issue, repo, moment="start", run=subprocess.run, flight=None):
     """The packet as recorded (`work.evidence`) and the text the agent reads."""
     prior = prior_attempts(led, task, exclude=flight)  # never the flight being briefed

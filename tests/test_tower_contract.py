@@ -6,7 +6,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from nexus import work
+from nexus import executor, work
 from tests import test_work  # fixture only; importing the module keeps its tests out of this file
 
 BLOCK = ('```tbs-contract\ndepends_on: ["thinking-brain-school/tbs-landing#66"]\nwrite_set: ["src/a.jsx"]\n'
@@ -217,6 +217,27 @@ class TowerYield(unittest.TestCase):
         self.assertIn("hides a failure", seen["nexus_evidence"])
         self.assertIn("origin/main...origin/aria/issue-60", seen["nexus_evidence"])
         self.assertEqual(1, len(self.led.events(kind="work.repair")))
+
+    def fly_seeing(self, said):
+        seen = {}
+        with patch("nexus.evidence.comments", return_value=said), \
+                patch("nexus.executor.fly", side_effect=lambda entry, issue, *a, **k: seen.update(
+                    issue, prompt=executor.issue_prompt(entry, issue)) or {"state": "HELD", "reason": "in_review",
+                                                                        "pr_url": "https://pr/9", "flight": a[0]}), \
+                patch("nexus.tower.land_write_flight"), patch("nexus.work.tower_review"):
+            work.tower_execute(self.led, self.entry, self.task)
+        return seen
+
+    def test_the_issue_comments_reach_the_prompt(self):
+        seen = self.fly_seeing(("\n\nLatest issue comments:\n- aria, 2026-09-28: use the held branch", None))
+        self.assertIn("aria, 2026-09-28: use the held branch", seen["prompt"])
+        self.assertNotIn("Read the latest issue comments", seen["prompt"])
+
+    def test_a_failed_comment_fetch_still_flies_and_is_recorded(self):
+        seen = self.fly_seeing(("", "comments exit 1"))
+        self.assertIn("prompt", seen)
+        [ev] = self.led.events(kind="work.evidence")
+        self.assertEqual("comments exit 1", json.loads(ev["payload"])["comments_error"])
 
     def closed_after_merge(self):
         fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)

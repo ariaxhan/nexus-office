@@ -880,6 +880,8 @@ def tower_execute(led, entry, task):
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
     from . import evidence
     recorded, issue["nexus_evidence"] = evidence.packet(led, task, issue, entry["path"], flight=fid)
+    said, recorded["comments_error"] = evidence.comments(repo, number)
+    issue["nexus_evidence"] = said + issue["nexus_evidence"]
     issue["nexus_evidence"] += repair_brief(led, fid, repair) + redesign_brief(led, fid, task)
     led.event("work.evidence", fid, recorded, "work")  # retrieved; "used" is the agent naming an id
 
