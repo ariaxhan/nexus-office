@@ -1,0 +1,74 @@
+{
+ "snapshot_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+ "valid": {
+  "escalate": {
+   "decided_at": "2026-09-28T00:00:00Z",
+   "decision": "escalate",
+   "escalation": {
+    "evidence": [
+     "tbs-www#480"
+    ],
+    "options": [
+     "ship",
+     "hold"
+    ],
+    "question": "May the retention offer ship to all parents?"
+   },
+   "outcome": null,
+   "schema": "tbs.coordinator-decision/v1",
+   "snapshot_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "wait": null
+  },
+  "execute": {
+   "decided_at": "2026-09-28T00:00:00Z",
+   "decision": "execute",
+   "escalation": null,
+   "outcome": {
+    "authority": {
+     "mode": "existing-policy",
+     "source": "repo:AGENTS.md"
+    },
+    "check": "npm test",
+    "class": "defect",
+    "executor": "code-judgment",
+    "impact": "internal",
+    "key": "defect:issue:tbs-www-512:fix",
+    "objective": "the defect's failing check passes",
+    "output": "landed commit on main",
+    "reason": "oldest eligible defect",
+    "resources": [
+     "repo:tbs-www"
+    ],
+    "risk": "low",
+    "title": "Fix one eligible non-customer-facing defect"
+   },
+   "schema": "tbs.coordinator-decision/v1",
+   "snapshot_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "wait": null
+  },
+  "idle": {
+   "decided_at": "2026-09-28T00:00:00Z",
+   "decision": "idle",
+   "escalation": null,
+   "outcome": null,
+   "schema": "tbs.coordinator-decision/v1",
+   "snapshot_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "wait": null
+  },
+  "wait": {
+   "decided_at": "2026-09-28T00:00:00Z",
+   "decision": "wait",
+   "escalation": null,
+   "outcome": null,
+   "schema": "tbs.coordinator-decision/v1",
+   "snapshot_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "wait": {
+    "evidence": [
+     "hold:release-window"
+    ],
+    "reason": "every eligible item is held until the release window",
+    "wake_at": "2026-09-29T09:00:00Z"
+   }
+  }
+ }
+}

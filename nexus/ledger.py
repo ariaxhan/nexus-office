@@ -504,17 +504,23 @@ class Ledger:
 
     def add_task(self, title, origin, plan_id=None, reason=None,
                  impact=None, risk=None, cost_estimate=None, dedupe_key=None,
-                 state="candidate", now=None):
+                 state="candidate", now=None, objective=None, autonomy=None,
+                 output=None, check=None, parent_id=None, unique_live=False):
+        """unique_live: inside this one write transaction, refuse (return None) when a live task
+        already owns dedupe_key, so two writers can never both create it."""
         now = now if now is not None else time.time()
         tid = new_id("task")
         if state not in TASK_STATES:
             raise LedgerError(f"unknown task state: {state}")
         with self.tx():
+            if unique_live and self.live_task_with_key(dedupe_key) is not None:
+                return None
             self.conn.execute(
-                "INSERT INTO tasks (id,plan_id,origin,title,reason,impact,risk,"
-                "cost_estimate,state,dedupe_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (tid, plan_id, origin, title, reason, impact, risk,
-                 cost_estimate, state, dedupe_key, now))
+                "INSERT INTO tasks (id,plan_id,origin,title,reason,impact,risk,cost_estimate,state,"
+                "dedupe_key,objective,autonomy,output,\"check\",parent_id,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (tid, plan_id, origin, title, reason, impact, risk, cost_estimate, state,
+                 dedupe_key, objective, autonomy, output, check, parent_id, now))
             self._event("task.state", tid,
                         {"to": state, "origin": origin, "plan_id": plan_id,
                          "dedupe_key": dedupe_key}, "tower", now)
