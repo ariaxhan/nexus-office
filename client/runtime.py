@@ -36,8 +36,6 @@ def read_gates() -> dict:
     rows=human_asks.listing()['items']
     gates=[]
     for row in rows:
-        if row['gate_type'] not in ('inaccessible_authentication','physical_action'):
-            continue
         try:
             asked_at=datetime.datetime.fromisoformat(row['created_at']).timestamp()
         except ValueError:
@@ -54,7 +52,14 @@ def read_gate() -> dict:
 
 
 def answer_gate(root, question_id: str, answer: str, always: bool) -> tuple[bool,str]:
+    import human_asks
     import office_tasks
+    with human_asks.connect() as db:
+        row=db.execute("SELECT gate_type FROM asks WHERE id=? AND state='open'",(question_id,)).fetchone()
+    if row is None:
+        return False,'Human-input request is no longer open'
+    if row['gate_type'] not in ('inaccessible_authentication','physical_action'):
+        return False,'Answer this choice in Office Needs You'
     try:
         office_tasks.answer_human_input({'id':question_id,
             'answer':'Aria completed the requested action' if answer=='allow'

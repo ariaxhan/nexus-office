@@ -24,7 +24,7 @@ class GateViewTest(unittest.TestCase):
     def request(self,kind='inaccessible_authentication',identifier='task-1'):
         with human_asks.connect(self.db) as db:
             human_asks.request_human_input(db,identifier=identifier,execution_ref=identifier,
-                gate_type=kind,action='Enter MFA code on Aria device',
+                gate_type=kind,action='Choose lesson A or B' if kind=='new_judgment' else 'Enter MFA code on Aria device',
                 why_agent_cannot_do_it='Only Aria has the device',
                 authorization_gap='Task authorization does not provide the factor',
                 resume_after_answer='Resume the original task')
@@ -42,10 +42,12 @@ class GateViewTest(unittest.TestCase):
         self.assertEqual(one,many[0])
         self.assertEqual(one['permission'],'inaccessible_authentication')
 
-    def test_product_judgment_stays_in_needs_you_text_view(self):
+    def test_product_judgment_appears_in_native_needs_you_but_cannot_be_allowed(self):
         self.request('new_judgment')
-        self.assertEqual(runtime.read_gates()['gates'],[])
+        self.assertEqual(runtime.read_gates()['gates'][0]['permission'],'new_judgment')
         self.assertEqual(len(human_asks.listing(self.db)['items']),1)
+        ok,_=runtime.answer_gate(None,'task-1','allow',False)
+        self.assertFalse(ok)
 
     def test_native_answer_uses_central_resolution_path(self):
         self.request()

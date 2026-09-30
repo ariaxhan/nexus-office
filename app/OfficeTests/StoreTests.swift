@@ -303,17 +303,15 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.sections.map(\.id), ["clock", "cost", "pipeline"])
     }
 
-    /// A source saying five things want a person is the same claim as a desk
-    /// waiting on you, so it lights the same dot. Anything else means a person
-    /// has to open the window to find out, which is the one job the dot has.
-    func testTheWallLightsTheMenuBarDot() async throws {
+    /// Wall source counts are operational status, not validated human input.
+    func testTheWallCannotLightTheNeedsYouDot() async throws {
         let store = try floor()
         await store.refreshBots()
         await store.refreshWorld()
 
         XCTAssertEqual(store.wallNeeds, 5)
         XCTAssertEqual(store.wallLine, "the wall needs 5")
-        XCTAssertEqual(store.dot, .needsYou)
+        XCTAssertNotEqual(store.dot, .needsYou)
     }
 
     func testTheNeedsFilterAndTheSearchReachTheWall() async throws {
@@ -444,7 +442,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.gates.map(\.id), ["q-second"],
                        "the second question is untouched by a click that was never aimed at it")
         XCTAssertEqual(store.toast, "that question has moved on. the floor is now asking about "
-                       + "rm -rf ~/code/acme/storefront/node_modules")
+                        + "inspect the build on Aria’s device")
     }
 
     /// One alert per question, however many hands are up. A second bot arriving
@@ -729,10 +727,10 @@ final class StoreTests: XCTestCase {
       },
       "chats": {},
       "gates": [
-        {"state": "pending", "id": "q-first", "permission": "run_bash",
-         "target": "git push origin main --follow-tags", "waiting_s": 47, "bot": "release"},
-        {"state": "pending", "id": "q-second", "permission": "run_bash",
-         "target": "rm -rf ~/code/acme/storefront/node_modules", "waiting_s": 12, "bot": "chief"}
+        {"state": "pending", "id": "q-first", "permission": "inaccessible_authentication",
+          "target": "enter MFA on Aria’s device", "waiting_s": 47, "bot": "release"},
+         {"state": "pending", "id": "q-second", "permission": "physical_action",
+          "target": "inspect the build on Aria’s device", "waiting_s": 12, "bot": "chief"}
       ],
       "world": {
         "generated": "2026-08-26T18:40:00Z",

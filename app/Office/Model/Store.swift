@@ -332,16 +332,13 @@ public final class Store {
 
     public var gateIsPending: Bool { gate.isPending }
 
-    public var showsGateSheet: Bool { gate.isPending && !suppressGateSheet }
+    public var showsGateSheet: Bool {
+        gate.isPending && !suppressGateSheet &&
+        (gate.permission == "inaccessible_authentication" || gate.permission == "physical_action")
+    }
 
     public var dot: DotState {
         if gate.isPending { return .needsYou }
-        if stations.contains(where: { StateRules.deskState($0) == .waiting }) { return .needsYou }
-        // A source on the wall saying five things want a person is the same
-        // claim as a desk waiting on you, so it lights the same dot. Anything
-        // else means a person has to open the window to find out, which is the
-        // one job this dot has.
-        if wallNeeds > 0 { return .needsYou }
         if bots.contains(where: { $0.busy }) { return .working }
         if stations.contains(where: { StateRules.deskState($0) == .working }) { return .working }
         return .idle

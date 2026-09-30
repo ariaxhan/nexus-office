@@ -48,6 +48,9 @@ class SingleCreationPath(unittest.TestCase):
         chat=(ROOT/'client/chat.py').read_text()
         self.assertIn("return {item['source_ref'] for item in human_asks.listing()['items']}",chat)
         self.assertNotIn('waiting_count += "waiting on human" in labels',chat)
+        native=(ROOT/'app/Office/Model/Store.swift').read_text()
+        self.assertNotIn('if wallNeeds > 0 { return .needsYou }',native)
+        self.assertNotIn('if stations.contains(where: { StateRules.deskState($0) == .waiting }) { return .needsYou }',native)
 
 
 if __name__=='__main__':

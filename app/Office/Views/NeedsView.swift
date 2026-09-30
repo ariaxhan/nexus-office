@@ -64,10 +64,14 @@ private struct GateNeed: View {
     let gate: Gate
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(gate.permission.isEmpty ? "agent permission" : gate.permission)
+            Text(gate.permission.isEmpty ? "Human input" : gate.permission.replacingOccurrences(of: "_", with: " ").capitalized)
                 .officeFont(size: 12.5, weight: .medium).foregroundStyle(Theme.text)
             Text(gate.target).officeFont(size: 11.5, design: .monospaced)
                 .foregroundStyle(Theme.dim).lineLimit(3)
+            if gate.permission != "inaccessible_authentication" && gate.permission != "physical_action" {
+                Link("Answer in Office on the web", destination: URL(string: "http://127.0.0.1:8790/#watch")!)
+                    .officeFont(size: 11)
+            }
         }
         .padding(13).frame(maxWidth: 720, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
