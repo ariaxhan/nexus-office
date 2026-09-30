@@ -91,9 +91,9 @@ PER_REPO = {"survey", "no-issues", "caught-up", "no-access"}
 HOW = [
     "A launchd job wakes the runner on the interval below. It sweeps every repo "
     "the office has a desk for, one at a time.",
-    "On each repo it lists the open issues and picks the ones the bot did NOT "
-    "comment on last. An issue the bot spoke on last is waiting on you, and it "
-    "is left alone until you reply. No label gates anything.",
+    "On each repo it lists open issues and records which ones the bot commented "
+    "on last. That marker is activity evidence, not a human-input request. "
+    "Unfinished technical work remains Office-owned.",
     "It runs one agent lane against one issue at a time, capped in minutes. "
     "What it is allowed to do is that repo's capability: most can open a branch "
     "and a PR, none can merge, none can push to a default branch.",

@@ -702,7 +702,7 @@ class DecisionTest(SyncCase):
         self.assertEqual(self.ran, [])
         self.mod.fetch_issues = lambda repo, tok: ([{"number": 5, "bot_last": False}], None)
         self.assertEqual(self.mod._requeue_stuck_issues("acme/one", "a", "tok", False),
-                         (False, "nothing here is waiting on a human"))
+                         (False, "no bot-last issues to requeue"))
 
     def test_refusals_before_any_command_runs(self):
         self.assertEqual(self.decide("close", issue=None),

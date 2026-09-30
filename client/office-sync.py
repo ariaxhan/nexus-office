@@ -556,11 +556,9 @@ def batch_query(n: int) -> str:
 
 
 def _bot_last_word(node) -> dict:
-    """The bot's comment when it had the last word on this issue, else empty.
+    """The bot's last comment, if it was the issue's last word.
 
-    THE rule, copied from dispatch.sh on purpose: the bot having the last
-    word is what "waiting on a human" mechanically means. A label is a hint
-    that can go stale; this cannot.
+    This is activity evidence. It does not transfer ownership to Aria.
 
     `url` and `createdAt` ride along and cost NOTHING: they are scalar fields on
     a comment node the query already pays for, and GraphQL bills nodes. They are
@@ -1085,9 +1083,9 @@ def _heartbeat() -> str:
 
 
 def _log_room(stations, cost, run) -> None:
-    waiting = sum(1 for s in stations for i in s["issues"] if i["bot_last"])
+    bot_last = sum(1 for s in stations for i in s["issues"] if i["bot_last"])
     log(f"{len(stations)} desks, "
-        f"{sum(len(s['issues']) for s in stations)} open issues, {waiting} waiting on you, "
+        f"{sum(len(s['issues']) for s in stations)} open issues, {bot_last} with bot as last commenter, "
         f"{cost} graphql points this build")
     gate = run.get("gate") or {}
     if gate.get("state") == "pending":
@@ -1367,7 +1365,7 @@ def _requeue_stuck_issues(repo, who, tok, dry: bool):
         return False, f"could not list issues: {err}"
     stuck = [i for i in issues if i["bot_last"]][:10]
     if not stuck:
-        return False, "nothing here is waiting on a human"
+        return False, "no bot-last issues to requeue"
     env = {"GH_TOKEN": tok}
     done = []
     for i in stuck:
