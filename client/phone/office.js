@@ -11,7 +11,7 @@ import {issueInventory,issueControls} from './office-issues.js';
 import {newTask,taskList,taskDetail} from './office-tasks.js';
 let attention={items:[],errors:[],failures:[]};
 let snapshot=null,snapshotReadAt=0;
-async function world(){if(!snapshot||Date.now()-snapshotReadAt>15000){const data=await api('/api/world');snapshot=data.world;snapshotReadAt=Date.now();}return snapshot;}
+async function world(){if(!snapshot||Date.now()-snapshotReadAt>15000){const data=await api('/api/world');snapshot=data.world||{stations:[],sections:{},automation:{}};snapshotReadAt=data.world?Date.now():0;}return snapshot;}
 async function guarded(parent,work){try{await work();}catch(error){failure(parent,error);}}
 function subtitle(data){return [data.state,data.detail,data.at].filter(Boolean).join(' · ');}
 async function today(parent){
