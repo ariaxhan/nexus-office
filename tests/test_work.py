@@ -673,7 +673,7 @@ else:
         report = work.run(self.led, [self.entry, other], budget_s=2, max_items=2)
         self.assertEqual(['failed', 'done'], [r['state'] for r in report])
         self.assertLess(work.time.monotonic() - start, 3)
-        token = work._deadline.set(work.time.monotonic() - 1)
+        token = work._deadline.set(work.flights.clock() - 1)
         try:
             with patch('nexus.work.subprocess.Popen') as spawn:
                 with self.assertRaises(work.WorkError):

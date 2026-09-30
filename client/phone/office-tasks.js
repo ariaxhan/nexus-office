@@ -142,8 +142,7 @@ function renderEvent(turns,live,state,event,taskId){
   'office.phase':()=>state.textContent=payload.state,
   'office.message':()=>{if(!payload.initial){const node=card('You',payload.text);showAttachments(node,payload.attachments);turns.insertBefore(node,live);}},
   'office.delivery':()=>turns.insertBefore(el('p','muted',`Message ${payload.message_id}: ${payload.state}${payload.consumption==='unknown'?' · provider acknowledged; consumption unconfirmed':''}`),live),
-  'office.permission_closed':()=>{const node=turns.querySelector(`[data-permission-id="${payload.permission_id}"]`);if(node)node.replaceChildren(el('p','muted','Permission answered'));},
-  'office.permission':()=>turns.insertBefore(permissionCard({id:event.id,task_id:taskId,payload}),live),
+   'office.internal_approval_rejected':()=>turns.insertBefore(el('p','muted','Internal approval request stayed with Office.'),live),
   'office.provider':()=>provider(turns,live,payload),
   'office.session_closed':()=>state.textContent='Session closed; output retained',
   'office.unsupported_request':()=>turns.insertBefore(card('Engine request needs support',JSON.stringify(payload.params)),live),
@@ -161,24 +160,6 @@ function renderItem(turns,live,item){
  if(item.type==='agentMessage'){live.textContent='';turns.insertBefore(markdownView(item.text),live);return;}
  const details=el('details','card');details.append(el('summary','',item.type||'Engine event'),el('pre','',JSON.stringify(item,null,2)));turns.insertBefore(details,live);
 }
-export function permissionCard(request){
- const payload=request.payload;const params=payload.params||{};
- if(payload.method==='item/tool/requestUserInput'||params.tool==='AskUserQuestion')return inputRequest(request);
- const node=el('article','card');node.append(el('h3','',params.title||params.reason||'Permission requested'),el('pre','',JSON.stringify(params,null,2)));
- const controls=el('div','actions');const requestId=crypto.randomUUID();
- for(const [decision,label] of [['accept','Allow once'],['decline','Deny']])controls.append(button(label,async()=>{await api('/api/tasks/answer',{task_id:request.task_id,permission_id:request.id,decision,request_id:requestId});controls.replaceChildren(el('p','muted','Answer queued for this exact request.'));}));
- node.dataset.permissionId=String(request.id);node.append(controls);return node;
-}
-export async function permissions(parent){const data=await api('/api/tasks/permissions');for(const request of data.items)parent.append(permissionCard(request));return data.items.length;}
-
-function inputRequest(request){
- const params=request.payload.params;const questions=params.questions||params.input.questions;
- const node=el('article','card');node.dataset.permissionId=String(request.id);const fields=new Map();
- for(const question of questions){const control=el('input');control.type=question.isSecret?'password':'text';const label=question.question;field(node,label,control);fields.set(question.id||label,control);
- if(question.options){const options=el('div','actions');for(const option of question.options)options.append(button(option.label,()=>control.value=option.label));node.append(options);}}
- const requestId=crypto.randomUUID();node.append(button('Send answers',async()=>{const answers=Object.fromEntries([...fields].map(([key,node])=>[key,node.value]));await api('/api/tasks/answer',{task_id:request.task_id,permission_id:request.id,decision:'answer',answers,request_id:requestId});node.replaceChildren(el('p','muted','Answers queued for this exact request.'));}));return node;
-}
-
 function showAttachments(parent,items=[]){
  for(const item of items){
   if(item.upload_id){parent.append(link(item.source,`/api/uploads/content?id=${encodeURIComponent(item.upload_id)}&revision=${item.revision}`));continue;}

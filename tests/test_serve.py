@@ -290,42 +290,11 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(self.serve.office_sync._issue_steps(
             "choose", "7", "a/b", "", {})[1], "nothing to say")
 
-    def test_a_permit_without_a_well_formed_id_is_refused(self):
-        code, body = self.post("/api/decision",
-                               {"kind": "permit", "question_id": "nope", "answer": "allow"})
-        self.assertEqual(code, 400)
-        self.assertIn("question id", body["error"])
-
-    def test_a_permit_for_a_question_that_moved_on_is_409_and_writes_nothing(self):
-        """The sharpest edge in the project. Between a gate being shown and being
-        answered, the agent can time out and a different gate can open; answering
-        by position would approve a command nobody ever saw."""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            (root / "_meta" / "state").mkdir(parents=True)
-            gate = root / "_meta" / "state" / "pending-question.json"
-            gate.write_text(json.dumps({
-                "id": "a" * 16, "permission": "Bash", "target": "rm -rf /",
-                "asked_at": time.time(),
-            }))
-            before = gate.read_bytes()
-
-            old = os.environ.get("OFFICE_RUNTIME_ROOT")
-            os.environ["OFFICE_RUNTIME_ROOT"] = str(root)
-            try:
-                code, body = self.post("/api/decision", {
-                    "kind": "permit", "question_id": "b" * 16, "answer": "allow",
-                })
-            finally:
-                if old is None:
-                    os.environ.pop("OFFICE_RUNTIME_ROOT", None)
-                else:
-                    os.environ["OFFICE_RUNTIME_ROOT"] = old
-
-            self.assertEqual(code, 409)
-            self.assertFalse(body["ok"])
-            self.assertIn("moved on", body["result"])
-            self.assertEqual(gate.read_bytes(), before)
+    def test_legacy_permit_decision_cannot_assign_human_ownership(self):
+        code,body=self.post('/api/decision',
+            {'kind':'permit','question_id':'a'*16,'answer':'allow'})
+        self.assertEqual(code,400)
+        self.assertIn('kind',body['error'])
 
     # ── the desk is right the moment the decision lands ──────────────────────
     def decide_with_a_fake_github(self, body, applied=(True, "done"), raises=None):
@@ -1250,164 +1219,67 @@ class ChatTest(unittest.TestCase):
 
 
 class GatesTest(unittest.TestCase):
-    """`/api/gates`: the whole floor, not just the hand at the front of it.
-
-    The harness gives every asking bot its own gate file, because two bots on two
-    threads can raise a hand in the same second and one shared file meant the
-    second write erased the first. So the office reads the whole directory, and
-    a hand it cannot see is a hand nobody will ever answer.
-    """
-
+    """Native gate routes read only the central human-input store."""
     @classmethod
     def setUpClass(cls):
-        import serve
-
-        cls.serve = serve
-        serve.log = lambda msg: None
-        serve.office_sync.Access = lambda: object()
-        serve.office_sync.build_snapshot = lambda access: copy.deepcopy(SNAP)
-
-        cls.tmp = tempfile.TemporaryDirectory()
-        cls.root = pathlib.Path(cls.tmp.name)
-        cls.state = cls.root / "_meta" / "state"
-        cls.state.mkdir(parents=True)
-        cls.was = os.environ.get("OFFICE_RUNTIME_ROOT")
-        os.environ["OFFICE_RUNTIME_ROOT"] = str(cls.root)
-
-        cls.world = serve.World()
-        cls.world.build()
-        cls.httpd = serve.make_server(cls.world, 0)
-        cls.port = cls.httpd.server_address[1]
-        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+        import serve,human_asks
+        cls.serve=serve;cls.human_asks=human_asks
+        serve.log=lambda msg:None
+        serve.office_sync.Access=lambda:object()
+        serve.office_sync.build_snapshot=lambda access:copy.deepcopy(SNAP)
+        cls.tmp=tempfile.TemporaryDirectory()
+        cls.db=pathlib.Path(cls.tmp.name)/'asks.sqlite'
+        cls.previous=human_asks.DB;human_asks.DB=cls.db
+        cls.world=serve.World();cls.world.build()
+        cls.httpd=serve.make_server(cls.world,0)
+        cls.port=cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever,daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
-        cls.httpd.shutdown()
-        cls.httpd.server_close()
-        if cls.was is None:
-            os.environ.pop("OFFICE_RUNTIME_ROOT", None)
-        else:
-            os.environ["OFFICE_RUNTIME_ROOT"] = cls.was
+        cls.httpd.shutdown();cls.httpd.server_close()
+        cls.human_asks.DB=cls.previous
         cls.tmp.cleanup()
 
     def setUp(self):
-        os.environ["OFFICE_RUNTIME_ROOT"] = str(self.root)
-        for path in self.state.glob("pending-question*"):
-            path.unlink()
+        with self.human_asks.connect(self.db) as db:
+            db.execute('DELETE FROM ask_events');db.execute('DELETE FROM asks')
 
-    def file(self, bot=""):
-        name = "pending-question.json" if not bot else f"pending-question.{bot}.json"
-        return self.state / name
+    def ask(self,identifier):
+        with self.human_asks.connect(self.db) as db:
+            self.human_asks.request_human_input(db,identifier=identifier,
+                execution_ref=identifier,gate_type='inaccessible_authentication',
+                action='Complete MFA on Aria device',
+                why_agent_cannot_do_it='Only Aria has the device',
+                authorization_gap='Task authorization cannot supply the factor',
+                resume_after_answer='Resume the original task')
 
-    def ask(self, qid, bot="", target="npm ci", ago=30):
-        self.file(bot).write_text(json.dumps({
-            "id": qid, "permission": "Bash", "target": target,
-            "detail": "", "asked_at": time.time() - ago,
-        }))
-        return qid
+    def test_unvalidated_gate_file_is_not_human_owned(self):
+        root=pathlib.Path(self.tmp.name)/'_meta'/'state';root.mkdir(parents=True,exist_ok=True)
+        (root/'pending-question.json').write_text(json.dumps({'id':'legacy','permission':'Bash'}))
+        self.assertEqual(api_get(self.port,'/api/gates')[1]['gates'],[])
 
-    def test_an_empty_floor_is_an_empty_list_and_nothing_is_wrong(self):
-        code, body = api_get(self.port, "/api/gates")
-        self.assertEqual(code, 200)
-        self.assertEqual(body["gates"], [])
-        self.assertTrue(body["at"])
-        self.assertNotIn("state", body)  # `state` appears only when something IS wrong
+    def test_validated_request_is_the_only_gate(self):
+        self.ask('task-12345678')
+        code,body=api_get(self.port,'/api/gates')
+        self.assertEqual(code,200)
+        self.assertEqual([g['id'] for g in body['gates']],['task-12345678'])
+        self.assertEqual(api_get(self.port,'/api/gate')[1]['id'],'task-12345678')
 
-    def test_every_raised_hand_is_listed_oldest_first_with_its_bot(self):
-        self.ask("a" * 16, bot="chief", ago=20)
-        self.ask("b" * 16, ago=900)
-        code, body = api_get(self.port, "/api/gates")
-        self.assertEqual(code, 200)
-        self.assertEqual([g["id"] for g in body["gates"]], ["b" * 16, "a" * 16])
-        self.assertEqual([g["bot"] for g in body["gates"]], [None, "chief"])
-        for gate in body["gates"]:
-            self.assertEqual(gate["state"], "pending")
-            self.assertEqual(gate["target"], "npm ci")
-            self.assertIsNotNone(gate["waiting_s"])
-
-    def test_the_single_gate_is_the_first_of_the_list_in_the_old_shape(self):
-        """Nothing that reads `/api/gate` today may learn a new shape to keep
-        working, and the two endpoints may never disagree about the front hand."""
-        self.ask("a" * 16, bot="chief", ago=20)
-        self.ask("b" * 16, ago=900)
-        one = api_get(self.port, "/api/gate")[1]
-        many = api_get(self.port, "/api/gates")[1]["gates"]
-        self.assertEqual(one["state"], "pending")
-        self.assertEqual(one["id"], many[0]["id"])
-        self.assertEqual(sorted(one), sorted(many[0]))
-
-    def test_answering_one_gate_leaves_the_other_one_listed(self):
-        """THE test for this endpoint. Two bots blocked, one answered: the other
-        hand is still up, still listed, and its file was never touched."""
-        chief = self.ask("a" * 16, bot="chief", ago=60)
-        release = self.ask("b" * 16, bot="release", ago=30)
-        untouched = self.file("release").read_bytes()
-
-        code, body = api_post(self.port, "/api/gate",
-                              {"question_id": chief, "answer": "allow"})
-        self.assertEqual(code, 200, body)
-        self.assertTrue(body["ok"])
-        self.assertEqual(json.loads(self.file("chief").read_text())["answer"], "allow")
-        self.assertEqual(self.file("release").read_bytes(), untouched)
-
-        listed = api_get(self.port, "/api/gates")[1]["gates"]
-        self.assertEqual([g["id"] for g in listed], [release])
-        self.assertEqual(api_get(self.port, "/api/gate")[1]["id"], release)
-
-    def test_answering_an_id_nobody_carries_is_409_and_writes_nothing(self):
-        self.ask("a" * 16, bot="chief")
-        before = self.file("chief").read_bytes()
-        code, body = api_post(self.port, "/api/gate",
-                              {"question_id": "c" * 16, "answer": "allow"})
-        self.assertEqual(code, 409)
-        self.assertFalse(body["ok"])
-        self.assertEqual(self.file("chief").read_bytes(), before)
-        self.assertEqual(len(api_get(self.port, "/api/gates")[1]["gates"]), 1)
-
-    def test_an_unconfigured_runtime_says_so_rather_than_showing_a_clear_floor(self):
-        """An empty list and a broken channel must never render the same. The
-        word is the same one `/api/gate` uses, so the two cannot tell different
-        stories about whether the gate channel works at all."""
-        os.environ.pop("OFFICE_RUNTIME_ROOT", None)
-        gates = api_get(self.port, "/api/gates")[1]
-        one = api_get(self.port, "/api/gate")[1]
-        self.assertEqual(gates["gates"], [])
-        self.assertEqual(gates["state"], "unconfigured")
-        self.assertEqual(gates["state"], one["state"])
-
-    def test_the_floor_is_listed_with_the_harness_closed(self):
-        """Why this reads files and not the harness's HTTP.
-
-        The gate is the channel that matters, so it is the one that must not
-        depend on a dev server being up: a hand raised by an agent that is still
-        standing there blocked has to be visible, and answerable, with nothing
-        else running. Answering writes the file too, so a list read over the wire
-        would be a list of gates that could not be answered.
-        """
-        self.ask("a" * 16, bot="chief")
-        was = os.environ.get("OFFICE_RUNTIME_URL")
-        os.environ["OFFICE_RUNTIME_URL"] = f"http://127.0.0.1:{free_port()}"
-        try:
-            body = api_get(self.port, "/api/gates")[1]
-            self.assertEqual([g["id"] for g in body["gates"]], ["a" * 16])
-            self.assertNotIn("state", body)
-            code, answered = api_post(self.port, "/api/gate",
-                                      {"question_id": "a" * 16, "answer": "deny"})
-            self.assertEqual(code, 200, answered)
-            self.assertEqual(api_get(self.port, "/api/gates")[1]["gates"], [])
-        finally:
-            if was is None:
-                os.environ.pop("OFFICE_RUNTIME_URL", None)
-            else:
-                os.environ["OFFICE_RUNTIME_URL"] = was
-
-    def test_a_torn_file_says_unreadable_and_still_lists_what_it_could_read(self):
-        self.file().write_text('{"id": "abc", "permis')
-        self.ask("a" * 16, bot="chief")
-        body = api_get(self.port, "/api/gates")[1]
-        self.assertEqual(body["state"], "unreadable")
-        self.assertEqual([g["id"] for g in body["gates"]], ["a" * 16])
-
+    def test_answering_exact_id_resolves_only_that_record(self):
+        self.ask('task-12345678');self.ask('task-87654321')
+        def answer(body):
+            with self.human_asks.connect(self.db) as db:
+                self.human_asks.resolve_human_input(db,body['id'],body['answer'])
+        with patch('office_tasks.answer_human_input',side_effect=answer):
+            code,body=api_post(self.port,'/api/gate',
+                {'question_id':'task-12345678','answer':'allow'})
+        self.assertEqual(code,200,body)
+        self.assertEqual([g['id'] for g in api_get(self.port,'/api/gates')[1]['gates']],
+                         ['task-87654321'])
+        code,_=api_post(self.port,'/api/gate',
+                        {'question_id':'task-12345678','answer':'allow'})
+        self.assertEqual(code,409)
 
 
 # ── the one public path ─────────────────────────────────────────────────────
@@ -1830,23 +1702,32 @@ class OfficeEvidenceTest(unittest.TestCase):
                      "labels": ["waiting on human"] if i % 3 == 0 else []}
                     for i in range(n)]}]}
 
-    def test_waiting_on_human_rows_come_first_and_counts_are_exact(self):
-        evidence = self.chat.office_evidence(self.world(30), "sphinx", "ariaxhan")
-        labels = [r["labels"] for r in evidence["issues"]]
-        first_plain = next(i for i, l in enumerate(labels) if "waiting on human" not in l)
-        self.assertTrue(all("waiting on human" in l for l in labels[:first_plain]))
-        self.assertEqual(evidence["counts"], {"issues": 30, "waiting_on_human": 10, "in_pr": 0,
-                                              "clean_mergeable_prs": 0, "conflicting_prs": 0})
+    def test_validated_human_input_rows_come_first_and_counts_are_exact(self):
+        requests={'items':[{'source_ref':f'ariaxhan/big#{i}'} for i in range(0,30,3)]}
+        with patch.object(self.chat.human_asks,'listing',return_value=requests):
+            evidence = self.chat.office_evidence(self.world(30), "sphinx", "ariaxhan")
+        first_plain = next(i for i, row in enumerate(evidence["issues"]) if not row["human_input_required"])
+        self.assertTrue(all(row["human_input_required"] for row in evidence["issues"][:first_plain]))
+        self.assertEqual(evidence["counts"], {"issues": 30, "human_input_required": 10, "in_pr": 0,
+                                               "clean_mergeable_prs": 0, "conflicting_prs": 0})
         self.assertFalse(evidence["truncated"])
 
+    def test_legacy_issue_label_cannot_create_human_ownership_in_recap(self):
+        with patch.object(self.chat.human_asks,'listing',return_value={'items':[]}):
+            evidence=self.chat.office_evidence(self.world(30),"sphinx","ariaxhan")
+        self.assertEqual(evidence['counts']['human_input_required'],0)
+        self.assertTrue(all(not row['human_input_required'] for row in evidence['issues']))
+
     def test_a_big_world_is_cut_to_budget_from_the_back(self):
-        evidence = self.chat.office_evidence(self.world(400), "sphinx", "ariaxhan")
+        requests={'items':[{'source_ref':f'ariaxhan/big#{i}'} for i in range(0,400,3)]}
+        with patch.object(self.chat.human_asks,'listing',return_value=requests):
+            evidence = self.chat.office_evidence(self.world(400), "sphinx", "ariaxhan")
         self.assertTrue(evidence["truncated"])
         self.assertLessEqual(len(json.dumps(evidence, ensure_ascii=False)), self.chat.EVIDENCE_MAX_CHARS)
         self.assertEqual(evidence["counts"]["issues"], 400)
         # the cut ate from the back, so what survived is raised hands only
         self.assertTrue(evidence["issues"])
-        self.assertTrue(all("waiting on human" in r["labels"] for r in evidence["issues"]))
+        self.assertTrue(all(r["human_input_required"] for r in evidence["issues"]))
 
 
 BLOCK = """Noted.

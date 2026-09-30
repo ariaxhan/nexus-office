@@ -14,6 +14,9 @@ cd "$(dirname "$0")/.."
 # the flight tests. Pin the gate interpreter instead of following Homebrew's
 # rolling `python3`. The installed service has its own runtime.
 PYTHON=${OFFICE_TEST_PYTHON:-python3.12}
+TEST_STATE="$(mktemp -d)"
+trap 'rm -rf "$TEST_STATE"' EXIT
+export OFFICE_HUMAN_ASKS_DB="$TEST_STATE/human-asks.sqlite"
 # Several suites replace process-global environment or module state. Give each
 # file a fresh interpreter so one fixture cannot corrupt later flight tests.
 for test_file in $(find tests -type f -name 'test_*.py' | sort); do

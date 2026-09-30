@@ -39,19 +39,30 @@ def plan(ledger,now):
     runtime=root/'.venv/bin/python'
     command=['env','PYTHONPATH='+str(root),'NEXUS_LEDGER='+ledger.path,'OFFICE_NEXUS_LEDGER='+ledger.path,str(runtime),'-m','nexus.office_agent']
     inputs={'cmd':shlex.join(command),'persistent_task':True}
+    budget={'timeout_s':86400,'concurrency':8,'max_retries':3}
     row=ledger.conn.execute('SELECT id FROM plans WHERE name=?',(PLAN_NAME,)).fetchone()
     if row:
-        ledger.conn.execute('UPDATE plans SET inputs=? WHERE id=?',(json.dumps(inputs),row['id']))
+        ledger.conn.execute('UPDATE plans SET inputs=?,budget=?,resolution_policy=? WHERE id=?',
+                            (json.dumps(inputs),json.dumps(budget),
+                             json.dumps({'may_retry':True,'may_accept':True}),row['id']))
         return row['id']
     identifier=new_id('plan')
     ledger.conn.execute('INSERT INTO plans (id,name,kind,schedule,inputs,outputs,budget,resolution_policy,resources,enabled,created_at) VALUES (?,?,?,?,?,?,?,?,?,1,?)',
-                        (identifier,PLAN_NAME,'script','{}',json.dumps(inputs),json.dumps(['response.md','conversation.jsonl','changes.patch','session.json']),json.dumps({'timeout_s':86400,'concurrency':8,'max_retries':0}),json.dumps({'may_retry':False,'may_accept':True}),'[]',now))
+                        (identifier,PLAN_NAME,'script','{}',json.dumps(inputs),json.dumps(['response.md','conversation.jsonl','changes.patch','session.json']),json.dumps(budget),json.dumps({'may_retry':True,'may_accept':True}),'[]',now))
     ledger._event('plan.added',identifier,{'name':PLAN_NAME,'kind':'script'},'office',now)
     return identifier
 
 
 def submit(ledger,request_id,spec):
     fingerprint=digest(spec)
+    spec=dict(spec)
+    spec['outcome_contract']={
+        'user_goal':spec['prompt'],
+        'terminal_condition':spec.get('terminal_condition') or spec['prompt'],
+        'verification_method':spec.get('verification_method') or 'Verify the requested behavior at its actual target',
+        'allowed_recovery':'diagnose, repair, retry, reassign, rollback and resume',
+        'human_gate_policy':'request_human_input only',
+    }
     with ledger.tx():
         receipt=existing(ledger,request_id,fingerprint)
         if receipt:
@@ -118,30 +129,6 @@ def command_event(ledger,kind,task_id,request_id,payload):
     return {'event_id':ledger.conn.execute('SELECT last_insert_rowid()').fetchone()[0],'state':'queued'}
 
 
-def answer(ledger,task_id,request_id,permission_id,decision,answers=None):
-    if decision not in ('accept','decline','cancel','answer'):
-        raise ValueError('Unknown permission decision')
-    with ledger.tx():
-        row=ledger.conn.execute("SELECT payload FROM events WHERE id=? AND subject=? AND kind='office.permission'",(permission_id,task_id)).fetchone()
-        if row is None:
-            raise FileNotFoundError('Permission request does not exist')
-        payload=loads(row['payload'],{})
-        if decision=='answer':
-            validate_answers(payload,answers)
-        flight=ledger.flight(payload['flight_id'])
-        if not flight or flight['state']!='running':
-            raise FileExistsError('The requesting attempt has ended')
-        closed=ledger.conn.execute("SELECT 1 FROM events WHERE subject=? AND kind='office.permission_closed' AND json_extract(payload,'$.permission_id')=?",(task_id,permission_id)).fetchone()
-        if closed:
-            raise FileExistsError('This permission request is no longer pending')
-        prior=ledger.conn.execute("SELECT payload FROM events WHERE subject=? AND kind='office.permission_answer' AND json_extract(payload,'$.permission_id')=?",(task_id,permission_id)).fetchone()
-        if prior and loads(prior['payload'],{}).get('request_id')!=request_id:
-            raise FileExistsError('This request was already answered on another device')
-        body={'request_id':request_id,'permission_id':permission_id,'decision':decision,'flight_id':flight['id']}
-        if answers is not None:body['answers']=answers
-        return command_event(ledger,'office.permission_answer',task_id,request_id,body)
-
-
 def resume_if_idle(ledger,task_id):
     live=ledger.conn.execute("SELECT 1 FROM flights WHERE task_id=? AND state IN ('queued','running','verifying','verified','landing','resolving') LIMIT 1",(task_id,)).fetchone()
     if live:return
@@ -152,24 +139,6 @@ def resume_if_idle(ledger,task_id):
     identifier=new_id('flt');now=time.time()
     ledger.conn.execute("INSERT INTO flights (id,task_id,plan_id,state,created_at,attempt) VALUES (?,?,?,'queued',?,?)",(identifier,task_id,task['plan_id'],now,previous+1))
     ledger._event('flight.state',identifier,{'from':None,'to':'queued','task_id':task_id,'plan_id':task['plan_id'],'attempt':previous+1},'phone',now)
-
-
-def validate_answers(request,answers):
-    params=request.get('params',{})
-    if request.get('method')=='item/tool/requestUserInput':
-        questions=params.get('questions',[])
-    elif params.get('tool')=='AskUserQuestion':
-        questions=params.get('input',{}).get('questions',[])
-    else:
-        raise ValueError('This request is not asking for text input')
-    identifiers={q.get('id') or q['question'] for q in questions}
-    if not isinstance(answers,dict) or set(answers)!=identifiers:
-        raise ValueError('Answer every question in this exact request')
-    if any(q.get('isSecret') for q in questions):
-        raise PermissionError('Credentials belong in the Mac account login, not in a task transcript')
-    for value in answers.values():
-        if not isinstance(value,str) or not value.strip() or len(value)>4096:
-            raise ValueError('Each answer must contain 1–4096 characters')
 
 
 def initial_prompt(spec):

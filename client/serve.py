@@ -58,7 +58,6 @@ import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import context  # noqa: E402
 import office_api  # noqa: E402
-import human_asks  # noqa: E402
 import live  # noqa: E402
 import lesson_status  # noqa: E402
 import lesson_outlines  # noqa: E402
@@ -101,11 +100,11 @@ BUILD_WAIT_S = 300
 
 GITHUB_KINDS = {"comment", "unblock", "close", "reopen", "label", "nudge", "merge",
                 "choose"}
-RUNTIME_KINDS = {"permit", "chat", "run", "stop"}
+RUNTIME_KINDS = {"chat", "run", "stop"}
 # fullmatch with ASCII: Python's `$` forgives a trailing newline and `\w` is Unicode,
 # neither of which the Worker's JS regexes allowed. Parity, not paranoia.
 REPO_RE = re.compile(r"[\w.-]+/[\w.-]+\Z", re.ASCII)
-QID_RE = re.compile(r"[0-9a-f]{8,64}\Z", re.ASCII)
+QID_RE = re.compile(r"[A-Za-z0-9:_-]{8,100}\Z", re.ASCII)
 NUM_RE = re.compile(r"\d+\Z", re.ASCII)
 
 # The bind address keeps the network out. It does not keep the browser out: any
@@ -170,8 +169,7 @@ NO_PAGE = "the office is at /; there is nothing else here"
 # traversal question never has to be answered correctly under pressure.
 PHONE = HERE / "phone"
 REPORTS = {}  # bot -> the last report that loaded, shown when the harness blinks
-PAGE = {"/": "office.html", "/index.html": "office.html", "/classic": "index.html",
-        "/phone.css": "phone.css", "/phone.js": "phone.js",
+PAGE = {"/": "office.html", "/index.html": "office.html",
         "/lessons": "lessons.html", "/lessons.html": "lessons.html",
         "/lessons.css": "lessons.css", "/lessons.js": "lessons.js",
         "/outlines": "outlines.html", "/outlines.html": "outlines.html", "/outlines.js": "outlines.js"}
@@ -180,9 +178,7 @@ PAGE.update({name: name[1:] for name in ['/office.css', '/office-v2.css', '/offi
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".png": "image/png"}
 
-# The page loads two files from here, talks to this door, and can reach nowhere
-# else. No inline script, no inline style and no external host, which is why the
-# page is three files rather than one: a strict policy is worth two more GETs.
+# The page and its bundled scripts load only through this authenticated door.
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; "
        "connect-src 'self'; img-src 'self' https:; media-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
 
@@ -436,14 +432,6 @@ def validate(body: dict):
         if not label:
             return BAD_LABEL, None
         choice = f"**{int(n)}.** {label[:200]}"
-
-    # A permit answers ONE specific question. The id travels with it so a gate
-    # that has already moved on cannot be answered by position.
-    if kind == "permit":
-        if not QID_RE.match(str(body.get("question_id") or "")):
-            return BAD_ID, None
-        if body.get("answer") not in ("allow", "deny"):
-            return BAD_ANSWER, None
 
     payload = {
         # A choice writes the body; it never carries one of its own.
@@ -793,10 +781,6 @@ class Handler(BaseHTTPRequestHandler):
         if err:
             return self._json({"error": err}, 400)
         ok, result = self.world.apply_now(body)
-        # A permit that did not apply means the gate is closed or has moved on.
-        # That is a conflict, not a server fault, and the room has to say which.
-        if not ok and body.get("kind") == "permit":
-            return self._json({"ok": False, "result": result}, 409)
         return self._json({"ok": bool(ok), "result": result})
 
     def _gates(self):
@@ -824,12 +808,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "message": BAD_ID}, 400)
         if answer not in ("allow", "deny"):
             return self._json({"ok": False, "message": BAD_ANSWER}, 400)
-        root = rt._root()
-        if root is None:
-            return self._json({"ok": False, "message": NO_ROOT}, 409)
-        ok, message = rt.answer_gate(root, qid, answer, body.get("always") is True)
-        if ok:
-            human_asks.gate_answered(qid, answer)
+        ok, message = rt.answer_gate(None, qid, answer, False)
         return self._json({"ok": ok, "message": message}, 200 if ok else 409)
 
     def _board(self, body):

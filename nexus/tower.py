@@ -534,7 +534,8 @@ def _sweep_workspaces(ledger):
 
 
 def _manual_retry_only(ledger, flight):
-    return ledger.plan(flight["plan_id"])["kind"] == "work" or _persistent_task(ledger, flight)
+    plan=ledger.plan(flight["plan_id"])
+    return plan["kind"] == "work" or (_persistent_task(ledger, flight) and plan["name"] != "office-conversations")
 
 
 def _retry_exhausted(ledger, now):
@@ -549,9 +550,21 @@ def _retry_exhausted(ledger, now):
         task = ledger.task(task_id)
         if task is None or task["state"] != "running":
             continue
+        latest=ledger.conn.execute('SELECT id FROM flights WHERE task_id=? ORDER BY created_at DESC LIMIT 1',(task_id,)).fetchone()
+        if latest and latest['id']!=flight['id']:
+            continue
         plan = ledger.plan(flight["plan_id"])
         _, max_retries, _ = _budget(plan)
         if flight["attempt"] > max_retries or plan["quarantined_at"] is not None:
+            if plan['name']=='office-conversations':
+                prior=ledger.conn.execute("SELECT 1 FROM events WHERE subject=? AND kind='office.phase' AND json_extract(payload,'$.flight_id')=? LIMIT 1",
+                                          (task_id,flight['id'])).fetchone()
+                if not prior:
+                    ledger.event('office.phase',task_id,
+                                 {'state':'office_owned_blocked','ownership':'OFFICE_OWNED',
+                                  'flight_id':flight['id'],'reason':'bounded provider retries exhausted'},
+                                 source='tower')
+                continue
             ledger.set_task_state(task_id, "abandoned", decided_by="tower policy",
                                   expect="running", reason="retries exhausted", now=now)
             continue

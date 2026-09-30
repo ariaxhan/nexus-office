@@ -719,27 +719,16 @@ class RuntimeDecisionTest(SyncCase):
         super().setUp()
         self.posted = []
         self.mod.rt.post = lambda path, body, timeout=20: self.posted.append((path, body))
-        self.mod.rt._root = lambda: pathlib.Path(self.tmp.name)
-        self.mod.rt.read_gate = lambda: {"state": "pending", "id": "q1"}
-        self.mod.rt.answer_gate = lambda root, qid, answer, always: (True, f"{answer} {qid}")
 
     def test_the_table_routes_every_runtime_kind_and_nothing_else(self):
         self.assertEqual(set(self.mod.RUNTIME_HANDLERS), self.mod.RUNTIME_KINDS)
         self.assertEqual(self.mod.apply_runtime_decision({"kind": "merge"}, True),
                          (False, "unknown runtime kind merge"))
 
-    def test_a_permit_answers_the_gate_it_was_asked_about(self):
-        permit = lambda dry, **p: self.mod.apply_runtime_decision(
-            {"kind": "permit", "payload": p}, dry)
-        self.assertEqual(permit(True, question_id="q1", answer="allow"), (True, "would allow"))
-        self.assertEqual(permit(True, question_id="q2", answer="allow"),
-                         (False, "the agent has moved on"))
-        self.assertEqual(permit(False, question_id="q1", answer="deny"), (True, "deny q1"))
-        self.assertEqual(permit(False, question_id="q1", answer="maybe"),
-                         (False, "a permit must answer allow or deny"))
-        self.mod.rt.read_gate = lambda: {"state": "clear"}
-        self.assertEqual(permit(True, question_id="q1", answer="allow"),
-                         (False, "nothing is waiting on a gate right now"))
+    def test_legacy_permit_cannot_answer_a_runtime_gate(self):
+        self.assertEqual(self.mod.apply_runtime_decision(
+            {"kind":"permit","payload":{"question_id":"q1","answer":"allow"}},False),
+            (False,"unknown runtime kind permit"))
 
     def test_chat_and_run_and_stop_post_to_the_runtime(self):
         self.assertEqual(self.mod._apply_chat({}, {"body": " "}, False), (False, "nothing to say"))

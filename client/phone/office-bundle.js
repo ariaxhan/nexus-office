@@ -1870,11 +1870,7 @@ function renderEvent(turns, live, state, event, taskId) {
       }
     },
     "office.delivery": () => turns.insertBefore(el("p", "muted", `Message ${payload.message_id}: ${payload.state}${payload.consumption === "unknown" ? " \xB7 provider acknowledged; consumption unconfirmed" : ""}`), live),
-    "office.permission_closed": () => {
-      const node = turns.querySelector(`[data-permission-id="${payload.permission_id}"]`);
-      if (node) node.replaceChildren(el("p", "muted", "Permission answered"));
-    },
-    "office.permission": () => turns.insertBefore(permissionCard({ id: event.id, task_id: taskId, payload }), live),
+    "office.internal_approval_rejected": () => turns.insertBefore(el("p", "muted", "Internal approval request stayed with Office."), live),
     "office.provider": () => provider(turns, live, payload),
     "office.session_closed": () => state.textContent = "Session closed; output retained",
     "office.unsupported_request": () => turns.insertBefore(card("Engine request needs support", JSON.stringify(payload.params)), live)
@@ -1913,48 +1909,6 @@ function renderItem(turns, live, item) {
   const details = el("details", "card");
   details.append(el("summary", "", item.type || "Engine event"), el("pre", "", JSON.stringify(item, null, 2)));
   turns.insertBefore(details, live);
-}
-function permissionCard(request) {
-  const payload = request.payload;
-  const params = payload.params || {};
-  if (payload.method === "item/tool/requestUserInput" || params.tool === "AskUserQuestion") return inputRequest(request);
-  const node = el("article", "card");
-  node.append(el("h3", "", params.title || params.reason || "Permission requested"), el("pre", "", JSON.stringify(params, null, 2)));
-  const controls = el("div", "actions");
-  const requestId = crypto.randomUUID();
-  for (const [decision, label] of [["accept", "Allow once"], ["decline", "Deny"]]) controls.append(button(label, async () => {
-    await api("/api/tasks/answer", { task_id: request.task_id, permission_id: request.id, decision, request_id: requestId });
-    controls.replaceChildren(el("p", "muted", "Answer queued for this exact request."));
-  }));
-  node.dataset.permissionId = String(request.id);
-  node.append(controls);
-  return node;
-}
-function inputRequest(request) {
-  const params = request.payload.params;
-  const questions = params.questions || params.input.questions;
-  const node = el("article", "card");
-  node.dataset.permissionId = String(request.id);
-  const fields = /* @__PURE__ */ new Map();
-  for (const question of questions) {
-    const control = el("input");
-    control.type = question.isSecret ? "password" : "text";
-    const label = question.question;
-    field(node, label, control);
-    fields.set(question.id || label, control);
-    if (question.options) {
-      const options = el("div", "actions");
-      for (const option of question.options) options.append(button(option.label, () => control.value = option.label));
-      node.append(options);
-    }
-  }
-  const requestId = crypto.randomUUID();
-  node.append(button("Send answers", async () => {
-    const answers = Object.fromEntries([...fields].map(([key, node2]) => [key, node2.value]));
-    await api("/api/tasks/answer", { task_id: request.task_id, permission_id: request.id, decision: "answer", answers, request_id: requestId });
-    node.replaceChildren(el("p", "muted", "Answers queued for this exact request."));
-  }));
-  return node;
 }
 function showAttachments(parent, items = []) {
   for (const item of items) {
@@ -2624,9 +2578,9 @@ async function watch(parent) {
         });
         nav.append(previous, next, button("Full list", () => {
           const body = sheet("All decisions");
-          for (const item of rows) body.append(item.kind === "permission" ? permissionCard(item.item) : attentionCard(item));
+          for (const item of rows) body.append(attentionCard(item));
         }));
-        stack.append(nav, entry.kind === "permission" ? permissionCard(entry.item) : attentionCard(entry));
+        stack.append(nav, attentionCard(entry));
       };
       draw();
     } else if (attention.errors.length) {
@@ -3424,9 +3378,11 @@ async function refreshAttention() {
       errors.push(result.reason.message);
       continue;
     }
-    if (index === 0) errors.push(...result.value.errors || []);
-    for (const entry of attentionItems(index, result.value)) {
-      (automationFailure(entry) ? failures : items).push(entry);
+    if (index === 0) {
+      errors.push(...result.value.errors || []);
+      items.push(...(result.value.items || []).map((item) => ({ kind: "human-ask", item })));
+    } else {
+      failures.push(...(result.value.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.automation_failure === "missing_decision").map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))));
     }
   }
   attention = { items, errors, failures };
@@ -3466,92 +3422,21 @@ function reconcileChildren(parent, nodes) {
   }
 }
 function attentionCard(entry) {
-  if (entry.kind === "human-ask") return humanAskCard(entry.item);
-  if (entry.kind === "buzz") return buzzDecisionCard(entry.item);
-  if (entry.kind === "gate") return gateAttentionCard(entry.item);
-  return issueAttentionCard(entry);
+  return humanAskCard(entry.item);
 }
 function humanAskCard(ask2) {
-  if (ask2.source === "office-permission" && ask2.live_request) return permissionCard(ask2.live_request);
-  if (ask2.source === "gate" && ask2.live_request) return gateAttentionCard(ask2.live_request);
   const node = el("article", "card attention-choice");
-  const verified = ask2.last_source_verification ? ` \xB7 verified ${formatAge(Date.now() - Date.parse(ask2.last_source_verification))}` : " \xB7 not verified yet";
-  node.append(el("p", "attention-source", `${ask2.source_ref}${verified}`), el("h3", "", "A decision needs you"), el("p", "attention-question", ask2.action));
-  if (ask2.source_stale) node.append(el("p", "muted", "The execution owner or source is unavailable; this request remains open until its outcome is verified."));
-  if (ask2.source === "github") {
-    const [repo, number] = ask2.source_ref.split("#");
-    node.append(button("Inspect source and answer there", () => githubDetail(repo, { number: Number(number) }, "issues"), "attention-details"));
-  }
-  return node;
-}
-function gateAttentionCard(gate) {
-  const node = el("article", "card attention-choice");
-  node.append(el("h3", "", "Permission needed"), el("p", "attention-question", gate.question || gate.title || "Pending decision"));
-  const choices = el("div", "attention-options");
-  for (const [answer, label] of [["allow", "Allow once"], ["deny", "Deny"]]) choices.append(button(label, async () => {
-    const result = await api("/api/gate", { question_id: gate.id, answer });
-    if (!result.ok) throw Error(result.message || "Answer was not recorded");
-    notice("Answer recorded");
-    if ($("#detail").open) $("#detail").close();
-    await route();
+  node.append(el("p", "attention-source", ask2.source_ref), el("h3", "", "Input needed"), el("p", "attention-question", ask2.action));
+  const input = el("input");
+  input.type = "text";
+  input.setAttribute("aria-label", "Answer this exact request");
+  node.append(input, button("Answer and resume", async () => {
+    const answer = input.value.trim();
+    if (!answer) throw Error("Enter an answer first");
+    await api("/api/human-input/answer", { id: ask2.id, answer });
+    notice("Answer recorded; Office resumed the task");
+    await refreshAttention();
   }, "attention-option"));
-  node.append(choices);
-  return node;
-}
-function issueAttentionCard(entry) {
-  const issue = entry.item, decision = issue.decision;
-  const node = el("article", "card attention-choice");
-  const askedAt = Date.parse(issue.last_word_at || "");
-  const head = el("div", "attention-head");
-  head.append(el("p", "attention-source", `${entry.repo.split("/")[1]} #${issue.number}${Number.isFinite(askedAt) ? ` \xB7 asked ${formatAge(Date.now() - askedAt)}` : ""}`));
-  node.append(head, el("h3", "", issue.title));
-  const context = reportLead(issue.body || "");
-  if (context && context !== issue.title) node.append(el("p", "attention-context", context.length > 200 ? context.slice(0, 199) + "\u2026" : context));
-  if (issue.decision_context) {
-    node.append(el("p", "attention-question", "A product decision is still needed for this issue."), markdownView(issue.decision_context));
-    node.append(button("Inspect evidence and answer in issue", () => githubDetail(entry.repo, issue, "issues"), "attention-details"));
-    return node;
-  }
-  node.append(el("p", "attention-question", decision.question));
-  const choices = el("div", "attention-options");
-  let busy = false;
-  async function decide(payload) {
-    if (busy) return;
-    busy = true;
-    for (const control of choices.querySelectorAll("button")) control.disabled = true;
-    try {
-      const result = await api("/api/decision", { repo: entry.repo, issue: String(issue.number), ...payload });
-      if (!result.ok) throw Error(result.result || "Decision was not applied");
-      snapshot = null;
-      snapshotReadAt = 0;
-      notice(payload.kind === "close" ? "Outdated issue closed" : "Choice recorded");
-      if ($("#detail").open) $("#detail").close();
-      await route();
-    } catch (error) {
-      busy = false;
-      for (const control of choices.querySelectorAll("button")) control.disabled = false;
-      throw error;
-    }
-  }
-  for (const option of [...decision.options].sort((a, b) => Number(b.recommended) - Number(a.recommended) || a.n - b.n)) {
-    const control = button("", () => decide({ kind: "choose", n: option.n, label: option.label }), "attention-option" + (option.recommended ? " is-recommended" : ""));
-    control.append(el("strong", "", option.label), el("span", "", option.consequence || "Record this choice"));
-    choices.append(control);
-  }
-  const actions = el("div", "attention-head-actions");
-  actions.append(button("Outdated \xB7 close issue", () => decide({ kind: "close", body: "Closing as outdated at Aria\u2019s direction from Office Watch." }), "attention-close"), button("Put away repo", () => setDeskHidden(entry.repo, true), "attention-hide"));
-  head.append(actions);
-  node.append(choices, button("Open issue details", () => githubDetail(entry.repo, issue, "issues"), "attention-details"));
-  return node;
-}
-function buzzDecisionCard(row) {
-  const node = el("article", "card attention-choice");
-  node.append(
-    el("p", "attention-source", `${row.author} \xB7 TBS #${row.channel} \xB7 ${formatAge(Date.now() - Date.parse(row.at))}`),
-    el("h3", "", "A reply needs you"),
-    el("p", "attention-question", row.question)
-  );
-  node.append(button("Inspect source conversation", () => buzzSourceDetail(row.id), "attention-details"));
   return node;
 }
 async function attentionList(parent) {
@@ -3559,14 +3444,6 @@ async function attentionList(parent) {
   drawAttention(parent);
 }
 setInterval(refreshAttention, 1e4);
-function attentionItems(index, value3) {
-  if (index === 0) return (value3?.items || []).map((item) => ({ kind: "human-ask", item }));
-  if (index === 1) return (value3?.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.automation_failure === "missing_decision").map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } })));
-  return [];
-}
-function automationFailure(entry) {
-  return entry.kind === "issue" && !entry.item.decision_context && (entry.item.automation_failure === "missing_decision" || String(entry.item.decision?.question || "").startsWith("The automated pass could not resolve this and did not say what to decide."));
-}
 function meaningfulFailureLine(text) {
   const lines = String(text || "").split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#") && !line.startsWith("|") && !line.startsWith("- ") && !/^Read[: `]/i.test(line));
   return (lines.find((line) => /\b(stopping|stopped|root cause|concrete cause|no code change|implemented|commit|does not exist|not implemented)\b/i.test(line)) || lines.find((line) => line.length > 35) || lines[0] || "").replace(/^[*\d.\s]+|[*\s]+$/g, "");

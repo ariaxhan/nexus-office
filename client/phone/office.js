@@ -8,7 +8,7 @@ import {markdownView} from './office-markdown.js';
 import {selecting,redrawIfChanged} from './office-selection.js';
 import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
 import {issueInventory,issueControls} from './office-issues.js';
-import {newTask,taskList,permissions,taskDetail,permissionCard} from './office-tasks.js';
+import {newTask,taskList,taskDetail} from './office-tasks.js';
 let attention={items:[],errors:[],failures:[]};
 let snapshot=null,snapshotReadAt=0;
 async function world(){if(!snapshot||Date.now()-snapshotReadAt>15000){const data=await api('/api/world');snapshot=data.world;snapshotReadAt=Date.now();}return snapshot;}
@@ -277,7 +277,6 @@ async function logPage(parent,id,offset=0,lane='',version=''){
 
 async function eventPage(parent,id,cursor=0){const data=await api(`/api/system/events?id=${id}&cursor=${cursor}`);for(const item of data.items)parent.append(card(item.kind,JSON.stringify(item.payload)));if(data.next_cursor!==null)parent.append(button('More events',()=>eventPage(parent,id,data.next_cursor)));}
 function planDetail(plan){const body=sheet(plan.name);body.append(el('p','',plan.objective||''),el('p','muted',`${plan.enabled?'Enabled':'Paused'} · ${plan.kind}`),el('pre','',plan.schedule));for(const action of [plan.enabled?'pause':'resume','run'])body.append(button(action,()=>systemCommand(action,plan.id)));}
-function gateDetail(gate){const body=sheet('Needs you');body.append(markdownView(gate.question||gate.text||JSON.stringify(gate)));for(const [answer,label] of [['allow','Allow once'],['deny','Deny']])body.append(button(label,async()=>{await api('/api/gate',{question_id:gate.id,answer});notice('Answer recorded');$('#detail').close();route();}));}
 
 let searchKind='';
 async function search(cursor=0){
@@ -324,8 +323,8 @@ async function watch(parent){
    const nav=el('div','decision-nav');
    const previous=button('← Previous',()=>{decisionIndex=(decisionIndex-1+rows.length)%rows.length;draw();});
    const next=button('Next →',()=>{decisionIndex=(decisionIndex+1)%rows.length;draw();});
-   nav.append(previous,next,button('Full list',()=>{const body=sheet('All decisions');for(const item of rows)body.append(item.kind==='permission'?permissionCard(item.item):attentionCard(item));}));
-   stack.append(nav,entry.kind==='permission'?permissionCard(entry.item):attentionCard(entry));
+    nav.append(previous,next,button('Full list',()=>{const body=sheet('All decisions');for(const item of rows)body.append(attentionCard(item));}));
+    stack.append(nav,attentionCard(entry));
   };draw();
   }else if(attention.errors.length){
    decisions.append(el('p','watch-unconfirmed',"I can't confirm yet. A source for decisions is unavailable."));
@@ -718,14 +717,18 @@ async function githubCollection(repo,kind,cursor=1,parent=null){const body=paren
 async function githubReviews(repo,number,cursor=1,parent=null,inline=false){const body=parent||sheet(repo+' reviews');const data=await api(`/api/github/reviews?repo=${encodeURIComponent(repo)}&number=${number}&cursor=${cursor}&inline=${inline}`);for(const item of data.items){body.append(commentView(item));if(item.diff_hunk)body.append(el('p','muted',`${item.path} · ${item.commit_id}`),el('pre','',item.diff_hunk));}if(data.next_cursor)body.append(button('More reviews',()=>githubReviews(repo,number,data.next_cursor,body,inline)));if(!parent)body.append(button('Inline comments',()=>githubReviews(repo,number,1,body,true)));}
 
 async function refreshAttention(){
- const results=await Promise.allSettled([api('/api/human-asks'),world()]);
- const items=[],errors=[],failures=[];
- for(const [index,result] of results.entries()){
-  if(result.status==='rejected'){errors.push(result.reason.message);continue;}
-   if(index===0)errors.push(...(result.value.errors||[]));
-  for(const entry of attentionItems(index,result.value)){
-   (automationFailure(entry)?failures:items).push(entry);
-  }
+  const results=await Promise.allSettled([api('/api/human-asks'),world()]);
+  const items=[],errors=[],failures=[];
+  for(const [index,result] of results.entries()){
+   if(result.status==='rejected'){errors.push(result.reason.message);continue;}
+   if(index===0){
+    errors.push(...(result.value.errors||[]));
+    items.push(...(result.value.items||[]).map(item=>({kind:'human-ask',item})));
+   }else{
+    failures.push(...(result.value.stations||[]).flatMap(station=>(station.issues||[])
+     .filter(issue=>issue.bot_last===true&&issue.automation_failure==='missing_decision')
+     .map(issue=>({kind:'issue',repo:station.repo,item:{...issue,id:`${station.repo}#${issue.number}`}}))));
+   }
  }
  attention={items,errors,failures};
   const needsYou=items.filter(requiresYou).length;
@@ -752,87 +755,22 @@ function reconcileChildren(parent,nodes){
  while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
 }
 function attentionCard(entry){
-  if(entry.kind==='human-ask')return humanAskCard(entry.item);
- if(entry.kind==='buzz')return buzzDecisionCard(entry.item);
- if(entry.kind==='gate')return gateAttentionCard(entry.item);
- return issueAttentionCard(entry);
+  return humanAskCard(entry.item);
 }
 function humanAskCard(ask){
- if(ask.source==='office-permission'&&ask.live_request)return permissionCard(ask.live_request);
- if(ask.source==='gate'&&ask.live_request)return gateAttentionCard(ask.live_request);
- const node=el('article','card attention-choice');
- const verified=ask.last_source_verification?` · verified ${formatAge(Date.now()-Date.parse(ask.last_source_verification))}`:' · not verified yet';
- node.append(el('p','attention-source',`${ask.source_ref}${verified}`),el('h3','','A decision needs you'),el('p','attention-question',ask.action));
- if(ask.source_stale)node.append(el('p','muted','The execution owner or source is unavailable; this request remains open until its outcome is verified.'));
- if(ask.source==='github'){
-  const [repo,number]=ask.source_ref.split('#');
-  node.append(button('Inspect source and answer there',()=>githubDetail(repo,{number:Number(number)},'issues'),'attention-details'));
- }
- return node;
-}
-function gateAttentionCard(gate){
-  const node=el('article','card attention-choice');node.append(el('h3','','Permission needed'),el('p','attention-question',gate.question||gate.title||'Pending decision'));
-  const choices=el('div','attention-options');
-  for(const [answer,label] of [['allow','Allow once'],['deny','Deny']])choices.append(button(label,async()=>{
-   const result=await api('/api/gate',{question_id:gate.id,answer});if(!result.ok)throw Error(result.message||'Answer was not recorded');notice('Answer recorded');if($('#detail').open)$('#detail').close();await route();
+  const node=el('article','card attention-choice');
+  node.append(el('p','attention-source',ask.source_ref),el('h3','','Input needed'),el('p','attention-question',ask.action));
+  const input=el('input');input.type='text';input.setAttribute('aria-label','Answer this exact request');
+  node.append(input,button('Answer and resume',async()=>{
+   const answer=input.value.trim();if(!answer)throw Error('Enter an answer first');
+   await api('/api/human-input/answer',{id:ask.id,answer});
+   notice('Answer recorded; Office resumed the task');await refreshAttention();
   },'attention-option'));
-  node.append(choices);return node;
-}
-function issueAttentionCard(entry){
- const issue=entry.item,decision=issue.decision;
- const node=el('article','card attention-choice');
- const askedAt=Date.parse(issue.last_word_at||'');
- const head=el('div','attention-head');head.append(el('p','attention-source',`${entry.repo.split('/')[1]} #${issue.number}${Number.isFinite(askedAt)?` · asked ${formatAge(Date.now()-askedAt)}`:''}`));
-  node.append(head,el('h3','',issue.title));
-  const context=reportLead(issue.body||'');if(context&&context!==issue.title)node.append(el('p','attention-context',context.length>200?context.slice(0,199)+'…':context));
-  if(issue.decision_context){
-   node.append(el('p','attention-question','A product decision is still needed for this issue.'),markdownView(issue.decision_context));
-   node.append(button('Inspect evidence and answer in issue',()=>githubDetail(entry.repo,issue,'issues'),'attention-details'));
-   return node;
-  }
-  node.append(el('p','attention-question',decision.question));
- const choices=el('div','attention-options');let busy=false;
- async function decide(payload){
-  if(busy)return;busy=true;for(const control of choices.querySelectorAll('button'))control.disabled=true;
-  try{
-   const result=await api('/api/decision',{repo:entry.repo,issue:String(issue.number),...payload});
-   if(!result.ok)throw Error(result.result||'Decision was not applied');
-   snapshot=null;snapshotReadAt=0;notice(payload.kind==='close'?'Outdated issue closed':'Choice recorded');
-   if($('#detail').open)$('#detail').close();await route();
-  }catch(error){busy=false;for(const control of choices.querySelectorAll('button'))control.disabled=false;throw error;}
- }
- for(const option of [...decision.options].sort((a,b)=>Number(b.recommended)-Number(a.recommended)||a.n-b.n)){
-  const control=button('',()=>decide({kind:'choose',n:option.n,label:option.label}),'attention-option'+(option.recommended?' is-recommended':''));
-  control.append(el('strong','',option.label),el('span','',option.consequence||'Record this choice'));
-  choices.append(control);
- }
- const actions=el('div','attention-head-actions');
- actions.append(button('Outdated · close issue',()=>decide({kind:'close',body:'Closing as outdated at Aria’s direction from Office Watch.'}),'attention-close'),button('Put away repo',()=>setDeskHidden(entry.repo,true),'attention-hide'));
- head.append(actions);
- node.append(choices,button('Open issue details',()=>githubDetail(entry.repo,issue,'issues'),'attention-details'));
- return node;
-}
-function buzzDecisionCard(row){
- const node=el('article','card attention-choice');
- node.append(el('p','attention-source',`${row.author} · TBS #${row.channel} · ${formatAge(Date.now()-Date.parse(row.at))}`),
-  el('h3','','A reply needs you'),el('p','attention-question',row.question));
- node.append(button('Inspect source conversation',()=>buzzSourceDetail(row.id),'attention-details'));
- return node;
+  return node;
 }
 async function attentionList(parent){await refreshAttention();drawAttention(parent);}
 setInterval(refreshAttention,10000);
 
-function attentionItems(index,value){
- // Only requests that require a human decision belong in Needs you.
-   if(index===0)return (value?.items||[]).map(item=>({kind:'human-ask',item}));
-   if(index===1)return (value?.stations||[]).flatMap(station=>(station.issues||[])
-      .filter(issue=>issue.bot_last===true&&issue.automation_failure==='missing_decision')
-      .map(issue=>({kind:'issue',repo:station.repo,item:{...issue,id:`${station.repo}#${issue.number}`}})));
-  return [];
-}
-function automationFailure(entry){
- return entry.kind==='issue'&&!entry.item.decision_context&&(entry.item.automation_failure==='missing_decision'||String(entry.item.decision?.question||'').startsWith('The automated pass could not resolve this and did not say what to decide.'));
-}
 function meaningfulFailureLine(text){
  const lines=String(text||'').split('\n').map(line=>line.trim()).filter(line=>line&&!line.startsWith('#')&&!line.startsWith('|')&&!line.startsWith('- ')&&!/^Read[: `]/i.test(line));
  return (lines.find(line=>/\b(stopping|stopped|root cause|concrete cause|no code change|implemented|commit|does not exist|not implemented)\b/i.test(line))||lines.find(line=>line.length>35)||lines[0]||'').replace(/^[*\d.\s]+|[*\s]+$/g,'');

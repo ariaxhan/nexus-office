@@ -80,29 +80,8 @@ def _annotate(messages, errors):
                     states[key] = 'unknown'
                     errors.append(str(error) if isinstance(error, RuntimeError) else f'GitHub {key} state unavailable')
             row['issue_state'] = states.get(key)
-        row['needs_you'] = False  # an open queue work item is not evidence of human authority
     messages.sort(key=lambda row: row['at'], reverse=True)
-    for row in messages:
-        if direct_judgment_request(row) and not any(
-                later['thread'] == row['thread'] and later['at'] > row['at'] and later['author'] == 'Aria'
-                for later in messages):
-            row['needs_you'] = True
-            row['question'] = concise_question(row['text'])
     return messages
-
-
-def direct_judgment_request(row):
-    if row['author'] not in ('Tim', 'Caleb') or row['acted'] or row['channel'] == 'queue':
-        return False
-    text = row['text'].split('\n\n', 1)[0][:300]
-    return (bool(re.search(r'(?i)\b(?:@aria|aria[, :])', text))
-            and bool(re.search(r'(?i)\b(?:what do you think|can you check|could you (?:decide|choose|review)|do you approve|which (?:one|option)|please decide)\b', text)))
-
-
-def concise_question(text):
-    clean = re.sub(r'[*_`>#]+', '', text).replace('\n', ' ')
-    match = re.search(r'[^.!?]{10,220}\?', clean)
-    return match.group(0).strip() if match else clean[:180].strip()
 
 
 def listing():
@@ -120,8 +99,7 @@ def listing():
                 except (OSError, ValueError, subprocess.TimeoutExpired, RuntimeError) as error:
                     errors.append(str(error) if isinstance(error, RuntimeError) else f'Buzz #{channel} unavailable ({type(error).__name__})')
         messages = _annotate(messages, errors)
-        visible = messages[:160] + [row for row in messages[160:] if row['needs_you']]
-        _cache = {'items': visible, 'errors': sorted(set(errors)), 'synced_at': now,
+        _cache = {'items': messages[:160], 'errors': sorted(set(errors)), 'synced_at': now,
                   'latest_at': messages[0]['at'] if messages else None,
                   'source': 'TBS Buzz live reader (read only)'}
         _cache_at = time.monotonic()

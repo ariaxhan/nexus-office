@@ -75,7 +75,7 @@ CHECKS = {"landed": _landed, "delivered": _delivered, "outputs": _outputs,
 ALLOWED = {
     ("flight", "verified"): ("landed", "delivered", "outputs"),
     ("flight", "landed"): ("landed", "applied"),
-    ("task", "done"): ("closed", "applied", "outputs"),
+    ("task", "done"): ("closed", "applied", "outputs", "delivered"),
 }
 
 #: an outcome that proves nothing; it never settles anything

@@ -1,23 +1,27 @@
-"""Durable, source-owned human requests. A failed read never clears an ask."""
+"""The sole durable human-input boundary. Needs You only reads this store."""
 import datetime as dt
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
-import subprocess
-import threading
-import time
 from contextlib import closing
 
-ROOT = Path(__file__).resolve().parent
-SEEDS = ROOT / 'human_asks_sources.json'
-DB = Path(os.environ.get('OFFICE_HUMAN_ASKS_DB', Path.home() / '.local/state/nexus-office/human-asks.sqlite'))
-_lock = threading.Lock()
-_last_check = 0.0
-STATES = {'open', 'resolved', 'dismissed', 'reassigned', 'superseded'}
-HUMAN_ASKS_SCHEMA_VERSION = 1
-ASK_MARKER = '<!-- office-human-ask\n'
-OUTCOME_MARKER = '<!-- office-human-ask-outcome\n'
+DB = Path(os.environ.get('OFFICE_HUMAN_ASKS_DB',
+         Path.home() / '.local/state/nexus-office/human-asks.sqlite'))
+HUMAN_ASKS_SCHEMA_VERSION = 2
+GATE_TYPES = {'inaccessible_authentication', 'physical_action', 'new_judgment',
+              'outside_authority', 'unrecoverable_missing_information'}
+ORDINARY_ACTION = re.compile(
+    r'^(?:(?:next[,;:]?\s+)?(?:aria\s+(?:should|must|needs?\s+to)\s+|'
+    r'ask\s+aria\s+to\s+|please\s+))?'
+    r'(?:run|rerun|retry|restart|push|merge|deploy|release|regenerate|repair|rollback|fix\s+ci)\b|'
+    r'^decide\s+whether\s+to\s+(?:run|rerun|retry|restart|push|merge|deploy|release|rollback|continue)\b',
+    re.IGNORECASE)
+REDUNDANT_APPROVAL = re.compile(
+    r'(?i)\b(?:approve|confirm|authorize|click)\b.{0,50}'
+    r'\b(?:merge|deploy|release|publish(?:ing)?|activate|commit|push|retry|continue|freeze)\b|'
+    r'\bdecide whether to continue\b')
 
 
 def now():
@@ -33,238 +37,108 @@ def connect(path=None):
     if version > HUMAN_ASKS_SCHEMA_VERSION:
         db.close()
         raise RuntimeError(f'human asks schema {version} is newer than this Office supports')
-    required = {
-        'asks': {'id', 'source', 'source_ref', 'owner', 'action', 'created_at', 'observed_at',
-                 'state', 'resolution_evidence', 'last_source_verification', 'source_stale'},
-        'ask_events': {'id', 'ask_id', 'at', 'state', 'evidence'},
-    }
-    for table, columns in required.items():
-        existing = {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}
-        if (version and not existing) or (existing and not columns <= existing):
-            db.close()
-            raise RuntimeError(f'human asks {table} has an incompatible schema')
+    if version == 1:
+        with db:
+            for column in ('gate_type', 'proof', 'resume'):
+                db.execute(f'ALTER TABLE asks ADD COLUMN {column} TEXT')
+            db.execute("UPDATE asks SET owner='office',state='reassigned',"
+                       "resolution_evidence=? WHERE state='open' AND owner='aria'",
+                       (json.dumps({'reason': 'legacy ask lacked central validation'}),))
+            db.execute('PRAGMA user_version=2')
+    elif version == 0:
+        with db:
+            db.execute('''CREATE TABLE IF NOT EXISTS asks (
+                id TEXT PRIMARY KEY, source TEXT NOT NULL, source_ref TEXT NOT NULL,
+                owner TEXT NOT NULL, action TEXT NOT NULL, created_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL, state TEXT NOT NULL, resolution_evidence TEXT,
+                last_source_verification TEXT, source_stale INTEGER NOT NULL DEFAULT 0,
+                gate_type TEXT, proof TEXT, resume TEXT)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS ask_events (
+                id INTEGER PRIMARY KEY, ask_id TEXT NOT NULL, at TEXT NOT NULL,
+                state TEXT NOT NULL, evidence TEXT NOT NULL)''')
+            db.execute('PRAGMA user_version=2')
+    required = {'id','source','source_ref','owner','action','created_at',
+                'observed_at','state','gate_type','proof','resume'}
+    if not required <= {row['name'] for row in db.execute('PRAGMA table_info(asks)')}:
+        db.close()
+        raise RuntimeError('human asks schema is incompatible')
     db.execute('PRAGMA journal_mode=WAL')
-    db.execute('''CREATE TABLE IF NOT EXISTS asks (
-        id TEXT PRIMARY KEY, source TEXT NOT NULL, source_ref TEXT NOT NULL,
-        owner TEXT NOT NULL, action TEXT NOT NULL, created_at TEXT NOT NULL,
-        observed_at TEXT NOT NULL, state TEXT NOT NULL, resolution_evidence TEXT,
-        last_source_verification TEXT, source_stale INTEGER NOT NULL DEFAULT 0)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS ask_events (
-        id INTEGER PRIMARY KEY, ask_id TEXT NOT NULL, at TEXT NOT NULL,
-        state TEXT NOT NULL, evidence TEXT NOT NULL)''')
-    if version < HUMAN_ASKS_SCHEMA_VERSION:
-        db.execute(f'PRAGMA user_version={HUMAN_ASKS_SCHEMA_VERSION}')
     return db
 
 
-def observe(db, item):
-    """A source explicitly publishes an ask; repeated observations retain one identity."""
-    required = ('id', 'source', 'source_ref', 'owner', 'action', 'created_at')
-    if any(not item.get(k) for k in required):
-        raise ValueError('human ask requires stable id, source, reference, owner, action and creation time')
+def request_human_input(db, *, identifier, execution_ref, gate_type, action,
+                        why_agent_cannot_do_it, authorization_gap,
+                        resume_after_answer):
+    """The one path that can transfer an unfinished execution to Aria."""
+    if gate_type not in GATE_TYPES:
+        raise ValueError('not a human-input gate')
+    values = (identifier,execution_ref,action,why_agent_cannot_do_it,
+              authorization_gap,resume_after_answer)
+    if any(not isinstance(value,str) or not value.strip() for value in values):
+        raise ValueError('human input needs an exact action and ownership proof')
+    if ORDINARY_ACTION.match(action.strip()) or REDUNDANT_APPROVAL.search(action):
+        raise ValueError('ordinary technical work remains Office-owned')
+    if gate_type == 'new_judgment' and re.search(r'(?i)\b(?:approve|approval|acceptance)\b',action):
+        raise ValueError('an approval label is not a new product judgment')
+    proof = {'why_agent_cannot_do_it':why_agent_cannot_do_it,
+             'authorization_gap':authorization_gap,
+             'resume_after_answer':resume_after_answer}
     at = now()
-    before = db.execute('SELECT * FROM asks WHERE id=?', (item['id'],)).fetchone()
-    if before and (before['source'], before['source_ref']) != (item['source'], item['source_ref']):
-        raise ValueError('human ask id belongs to a different source')
-    if before:
-        # A later observation is not authority to undo a terminal receipt.
-        db.execute('UPDATE asks SET observed_at=? WHERE id=?', (at, item['id']))
-        return
-    db.execute('''INSERT INTO asks(id,source,source_ref,owner,action,created_at,observed_at,state)
-                  VALUES(?,?,?,?,?,?,?,?)''', tuple(item[k] for k in required) + (at, 'open'))
-    db.execute('INSERT INTO ask_events(ask_id,at,state,evidence) VALUES(?,?,?,?)',
-               (item['id'], at, 'open', json.dumps({'source': item['source_ref']})))
-
-
-def transition(db, ask_id, state, evidence, owner=None):
-    if state not in STATES or state == 'open' or not evidence or not evidence.get('source_ref'):
-        raise ValueError('terminal human ask state requires authoritative source evidence')
-    row = db.execute('SELECT * FROM asks WHERE id=?', (ask_id,)).fetchone()
-    if row is None:
-        raise KeyError(ask_id)
-    if evidence['source_ref'] != row['source_ref']:
-        raise ValueError('resolution evidence must match the authoritative source')
-    if state == 'reassigned' and not owner:
-        raise ValueError('reassignment requires the new owner')
-    at = now()
-    encoded = json.dumps(evidence, ensure_ascii=False)
-    db.execute('''UPDATE asks SET state=?, owner=?, resolution_evidence=?,
-                  last_source_verification=?, source_stale=0 WHERE id=?''',
-               (state, owner or row['owner'], encoded, at, ask_id))
-    db.execute('INSERT INTO ask_events(ask_id,at,state,evidence) VALUES(?,?,?,?)',
-               (ask_id, at, state, encoded))
-
-
-def seed(db, path=None):
-    for item in json.loads(Path(path or SEEDS).read_text()):
-        observe(db, item)
-
-
-def declarations(text, marker=ASK_MARKER):
-    """Only source-authored, typed JSON blocks qualify; prose is never classified."""
-    out = []
-    for part in str(text or '').split(marker)[1:]:
-        payload, sep, _ = part.partition('\n-->')
-        if sep:
-            try:
-                value = json.loads(payload)
-                if isinstance(value, dict):
-                    out.append(value)
-            except ValueError:
-                continue
-    return out
-
-
-def observe_stations(db, stations):
-    for station in stations or []:
-        repo = station.get('repo') or ''
-        for issue in station.get('issues') or []:
-            number = issue.get('number')
-            if not number:
-                continue
-            ref = f'{repo}#{number}'
-            for entry in issue.get('human_ask_declarations') or []:
-                if not all(entry.get(k) for k in ('key', 'owner', 'action')):
-                    continue
-                observe(db, {'id': f'github:{ref}:{entry["key"]}', 'source': 'github',
-                             'source_ref': ref, 'owner': entry['owner'], 'action': entry['action'],
-                             'created_at': entry.get('created_at') or issue.get('updatedAt') or now()})
-
-
-def _permission_event(db, ledger, event, active):
-    ref = f'{event["subject"]}:{event["id"]}'
-    ask_id = f'office-permission:{event["id"]}'
-    params = (json.loads(event['payload']).get('params') or {})
-    action = params.get('title') or params.get('reason') or params.get('question') or 'Answer this exact task request.'
-    observe(db, {'id': ask_id, 'source': 'office-permission', 'source_ref': ref,
-                 'owner': 'aria', 'action': str(action)[:4000],
-                 'created_at': dt.datetime.fromtimestamp(event['ts'], dt.timezone.utc).isoformat()})
-    closure = ledger.execute("""SELECT id,ts FROM events WHERE kind='office.permission_closed'
-        AND subject=? AND json_extract(payload,'$.permission_id')=? ORDER BY id DESC LIMIT 1""",
-        (event['subject'], event['id'])).fetchone()
-    if closure and db.execute('SELECT state FROM asks WHERE id=?', (ask_id,)).fetchone()['state'] == 'open':
-        transition(db, ask_id, 'resolved',
-                   {'source_ref': ref, 'ledger_event': closure['id'], 'closed_at': closure['ts']})
-    elif not closure:
-        db.execute('UPDATE asks SET source_stale=?,last_source_verification=? WHERE id=?',
-                   (0 if event['id'] in active else 1, now(), ask_id))
-
-
-def _ingest_permissions(db):
-    import office_tasks
-    from run_board import LEDGER
-    active = {}
-    try:
-        for request in office_tasks.permissions()['items']:
-            active[int(request['id'])] = request
-    except (OSError, ValueError, sqlite3.Error):
-        pass
-    try:
-        with sqlite3.connect(f'file:{LEDGER}?mode=ro', uri=True, timeout=2) as ledger:
-            ledger.row_factory = sqlite3.Row
-            rows = ledger.execute("SELECT id,ts,subject,payload FROM events WHERE kind='office.permission'").fetchall()
-            for event in rows:
-                _permission_event(db, ledger, event, active)
-    except (OSError, ValueError, sqlite3.Error):
-        db.execute("UPDATE asks SET source_stale=1 WHERE source='office-permission' AND state='open'")
-    return active
-
-
-def _ingest_gates(db):
-    import runtime
-    active = {}
-    try:
-        gates = runtime.read_gates()
-    except (OSError, ValueError):
-        gates = {'gates': [], 'state': 'unavailable'}
-    for gate in gates.get('gates') or []:
-        ref = str(gate['id'])
-        observe(db, {'id': f'gate:{ref}', 'source': 'gate', 'source_ref': ref,
-                     'owner': 'aria', 'action': gate.get('detail') or gate.get('target') or gate.get('permission') or 'Answer this exact agent gate.',
-                     'created_at': dt.datetime.fromtimestamp(gate.get('asked_at') or time.time(), dt.timezone.utc).isoformat()})
-        active[ref] = gate
-        db.execute('UPDATE asks SET source_stale=0,last_source_verification=? WHERE id=?', (now(), f'gate:{ref}'))
-    for row in db.execute("SELECT id,source_ref FROM asks WHERE source='gate' AND state='open'").fetchall():
-        if row['source_ref'] not in active:
-            db.execute('UPDATE asks SET source_stale=1 WHERE id=?', (row['id'],))
-    return active
-
-
-def ingest_runtime_asks(db):
-    """Project durable permission events and pending gates, not process liveness."""
-    return {'office-permission': _ingest_permissions(db), 'gate': _ingest_gates(db)}
-
-
-def gate_answered(question_id, answer, path=None):
-    """A successful source-file write is the resolution receipt for that gate."""
-    with closing(connect(path)) as db, db:
-        ask_id = f'gate:{question_id}'
-        if db.execute('SELECT state FROM asks WHERE id=?', (ask_id,)).fetchone():
-            transition(db, ask_id, 'resolved', {'source_ref': question_id,
-                       'answer': answer, 'written_at': now(), 'source': 'runtime gate file'})
-
-
-def github_issue(ref):
-    repo, number = ref.rsplit('#', 1)
-    result = subprocess.run(['gh', 'issue', 'view', number, '-R', repo,
-                             '--json', 'state,closedAt,updatedAt,url,comments'],
-                            capture_output=True, text=True, timeout=15)
-    if result.returncode:
-        raise RuntimeError(f'GitHub {ref} unavailable: {result.stderr.strip()[:120]}')
-    return json.loads(result.stdout)
-
-
-def reconcile(db, fetch=github_issue):
-    """Only a verified source transition may remove an open ask."""
-    rows = db.execute("SELECT * FROM asks WHERE source='github'").fetchall()
-    by_ref = {}
-    for row in rows:
-        ref = row['source_ref']
-        if ref not in by_ref:
-            try:
-                by_ref[ref] = fetch(ref)
-            except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
-                by_ref[ref] = exc
-        source = by_ref[ref]
-        if isinstance(source, Exception):
-            db.execute('UPDATE asks SET source_stale=1 WHERE id=?', (row['id'],))
-            continue
-        at = now()
-        outcomes = [dict(value, comment_url=comment.get('url'))
-                    for comment in source.get('comments') or []
-                    for value in declarations(comment.get('body'), OUTCOME_MARKER)
-                    if value.get('id') == row['id'] and value.get('state') in STATES - {'open'}]
-        if outcomes and row['state'] == 'open':
-            outcome = outcomes[-1]
-            transition(db, row['id'], outcome['state'],
-                       {'source_ref': ref, 'comment_url': outcome.get('comment_url'),
-                        'verified_at': at, 'declared_evidence': outcome.get('evidence')},
-                       owner=outcome.get('owner'))
-        elif source.get('state') == 'CLOSED' and row['state'] == 'open':
-            transition(db, row['id'], 'resolved', {'source_ref': ref, 'url': source.get('url'),
-                       'closed_at': source.get('closedAt'), 'verified_at': at})
-        elif source.get('state') == 'OPEN':
-            # Explicit dismissal/reassignment/supersession remains terminal even if the issue stays open.
-            db.execute('UPDATE asks SET last_source_verification=?, source_stale=0 WHERE id=?', (at, row['id']))
+    row = db.execute('SELECT source_ref,state,gate_type,action,proof,resume FROM asks WHERE id=?',
+                     (identifier,)).fetchone()
+    if row and row['source_ref'] != execution_ref:
+        raise ValueError('human-input ID belongs to a different execution')
+    if row and row['state'] == 'open':
+        if (row['gate_type'],row['action'],row['proof'],row['resume']) != (
+                gate_type,action,json.dumps(proof),resume_after_answer):
+            raise ValueError('an open human-input ID cannot change request')
+        return identifier
+    with db:
+        if row:
+            db.execute("""UPDATE asks SET source='request_human_input',
+                owner='aria',action=?,observed_at=?,state='open',
+                gate_type=?,proof=?,resume=?,resolution_evidence=NULL WHERE id=?""",
+                (action,at,gate_type,json.dumps(proof),resume_after_answer,identifier))
         else:
-            db.execute('UPDATE asks SET source_stale=1 WHERE id=?', (row['id'],))
+            db.execute("""INSERT INTO asks(id,source,source_ref,owner,action,created_at,
+                observed_at,state,gate_type,proof,resume) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (identifier,'request_human_input',execution_ref,'aria',action,at,at,
+                 'open',gate_type,json.dumps(proof),resume_after_answer))
+        db.execute('INSERT INTO ask_events(ask_id,at,state,evidence) VALUES(?,?,?,?)',
+                   (identifier,at,'open',json.dumps({'gate_type':gate_type,'proof':proof})))
+    return identifier
 
 
-def listing(path=None, fetch=github_issue, max_age_s=300, stations=None, runtime_asks=True):
-    global _last_check
-    with _lock, closing(connect(path)) as db:
-        with db:
-            seed(db)
-            observe_stations(db, stations)
-            active = ingest_runtime_asks(db) if runtime_asks and path is None else {'office-permission': {}, 'gate': {}}
-            if time.monotonic() - _last_check >= max_age_s or path is not None:
-                reconcile(db, fetch)
-                if path is None:
-                    _last_check = time.monotonic()
-            rows = db.execute("SELECT * FROM asks WHERE owner='aria' AND state='open' ORDER BY created_at,id").fetchall()
-            return {'items': [dict(r, resolution_evidence=json.loads(r['resolution_evidence'])
-                                      if r['resolution_evidence'] else None,
-                                      live_request=active.get(r['source'], {}).get(
-                                          int(r['source_ref'].rsplit(':', 1)[1]) if r['source'] == 'office-permission' else r['source_ref']))
-                              for r in rows],
-                    'at': now()}
+def resolve_human_input(db, identifier, answer):
+    if not isinstance(answer,str) or not answer.strip():
+        raise ValueError('an answer is required')
+    row = db.execute("SELECT * FROM asks WHERE id=? AND state='open' AND gate_type IS NOT NULL",
+                     (identifier,)).fetchone()
+    if row is None:
+        raise FileNotFoundError('active human-input request not found')
+    at = now()
+    with db:
+        db.execute("UPDATE asks SET state='resolved',owner='office',resolution_evidence=?,"
+                   "last_source_verification=? WHERE id=?",
+                   (json.dumps({'answer':answer,'at':at}),at,identifier))
+        db.execute('INSERT INTO ask_events(ask_id,at,state,evidence) VALUES(?,?,?,?)',
+                   (identifier,at,'resolved',json.dumps({'answer':answer})))
+    return {'execution_ref':row['source_ref'],'resume':row['resume'],'answer':answer}
+
+
+def listing(path=None):
+    with closing(connect(path)) as db:
+        rows = db.execute("SELECT * FROM asks WHERE state='open' AND owner='aria' "
+                          "AND gate_type IS NOT NULL ORDER BY created_at,id").fetchall()
+        return {'items':[dict(row) for row in rows], 'at':now()}
+
+
+def ownership(execution_ref, task_state, path=None):
+    """The only ownership decision: terminal, validated input, or Office."""
+    if task_state == 'done':
+        return 'DONE'
+    with closing(connect(path)) as db:
+        waiting = db.execute("SELECT 1 FROM asks WHERE source_ref=? AND state='open' "
+                             "AND owner='aria' AND gate_type IS NOT NULL LIMIT 1",
+                             (execution_ref,)).fetchone()
+    return 'HUMAN_INPUT_REQUIRED' if waiting else 'OFFICE_OWNED'

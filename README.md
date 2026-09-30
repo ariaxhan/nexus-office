@@ -12,11 +12,10 @@ It looks like a chat app on purpose, and it is not one. It is the face of two
 things that already run on this machine without a screen: an
 [issue-to-PR pipeline](#what-feeds-it) that files issues, works them and opens
 PRs, edit and autosave a repo's Markdown, and an agent runtime (the harness)
-that runs bots on a schedule and stops
-at permission gates. Both are invisible by nature. This gives them a face.
+    that runs bots on a schedule. Both are invisible by nature. This gives them a face.
 
 Office is not the runner and not the source of truth. GitHub owns work, the
-runtime owns execution and gates, receipts record outcomes, and Office derives
+runtime owns execution, receipts record outcomes, and Office derives
 the view. The feed is conversation, never authority.
 
 ## Four words, for a stranger
@@ -38,38 +37,18 @@ flowchart LR
   S[client/serve.py<br/>127.0.0.1:8790] -->|world · feed · bots · gates| A[Mac app]
   S -->|world · bots · gates| P[phone]
   A -->|a click| S
-  S -->|comment · close · merge · permit · reply| G[GitHub · runtime · board]
+  S -->|comment · close · merge · reply| G[GitHub · runtime · board]
   G --> R
 ```
 
-## The raised hand
+## Human input
 
-The highest-value thing in here. When an agent hits a permission gate it stops
-and waits for a person. Normally that is a line in a log nobody is watching, or a
-prompt in a terminal that is not on screen: work silently stops and you find out
-later.
-
-Here it is a message in that bot's thread, a **sheet you cannot dismiss without
-answering**, an OS notification, and an amber menu-bar dot that stays amber with
-the window closed. Read the literal command, then answer allow once, allow
-always, or deny. Three properties this has to hold, and does:
-
-- **The target is shown verbatim.** Never summarised, never truncated into
-  ambiguity. A gate you approve without reading the command is a rubber stamp.
-- **The answer carries the question's id.** Between seeing a gate and answering
-  it, the agent can time out and a *different* gate can open. Answering by
-  position rather than by id would approve a command nobody ever saw, so a
-  mismatched answer is refused out loud.
-- **A gate is never hidden.** No filter, no "put this away", nothing removes a
-  raised hand. It is read from a **file** rather than an API, so a blocked agent
-  is visible whether or not the runtime's own dashboard is running.
-
-The pending file expires fail-closed, so a late reply cannot grant permission to
-a question that is gone. Before blocking, the harness makes a best-effort write
-of a `nexus.board.post/v1` post that Office reads with the same field contract.
-When the board is writable, the question and timeout outcome survive after the
-pending file expires. A failed history write never weakens the gate and is not
-durability proof. The live gate remains the only decision path.
+Office owns unfinished work through CI, merge, deployment, technical failure,
+and rollback. The only transfer to Aria is a validated request made through
+client/human_asks.py::request_human_input. Needs You and the native gate view
+read the same unresolved records. Provider approvals, issue text, labels, and
+runtime gate files cannot create human-owned work. Answering a request resumes
+its original task or source issue. See docs/human-asks.md.
 
 ## The security model
 
@@ -79,9 +58,8 @@ process running as that user can. A phone goes through Tailscale Serve rather
 than a wider bind, carrying the configured login. Every write must name
 that door as its `Host`, arrive as `application/json`, and carry either this
 origin or no origin at all, because a page you have open elsewhere can post to
-`127.0.0.1` without a preflight. Everything that touches GitHub happens in
-`client/office-sync.py`, and a permission answer carries the id of the question
-it is answering, so it is refused if the agent has moved on.
+`127.0.0.1` without a preflight. Human-input answers carry the exact request ID;
+a stale ID is refused.
 
 Feed files are not authenticated records. The ordinary CLI always refuses the
 human account, which is policy rather than authentication. A process with write
@@ -148,7 +126,7 @@ python3 client/serve.py --root ~/path/to/your/vault    # the door, and the runti
 python3 client/serve.py --once                         # one snapshot as JSON, for a script
 ```
 
-Then open the app. `--root` is where the agent runtime keeps its gates, runs and
+Then open the app. `--root` is where the agent runtime keeps its runs and
 cost, and where `_meta/bots.json` names your bots. The snapshot rebuilds in the
 background every `OFFICE_POLL_S` seconds, so nothing waits on GitHub. Leave the
 door running (a launchd job works) and the roster stays live.
@@ -187,10 +165,9 @@ card, never as a quiet Sunday. `docs/webhooks.md` has the two steps, one of whic
 is a click in the Tailscale admin console that nothing on this machine can do for
 you.
 
-The same door serves the phone at `/`: three files out of `client/phone/`, no
-build step and no request to anywhere but itself, showing the raised hand first,
-then what needs you, the bots, the desks and the wall. It is the same office and
-the same writes, so answering a gate from a pocket is answering it. Put it on the
+The same door serves the phone at `/` from `client/phone/`, with a bundled
+script and no request to anywhere but itself. Needs You reads only validated
+human-input records. Put it on the
 tailnet with `tailscale serve --bg 8790`, then name the tailnet host in
 `OFFICE_TRUSTED_HOSTS` and yourself in `OFFICE_LOGIN`: off loopback the request
 must carry the `Tailscale-User-Login` that matches, or it is 403 before it reads

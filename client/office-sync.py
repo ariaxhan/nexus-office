@@ -18,7 +18,7 @@ Configuration, all from the environment so nothing personal lives in this file:
   OFFICE_HEARTBEAT  file holding your runner's last-success stamp  (optional)
   OFFICE_KILLSWITCH file whose existence means "the runner is halted" (optional)
   OFFICE_MARKER     the comment marker your bot leaves    (default: pipeline-bot)
-  OFFICE_WAITING    the label meaning a human must look   (default: waiting on human)
+  OFFICE_WAITING    legacy issue hold label; no ownership meaning (default: waiting on human)
   OFFICE_RUNTIME_ROOT  a local agent runtime's repo root   (optional; enables gates)
   OFFICE_RUNTIME_URL   that runtime's dashboard            (default 127.0.0.1:8787)
   OFFICE_GH_RESERVE the GraphQL points to leave unspent    (default 1000)
@@ -57,7 +57,6 @@ import run_board  # noqa: E402  (needs the path above)
 import product_board  # noqa: E402  (needs the path above)
 import tower_board  # noqa: E402  (needs the path above)
 import sections as sections_mod  # noqa: E402  (needs the path above)
-import human_asks  # noqa: E402  (typed source declarations, independent of bot_last)
 
 def _env_path(name):
     v = os.environ.get(name, "").strip()
@@ -669,13 +668,6 @@ def parse_landed_pr(text):
     return int(hit.group(1)) if hit else None
 
 
-def _ask_declarations(issue):
-    found = human_asks.declarations(issue.get('body'))
-    for comment in ((issue.get('comments') or {}).get('nodes') or []):
-        found.extend(human_asks.declarations(comment.get('body')))
-    return found
-
-
 def _issue_row(i) -> dict:
     last_word = _bot_last_word(i)
     full = str(last_word.get("body") or "")
@@ -691,7 +683,6 @@ def _issue_row(i) -> dict:
         "url": i.get("url") or "",
         "updatedAt": i.get("updatedAt") or "",
         "bot_last": bool(last_word),
-        "human_ask_declarations": _ask_declarations(i),
         # When the bot spoke last, its words ARE the question a human has to
         # answer, so they travel with the issue instead of behind a click.
         "last_word": str(last_word.get("body") or "")[:1500],
@@ -1173,7 +1164,7 @@ def build_snapshot(access: Access):
 
 # ── applying what was clicked ────────────────────────────────────────────────
 
-RUNTIME_KINDS = {"permit", "chat", "run", "stop"}
+RUNTIME_KINDS = {"chat", "run", "stop"}
 
 
 def apply_merge(repo, who, tok, payload, dry: bool):
@@ -1297,24 +1288,6 @@ def _merge_refusal(pr: dict, num: str, head: str, repo: str = "", env: dict | No
     return ""
 
 
-def _apply_permit(d, payload, dry: bool):
-    """Answer the gate on disk, and only the gate whose id was answered."""
-    root = rt._root()
-    if root is None:
-        return False, "no runtime root configured (OFFICE_RUNTIME_ROOT)"
-    qid = str(payload.get("question_id") or "")
-    answer = payload.get("answer")
-    if answer not in ("allow", "deny"):
-        return False, "a permit must answer allow or deny"
-    if dry:
-        live = rt.read_gate()
-        if live.get("state") != "pending":
-            return False, "nothing is waiting on a gate right now"
-        same = live.get("id") == qid
-        return same, ("would " + answer) if same else "the agent has moved on"
-    return rt.answer_gate(root, qid, answer, bool(payload.get("always")))
-
-
 def _apply_chat(d, payload, dry: bool):
     text = (payload.get("body") or "").strip()
     if not text:
@@ -1354,7 +1327,6 @@ def _apply_stop(d, payload, dry: bool):
 
 
 RUNTIME_HANDLERS = {
-    "permit": _apply_permit,
     "chat": _apply_chat,
     "run": _apply_run,
     "stop": _apply_stop,

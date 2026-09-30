@@ -25,9 +25,10 @@ BATCH = 10
 TTL = 300
 STALE_DAYS = 30
 NWO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
-HELD = {'hold', 'on-hold', 'blocked', 'blocked-needs-look', 'cancelled', 'canceled'}
+HELD = {'hold', 'on-hold', 'blocked', 'blocked-needs-look', 'cancelled', 'canceled',
+        'needs-you', 'needs you', 'needs-human', 'needs-aria', 'waiting',
+        'waiting on human', 'question', 'decision'}
 OWNED = {'direct', 'claimed', 'in-progress', 'in progress', 'tower-v2'}
-NEEDS_YOU = {'needs-you', 'needs you', 'needs-human', 'needs-aria', 'waiting', 'waiting on human', 'question', 'decision'}
 PRIORITY = ('p0', 'p1', 'p2')
 LOCK = threading.Lock()
 MEMORY = {'at': 0.0, 'result': None}
@@ -264,8 +265,6 @@ def classify(labels, active):
     names = {label.lower() for label in labels}
     if active:
         return 'active'
-    if names & NEEDS_YOU:
-        return 'needs_you'
     if names & HELD:
         return 'held'
     if names & OWNED:

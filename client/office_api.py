@@ -58,7 +58,7 @@ def get(handler, path, query):
         '/api/feed/detail': lambda: feed.detail(q['id']),
         '/api/feed/threads': feed.threads,
         '/api/buzz': office_buzz.listing,
-        '/api/human-asks': lambda: human_asks.listing(stations=(handler.world.snapshot or {}).get('stations')),
+        '/api/human-asks': human_asks.listing,
         '/api/buzz/detail': lambda: office_buzz.detail(q['id']),
         '/api/ask': ask.read,
         '/api/ask/models': ask.models,
@@ -77,7 +77,6 @@ def get(handler, path, query):
         '/api/tasks/capabilities': tasks.capabilities,
         '/api/tasks/sources': lambda: tasks.source_choices(q.get('project','')),
         '/api/tasks': lambda: tasks.active_listing() if q.get('active')=='1' else tasks.listing(q.get('cursor',0),q.get('project','')),
-        '/api/tasks/permissions': tasks.permissions,
         '/api/tasks/detail': lambda: tasks.detail(q['id']),
         '/api/tasks/history': lambda: tasks.history(q['id'],q.get('cursor',0)),
         '/api/system/jobs': jobs.clock.read,
@@ -154,7 +153,8 @@ def post(handler, path):
               '/api/feed/follow': feed.follow,
               '/api/ask/send': ask.send, '/api/ask/rate': ask.rate,
               '/api/tasks/start': tasks.start, '/api/tasks/say': tasks.say,
-              '/api/tasks/control': tasks.control, '/api/tasks/answer': tasks.answer}
+              '/api/tasks/control': tasks.control,
+              '/api/human-input/answer': tasks.answer_human_input}
     if path not in routes:
         return False
     handler._json(routes[path](handler._read_json(limit=7 * 1024 * 1024)), 202 if path.startswith('/api/tasks/') else 200)

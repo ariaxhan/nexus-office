@@ -1,32 +1,45 @@
-import json
+"""An ended attempt cannot be controlled or turned into a permission gate."""
 from pathlib import Path
-import sys,tempfile,unittest
+import sys,tempfile,unittest,time,json
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from nexus.ledger import Ledger
 from nexus import office_tasks
+from nexus import tower
 
-class Permissions(unittest.TestCase):
-    def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-        self.ledger=Ledger(str(Path(self.tmp.name)/'ledger.sqlite'));self.addCleanup(self.ledger.close)
-        spec={'engine':'codex','profile':'personal','project':{'id':'root'},'prompt':'Read a file'}
-        receipt=office_tasks.submit(self.ledger,'request-123456789',spec)
-        self.task=receipt['task_id'];self.flight=receipt['flight_id']
-        self.ledger.set_state(self.flight,'running',expect='queued')
-        self.ledger.event('office.permission',self.task,{'flight_id':self.flight,'id':'native-unique','method':'item/commandExecution/requestApproval','params':{'command':'test'}},source='office-engine')
-        self.permission=self.ledger.events(kind='office.permission')[-1]['id']
 
-    def test_exact_permission_answer_and_cross_device_conflict(self):
-        first=office_tasks.answer(self.ledger,self.task,'answer-123456789',self.permission,'accept')
-        self.assertEqual(first,office_tasks.answer(self.ledger,self.task,'answer-123456789',self.permission,'accept'))
-        with self.assertRaises(FileExistsError):office_tasks.answer(self.ledger,self.task,'different-123456789',self.permission,'decline')
-        with self.assertRaises(FileNotFoundError):office_tasks.answer(self.ledger,self.task,'answer-123456789',self.permission+100,'accept')
+class Controls(unittest.TestCase):
+    def test_ended_attempt_cannot_receive_interrupt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger=Ledger(str(Path(directory)/'ledger.sqlite'))
+            self.addCleanup(ledger.close)
+            spec={'engine':'codex','profile':'personal','project':{'id':'root'},'prompt':'Read a file'}
+            receipt=office_tasks.submit(ledger,'request-123456789',spec)
+            flight=receipt['flight_id'];task=receipt['task_id']
+            ledger.set_state(flight,'running',expect='queued')
+            ledger.set_state(flight,'cancelled',expect='running')
+            with self.assertRaises(FileExistsError):
+                office_tasks.control(ledger,task,'control-123456789','interrupt',flight)
 
-    def test_ended_attempt_cannot_receive_permission_or_interrupt(self):
-        self.ledger.set_state(self.flight,'cancelled',expect='running')
-        with self.assertRaises(FileExistsError):office_tasks.answer(self.ledger,self.task,'answer-123456789',self.permission,'accept')
-        with self.assertRaises(FileExistsError):office_tasks.control(self.ledger,self.task,'control-123456789','interrupt',self.flight)
+    def test_failed_office_flights_retry_then_stay_office_owned_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger=Ledger(str(Path(directory)/'ledger.sqlite'))
+            self.addCleanup(ledger.close)
+            spec={'engine':'codex','profile':'personal','project':{'id':'root'},'prompt':'Land and verify PR'}
+            receipt=office_tasks.submit(ledger,'request-123456789',spec)
+            task=receipt['task_id']
+            ledger.set_task_state(task,'running',expect='accepted')
+            for attempt in range(4):
+                flight=list(ledger.flights(task_id=task))[0]
+                ledger.set_state(flight['id'],'running',expect='queued')
+                ledger.set_state(flight['id'],'failed',expect='running')
+                tower._retry_exhausted(ledger,time.time())
+                self.assertEqual(ledger.task(task)['state'],'running')
+                if attempt<3:
+                    self.assertEqual(len(list(ledger.flights(task_id=task))),attempt+2)
+            events=[json.loads(row['payload']) for row in ledger.events(kind='office.phase')]
+            self.assertEqual(events[-1]['state'],'office_owned_blocked')
+            tower._retry_exhausted(ledger,time.time())
+            self.assertEqual(len(ledger.events(kind='office.phase')),1)
 
-    def test_closed_request_cannot_be_answered_again(self):
-        self.ledger.event('office.permission_closed',self.task,{'permission_id':self.permission},source='office-engine')
-        with self.assertRaises(FileExistsError):office_tasks.answer(self.ledger,self.task,'answer-123456789',self.permission,'accept')
+
+if __name__=='__main__':unittest.main()

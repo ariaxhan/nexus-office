@@ -1,6 +1,7 @@
 """The authenticated phone's typed task boundary."""
 from contextlib import closing
 import json
+import hashlib
 from pathlib import Path
 import re
 import subprocess
@@ -16,6 +17,7 @@ from nexus import office_tasks as tasks
 import office_objects as objects
 import office_profiles as profiles
 import run_board
+import human_asks
 import office_uploads as uploads
 
 
@@ -68,6 +70,7 @@ def detail(identifier):
         spec=tasks.specification(ledger,identifier)
         task=dict(ledger.task(identifier))
         flights=[dict(row) for row in ledger.flights(task_id=identifier)]
+    task['ownership']=human_asks.ownership(identifier,task['state'])
     return {'task':task,'specification':spec,'flights':flights}
 
 
@@ -97,9 +100,33 @@ def control(body):
         return tasks.control(ledger,body.get('task_id',''),request_id(body),body.get('action'),body.get('flight_id'))
 
 
-def answer(body):
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
-        return tasks.answer(ledger,body.get('task_id',''),request_id(body),int(body.get('permission_id',0)),body.get('decision'),body.get('answers'))
+def answer_human_input(body):
+    identifier=body.get('id')
+    answer=body.get('answer')
+    if not isinstance(identifier,str) or not isinstance(answer,str) or not answer.strip():
+        raise ValueError('Answer the exact human-input request')
+    with closing(human_asks.connect()) as db:
+        row=db.execute("SELECT source_ref,state FROM asks WHERE id=? AND gate_type IS NOT NULL",
+                       (identifier,)).fetchone()
+        if row is None or row['state']!='open':
+            raise FileNotFoundError('Human-input request is no longer open')
+        ref=row['source_ref']
+        if re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*',ref):
+            repo,number=ref.rsplit('#',1)
+            marker='<!-- office-human-input:'+identifier+' -->'
+            current=subprocess.run(['gh','issue','view',number,'-R',repo,'--json','comments'],
+                                   capture_output=True,text=True,timeout=20,check=True)
+            comments=json.loads(current.stdout).get('comments') or []
+            if not any(marker in (comment.get('body') or '') for comment in comments):
+                subprocess.run(['gh','issue','comment',number,'-R',repo,
+                                '--body',answer+'\n\n'+marker],
+                               capture_output=True,text=True,timeout=30,check=True)
+        else:
+            key=hashlib.sha256((identifier+'\0'+answer).encode()).hexdigest()[:32]
+            say({'task_id':ref,'request_id':key,
+                 'text':'Aria answered the validated human-input request '+identifier+': '+answer})
+        receipt=human_asks.resolve_human_input(db,identifier,answer)
+    return {'ok':True,'resumed_task':receipt['execution_ref']}
 
 
 def listing(cursor=0,project=""):
@@ -121,26 +148,17 @@ def active_listing():
 
 def task_row(ledger,row):
     data=dict(row);data['specification']=json.loads(data['specification'])
+    data['ownership']=human_asks.ownership(row['id'],row['state'])
     last=ledger.conn.execute('SELECT id,state,pid,started_at FROM flights WHERE task_id=? ORDER BY created_at DESC LIMIT 1',(row['id'],)).fetchone()
     data['flight']=dict(last) if last else None
     phase=ledger.conn.execute("SELECT payload FROM events WHERE kind='office.phase' AND subject=? ORDER BY id DESC LIMIT 1",(row['id'],)).fetchone()
     data['phase']=json.loads(phase['payload']).get('state') if phase else 'queued'
     if last and last['state'] in ('failed','cancelled','produced'):
-        data['phase']='closed' if last['state']=='produced' else last['state']
+        data['phase']='done' if data['ownership']=='DONE' else 'office_owned_blocked'
     data['observed_at']=time.time()
     if last and last['state']=='running' and not flight_runtime.alive(last['pid']):
         data['phase']='starting' if time.time()-(last['started_at'] or 0)<5 else 'runner missing; awaiting reconciliation'
     return data
-
-
-def permissions():
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
-        rows=ledger.conn.execute("""SELECT e.id,e.subject task_id,e.payload,t.title FROM events e
-            JOIN tasks t ON t.id=e.subject JOIN flights f ON f.id=json_extract(e.payload,'$.flight_id')
-            WHERE e.kind='office.permission' AND f.state='running'
-            AND NOT EXISTS (SELECT 1 FROM events c WHERE c.subject=e.subject AND c.kind='office.permission_closed' AND json_extract(c.payload,'$.permission_id')=e.id)
-            ORDER BY e.id""").fetchall()
-    return {'items':[dict(row,payload=json.loads(row['payload'])) for row in rows]}
 
 
 def context_attachment(reference):

@@ -40,6 +40,11 @@ import urllib.parse
 from datetime import datetime, timezone
 
 import runtime as rt
+import human_asks
+
+
+def validated_human_inputs():
+    return {item['source_ref'] for item in human_asks.listing()['items']}
 
 BOTS_FILE = "_meta/bots.json"
 # The id is a thread key, a filename component and a query parameter all at
@@ -147,6 +152,7 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
         and (row.get("issues") or row.get("prs"))
     ]
 
+    validated = validated_human_inputs()
     issue_count = waiting_count = in_pr_count = 0
     clean_prs = dirty_prs = 0
     for row in stations:
@@ -159,7 +165,7 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
         issue_count += len(issues)
         for issue in issues:
             labels = [str(label) for label in issue.get("labels") or []]
-            waiting_count += "waiting on human" in labels
+            waiting_count += f"{repo}#{issue.get('number')}" in validated
             in_pr_count += "in pr" in labels
         for pr in row.get("prs") or []:
             clean_prs += pr.get("mergeable") == "MERGEABLE" and pr.get("state") == "CLEAN"
@@ -172,6 +178,7 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
             issue_rows.append({
                 "repo": repo,
                 "number": issue.get("number"),
+                "human_input_required": f"{repo}#{issue.get('number')}" in validated,
                 "title": str(issue.get("title") or "")[:300],
                 "labels": [str(label)[:80] for label in issue.get("labels") or []],
                 "url": str(issue.get("url") or "")[:500],
@@ -191,7 +198,7 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
                 "closes": list(pr.get("closes") or [])[:40],
             })
 
-    issue_rows.sort(key=lambda r: "waiting on human" not in r["labels"])
+    issue_rows.sort(key=lambda r: not r["human_input_required"])
     issue_rows = issue_rows[:MAX_EVIDENCE_ISSUES]
     pr_rows = pr_rows[:MAX_EVIDENCE_PRS]
 
@@ -217,12 +224,12 @@ def office_evidence(snapshot: dict | None, bot: str, message: str) -> dict:
                         else "every desk on the wall",
         "counts": {
             "issues": issue_count,
-            "waiting_on_human": waiting_count,
+            "human_input_required": waiting_count,
             "in_pr": in_pr_count,
             "clean_mergeable_prs": clean_prs,
             "conflicting_prs": dirty_prs,
         },
-        "rows_note": "counts are exact; rows are the ones that fit, waiting on human first",
+        "rows_note": "counts are exact; rows are the ones that fit, validated human input first",
         "issues": issue_rows,
         "pull_requests": pr_rows,
         "sections": sections,

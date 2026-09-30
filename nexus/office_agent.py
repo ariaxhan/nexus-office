@@ -20,6 +20,7 @@ from .office_rpc import Codex
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'client'))
 import office_profiles
+import human_asks
 
 APPROVALS={'item/tool/requestUserInput','item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','claude/requestApproval'}
 
@@ -87,7 +88,6 @@ class Conversation:
         self.ledger=ledger;self.flight=flight;self.task_id=flight['task_id']
         self.directory=directory;self.checkout=checkout;self.spec=spec
         self.cursor=0;self.closed=False;self.adapter=None
-        self.pending={}
         self.next_engine=spec.get('engine','codex');self.current_message=None;self.reconcile_message=None
         previous=directory/'response.md'
         self.output=[previous.read_text().strip()] if previous.exists() else []
@@ -106,6 +106,7 @@ class Conversation:
         for name in (self.next_engine,'claude' if self.next_engine=='codex' else 'codex'):
             try:
                 env=office_profiles.environment(name,self.spec['profile'])
+                env['OFFICE_TASK_ID']=self.task_id
                 # SDK options overlay their parent; clean the flight process too.
                 os.environ.clear();os.environ.update(env)
                 engine=Codex
@@ -180,8 +181,32 @@ class Conversation:
             (self.directory/'response.md').write_text('\n\n'.join(self.output)+'\n')
         if method in ('turn/completed','claude/ResultMessage'):
             self.current_message=None
-            self.emit('office.phase',{'state':'listening'})
             self.save_outputs()
+            owner=human_asks.ownership(self.task_id,self.ledger.task(self.task_id)['state'])
+            if owner=='DONE':
+                self.emit('office.phase',{'state':'done','ownership':owner})
+                self.closed=True
+            elif owner=='HUMAN_INPUT_REQUIRED':
+                self.emit('office.phase',{'state':'human_input_required','ownership':owner})
+            else:
+                self.continue_outcome()
+
+    def continue_outcome(self):
+        latest=self.ledger.conn.execute("SELECT id FROM events WHERE subject=? AND kind='office.message' ORDER BY id DESC LIMIT 1",(self.task_id,)).fetchone()
+        after=latest['id'] if latest else 0
+        attempts=self.ledger.conn.execute("SELECT count(*) FROM events WHERE subject=? AND kind='office.continuation' AND id>?",(self.task_id,after)).fetchone()[0]
+        if attempts>=3:
+            self.emit('office.phase',{'state':'office_owned_blocked','ownership':'OFFICE_OWNED',
+                                      'reason':'Three turns ended without terminal verification; internal strategy change required'})
+            return
+        terminal_condition=self.spec.get('outcome_contract',{}).get('terminal_condition') or self.spec['prompt']
+        self.emit('office.continuation',{'attempt':attempts+1,'terminal_condition':terminal_condition})
+        self.adapter.message('The parent terminal outcome is still open: '+terminal_condition+
+            '\nContinue from the next unresolved blocker. CI, merge, deploy, rollback, and tool failure remain Office-owned. '
+            'If the outcome is actually verified, record concrete evidence with python3 '+
+            str(Path(__file__).resolve().parents[1]/'client/report_outcome.py')+
+            ' --evidence RECEIPT. Only request_human_input can require Aria.')
+        self.emit('office.phase',{'state':'working','ownership':'OFFICE_OWNED'})
 
     def provider_request(self,message):
         if message['method'] not in APPROVALS:
@@ -190,17 +215,28 @@ class Conversation:
             if hasattr(self.adapter,'rpc'):
                 self.adapter.rpc.send({'id':message['id'],'error':{'code':-32601,'message':'This request type is not supported by Office yet'}})
             return
-        self.emit('office.permission',message)
-        event=self.ledger.conn.execute("SELECT id FROM events WHERE kind='office.permission' AND subject=? ORDER BY id DESC LIMIT 1",(self.task_id,)).fetchone()
-        self.pending[event['id']]=message['id']
-        self.emit('office.phase',{'state':'needs_permission'})
+        params=message.get('params') or {}
+        questions=(params.get('questions') or
+                   (params.get('input') or {}).get('questions') or [])
+        if message['method']=='item/tool/requestUserInput' or params.get('tool')=='AskUserQuestion':
+            answers={str(question.get('id') or question.get('question')):
+                     'Office has no human answer. Continue autonomously, or use request_human_input for a genuine human gate.'
+                     for question in questions}
+            self.adapter.answer(message['id'],'answer',answers)
+            resolution='question_returned_to_worker'
+        else:
+            self.adapter.answer(message['id'],'accept')
+            resolution='accepted_under_parent_task_authorization'
+        self.emit('office.internal_approval_resolved',
+                  {'method':message['method'],'resolution':resolution})
+        self.emit('office.phase',{'state':'working'})
 
     def commands(self):
         rows=self.ledger.conn.execute('SELECT id,kind,payload FROM events WHERE subject=? AND id>? ORDER BY id LIMIT 100',(self.task_id,self.cursor)).fetchall()
         for row in rows:
             self.cursor=row['id']
             body=loads(row['payload'],{})
-            actions={'office.message':self.message,'office.control':self.control,'office.permission_answer':self.answer}
+            actions={'office.message':self.message,'office.control':self.control}
             if row['kind'] in actions:actions[row['kind']](row['id'],body)
 
     def message(self,event_id,body):
@@ -215,7 +251,21 @@ class Conversation:
         try:
             attach_context(self.checkout,body.get('attachments',[]))
             self.current_message=body['text']
-            self.adapter.message(office_tasks.initial_prompt({'prompt':body['text'],'attachments':body.get('attachments',[])}))
+            request_cli=Path(__file__).resolve().parents[1]/'client/request_human_input.py'
+            outcome_cli=Path(__file__).resolve().parents[1]/'client/report_outcome.py'
+            instruction=(
+                '\n\nPersisted terminal outcome: '+
+                (self.spec.get('outcome_contract',{}).get('terminal_condition') or self.spec['prompt'])+
+                '. Verify the actual target, then record evidence with python3 '+str(outcome_cli)+
+                ' --evidence RECEIPT. Office owns the requested outcome through verification. A provider question or '
+                'approval request does not transfer ownership. Continue ordinary technical work. '
+                'Only when authentication, physical action, unresolved new judgment, an action '
+                'outside the original authority, or unrecoverable missing information truly '
+                'requires Aria, run: python3 '+str(request_cli)+
+                ' --type TYPE --action EXACT_INPUT --why WHY --authorization-gap GAP '
+                '--resume NEXT_STEP. Built-in approval and question tools are not human gates.')
+            self.adapter.message(office_tasks.initial_prompt(
+                {'prompt':body['text'],'attachments':body.get('attachments',[])})+instruction)
             self.emit('office.delivery',{'message_id':event_id,'state':'submitted','consumption':'unknown'})
             self.emit('office.phase',{'state':'working'})
         except Exception as exc:
@@ -227,14 +277,6 @@ class Conversation:
         if body['action']=='close':self.closed=True
         elif body['action']=='interrupt':self.adapter.interrupt()
         self.emit('office.control_received',{'event_id':event_id,'action':body['action']})
-
-    def answer(self,event_id,body):
-        request=self.pending.pop(body.get('permission_id'),None)
-        if request is None:
-            return
-        self.adapter.answer(request,body['decision'],body.get('answers'))
-        self.emit('office.permission_closed',{'permission_id':body['permission_id'],'answer_event_id':event_id})
-        self.emit('office.phase',{'state':'working'})
 
     def save_outputs(self):
         (self.directory/'response.md').write_text('\n\n'.join(self.output)+'\n')

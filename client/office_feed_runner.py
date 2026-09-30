@@ -161,7 +161,7 @@ def buzz_candidate(row, now):
     except (KeyError, ValueError):
         return False
     text = row['text'].strip()
-    return (0 <= age <= 36 * 3600 and not row.get('needs_you') and text
+    return (0 <= age <= 36 * 3600 and text
             and row['channel'] != 'queue' and row['author'] != 'Aria'
             and not re.search(r'\b(no new questions|still open above|building|picked up|working on this now)\b',
                               text[:160], re.I))

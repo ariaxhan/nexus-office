@@ -1,25 +1,32 @@
-# Human asks
+# Human input
 
-Office Needs You reads `~/.local/state/nexus-office/human-asks.sqlite`. Each row has a stable ID, authoritative source and reference, owner, exact action, creation and observation times, state, resolution evidence, and last source verification. `ask_events` preserves transitions. A failed source read marks an open row stale; it does not remove it.
+Execution has three ownership states: OFFICE_OWNED, HUMAN_INPUT_REQUIRED,
+and DONE. CI, PR, deployment, rollback, tool failures, and provider turns are
+execution progress. They do not transfer ownership.
 
-Sources publish requests with `human_asks.observe(db, item)`. GitHub sources can publish a typed declaration at the start of an issue body or in a comment:
+Each Office task stores its parent goal and terminal condition in its task
+specification. A provider turn ending without verification triggers another
+Office turn. After three unchanged completions, the phase is
+`office_owned_blocked`; the persisted task is still Office-owned across a
+restart. A worker records concrete target verification with
+`client/report_outcome.py --evidence RECEIPT`, which closes the parent task.
+Failed Office flights retry three times. Exhaustion records an Office-owned
+blocker without abandoning the parent task or creating a human request.
 
-```text
-<!-- office-human-ask
-{"key":"policy-choice","owner":"aria","action":"Choose the policy before release."}
--->
-```
+client/human_asks.py::request_human_input is the only creation path for
+HUMAN_INPUT_REQUIRED. It accepts inaccessible authentication, physical action,
+new unresolved judgment, an action outside the original authorization, or
+unrecoverable missing information. The caller supplies the exact minimum input,
+why Office cannot provide it, the authorization gap, and what resumes afterward.
+Ordinary technical actions and duplicate approval requests are rejected.
 
-The key is stable within the issue. Office ingests the declaration regardless of the last commenter or `bot_last`. Unstructured prose, an escalation to Tim, and a failed automated pass do not create an Aria ask. Existing free-form issues were individually reviewed and registered in `client/human_asks_sources.json`; that file does not decide their current state.
+Needs You reads unresolved records from this store. Native gate surfaces read
+the same records. Issue text, labels, provider output, old gate files, progress
+checks, and recap text cannot create a request. An answer is sent to the owning
+task or source issue before the record resolves, so a failed delivery leaves the
+request open for retry.
 
-Office task permissions are ingested from the Nexus ledger's `office.permission` events and closed only by matching `office.permission_closed` events. Harness gates are ingested from the runtime gate files; a successful gate answer through Office supplies their closure receipt. Losing a flight, a gate file, or a source connection leaves the request visible as stale until a source-backed outcome is recorded. The existing permission controls remain available while their execution owner is live.
-
-GitHub issue closure supplies a terminal receipt. A source can record an earlier resolution, dismissal, reassignment, or supersession in a comment:
-
-```text
-<!-- office-human-ask-outcome
-{"id":"github:owner/repo#42:policy-choice","state":"superseded","evidence":"Link to the later ruling"}
--->
-```
-
-For reassignment, include `"owner":"tim"`. Other source systems call `human_asks.transition` with an exact matching `source_ref` and evidence from that source. A possible supersession without such evidence stays open. Office never settles a request from a cached issue row, a missing message in a bounded window, or a process exiting.
+Schema v2 keeps historical v1 rows. Migration reclassifies unvalidated open
+legacy asks as Office-owned; the reviewed active asks are resubmitted through
+request_human_input during the release. tests/test_human_input_static.py
+rejects new direct writers and old producer APIs.
