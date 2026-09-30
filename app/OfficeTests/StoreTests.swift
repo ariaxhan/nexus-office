@@ -442,7 +442,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.gates.map(\.id), ["q-second"],
                        "the second question is untouched by a click that was never aimed at it")
         XCTAssertEqual(store.toast, "that question has moved on. the floor is now asking about "
-                        + "inspect the build on Aria’s device")
+                        + "inspect the build on Aria’s device for acme/storefront")
     }
 
     /// One alert per question, however many hands are up. A second bot arriving
@@ -728,9 +728,9 @@ final class StoreTests: XCTestCase {
       "chats": {},
       "gates": [
         {"state": "pending", "id": "q-first", "permission": "inaccessible_authentication",
-          "target": "enter MFA on Aria’s device", "waiting_s": 47, "bot": "release"},
+          "target": "enter MFA on Aria’s device for acme/checkout-api", "waiting_s": 47, "bot": "release"},
          {"state": "pending", "id": "q-second", "permission": "physical_action",
-          "target": "inspect the build on Aria’s device", "waiting_s": 12, "bot": "chief"}
+           "target": "inspect the build on Aria’s device for acme/storefront", "waiting_s": 12, "bot": "chief"}
       ],
       "world": {
         "generated": "2026-08-26T18:40:00Z",
