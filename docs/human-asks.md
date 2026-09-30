@@ -19,6 +19,9 @@ new unresolved judgment, an action outside the original authorization, or
 unrecoverable missing information. The caller supplies the exact minimum input,
 why Office cannot provide it, the authorization gap, and what resumes afterward.
 Ordinary technical actions and duplicate approval requests are rejected.
+An obsolete configured tool path, including one pointing to a removed external
+volume, is an Office-owned environment repair. It cannot become a physical-action
+request just because the old path contains a volume name.
 
 Needs You reads unresolved records from this store. Native gate surfaces read
 the same records. Issue text, labels, provider output, old gate files, progress
@@ -26,7 +29,8 @@ checks, and recap text cannot create a request. An answer is sent to the owning
 task or source issue before the record resolves, so a failed delivery leaves the
 request open for retry.
 
-Schema v2 keeps historical v1 rows. Migration reclassifies unvalidated open
-legacy asks as Office-owned; the reviewed active asks are resubmitted through
-request_human_input during the release. tests/test_human_input_static.py
+Schema v3 keeps historical v1 rows but removes the redundant `owner` column.
+Migration reclassifies unvalidated open legacy asks as Office-owned; the reviewed
+active asks were resubmitted through request_human_input during the release.
+tests/test_human_input_static.py
 rejects new direct writers and old producer APIs.
