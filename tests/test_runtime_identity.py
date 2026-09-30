@@ -85,6 +85,23 @@ class RuntimeIdentityTests(unittest.TestCase):
     self.assertTrue(report["ok"])
     self.assertEqual(report["revision"], revision)
 
+  def test_archived_service_release_is_bound_to_its_full_revision(self):
+    temp = tempfile.TemporaryDirectory()
+    self.addCleanup(temp.cleanup)
+    root = pathlib.Path(temp.name)
+    repo, revision = _make_repo(root)
+    release = root / f".nexus-office-release-{revision[:7]}"
+    (release / "client").mkdir(parents=True)
+    server = release / "client" / "serve.py"
+    server.write_text("# release server\n")
+    (release / "SOURCE_REVISION").write_text(revision + "\n")
+    door = {"pid": 42, "executable": "/usr/bin/python3",
+            "server": str(server), "revision": revision,
+            "listen": "127.0.0.1:8790"}
+    self.assertTrue(runtime_identity._door_report(repo, revision, door)["ok"])
+    (release / "SOURCE_REVISION").write_text("f" * 40 + "\n")
+    self.assertFalse(runtime_identity._door_report(repo, revision, door)["ok"])
+
 
   def test_unknown_or_mismatched_artifact_identity_fails_closed(self):
     temp = tempfile.TemporaryDirectory()

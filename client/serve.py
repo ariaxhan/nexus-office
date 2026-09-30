@@ -86,6 +86,10 @@ FRESH_WAIT_S = 45
 
 
 def source_revision() -> str:
+    marker = HERE.parent / 'SOURCE_REVISION'
+    if marker.is_file():
+        revision = marker.read_text().strip()
+        return revision if re.fullmatch(r'[0-9a-f]{40}', revision) else ''
     try:
         return subprocess.check_output(
             ("git", "-C", str(HERE.parent), "rev-parse", "HEAD"),

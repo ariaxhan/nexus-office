@@ -110,7 +110,16 @@ def _door_report(root, expected: str, door: dict) -> dict:
     except OSError:
         pass
     if server != expected_server:
-        issues.append("listener is not running this checkout's client/serve.py")
+        release = server.parent.parent
+        marker = release / "SOURCE_REVISION"
+        try:
+            release_revision = marker.read_text().strip() if (
+                release.name.startswith(".nexus-office-release-") and
+                server == release / "client" / "serve.py") else ""
+        except OSError:
+            release_revision = ""
+        if release_revision != expected:
+            issues.append("listener is not running this checkout's verified release")
     if not executable.is_absolute() or not executable.is_file():
         issues.append("server executable path is unknown")
     if not (listen.startswith("127.0.0.1:") or listen.startswith("[::1]:")):
@@ -144,12 +153,12 @@ def probe_door(root=ROOT, port=8790) -> dict:
     except ValueError:
         tokens = []
     executable = tokens[0] if tokens else ""
-    expected_name = str((pathlib.Path(root) / "client" / "serve.py").resolve())
     server = ""
     for token in tokens[1:]:
         try:
-            if str(pathlib.Path(token).expanduser().resolve()) == expected_name:
-                server = expected_name
+            path = pathlib.Path(token).expanduser().resolve()
+            if path.name == "serve.py" and path.parent.name == "client":
+                server = str(path)
                 break
         except OSError:
             continue
