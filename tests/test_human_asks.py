@@ -64,6 +64,14 @@ class HumanInputTest(unittest.TestCase):
             self.request(authorization_gap='')
         self.assertEqual(human_asks.listing(self.path)['items'],[])
 
+    def test_removed_external_toolchain_volume_is_office_owned_environment_repair(self):
+        for action in ('Mount /Volumes/the-drive to restore Xcode',
+                       'Configured tool/dependency path points to a removed external volume'):
+            with self.subTest(action=action),self.assertRaises(ValueError):
+                self.request(identifier=action,gate_type='physical_action',action=action)
+        self.assertEqual(human_asks.ownership('task-123','running',self.path),'OFFICE_OWNED')
+        self.assertEqual(human_asks.listing(self.path)['items'],[])
+
     def test_restart_keeps_human_request(self):
         self.request()
         self.assertEqual(human_asks.listing(self.path)['items'][0]['id'],'task-123')

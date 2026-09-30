@@ -17,6 +17,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+. "$ROOT/scripts/use-local-xcode.sh"
 "$ROOT/scripts/install-runtime.sh"
 DEST="/Applications/Office.app"
 CLI="$HOME/.local/bin/nexus"

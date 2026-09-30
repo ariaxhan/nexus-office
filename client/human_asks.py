@@ -22,6 +22,9 @@ REDUNDANT_APPROVAL = re.compile(
     r'(?i)\b(?:approve|confirm|authorize|click)\b.{0,50}'
     r'\b(?:merge|deploy|release|publish(?:ing)?|activate|commit|push|retry|continue|freeze)\b|'
     r'\bdecide whether to continue\b')
+STALE_TOOL_PATH = re.compile(
+    r'(?i)\bmount\s+/Volumes/|\b(?:configured|toolchain|dependency|xcode)\b'
+    r'.{0,100}\b(?:removed|missing|unmounted)\s+(?:external\s+)?volume\b')
 
 
 def now():
@@ -82,7 +85,8 @@ def request_human_input(db, *, identifier, execution_ref, gate_type, action,
               authorization_gap,resume_after_answer)
     if any(not isinstance(value,str) or not value.strip() for value in values):
         raise ValueError('human input needs an exact action and ownership proof')
-    if ORDINARY_ACTION.match(action.strip()) or REDUNDANT_APPROVAL.search(action):
+    if (ORDINARY_ACTION.match(action.strip()) or REDUNDANT_APPROVAL.search(action)
+            or STALE_TOOL_PATH.search(action)):
         raise ValueError('ordinary technical work remains Office-owned')
     if gate_type == 'new_judgment' and re.search(r'(?i)\b(?:approve|approval|acceptance)\b',action):
         raise ValueError('an approval label is not a new product judgment')

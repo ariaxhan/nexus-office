@@ -9,6 +9,7 @@
 set -eu
 
 cd "$(dirname "$0")/.."
+. "$PWD/scripts/use-local-xcode.sh"
 
 # Tests use Python 3.12 syntax; Python 3.14 changed process/fork behavior in
 # the flight tests. Pin the gate interpreter instead of following Homebrew's

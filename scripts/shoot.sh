@@ -52,6 +52,7 @@ fi
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+. "$ROOT/scripts/use-local-xcode.sh"
 
 command -v xcodegen >/dev/null 2>&1 || {
   echo "shoot: xcodegen is not installed (brew install xcodegen)" >&2

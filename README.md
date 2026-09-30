@@ -111,7 +111,10 @@ cd app && xcodegen generate && open Office.xcodeproj   # then Run
 
 ## Run it for real
 
-You need Xcode, Python 3, and the GitHub CLI logged in. Office itself has no
+Install full Xcode locally at `/Applications/Xcode.app` from the Mac App Store;
+Command Line Tools alone cannot run the native build or tests. The supported
+scripts select the local app even if a stale developer path points to a removed
+volume. You also need Python 3 and the GitHub CLI logged in. Office itself has no
 account or hosted backend.
 
 `./scripts/install.sh` installs both `/Applications/Office.app` and the standalone `nexus` CLI.
