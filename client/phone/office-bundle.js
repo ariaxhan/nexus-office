@@ -1968,8 +1968,8 @@ var snapshotReadAt = 0;
 async function world() {
   if (!snapshot || Date.now() - snapshotReadAt > 15e3) {
     const data = await api("/api/world");
-    snapshot = data.world;
-    snapshotReadAt = Date.now();
+    snapshot = data.world || { stations: [], sections: {}, automation: {} };
+    snapshotReadAt = data.world ? Date.now() : 0;
   }
   return snapshot;
 }

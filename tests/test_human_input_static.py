@@ -2,6 +2,8 @@
 import ast
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -9,6 +11,16 @@ SOURCE=[*ROOT.joinpath('client').rglob('*.py'),*ROOT.joinpath('nexus').rglob('*.
 
 
 class SingleCreationPath(unittest.TestCase):
+    def test_browser_bundle_matches_the_reviewed_human_input_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/'office-bundle.js'
+            subprocess.run([str(ROOT/'node_modules/.bin/esbuild'),
+                            'client/phone/office.js','--bundle','--format=esm',
+                            '--target=safari17',f'--outfile={output}'],
+                           cwd=ROOT,check=True,capture_output=True)
+            self.assertEqual(output.read_bytes(),(ROOT/'client/phone/office-bundle.js').read_bytes(),
+                             'run npm run bundle and land the generated browser code')
+
     def test_only_request_human_input_can_write_human_owned_rows(self):
         creators=[]
         for path in SOURCE:
