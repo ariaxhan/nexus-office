@@ -103,6 +103,43 @@ class AttemptArtifacts(unittest.TestCase):
             item.provider({'method':'turn/completed','params':{}})
             self.assertTrue(item.closed)
 
+    def test_restart_preserves_human_input_then_answer_resumes_office(self):
+        from nexus.ledger import Ledger
+        from nexus import office_tasks
+        from nexus.office_agent import Conversation
+        import human_asks
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            asks=root/'asks.sqlite'
+            ledger=Ledger(str(root/'ledger.sqlite'));self.addCleanup(ledger.close)
+            spec={'engine':'codex','profile':'personal','project':{'id':'repo'},'prompt':'Publish and verify'}
+            receipt=office_tasks.submit(ledger,'request-123456789',spec)
+            task=receipt['task_id']
+            with human_asks.connect(asks) as db:
+                human_asks.request_human_input(db,identifier='mfa-1',execution_ref=task,
+                    gate_type='inaccessible_authentication',action='Enter the MFA code on Aria’s device',
+                    why_agent_cannot_do_it='Only Aria has the device',
+                    authorization_gap='The task cannot provide the factor',
+                    resume_after_answer='Continue the release')
+            sent=[]
+            def conversation():
+                item=Conversation(ledger,{'id':'flight','task_id':task},root,root,
+                                  office_tasks.specification(ledger,task))
+                item.adapter=type('Adapter',(),{'message':lambda self,text:sent.append(text)})()
+                item.save_outputs=lambda:None
+                return item
+            with patch.object(human_asks,'DB',asks):
+                conversation().provider({'method':'turn/completed','params':{}})
+                restarted=conversation()
+                restarted.provider({'method':'turn/completed','params':{}})
+                self.assertEqual(sent,[])
+                self.assertEqual(human_asks.ownership(task,'running',asks),'HUMAN_INPUT_REQUIRED')
+                with human_asks.connect(asks) as db:
+                    human_asks.resolve_human_input(db,'mfa-1','MFA completed')
+                restarted.provider({'method':'turn/completed','params':{}})
+            self.assertEqual(len(sent),1)
+            self.assertEqual(human_asks.ownership(task,'running',asks),'OFFICE_OWNED')
+
 
 if __name__=='__main__':
     unittest.main()
