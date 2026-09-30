@@ -23,6 +23,7 @@ class SingleCreationPath(unittest.TestCase):
                     self.assertEqual(path,ROOT/'client/human_asks.py',f'direct human ownership write: {path}:{node.lineno}')
         self.assertEqual(len(creators),1,creators)
         self.assertEqual(creators[0][0],'client/human_asks.py')
+        self.assertNotIn("owner='aria'",(ROOT/'client/human_asks.py').read_text().split('def request_human_input',1)[1])
 
     def test_legacy_bypasses_cannot_return(self):
         forbidden=('human_asks.observe(', 'human_asks.declarations(',

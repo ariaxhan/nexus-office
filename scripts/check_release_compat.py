@@ -33,10 +33,15 @@ def check(release, store):
     with closing(sqlite3.connect(store, timeout=5)) as db:
         version = db.execute('PRAGMA user_version').fetchone()[0]
         columns = {row[1] for row in db.execute('PRAGMA table_info(asks)')}
-        required = {'id', 'owner', 'state', 'source_ref'}
+        required = {'id', 'state', 'source_ref'}
         if not required <= columns:
             raise RuntimeError('human ask store schema cannot be inspected safely')
-        open_count = db.execute("SELECT count(*) FROM asks WHERE state='open' AND owner='aria'").fetchone()[0]
+        if 'gate_type' in columns:
+            open_count = db.execute("SELECT count(*) FROM asks WHERE state='open' AND gate_type IS NOT NULL").fetchone()[0]
+        elif 'owner' in columns:
+            open_count = db.execute("SELECT count(*) FROM asks WHERE state='open' AND owner='aria'").fetchone()[0]
+        else:
+            raise RuntimeError('human ask store schema cannot be inspected safely')
     supported = supported_version(release)
     if version > supported or (open_count and supported == 0):
         raise RuntimeError(f'release supports human asks schema {supported}; store is schema {version} with {open_count} open Aria asks')

@@ -9,7 +9,7 @@ from contextlib import closing
 
 DB = Path(os.environ.get('OFFICE_HUMAN_ASKS_DB',
          Path.home() / '.local/state/nexus-office/human-asks.sqlite'))
-HUMAN_ASKS_SCHEMA_VERSION = 2
+HUMAN_ASKS_SCHEMA_VERSION = 3
 GATE_TYPES = {'inaccessible_authentication', 'physical_action', 'new_judgment',
               'outside_authority', 'unrecoverable_missing_information'}
 ORDINARY_ACTION = re.compile(
@@ -45,19 +45,25 @@ def connect(path=None):
                        "resolution_evidence=? WHERE state='open' AND owner='aria'",
                        (json.dumps({'reason': 'legacy ask lacked central validation'}),))
             db.execute('PRAGMA user_version=2')
+        version = 2
     elif version == 0:
         with db:
             db.execute('''CREATE TABLE IF NOT EXISTS asks (
                 id TEXT PRIMARY KEY, source TEXT NOT NULL, source_ref TEXT NOT NULL,
-                owner TEXT NOT NULL, action TEXT NOT NULL, created_at TEXT NOT NULL,
+                action TEXT NOT NULL, created_at TEXT NOT NULL,
                 observed_at TEXT NOT NULL, state TEXT NOT NULL, resolution_evidence TEXT,
                 last_source_verification TEXT, source_stale INTEGER NOT NULL DEFAULT 0,
                 gate_type TEXT, proof TEXT, resume TEXT)''')
             db.execute('''CREATE TABLE IF NOT EXISTS ask_events (
                 id INTEGER PRIMARY KEY, ask_id TEXT NOT NULL, at TEXT NOT NULL,
                 state TEXT NOT NULL, evidence TEXT NOT NULL)''')
-            db.execute('PRAGMA user_version=2')
-    required = {'id','source','source_ref','owner','action','created_at',
+            db.execute('PRAGMA user_version=3')
+        version = 3
+    if version == 2:
+        with db:
+            db.execute('ALTER TABLE asks DROP COLUMN owner')
+            db.execute('PRAGMA user_version=3')
+    required = {'id','source','source_ref','action','created_at',
                 'observed_at','state','gate_type','proof','resume'}
     if not required <= {row['name'] for row in db.execute('PRAGMA table_info(asks)')}:
         db.close()
@@ -96,14 +102,14 @@ def request_human_input(db, *, identifier, execution_ref, gate_type, action,
     with db:
         if row:
             db.execute("""UPDATE asks SET source='request_human_input',
-                owner='aria',action=?,observed_at=?,state='open',
+                action=?,observed_at=?,state='open',
                 gate_type=?,proof=?,resume=?,resolution_evidence=NULL WHERE id=?""",
                 (action,at,gate_type,json.dumps(proof),resume_after_answer,identifier))
         else:
-            db.execute("""INSERT INTO asks(id,source,source_ref,owner,action,created_at,
-                observed_at,state,gate_type,proof,resume) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (identifier,'request_human_input',execution_ref,'aria',action,at,at,
-                 'open',gate_type,json.dumps(proof),resume_after_answer))
+            db.execute("""INSERT INTO asks(id,source,source_ref,action,created_at,
+                observed_at,state,gate_type,proof,resume) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (identifier,'request_human_input',execution_ref,action,at,at,
+                  'open',gate_type,json.dumps(proof),resume_after_answer))
         db.execute('INSERT INTO ask_events(ask_id,at,state,evidence) VALUES(?,?,?,?)',
                    (identifier,at,'open',json.dumps({'gate_type':gate_type,'proof':proof})))
     return identifier
@@ -118,7 +124,7 @@ def resolve_human_input(db, identifier, answer):
         raise FileNotFoundError('active human-input request not found')
     at = now()
     with db:
-        db.execute("UPDATE asks SET state='resolved',owner='office',resolution_evidence=?,"
+        db.execute("UPDATE asks SET state='resolved',resolution_evidence=?,"
                    "last_source_verification=? WHERE id=?",
                    (json.dumps({'answer':answer,'at':at}),at,identifier))
         db.execute('INSERT INTO ask_events(ask_id,at,state,evidence) VALUES(?,?,?,?)',
@@ -128,7 +134,7 @@ def resolve_human_input(db, identifier, answer):
 
 def listing(path=None):
     with closing(connect(path)) as db:
-        rows = db.execute("SELECT * FROM asks WHERE state='open' AND owner='aria' "
+        rows = db.execute("SELECT * FROM asks WHERE state='open' "
                           "AND gate_type IS NOT NULL ORDER BY created_at,id").fetchall()
         return {'items':[dict(row) for row in rows], 'at':now()}
 
@@ -139,6 +145,6 @@ def ownership(execution_ref, task_state, path=None):
         return 'DONE'
     with closing(connect(path)) as db:
         waiting = db.execute("SELECT 1 FROM asks WHERE source_ref=? AND state='open' "
-                             "AND owner='aria' AND gate_type IS NOT NULL LIMIT 1",
+                             "AND gate_type IS NOT NULL LIMIT 1",
                              (execution_ref,)).fetchone()
     return 'HUMAN_INPUT_REQUIRED' if waiting else 'OFFICE_OWNED'

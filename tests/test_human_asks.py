@@ -38,7 +38,7 @@ class HumanInputTest(unittest.TestCase):
         self.assertEqual(human_asks.ownership('task-123','running',self.path),'OFFICE_OWNED')
         self.assertEqual(human_asks.ownership('task-123','done',self.path),'DONE')
         with human_asks.connect(self.path) as db:
-            self.assertEqual(db.execute("SELECT owner FROM asks WHERE id='task-123'").fetchone()[0],'office')
+            self.assertNotIn('owner',{row['name'] for row in db.execute('PRAGMA table_info(asks)')})
 
     def test_product_choice_is_one_request(self):
         self.request(gate_type='new_judgment',action='Choose A or B for the lesson',
@@ -83,9 +83,21 @@ class HumanInputTest(unittest.TestCase):
             db.execute('PRAGMA user_version=1')
         self.assertEqual(human_asks.listing(self.path)['items'],[])
         with human_asks.connect(self.path) as db:
-            row=db.execute("SELECT owner,state,resolution_evidence FROM asks WHERE id='legacy'").fetchone()
-        self.assertEqual((row['owner'],row['state']),('office','reassigned'))
+            row=db.execute("SELECT state,resolution_evidence FROM asks WHERE id='legacy'").fetchone()
+            self.assertNotIn('owner',{column['name'] for column in db.execute('PRAGMA table_info(asks)')})
+        self.assertEqual(row['state'],'reassigned')
         self.assertIn('legacy ask',json.loads(row['resolution_evidence'])['reason'])
+
+    def test_v2_migration_retains_valid_requests_without_owner_column(self):
+        self.request()
+        with sqlite3.connect(self.path) as db:
+            db.execute('ALTER TABLE asks ADD COLUMN owner TEXT')
+            db.execute("UPDATE asks SET owner='aria'")
+            db.execute('PRAGMA user_version=2')
+        self.assertEqual(human_asks.ownership('task-123','running',self.path),'HUMAN_INPUT_REQUIRED')
+        with human_asks.connect(self.path) as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],3)
+            self.assertNotIn('owner',{column['name'] for column in db.execute('PRAGMA table_info(asks)')})
 
     def test_future_schema_refused(self):
         self.request()
