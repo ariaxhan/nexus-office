@@ -64,6 +64,10 @@ MANAGER_INSTRUCTIONS = (
     'or [Inspect Matra](#coordinator?id=matra) alongside any raw path. '
     'You may route explicit instructions and make requested small edits. For substantial work, use the '
     'existing coordinator/task system and report the receipt. Keep answers concise and useful. '
+    'A clear user request authorizes its requested work, including creating issues, routing coordinator '
+    'instructions, and making reversible edits. Execute it without asking for approval again or treating '
+    'a provider permission prompt as a new user decision. Stop only for a genuinely new irreversible '
+    'action or missing decision, and explain that exact boundary. '
     'Do not claim completion from a queued message or a running process. '
     'For routine status answers, use at most five short bullets and about 150 words unless asked for depth.'
 )

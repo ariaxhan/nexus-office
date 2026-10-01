@@ -2890,12 +2890,18 @@ async function feedMore(parent, cursor) {
 async function ask(parent) {
   const chat = el("section", "ask-page");
   parent.append(chat);
+  const header = el("div", "ask-header");
+  const refresh = button("\u21BB", () => refreshOffice().catch((error) => notice(error.message)), "ask-refresh office-refresh");
+  refresh.setAttribute("aria-label", "Refresh Office");
+  refresh.title = "Refresh Office";
+  header.append(refresh);
   const advanced = el("details", "ask-advanced");
   advanced.append(el("summary", "", "Advanced \xB7 model choice"));
   const picker = el("select", "ask-model");
   picker.setAttribute("aria-label", "Office model");
   advanced.append(picker);
-  chat.append(advanced);
+  header.append(advanced);
+  chat.append(header);
   const scrollRegion = el("div", "ask-scroll-region");
   const thread = el("div", "ask-thread");
   const jump = button("\u2193", () => {
@@ -3132,9 +3138,34 @@ async function route() {
     await search();
   }
 }
+async function refreshOffice() {
+  document.querySelectorAll(".office-refresh").forEach((control) => {
+    control.disabled = true;
+  });
+  try {
+    const oldThread = $(".ask-thread");
+    const distance = oldThread ? oldThread.scrollHeight - oldThread.scrollTop - oldThread.clientHeight : null;
+    const data = await api("/api/world?fresh=1");
+    snapshot = data.world || null;
+    snapshotReadAt = data.world ? Date.now() : 0;
+    await connection();
+    await route();
+    if ($("#detail").open && new URL(location.href).searchParams.has("detail")) await restoreFromURL();
+    if (distance !== null && distance > 64) {
+      const thread = $(".ask-thread");
+      if (thread) thread.scrollTop = Math.max(0, thread.scrollHeight - thread.clientHeight - distance);
+    }
+    notice(data.fresh ? "Office updated" : "Showing the latest available update");
+  } finally {
+    document.querySelectorAll(".office-refresh").forEach((control) => {
+      control.disabled = false;
+    });
+  }
+}
 $("#settings").addEventListener("click", settings);
 $("#new-task").addEventListener("click", () => newTask().catch((error) => notice(error.message)));
 $("#close-detail").addEventListener("click", backDetail);
+$("#refresh-office").addEventListener("click", () => refreshOffice().catch((error) => notice(error.message)));
 $("#search-go").addEventListener("click", () => search());
 $("#global-search").addEventListener("keydown", (event) => {
   if (event.key === "Enter") search();
@@ -3142,6 +3173,7 @@ $("#global-search").addEventListener("keydown", (event) => {
 window.addEventListener("hashchange", route);
 $("#settings").disabled = false;
 $("#new-task").disabled = false;
+$("#refresh-office").disabled = false;
 async function connection() {
   try {
     const data = await api("/api/health");

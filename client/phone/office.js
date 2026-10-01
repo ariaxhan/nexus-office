@@ -504,8 +504,10 @@ async function feed(parent){
 async function feedMore(parent,cursor){const data=await api(`/api/feed?category=${encodeURIComponent(feedCategory)}&cursor=${cursor}`);for(const post of data.items)renderFeedPost(parent,post);if(data.next_cursor!==null){const more=button('More posts',async()=>{more.disabled=true;try{await feedMore(parent,data.next_cursor);more.remove();}catch(error){more.disabled=false;notice(error.message);}});parent.append(more);}}
 async function ask(parent){
   const chat=el('section','ask-page');parent.append(chat);
+  const header=el('div','ask-header');const refresh=button('↻',()=>refreshOffice().catch(error=>notice(error.message)),'ask-refresh office-refresh');
+  refresh.setAttribute('aria-label','Refresh Office');refresh.title='Refresh Office';header.append(refresh);
   const advanced=el('details','ask-advanced');advanced.append(el('summary','','Advanced · model choice'));
-  const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);chat.append(advanced);
+  const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);header.append(advanced);chat.append(header);
  const scrollRegion=el('div','ask-scroll-region');const thread=el('div','ask-thread');
  const jump=button('↓',()=>{thread.scrollTop=thread.scrollHeight;updateJump();},'ask-jump');jump.setAttribute('aria-label','Jump to latest message');jump.hidden=true;
  scrollRegion.append(thread,jump);chat.append(scrollRegion);
@@ -620,9 +622,23 @@ async function route(){
   const view=el('div');parent.append(view);await guarded(view,()=> (views[page]||watch)(view));
   if(page==='find'&&params.get('q')){$('#global-search').value=params.get('q');await search();}
 }
+async function refreshOffice(){
+ document.querySelectorAll('.office-refresh').forEach(control=>{control.disabled=true;});
+ try{
+  const oldThread=$('.ask-thread');
+  const distance=oldThread?oldThread.scrollHeight-oldThread.scrollTop-oldThread.clientHeight:null;
+  const data=await api('/api/world?fresh=1');
+  snapshot=data.world||null;snapshotReadAt=data.world?Date.now():0;
+  await connection();await route();
+  if($('#detail').open&&new URL(location.href).searchParams.has('detail'))await restoreFromURL();
+  if(distance!==null&&distance>64){const thread=$('.ask-thread');if(thread)thread.scrollTop=Math.max(0,thread.scrollHeight-thread.clientHeight-distance);}
+  notice(data.fresh?'Office updated':'Showing the latest available update');
+ }finally{document.querySelectorAll('.office-refresh').forEach(control=>{control.disabled=false;});}
+}
 $('#settings').addEventListener('click',settings);$('#new-task').addEventListener('click',()=>newTask().catch(error=>notice(error.message)));$('#close-detail').addEventListener('click',backDetail);
+$('#refresh-office').addEventListener('click',()=>refreshOffice().catch(error=>notice(error.message)));
 $('#search-go').addEventListener('click',()=>search());$('#global-search').addEventListener('keydown',event=>{if(event.key==='Enter')search();});window.addEventListener('hashchange',route);
-$('#settings').disabled=false;$('#new-task').disabled=false;
+$('#settings').disabled=false;$('#new-task').disabled=false;$('#refresh-office').disabled=false;
 async function connection(){try{const data=await api('/api/health');$('#connection').textContent=data.ok?'Mac connected':'Mac needs attention';}catch{$('#connection').textContent='Mac unreachable';}}
 await userState.synchronize();await loadSettings().catch(error=>notice(error.message));await connection();await route();if(new URL(location.href).searchParams.has('detail')&&!$('#detail').open)await restoreFromURL();setInterval(connection,30000);
 

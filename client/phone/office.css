@@ -13,7 +13,7 @@ dialog>header{gap:6px;flex-wrap:wrap}#detail-title{flex:1 1 70px}dialog>header b
 body{font-family:var(--font,system-ui);overflow-wrap:break-word}
 .icon{width:22px;height:22px;flex:0 0 22px;vertical-align:middle;pointer-events:none}
 button{white-space:normal;overflow-wrap:anywhere;line-height:1.4;text-align:center}
-.topbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px}
+.topbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:10px}
 .topbar button{display:flex;align-items:center;justify-content:center;gap:7px}
 .wordmark{font-family:Georgia,serif;font-size:1.35rem;line-height:1.25}
 #settings,#search-go,#detail-search,#detail-attention{min-width:44px;min-height:44px;flex-shrink:0}
@@ -41,7 +41,7 @@ input,select,textarea{font-size:max(16px,1rem);max-width:100%}select{white-space
 .transcript-nav button{font-size:.8rem;padding:8px 4px}.transcript-nav select{grid-column:1/-1;font-size:.9rem}
 @media(max-width:430px){.shell{padding:0 16px}.topbar{gap:8px}.topbar button{padding:9px}.wordmark{font-size:1.15rem}.connection{letter-spacing:.04em;font-size:10px}.topbar #new-task span{max-width:5em}#detail-body{padding:16px}.transcript-nav{top:-16px}.setting{padding:18px 0}.tabs{padding-inline:8px}}
 
-@media(max-width:360px){.topbar{grid-template-columns:minmax(0,1fr) auto}.topbar #new-task{grid-column:1/-1;width:100%}.topbar #new-task span{max-width:none}.wordmark{font-size:1.25rem}.searchbar{gap:6px;padding-inline:10px}.searchbar input{font-size:16px}}
+@media(max-width:360px){.topbar{grid-template-columns:minmax(0,1fr) auto auto}.topbar #new-task{grid-column:1/-1;width:100%}.topbar #new-task span{max-width:none}.wordmark{font-size:1.25rem}.searchbar{gap:6px;padding-inline:10px}.searchbar input{font-size:16px}}
 
 #close-detail{grid-column:1;grid-row:1}#detail-search{grid-column:3;grid-row:1}#detail-attention{grid-column:4;grid-row:1}.transcript-nav select{white-space:nowrap;min-height:48px}
 
