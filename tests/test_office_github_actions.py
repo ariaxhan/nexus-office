@@ -3,11 +3,19 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'client'))
 import office_github_actions as actions
 
 class GitHubActions(unittest.TestCase):
+    def test_confirmed_close_removes_watch_issue(self):
+        with tempfile.TemporaryDirectory() as directory,patch.object(actions.run_board,'LEDGER',Path(directory)/'ledger.sqlite'),patch.object(actions,'fresh_access',return_value=('fixture','token')),patch.object(actions,'perform',return_value={'number':7,'state':'closed'}):
+            world=SimpleNamespace(access=lambda:None,mark_issue_closed=Mock())
+            body={'action':'close','repo':'fixture/repo','number':7,'request_id':'github-close-123456'}
+            receipt=actions.command(world,{'fixture/repo'},body,None)
+            self.assertEqual(receipt['state'],'confirmed')
+            world.mark_issue_closed.assert_called_once_with('fixture/repo',7)
+
     def test_double_tap_has_one_external_mutation(self):
         with tempfile.TemporaryDirectory() as directory,patch.object(actions.run_board,'LEDGER',Path(directory)/'ledger.sqlite'),patch.object(actions,'fresh_access',return_value=('fixture','token')),patch.object(actions,'perform',return_value={'number':42}) as perform:
             world=SimpleNamespace(access=lambda:None);body={'action':'create','repo':'fixture/repo','title':'Fixture','body':'Details','request_id':'github-request-123456'}

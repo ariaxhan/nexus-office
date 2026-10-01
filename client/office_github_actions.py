@@ -79,6 +79,8 @@ def command(world,known,body,sync):
             receipt={'state':'rejected' if rejected else 'unconfirmed','error':str(exc)[:400],'request_id':key}
         ledger.event('office.github_result',key,receipt,source='office')
     with github.LOCK:github.CACHE.clear()
+    if action=='close' and receipt['state']=='confirmed' and hasattr(world,'mark_issue_closed'):
+        world.mark_issue_closed(body['repo'],body['number'])
     return receipt
 
 

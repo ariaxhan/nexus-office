@@ -317,6 +317,14 @@ class World:
                 if st.get("repo") == repo:
                     st["hidden"] = hidden
 
+    def mark_issue_closed(self, repo: str, number: int) -> None:
+        """Apply a GitHub-confirmed close to the live Watch snapshot."""
+        with self.lock:
+            for station in ((self.snapshot or {}).get('stations') or []):
+                if station.get('repo') == repo:
+                    station['issues'] = [issue for issue in station.get('issues') or []
+                                         if issue.get('number') != number]
+
     def mark_pins(self, pins: list) -> None:
         """Land a new pin order on the snapshot now, not on the next poll."""
         with self.lock:

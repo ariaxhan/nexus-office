@@ -806,7 +806,12 @@ function coordinatorQuestionCard(entry){
   if(!result.ok)throw Error(result.result||'Answer was not recorded');
   snapshot=null;snapshotReadAt=0;notice('Answer recorded on the issue');await route();
  },'attention-option'));
- node.append(link('Open on GitHub',issue.url));return node;
+ node.append(button('Close issue',()=>closeWatchIssue(entry.repo,issue.number),'attention-close'),link('Open on GitHub',issue.url));return node;
+}
+async function closeWatchIssue(repo,number){
+ const result=await githubAction({action:'close',repo,number});
+ if(result.state!=='closed')throw Error('GitHub did not confirm the issue is closed');
+ snapshot=null;snapshotReadAt=0;await route();
 }
 function humanAskCard(ask){
   const node=el('article','card attention-choice');
@@ -831,7 +836,7 @@ function automationFailureCard(entry){
  const node=el('article','card attention-choice');
  node.append(el('h3','',`${entry.repo} #${issue.number} · ${issue.title}`),el('p','muted',`Unexplained pass${Number.isFinite(askedAt)?` · ${formatAge(Date.now()-askedAt)}`:''}`));
  const receipt=el('p','muted','Checking earlier work and failure receipt…');node.append(receipt);
- const actions=el('div','actions');actions.append(button('Inspect history or add guidance',()=>githubDetail(entry.repo,issue,'issues')),link('Open on GitHub',issue.url||`https://github.com/${entry.repo}/issues/${issue.number}`));node.append(actions);
+ const actions=el('div','actions');actions.append(button('Inspect history or add guidance',()=>githubDetail(entry.repo,issue,'issues')),button('Close issue',()=>closeWatchIssue(entry.repo,issue.number),'attention-close'),link('Open on GitHub',issue.url||`https://github.com/${entry.repo}/issues/${issue.number}`));node.append(actions);
  api(`/api/github/detail?repo=${encodeURIComponent(entry.repo)}&number=${issue.number}&kind=issues`).then(data=>{
   if(!node.isConnected)return;
   const comments=(data.comments||[]).filter(row=>!String(row.body||'').includes('The automated pass could not resolve this and did not say what to decide.')&&!String(row.body||'').includes('<!-- office-request:'));
