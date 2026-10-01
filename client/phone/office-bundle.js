@@ -2552,6 +2552,12 @@ async function watch(parent) {
   } catch (error) {
     coordinatorError = error.message;
   }
+  let tower = { state: "unavailable", detail: "Tower state is unavailable" };
+  try {
+    tower = (await world()).automation?.tower || tower;
+  } catch (error) {
+    tower.detail = error.message;
+  }
   const exceptions = coordinatorRows.filter((row) => ["failing", "stalled", "error"].includes(row.health));
   const healthy = coordinatorRows.length - exceptions.length;
   const overview = el("header", "watch-overview");
@@ -2612,9 +2618,19 @@ async function watch(parent) {
     for (const entry of failures) stalled.append(automationFailureCard(entry));
     stalled.append(link("Track the repair", "https://github.com/ariaxhan/nexus-office/issues/186"));
   }
-  if (coordinatorRows.length) {
+  if (coordinatorRows.length || tower) {
     const systems = el("section", "watch-systems");
     systems.append(el("h2", "watch-section-title", "Systems"));
+    const towerIssue = tower.state !== "ok" || ["down", "erroring", "failed"].includes(tower.activity);
+    const towerItem = el("article", "watch-system" + (towerIssue ? " is-attention" : ""));
+    const towerHead = el("div", "watch-system-head");
+    towerHead.append(el("h3", "", "Nexus Tower"), el("span", towerIssue ? "watch-system-status is-attention" : "watch-system-status", tower.state === "ok" ? tower.activity || "unknown" : "Unavailable"));
+    towerItem.append(towerHead, el("p", "watch-system-outcome", tower.state === "ok" ? `${tower.working || 0} working \xB7 ${tower.queued || 0} queued \xB7 ${tower.held || 0} held \xB7 ${tower.retrying || 0} retrying` : tower.detail || "Tower state is unavailable"));
+    if (tower.state === "ok") towerItem.append(el("p", "watch-system-action", tower.tick_age ? `Last tick ${tower.tick_age} ago` : "Last tick unavailable"));
+    towerItem.append(button("See activity", () => {
+      location.hash = "system";
+    }, "watch-activity-link"));
+    systems.append(towerItem);
     for (const row of coordinatorRows) {
       const issue = exceptions.includes(row);
       const names = { tbs: "Thinking Brain School", matra: "Matra" };
@@ -2630,9 +2646,6 @@ async function watch(parent) {
       systems.append(item);
     }
     parent.append(systems);
-  } else if (coordinatorError) {
-    const systems = section(parent, "Systems");
-    systems.append(el("p", "watch-summary-muted", "System status is unavailable."));
   }
   await guarded(parent, async () => {
     const done = coordinatorRows.flatMap((row) => (row.commits || []).map((item) => ({ ...item, checkout: item.checkout || row.id }))).filter((item) => item.sha && item.checkout).sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)).slice(0, 3);

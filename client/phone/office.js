@@ -306,6 +306,9 @@ async function watch(parent){
   let coordinatorError='';
   try{const data=await api('/api/coordinators');coordinatorRows=data.coordinators||[];}
   catch(error){coordinatorError=error.message;}
+  let tower={state:'unavailable',detail:'Tower state is unavailable'};
+  try{tower=(await world()).automation?.tower||tower;}
+  catch(error){tower.detail=error.message;}
 
   const exceptions=coordinatorRows.filter(row=>['failing','stalled','error'].includes(row.health));
   const healthy=coordinatorRows.length-exceptions.length;
@@ -356,9 +359,17 @@ async function watch(parent){
    stalled.append(link('Track the repair', 'https://github.com/ariaxhan/nexus-office/issues/186'));
   }
 
-  if(coordinatorRows.length){
+  if(coordinatorRows.length||tower){
    const systems=el('section','watch-systems');
    systems.append(el('h2','watch-section-title','Systems'));
+   const towerIssue=tower.state!=='ok'||['down','erroring','failed'].includes(tower.activity);
+   const towerItem=el('article','watch-system'+(towerIssue?' is-attention':''));
+   const towerHead=el('div','watch-system-head');
+   towerHead.append(el('h3','','Nexus Tower'),el('span',towerIssue?'watch-system-status is-attention':'watch-system-status',tower.state==='ok'?(tower.activity||'unknown'):'Unavailable'));
+   towerItem.append(towerHead,el('p','watch-system-outcome',tower.state==='ok'?`${tower.working||0} working · ${tower.queued||0} queued · ${tower.held||0} held · ${tower.retrying||0} retrying`:(tower.detail||'Tower state is unavailable')));
+   if(tower.state==='ok')towerItem.append(el('p','watch-system-action',tower.tick_age?`Last tick ${tower.tick_age} ago`:'Last tick unavailable'));
+   towerItem.append(button('See activity',()=>{location.hash='system';},'watch-activity-link'));
+   systems.append(towerItem);
    for(const row of coordinatorRows){
     const issue=exceptions.includes(row);
     const names={tbs:'Thinking Brain School',matra:'Matra'};
@@ -371,8 +382,6 @@ async function watch(parent){
     systems.append(item);
    }
    parent.append(systems);
-  }else if(coordinatorError){
-   const systems=section(parent,'Systems');systems.append(el('p','watch-summary-muted','System status is unavailable.'));
   }
 
   await guarded(parent,async()=>{
