@@ -25,13 +25,14 @@ def main(argv=None):
         evidence=[item.strip() for item in args.evidence if item.strip()]
         if not evidence:
             raise ValueError('concrete verification evidence is required')
-        ledger.set_task_state(task,'done',decided_by='office',
-                              reason='terminal outcome verified',
-                              evidence=terminal.delivered({'verified':True,'evidence':evidence}))
+        if not spec.get('interactive_issue'):
+            ledger.set_task_state(task,'done',decided_by='office',
+                                  reason='terminal outcome verified',
+                                  evidence=terminal.delivered({'verified':True,'evidence':evidence}))
         ledger.event('office.outcome_verified',task,
                      {'terminal_condition':terminal_condition,
                       'evidence':evidence},source='office-engine')
-    print('DONE')
+    print('RECORDED' if spec.get('interactive_issue') else 'DONE')
     return 0
 
 

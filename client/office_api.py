@@ -21,6 +21,7 @@ import office_feed as feed
 import office_ask as ask
 import office_bot_history as bot_history
 import office_github_actions as github_actions
+import office_direct
 import office_github_bump as github_bump
 import office_github_inventory as inventory
 import coordinator_chat
@@ -78,6 +79,7 @@ def get(handler, path, query):
         '/api/tasks/sources': lambda: tasks.source_choices(q.get('project','')),
         '/api/tasks': lambda: tasks.active_listing() if q.get('active')=='1' else tasks.listing(q.get('cursor',0),q.get('project','')),
         '/api/tasks/detail': lambda: tasks.detail(q['id']),
+        '/api/tasks/issue': lambda: office_direct.status(q.get('repo',''),q.get('number','')),
         '/api/tasks/history': lambda: tasks.history(q['id'],q.get('cursor',0)),
         '/api/system/jobs': jobs.clock.read,
         '/api/system/job-log': lambda: jobs.logs(q['id'],q.get('offset',0),q.get('version','')),
@@ -148,11 +150,14 @@ def post(handler, path):
     if path == '/api/coordinator/say':
         handler._json(coordinator_chat.say(handler._read_json(limit=64 * 1024)))
         return True
+    if path == '/api/tasks/issue/release':
+        handler._json(office_direct.release(handler._read_json(limit=4096), handler.world))
+        return True
     routes = {'/api/user-state': user_state.save, '/api/uploads': uploads.upload, '/api/objects/diff': objects.diff, '/api/system/command': system.command, '/api/objects/save': objects.save, '/api/objects/active': objects.activate, '/api/preferences': preferences.save,
               '/api/feed/react': feed.react, '/api/feed/reply': feed.reply,
               '/api/feed/follow': feed.follow,
               '/api/ask/send': ask.send, '/api/ask/rate': ask.rate,
-              '/api/tasks/start': tasks.start, '/api/tasks/say': tasks.say,
+              '/api/tasks/start': lambda body: office_direct.start(body,handler.world) if body.get('issue') else tasks.start(body), '/api/tasks/say': tasks.say,
               '/api/tasks/control': tasks.control,
               '/api/human-input/answer': tasks.answer_human_input}
     if path not in routes:

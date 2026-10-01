@@ -182,6 +182,9 @@ class Conversation:
         if method in ('turn/completed','claude/ResultMessage'):
             self.current_message=None
             self.save_outputs()
+            if self.spec.get('interactive_issue'):
+                self.emit('office.phase',{'state':'listening','ownership':'OFFICE_OWNED'})
+                return
             owner=human_asks.ownership(self.task_id,self.ledger.task(self.task_id)['state'])
             if owner=='DONE':
                 self.emit('office.phase',{'state':'done','ownership':owner})
@@ -264,6 +267,13 @@ class Conversation:
                 'requires Aria, run: python3 '+str(request_cli)+
                 ' --type TYPE --action EXACT_INPUT --why WHY --authorization-gap GAP '
                 '--resume NEXT_STEP. Built-in approval and question tools are not human gates.')
+            if self.spec.get('interactive_issue'):
+                issue=self.spec['issue']
+                instruction=(f'\n\nDirect Office conversation about https://github.com/{issue["repo"]}/issues/{issue["number"]}. '
+                             'The issue is held from automated coordinators. Read its current GitHub state. '
+                             'Answer this message or do the work it requests, with concrete evidence. '
+                             'Remain available for follow-up messages; do not treat a completed answer as the end of the conversation. '
+                             'Do not ask again for approval already given in the message.')
             self.adapter.message(office_tasks.initial_prompt(
                 {'prompt':body['text'],'attachments':body.get('attachments',[])})+instruction)
             self.emit('office.delivery',{'message_id':event_id,'state':'submitted','consumption':'unknown'})

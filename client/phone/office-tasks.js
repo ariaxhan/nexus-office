@@ -8,14 +8,27 @@ export async function taskList(parent,onlyActive=false,cursor=0){
  if(data.next_cursor!==null)parent.append(button('Older conversations',()=>taskList(parent,onlyActive,data.next_cursor)));
  return data.items;
 }
-export async function newTask(project='',context=null){
+export async function newIssueTask(repo,number,title=''){
+ const data=await api(`/api/tasks/issue?repo=${encodeURIComponent(repo)}&number=${number}`);
+ if(data.conversation)return taskDetail(data.conversation.task_id);
+ return newTask(repo,null,{repo,number,title});
+}
+export async function newTask(project='',context=null,issue=null){
  const body=sheet('Start something');
  body.append(el('p','muted','Runs on your Mac in a disposable clone.'));
  const loading=el('p','muted','Checking projects and accounts on your Mac…');body.append(loading);
  const data=await api('/api/tasks/capabilities');loading.remove();
+ if(issue&&!data.projects.some(row=>row.name===issue.repo))throw Error('This issue needs its registered Git checkout in Office');
  body.append(el('p','muted',data.workspace));
  const controls=composerControls(body,data,project);
  const draft=restoreComposer(controls,context,project);
+ if(issue){
+  const saved=JSON.parse(localStorage.getItem('office-new-task')||'{}');
+  if(saved.issue?.repo!==issue.repo||saved.issue?.number!==issue.number){controls.prompt.value='';draft.request_id=crypto.randomUUID();draft.uploads=[];draft.context=null;controls.source_ref.dataset.savedValue='HEAD';}
+  draft.issue={repo:issue.repo,number:issue.number};controls.project.disabled=true;
+  body.append(el('p','muted',`Direct conversation · ${issue.repo}#${issue.number}${issue.title?` · ${issue.title}`:''}. Starting reserves the issue from coordinators.`));
+  controls.prompt.placeholder='Ask a question or tell this agent what to do on this issue…';
+ }else draft.issue=null;
  const attached=attachments(body,draft.uploads,items=>{draft.uploads=items;localStorage.setItem('office-new-task',JSON.stringify(composerPayload(controls,draft)));});
  const status=el('p','muted');body.append(status);
  const start=button('Start task',()=>{if(!attached.ready())throw Error('Wait for the attachment upload to finish.');return startTask(controls,draft);},'primary');
@@ -73,6 +86,14 @@ export async function taskDetail(id){
  rememberDetail('task',id);
  const data=await api(`/api/tasks/detail?id=${id}`);const body=sheet(data.task.title);body.dataset.taskId=id;const viewToken=crypto.randomUUID();body.dataset.taskView=viewToken;
  body.append(el('p','muted',`${data.specification.engine} · ${data.specification.profile} · ${data.specification.project.name}`));
+ let release=null;
+ if(data.specification.interactive_issue&&data.specification.issue&&!data.issue_released){
+  const issue=data.specification.issue;
+  body.append(link(`${issue.repo}#${issue.number}`,`https://github.com/${issue.repo}/issues/${issue.number}`));
+  release=button('Return issue to coordinator',async()=>{
+   await api('/api/tasks/issue/release',{task_id:id});release.remove();notice('Issue returned to coordinator');
+  });body.append(release);
+ }
  const state=el('p','pill',data.flights[0]?.state||data.task.state);body.append(state);
  const initial=el('details','card');initial.append(el('summary','','Original request'),el('p','',data.specification.prompt));showAttachments(initial,data.specification.attachments);body.append(initial);
  const turns=section(body,'Conversation');
@@ -92,7 +113,7 @@ export async function taskDetail(id){
   try{const events=await api(`/api/tasks/history?id=${id}&cursor=${cursor}`);if(cursor===-1){earlier.dataset.cursor=events.previous_cursor;earlier.hidden=events.previous_cursor===null;}for(const event of events.items){cursor=event.id;renderEvent(turns,live,state,event,id);}
    if(cursor===-1)cursor=0;
    const current=await api(`/api/tasks/detail?id=${id}`);
-   if(body.dataset.taskView===viewToken)updateFlightControls(flightControls,id,current.flights[0]);}
+   if(body.dataset.taskView===viewToken){updateFlightControls(flightControls,id,current.flights[0]);if(release)release.disabled=['running','queued','verifying','landing','resolving'].includes(current.flights[0]?.state);}}
   catch(error){state.textContent=error.message;}
   if($('#detail').open&&body.dataset.taskId===id&&body.dataset.taskView===viewToken)setTimeout(poll,1200);
  }

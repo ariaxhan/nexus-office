@@ -49,6 +49,8 @@ def start(body):
     engine,profile=body.get('engine'),body.get('profile')
     message=prompt(body)
     intent={'engine':engine,'profile':profile,'project':{'id':body.get('project')},'prompt':message,'context':body.get('context'),'uploads':body.get('uploads') or [],'source_ref':body.get('source_ref','HEAD')}
+    if body.get('issue'):
+        intent.update(issue=body['issue'],interactive_issue=body.get('interactive_issue') is True)
     with closing(Ledger(str(run_board.LEDGER))) as ledger:
         prior=tasks.existing(ledger,key,tasks.digest(intent))
         if prior:
@@ -60,6 +62,8 @@ def start(body):
     revision=source_revision(project,body.get('source_ref','HEAD'))
     spec={'engine':engine,'profile':profile,'project':project,'source_revision':revision,'source_ref':body.get('source_ref','HEAD'),'prompt':message,
           'runtime_root':str(objects.vault()),'context':body.get('context'),'uploads':body.get('uploads') or [],'attachments':context_attachment(body.get('context'))+uploads.attachments(body.get('uploads'))}
+    if body.get('issue'):
+        spec.update(issue=body['issue'],interactive_issue=body.get('interactive_issue') is True)
     with closing(Ledger(str(run_board.LEDGER))) as ledger:
         receipt=tasks.submit(ledger,key,spec)
     return {k:v for k,v in receipt.items() if k!='payload_hash'}
@@ -70,13 +74,16 @@ def detail(identifier):
         spec=tasks.specification(ledger,identifier)
         task=dict(ledger.task(identifier))
         flights=[dict(row) for row in ledger.flights(task_id=identifier)]
+        issue_released=ledger.conn.execute("SELECT 1 FROM events WHERE subject=? AND kind='office.issue_released' LIMIT 1",(identifier,)).fetchone() is not None
     task['ownership']=human_asks.ownership(identifier,task['state'])
-    return {'task':task,'specification':spec,'flights':flights}
+    return {'task':task,'specification':spec,'flights':flights,'issue_released':issue_released}
 
 
 def say(body):
     key=request_id(body);text=prompt(body,'text')
     with closing(Ledger(str(run_board.LEDGER))) as ledger:
+        if ledger.conn.execute("SELECT 1 FROM events WHERE subject=? AND kind='office.issue_released' LIMIT 1",(body.get('task_id',''),)).fetchone():
+            raise FileExistsError('This issue was returned to its coordinator')
         return tasks.message_payload(ledger,body.get('task_id',''),key,{'text':text,'attachments':uploads.attachments(body.get('uploads'))})
 
 

@@ -1659,16 +1659,36 @@ async function taskList(parent, onlyActive = false, cursor = 0) {
   if (data.next_cursor !== null) parent.append(button("Older conversations", () => taskList(parent, onlyActive, data.next_cursor)));
   return data.items;
 }
-async function newTask(project2 = "", context = null) {
+async function newIssueTask(repo, number, title = "") {
+  const data = await api(`/api/tasks/issue?repo=${encodeURIComponent(repo)}&number=${number}`);
+  if (data.conversation) return taskDetail(data.conversation.task_id);
+  return newTask(repo, null, { repo, number, title });
+}
+async function newTask(project2 = "", context = null, issue = null) {
   const body = sheet("Start something");
   body.append(el("p", "muted", "Runs on your Mac in a disposable clone."));
   const loading = el("p", "muted", "Checking projects and accounts on your Mac\u2026");
   body.append(loading);
   const data = await api("/api/tasks/capabilities");
   loading.remove();
+  if (issue && !data.projects.some((row) => row.name === issue.repo)) throw Error("This issue needs its registered Git checkout in Office");
   body.append(el("p", "muted", data.workspace));
   const controls = composerControls(body, data, project2);
   const draft2 = restoreComposer(controls, context, project2);
+  if (issue) {
+    const saved = JSON.parse(localStorage.getItem("office-new-task") || "{}");
+    if (saved.issue?.repo !== issue.repo || saved.issue?.number !== issue.number) {
+      controls.prompt.value = "";
+      draft2.request_id = crypto.randomUUID();
+      draft2.uploads = [];
+      draft2.context = null;
+      controls.source_ref.dataset.savedValue = "HEAD";
+    }
+    draft2.issue = { repo: issue.repo, number: issue.number };
+    controls.project.disabled = true;
+    body.append(el("p", "muted", `Direct conversation \xB7 ${issue.repo}#${issue.number}${issue.title ? ` \xB7 ${issue.title}` : ""}. Starting reserves the issue from coordinators.`));
+    controls.prompt.placeholder = "Ask a question or tell this agent what to do on this issue\u2026";
+  } else draft2.issue = null;
   const attached = attachments(body, draft2.uploads, (items) => {
     draft2.uploads = items;
     localStorage.setItem("office-new-task", JSON.stringify(composerPayload(controls, draft2)));
@@ -1762,6 +1782,17 @@ async function taskDetail(id) {
   const viewToken = crypto.randomUUID();
   body.dataset.taskView = viewToken;
   body.append(el("p", "muted", `${data.specification.engine} \xB7 ${data.specification.profile} \xB7 ${data.specification.project.name}`));
+  let release = null;
+  if (data.specification.interactive_issue && data.specification.issue && !data.issue_released) {
+    const issue = data.specification.issue;
+    body.append(link(`${issue.repo}#${issue.number}`, `https://github.com/${issue.repo}/issues/${issue.number}`));
+    release = button("Return issue to coordinator", async () => {
+      await api("/api/tasks/issue/release", { task_id: id });
+      release.remove();
+      notice("Issue returned to coordinator");
+    });
+    body.append(release);
+  }
   const state = el("p", "pill", data.flights[0]?.state || data.task.state);
   body.append(state);
   const initial = el("details", "card");
@@ -1799,7 +1830,10 @@ async function taskDetail(id) {
       }
       if (cursor === -1) cursor = 0;
       const current2 = await api(`/api/tasks/detail?id=${id}`);
-      if (body.dataset.taskView === viewToken) updateFlightControls(flightControls, id, current2.flights[0]);
+      if (body.dataset.taskView === viewToken) {
+        updateFlightControls(flightControls, id, current2.flights[0]);
+        if (release) release.disabled = ["running", "queued", "verifying", "landing", "resolving"].includes(current2.flights[0]?.state);
+      }
     } catch (error) {
       state.textContent = error.message;
     }
@@ -2159,6 +2193,7 @@ async function githubDetail(repo, item, kind) {
       githubDiff(body, repo, item.number, data);
     }
     body.append(button("Full timeline", () => githubTimeline(repo, item.number)));
+    if (kind === "issues" && data.state === "open") body.append(button("Talk to agent", () => newIssueTask(repo, item.number, data.title), "primary"));
     body.append(button("Edit labels", () => editLabels(repo, item.number, data.labels || [])));
     if (kind === "issues" && data.state === "open") await issueControls(body, repo, data, githubAction, () => githubDetail(repo, item, kind));
     const comments = section(body, "Discussion");
@@ -3500,7 +3535,7 @@ function coordinatorQuestionCard(entry) {
     notice("Answer recorded on the issue");
     await route();
   }, "attention-option"));
-  node.append(button("Close issue", () => closeWatchIssue(entry.repo, issue.number), "attention-close"), link("Open on GitHub", issue.url));
+  node.append(button("Talk to agent", () => newIssueTask(entry.repo, issue.number, issue.title), "attention-option"), button("Close issue", () => closeWatchIssue(entry.repo, issue.number), "attention-close"), link("Open on GitHub", issue.url));
   return node;
 }
 async function closeWatchIssue(repo, number) {
@@ -3541,7 +3576,7 @@ function automationFailureCard(entry) {
   const receipt = el("p", "muted", "Checking earlier work and failure receipt\u2026");
   node.append(receipt);
   const actions = el("div", "actions");
-  actions.append(button("Inspect history or add guidance", () => githubDetail(entry.repo, issue, "issues")), button("Close issue", () => closeWatchIssue(entry.repo, issue.number), "attention-close"), link("Open on GitHub", issue.url || `https://github.com/${entry.repo}/issues/${issue.number}`));
+  actions.append(button("Talk to agent", () => newIssueTask(entry.repo, issue.number, issue.title)), button("Inspect history or add guidance", () => githubDetail(entry.repo, issue, "issues")), button("Close issue", () => closeWatchIssue(entry.repo, issue.number), "attention-close"), link("Open on GitHub", issue.url || `https://github.com/${entry.repo}/issues/${issue.number}`));
   node.append(actions);
   api(`/api/github/detail?repo=${encodeURIComponent(entry.repo)}&number=${issue.number}&kind=issues`).then((data) => {
     if (!node.isConnected) return;

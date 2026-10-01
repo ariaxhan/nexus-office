@@ -9,7 +9,7 @@ import {selecting,redrawIfChanged} from './office-selection.js';
 import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
 import {issueInventory,issueControls} from './office-issues.js';
 import {coordinatorQuestions} from './office-questions.js';
-import {newTask,taskList,taskDetail} from './office-tasks.js';
+import {newTask,newIssueTask,taskList,taskDetail} from './office-tasks.js';
 let attention={items:[],errors:[],failures:[]};
 let snapshot=null,snapshotReadAt=0;
 async function world(){if(!snapshot||Date.now()-snapshotReadAt>15000){const data=await api('/api/world');snapshot=data.world||{stations:[],sections:{},automation:{}};snapshotReadAt=data.world?Date.now():0;}return snapshot;}
@@ -103,6 +103,7 @@ async function githubDetail(repo,item,kind){
  const changes=section(body,'Changed files');githubFiles(changes,repo,item.number,data.files,data.head.sha);if(data.files_next_cursor)changes.append(button('More changed files',()=>githubFilePage(changes,repo,item.number,data.files_next_cursor,data.head.sha)));
  body.append(button('Ask an agent about this change',()=>githubContext({kind:'change',repo,number:item.number,head:data.head.sha,base:data.base.sha})),button('Reviews & inline discussion',()=>githubReviews(repo,item.number)),button('Review this change',()=>reviewChange(repo,item.number,data.head.sha)),button('Merge checked pipeline change',()=>githubAction({action:'merge',repo,number:item.number,head:data.head.sha})));body.append(el('p','muted','Merge requires a pipeline branch, the current head, a passing verify check, and permission under GitHub’s merge rules.'));githubDiff(body,repo,item.number,data);}
  body.append(button('Full timeline',()=>githubTimeline(repo,item.number)));
+ if(kind==='issues'&&data.state==='open')body.append(button('Talk to agent',()=>newIssueTask(repo,item.number,data.title),'primary'));
  body.append(button('Edit labels',()=>editLabels(repo,item.number,data.labels||[])));
  if(kind==='issues'&&data.state==='open')await issueControls(body,repo,data,githubAction,()=>githubDetail(repo,item,kind));
  const comments=section(body,'Discussion');for(const comment of data.comments||[])comments.append(commentView(comment));if(data.comments_next_cursor)comments.append(button('More comments',()=>githubComments(comments,repo,item.number,data.comments_next_cursor)));
@@ -806,7 +807,7 @@ function coordinatorQuestionCard(entry){
   if(!result.ok)throw Error(result.result||'Answer was not recorded');
   snapshot=null;snapshotReadAt=0;notice('Answer recorded on the issue');await route();
  },'attention-option'));
- node.append(button('Close issue',()=>closeWatchIssue(entry.repo,issue.number),'attention-close'),link('Open on GitHub',issue.url));return node;
+ node.append(button('Talk to agent',()=>newIssueTask(entry.repo,issue.number,issue.title),'attention-option'),button('Close issue',()=>closeWatchIssue(entry.repo,issue.number),'attention-close'),link('Open on GitHub',issue.url));return node;
 }
 async function closeWatchIssue(repo,number){
  const result=await githubAction({action:'close',repo,number});
@@ -836,7 +837,7 @@ function automationFailureCard(entry){
  const node=el('article','card attention-choice');
  node.append(el('h3','',`${entry.repo} #${issue.number} · ${issue.title}`),el('p','muted',`Unexplained pass${Number.isFinite(askedAt)?` · ${formatAge(Date.now()-askedAt)}`:''}`));
  const receipt=el('p','muted','Checking earlier work and failure receipt…');node.append(receipt);
- const actions=el('div','actions');actions.append(button('Inspect history or add guidance',()=>githubDetail(entry.repo,issue,'issues')),button('Close issue',()=>closeWatchIssue(entry.repo,issue.number),'attention-close'),link('Open on GitHub',issue.url||`https://github.com/${entry.repo}/issues/${issue.number}`));node.append(actions);
+ const actions=el('div','actions');actions.append(button('Talk to agent',()=>newIssueTask(entry.repo,issue.number,issue.title)),button('Inspect history or add guidance',()=>githubDetail(entry.repo,issue,'issues')),button('Close issue',()=>closeWatchIssue(entry.repo,issue.number),'attention-close'),link('Open on GitHub',issue.url||`https://github.com/${entry.repo}/issues/${issue.number}`));node.append(actions);
  api(`/api/github/detail?repo=${encodeURIComponent(entry.repo)}&number=${issue.number}&kind=issues`).then(data=>{
   if(!node.isConnected)return;
   const comments=(data.comments||[]).filter(row=>!String(row.body||'').includes('The automated pass could not resolve this and did not say what to decide.')&&!String(row.body||'').includes('<!-- office-request:'));
