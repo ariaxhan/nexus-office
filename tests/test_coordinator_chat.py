@@ -246,3 +246,20 @@ class OverviewTest(Fixture):
         self.assertFalse(row["thrashing"])
         self.assertEqual(row["health"], "ok")
         self.assertEqual(row["shipped_recent"], [0, 0, 0, 0])
+
+
+class TriggerStatusTest(Fixture):
+    def test_offset_timestamp_and_trigger_log_replace_legacy_status(self):
+        at=chat.now().replace('Z','+00:00')
+        self.assertIsNotNone(chat._age(at))
+        self.assertIsNone(chat._age('not-a-time'))
+        self.write('.tbs-out/coordinator-20200101.log','stale error')
+        self.write('.tbs-out/trigger-test-run/model.jsonl','')
+        self.write(chat.RUNS,json.dumps({'event':'start','engine':'trigger','at':at,'start':'test-run'})+'\n'+
+                   json.dumps({'event':'end','engine':'trigger','at':at,'start':'test-run','rc':0})+'\n')
+        with patch.object(chat,'_window_commits',return_value=[]) as window:
+            result=chat.summary({'id':'tbs','name':'TBS','path':self.root})
+        self.assertEqual(result['health'],'ok')
+        self.assertEqual(result['working_on'],'')
+        self.assertLess(result['age_s'],10)
+        self.assertEqual(window.call_args.args[1],at)

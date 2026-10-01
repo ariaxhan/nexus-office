@@ -543,7 +543,9 @@ OVERVIEW_LOG_BYTES = 512 * 1024
 
 def _age(at):
     try:
-        then = dt.datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+        then = dt.datetime.fromisoformat(at.replace("Z", "+00:00"))
+        if then.tzinfo is None:
+            return None
     except (TypeError, ValueError):
         return None
     return int((dt.datetime.now(dt.timezone.utc) - then).total_seconds())
@@ -586,10 +588,17 @@ def summary(row):
     ends = [r for r in ledger if r.get("event") == "end" and isinstance(r.get("at"), str)]
     logs = sorted(glob.glob(str(root / log_glob(root))))
     latest = Path(logs[-1]) if logs else None
+    trigger = bool(starts and starts[-1].get("engine") == "trigger")
+    if trigger:
+        candidate = root / conf(root)["out"] / ("trigger-" + starts[-1]["start"]) / "model.jsonl"
+        latest = candidate if candidate.is_file() else None
     live = bool(latest) and not any(os.path.basename(r.get("log") or "") == latest.name for r in ends) and _live(root, latest)
+    if trigger:
+        live = not any(r.get("start") == starts[-1]["start"] for r in ends)
+    start_times = {r.get("start"): r["at"] for r in starts}
     last_end = ends[-1] if ends else None
     recent = ends[-RECENT_RUNS:]
-    windows = [_window_commits(root, r.get("start") or r["at"], r["at"]) for r in recent]
+    windows = [_window_commits(root, start_times.get(r.get("start"), r.get("start") or r["at"]), r["at"]) for r in recent]
     shipped = [(r.get("prod_changes") or 0) + len(found) for r, found in zip(recent, windows)]
     doing, lanes = "", []
     if latest:
