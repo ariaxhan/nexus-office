@@ -36,7 +36,8 @@ def existing(ledger,request_id,payload_hash):
 
 def plan(ledger,now):
     root=Path(__file__).resolve().parents[1]
-    runtime=root/'.venv/bin/python'
+    # Deployed releases are source archives; their Python lives outside the archive.
+    runtime=Path(sys.executable)
     command=['env','PYTHONPATH='+str(root),'NEXUS_LEDGER='+ledger.path,'OFFICE_NEXUS_LEDGER='+ledger.path,str(runtime),'-m','nexus.office_agent']
     inputs={'cmd':shlex.join(command),'persistent_task':True}
     budget={'timeout_s':86400,'concurrency':8,'max_retries':3}

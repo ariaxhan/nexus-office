@@ -1,5 +1,7 @@
 import os
+import json
 from pathlib import Path
+import shlex
 import sys
 import tempfile
 import unittest
@@ -15,6 +17,14 @@ class TaskReceipts(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.ledger=Ledger(str(Path(self.temp.name)/'ledger.sqlite'));self.addCleanup(self.ledger.close)
         self.spec={'engine':'codex','profile':'personal','project':{'id':'root','path':'/fixture'},'source_revision':'abc','prompt':'Read the spec'}
+
+    def test_release_plan_uses_existing_python_outside_source_archive(self):
+        release=Path(self.temp.name)/'release'
+        with patch.object(office_tasks,'__file__',str(release/'nexus'/'office_tasks.py')):
+            office_tasks.submit(self.ledger,'release-runtime-request',self.spec)
+        command=shlex.split(json.loads(self.ledger.plan_by_name(office_tasks.PLAN_NAME)['inputs'])['cmd'])
+        self.assertEqual(command[4],sys.executable)
+        self.assertFalse((release/'.venv/bin/python').exists())
 
     def test_source_commit_selection_is_exact_and_part_of_retry_identity(self):
         import office_tasks as api
