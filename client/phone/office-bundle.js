@@ -1642,6 +1642,11 @@ function editIssue(repo, data, act, reload) {
   title.focus();
 }
 
+// client/phone/office-questions.js
+function coordinatorQuestions(world2) {
+  return (world2.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision && /<!-- aria-question:[a-f0-9]+ -->/.test(issue.last_word || "")).map((issue) => ({ kind: "coordinator-question", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } })));
+}
+
 // client/phone/office-tasks.js
 init_office_ui();
 init_office_markdown();
@@ -2666,7 +2671,7 @@ async function watch(parent) {
   });
 }
 function requiresYou(entry) {
-  return entry.kind === "human-ask";
+  return entry.kind === "human-ask" || entry.kind === "coordinator-question";
 }
 function formatAge(milliseconds) {
   if (!Number.isFinite(milliseconds)) return "not checked yet";
@@ -3408,6 +3413,7 @@ async function refreshAttention() {
       errors.push(...result.value.errors || []);
       items.push(...(result.value.items || []).map((item) => ({ kind: "human-ask", item })));
     } else {
+      items.push(...coordinatorQuestions(result.value));
       failures.push(...(result.value.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.automation_failure === "missing_decision").map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))));
     }
   }
@@ -3448,7 +3454,22 @@ function reconcileChildren(parent, nodes) {
   }
 }
 function attentionCard(entry) {
+  if (entry.kind === "coordinator-question") return coordinatorQuestionCard(entry);
   return humanAskCard(entry.item);
+}
+function coordinatorQuestionCard(entry) {
+  const issue = entry.item, node = el("article", "card attention-choice");
+  node.append(el("p", "attention-source", `${entry.repo} #${issue.number}`), el("h3", "", issue.title), el("p", "attention-question", issue.decision.question));
+  for (const option of issue.decision.options) node.append(button(`${option.label}${option.recommended ? " (recommended)" : ""}`, async () => {
+    const result = await api("/api/decision", { kind: "choose", repo: entry.repo, issue: issue.number, n: option.n, label: option.label });
+    if (!result.ok) throw Error(result.result || "Answer was not recorded");
+    snapshot = null;
+    snapshotReadAt = 0;
+    notice("Answer recorded on the issue");
+    await route();
+  }, "attention-option"));
+  node.append(link("Open on GitHub", issue.url));
+  return node;
 }
 function humanAskCard(ask2) {
   const node = el("article", "card attention-choice");

@@ -8,6 +8,7 @@ import {markdownView} from './office-markdown.js';
 import {selecting,redrawIfChanged} from './office-selection.js';
 import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
 import {issueInventory,issueControls} from './office-issues.js';
+import {coordinatorQuestions} from './office-questions.js';
 import {newTask,taskList,taskDetail} from './office-tasks.js';
 let attention={items:[],errors:[],failures:[]};
 let snapshot=null,snapshotReadAt=0;
@@ -401,7 +402,7 @@ async function watch(parent){
   });
 
 }
-function requiresYou(entry){return entry.kind==='human-ask';}
+function requiresYou(entry){return entry.kind==='human-ask'||entry.kind==='coordinator-question';}
 function formatAge(milliseconds){
  if(!Number.isFinite(milliseconds))return 'not checked yet';
  const minutes=Math.max(0,Math.floor(milliseconds/60000));
@@ -746,7 +747,8 @@ async function refreshAttention(){
    if(index===0){
     errors.push(...(result.value.errors||[]));
     items.push(...(result.value.items||[]).map(item=>({kind:'human-ask',item})));
-   }else{
+    }else{
+     items.push(...coordinatorQuestions(result.value));
     failures.push(...(result.value.stations||[]).flatMap(station=>(station.issues||[])
      .filter(issue=>issue.bot_last===true&&issue.automation_failure==='missing_decision')
      .map(issue=>({kind:'issue',repo:station.repo,item:{...issue,id:`${station.repo}#${issue.number}`}}))));
@@ -777,7 +779,18 @@ function reconcileChildren(parent,nodes){
  while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
 }
 function attentionCard(entry){
-  return humanAskCard(entry.item);
+   if(entry.kind==='coordinator-question')return coordinatorQuestionCard(entry);
+   return humanAskCard(entry.item);
+}
+function coordinatorQuestionCard(entry){
+ const issue=entry.item,node=el('article','card attention-choice');
+ node.append(el('p','attention-source',`${entry.repo} #${issue.number}`),el('h3','',issue.title),el('p','attention-question',issue.decision.question));
+ for(const option of issue.decision.options)node.append(button(`${option.label}${option.recommended?' (recommended)':''}`,async()=>{
+  const result=await api('/api/decision',{kind:'choose',repo:entry.repo,issue:issue.number,n:option.n,label:option.label});
+  if(!result.ok)throw Error(result.result||'Answer was not recorded');
+  snapshot=null;snapshotReadAt=0;notice('Answer recorded on the issue');await route();
+ },'attention-option'));
+ node.append(link('Open on GitHub',issue.url));return node;
 }
 function humanAskCard(ask){
   const node=el('article','card attention-choice');
