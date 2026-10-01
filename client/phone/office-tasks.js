@@ -14,6 +14,8 @@ export async function newIssueTask(repo,number,title=''){
  return newTask(repo,null,{repo,number,title});
 }
 export async function newTask(project='',context=null,issue=null){
+ const storageKey=issue?`office-issue-task:${issue.repo}#${issue.number}`:'office-new-task';
+ const pendingKey=storageKey+'-pending';
  const body=sheet('Start something');
  body.append(el('p','muted','Runs on your Mac in a disposable clone.'));
  const loading=el('p','muted','Checking projects and accounts on your Mac…');body.append(loading);
@@ -21,32 +23,30 @@ export async function newTask(project='',context=null,issue=null){
  if(issue&&!data.projects.some(row=>row.name===issue.repo))throw Error('This issue needs its registered Git checkout in Office');
  body.append(el('p','muted',data.workspace));
  const controls=composerControls(body,data,project);
- const draft=restoreComposer(controls,context,project);
+ const draft=restoreComposer(controls,context,project,storageKey);
  if(issue){
-  const saved=JSON.parse(localStorage.getItem('office-new-task')||'{}');
-  if(saved.issue?.repo!==issue.repo||saved.issue?.number!==issue.number){controls.prompt.value='';draft.request_id=crypto.randomUUID();draft.uploads=[];draft.context=null;controls.source_ref.dataset.savedValue='HEAD';}
   draft.issue={repo:issue.repo,number:issue.number};controls.project.disabled=true;
   body.append(el('p','muted',`Direct conversation · ${issue.repo}#${issue.number}${issue.title?` · ${issue.title}`:''}. Starting reserves the issue from coordinators.`));
   controls.prompt.placeholder='Ask a question or tell this agent what to do on this issue…';
  }else draft.issue=null;
- const attached=attachments(body,draft.uploads,items=>{draft.uploads=items;localStorage.setItem('office-new-task',JSON.stringify(composerPayload(controls,draft)));});
+ const attached=attachments(body,draft.uploads,items=>{draft.uploads=items;localStorage.setItem(storageKey,JSON.stringify(composerPayload(controls,draft)));});
  const status=el('p','muted');body.append(status);
- const start=button('Start task',()=>{if(!attached.ready())throw Error('Wait for the attachment upload to finish.');return startTask(controls,draft);},'primary');
+ const start=button('Start task',()=>{if(!attached.ready())throw Error('Wait for the attachment upload to finish.');return startTask(controls,draft,storageKey,pendingKey);},'primary');
  const readiness=()=>{
   const ready=data.profiles.find(p=>p.engine===controls.engine.value&&p.id===controls.profile.value);
-  const pending=Boolean(localStorage.getItem('office-new-task-pending'));
+  const pending=Boolean(localStorage.getItem(pendingKey));
   start.disabled=!pending&&(!ready?.ready||controls.source_ref.disabled);start.textContent=pending?'Recover submitted task':'Start task';
   status.textContent=pending?'Retrying retrieves the exact submitted task; edits stay in your next draft.':controls.source_ref.disabled?(controls.source_ref.dataset.error||'Loading saved branches from your Mac…'):ready?.detail||'This account is unavailable.';
  };
  for(const control of Object.values(controls))control.addEventListener('input',()=>{
-  localStorage.setItem('office-new-task',JSON.stringify(composerPayload(controls,draft)));readiness();
+  localStorage.setItem(storageKey,JSON.stringify(composerPayload(controls,draft)));readiness();
  });
  body.append(start);readiness();
  const refreshSource=()=>{controls.source_ref.disabled=true;readiness();return loadSources(controls,body).finally(()=>{readiness();retry.hidden=!controls.source_ref.dataset.error;});};
  const retry=button('Retry loading branches',refreshSource);retry.hidden=true;body.append(retry);controls.project.addEventListener('change',refreshSource);await refreshSource();
 }
-async function startTask(controls,draft){
- const key='office-new-task-pending';const current=composerPayload(controls,draft);
+async function startTask(controls,draft,storageKey='office-new-task',key=storageKey+'-pending'){
+ const current=composerPayload(controls,draft);
  let pending=JSON.parse(localStorage.getItem(key)||'null');
  if(!pending){
   if(!current.prompt.trim())throw Error('Describe the task first.');
@@ -56,8 +56,8 @@ async function startTask(controls,draft){
  try{result=await api('/api/tasks/start',pending);}
  catch(error){if([400,403,404,409,413,422].includes(error.status))localStorage.removeItem(key);throw error;}
  localStorage.removeItem(key);
- if(JSON.stringify(current)===JSON.stringify(pending))localStorage.removeItem('office-new-task');
- else{draft.request_id=crypto.randomUUID();localStorage.setItem('office-new-task',JSON.stringify(composerPayload(controls,draft)));}
+ if(JSON.stringify(current)===JSON.stringify(pending))localStorage.removeItem(storageKey);
+ else{draft.request_id=crypto.randomUUID();localStorage.setItem(storageKey,JSON.stringify(composerPayload(controls,draft)));}
  notice('Accepted by your Mac');await taskDetail(result.task_id);
 }
 function composerControls(body,data,project){
@@ -70,8 +70,8 @@ function composerControls(body,data,project){
   profile:field(body,'Account',select([['personal','Personal'],['tbs','TBS']],'personal')),
  };
 }
-function restoreComposer(controls,context,project){
- const saved=JSON.parse(localStorage.getItem('office-new-task')||'{}');
+function restoreComposer(controls,context,project,storageKey='office-new-task'){
+ const saved=JSON.parse(localStorage.getItem(storageKey)||'{}');
  for(const [key,control] of Object.entries(controls))if(saved[key]&&!(key==='project'&&project))control.value=saved[key];
  controls.source_ref.dataset.savedValue=saved.source_ref||'HEAD';
  const reference=context?{id:context.id,revision:context.revision,...(context.start_line?{start_line:context.start_line,end_line:context.end_line}:{})}:saved.context||null;

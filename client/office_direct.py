@@ -139,7 +139,7 @@ def release(body, world):
     known = {row['name'] for row in tasks.projects()}
     _, token = github.fresh_access(world.access(), repo, known)
     issue = _issue(repo, number, token)
-    if issue.get('state') == 'open' and any(label.get('name', '').lower() == 'hold' for label in issue.get('labels', [])):
+    if any(label.get('name', '').lower() == 'hold' for label in issue.get('labels', [])):
         github.request(f'repos/{repo}/issues/{number}/labels/hold', 'DELETE', {}, token)
         if any(label.get('name', '').lower() == 'hold' for label in _issue(repo, number, token).get('labels', [])):
             raise RuntimeError('GitHub did not confirm release of the hold')

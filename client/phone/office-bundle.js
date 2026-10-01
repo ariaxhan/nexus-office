@@ -1665,6 +1665,8 @@ async function newIssueTask(repo, number, title = "") {
   return newTask(repo, null, { repo, number, title });
 }
 async function newTask(project2 = "", context = null, issue = null) {
+  const storageKey = issue ? `office-issue-task:${issue.repo}#${issue.number}` : "office-new-task";
+  const pendingKey2 = storageKey + "-pending";
   const body = sheet("Start something");
   body.append(el("p", "muted", "Runs on your Mac in a disposable clone."));
   const loading = el("p", "muted", "Checking projects and accounts on your Mac\u2026");
@@ -1674,16 +1676,8 @@ async function newTask(project2 = "", context = null, issue = null) {
   if (issue && !data.projects.some((row) => row.name === issue.repo)) throw Error("This issue needs its registered Git checkout in Office");
   body.append(el("p", "muted", data.workspace));
   const controls = composerControls(body, data, project2);
-  const draft2 = restoreComposer(controls, context, project2);
+  const draft2 = restoreComposer(controls, context, project2, storageKey);
   if (issue) {
-    const saved = JSON.parse(localStorage.getItem("office-new-task") || "{}");
-    if (saved.issue?.repo !== issue.repo || saved.issue?.number !== issue.number) {
-      controls.prompt.value = "";
-      draft2.request_id = crypto.randomUUID();
-      draft2.uploads = [];
-      draft2.context = null;
-      controls.source_ref.dataset.savedValue = "HEAD";
-    }
     draft2.issue = { repo: issue.repo, number: issue.number };
     controls.project.disabled = true;
     body.append(el("p", "muted", `Direct conversation \xB7 ${issue.repo}#${issue.number}${issue.title ? ` \xB7 ${issue.title}` : ""}. Starting reserves the issue from coordinators.`));
@@ -1691,23 +1685,23 @@ async function newTask(project2 = "", context = null, issue = null) {
   } else draft2.issue = null;
   const attached = attachments(body, draft2.uploads, (items) => {
     draft2.uploads = items;
-    localStorage.setItem("office-new-task", JSON.stringify(composerPayload(controls, draft2)));
+    localStorage.setItem(storageKey, JSON.stringify(composerPayload(controls, draft2)));
   });
   const status = el("p", "muted");
   body.append(status);
   const start = button("Start task", () => {
     if (!attached.ready()) throw Error("Wait for the attachment upload to finish.");
-    return startTask(controls, draft2);
+    return startTask(controls, draft2, storageKey, pendingKey2);
   }, "primary");
   const readiness = () => {
     const ready = data.profiles.find((p) => p.engine === controls.engine.value && p.id === controls.profile.value);
-    const pending2 = Boolean(localStorage.getItem("office-new-task-pending"));
+    const pending2 = Boolean(localStorage.getItem(pendingKey2));
     start.disabled = !pending2 && (!ready?.ready || controls.source_ref.disabled);
     start.textContent = pending2 ? "Recover submitted task" : "Start task";
     status.textContent = pending2 ? "Retrying retrieves the exact submitted task; edits stay in your next draft." : controls.source_ref.disabled ? controls.source_ref.dataset.error || "Loading saved branches from your Mac\u2026" : ready?.detail || "This account is unavailable.";
   };
   for (const control of Object.values(controls)) control.addEventListener("input", () => {
-    localStorage.setItem("office-new-task", JSON.stringify(composerPayload(controls, draft2)));
+    localStorage.setItem(storageKey, JSON.stringify(composerPayload(controls, draft2)));
     readiness();
   });
   body.append(start);
@@ -1726,8 +1720,7 @@ async function newTask(project2 = "", context = null, issue = null) {
   controls.project.addEventListener("change", refreshSource);
   await refreshSource();
 }
-async function startTask(controls, draft2) {
-  const key = "office-new-task-pending";
+async function startTask(controls, draft2, storageKey = "office-new-task", key = storageKey + "-pending") {
   const current2 = composerPayload(controls, draft2);
   let pending2 = JSON.parse(localStorage.getItem(key) || "null");
   if (!pending2) {
@@ -1743,10 +1736,10 @@ async function startTask(controls, draft2) {
     throw error;
   }
   localStorage.removeItem(key);
-  if (JSON.stringify(current2) === JSON.stringify(pending2)) localStorage.removeItem("office-new-task");
+  if (JSON.stringify(current2) === JSON.stringify(pending2)) localStorage.removeItem(storageKey);
   else {
     draft2.request_id = crypto.randomUUID();
-    localStorage.setItem("office-new-task", JSON.stringify(composerPayload(controls, draft2)));
+    localStorage.setItem(storageKey, JSON.stringify(composerPayload(controls, draft2)));
   }
   notice("Accepted by your Mac");
   await taskDetail(result.task_id);
@@ -1761,8 +1754,8 @@ function composerControls(body, data, project2) {
     profile: field(body, "Account", select([["personal", "Personal"], ["tbs", "TBS"]], "personal"))
   };
 }
-function restoreComposer(controls, context, project2) {
-  const saved = JSON.parse(localStorage.getItem("office-new-task") || "{}");
+function restoreComposer(controls, context, project2, storageKey = "office-new-task") {
+  const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
   for (const [key, control] of Object.entries(controls)) if (saved[key] && !(key === "project" && project2)) control.value = saved[key];
   controls.source_ref.dataset.savedValue = saved.source_ref || "HEAD";
   const reference = context ? { id: context.id, revision: context.revision, ...context.start_line ? { start_line: context.start_line, end_line: context.end_line } : {} } : saved.context || null;
