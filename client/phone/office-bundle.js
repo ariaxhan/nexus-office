@@ -2311,11 +2311,24 @@ async function observedTranscript(body, key) {
   transcriptNavigation(body, turns).append(earlier);
 }
 async function sessions(parent, onlyActive = false) {
+  const projects = await api("/api/projects");
+  for (const project2 of projects.items || []) {
+    if (project2.path) await enrolmentFailures(parent, project2.path);
+  }
   const data = await api("/api/sessions");
   if (!["ok", "empty"].includes(data.state)) throw Error(data.detail || data.state);
   const rows = data.sessions.filter((item) => !onlyActive || item.status !== "inactive");
   for (const item of rows) parent.append(card(item.name, `${item.tool} \xB7 hcom reports ${item.status} \xB7 ${item.repo || item.directory}`, () => conversation2(item)));
   if (!rows.length) empty(parent, "No addressable sessions currently active.");
+}
+async function enrolmentFailures(parent, cwd) {
+  const data = await api(`/api/session/enrolment-failures?cwd=${encodeURIComponent(cwd)}`);
+  for (const row of data.failures || []) {
+    const line = el("p", "enrolment-failure", "enrolment failed");
+    line.style.color = "#b3261e";
+    line.title = cwd;
+    parent.append(line);
+  }
 }
 async function conversation2(session) {
   rememberDetail("hcom", JSON.stringify({ session_id: session.session_id, name: session.name, started_at: session.started_at, directory: session.directory }));
@@ -3696,6 +3709,7 @@ async function projectAgents(parent, desk) {
   parent.replaceChildren();
   const sessionsView = section(parent, "Addressable agents");
   await guarded(sessionsView, async () => {
+    if (desk.checkoutPath) await enrolmentFailures(sessionsView, desk.checkoutPath);
     const data = await api("/api/sessions");
     if (!["ok", "empty"].includes(data.state)) throw Error(data.detail || data.state);
     const rows = data.sessions.filter((item) => item.directory === desk.checkoutPath);

@@ -34,10 +34,27 @@ import sys
 import tempfile
 import unittest
 import unittest.mock
+from unittest.mock import patch
+import json
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "client"))
 
 import sessions  # noqa: E402
+
+
+class EnrolmentFailuresTest(unittest.TestCase):
+    def test_exact_cwd_and_malformed_rows(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HCOM_DIR": directory}):
+            path = pathlib.Path(directory) / "session-enroll-failures.jsonl"
+            path.write_text('\n'.join([
+                json.dumps({"ts": "2026-09-30T00:00:00Z", "cwd": "/desk", "pid": 42, "error": "secret"}),
+                json.dumps({"ts": "2026-09-30T00:00:01Z", "cwd": "/other", "pid": 43, "error": "secret"}),
+                'broken',
+            ]))
+            self.assertEqual(sessions.enrolment_failures('/desk'),
+                             [{"ts": "2026-09-30T00:00:00Z", "cwd": "/desk", "pid": 42}])
+            self.assertEqual(sessions.enrolment_failures('/unknown'), [])
+            self.assertEqual(sessions.enrolment_failures('relative'), [])
 
 
 def agent(name, status="active", directory="/tmp", tool="claude", **kw):

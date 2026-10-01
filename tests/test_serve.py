@@ -409,6 +409,14 @@ class SessionRoutesTest(ServeTest):
         self.get("/api/sessions?repo=acme/thing")
         self.assertEqual(seen["read"][0], ("acme/thing",))
 
+    def test_enrolment_failures_require_exact_cwd(self):
+        seen = self.stub(enrolment_failures=[{"ts": "now", "cwd": "/desk", "pid": 1}])
+        self.assertEqual(self.get('/api/session/enrolment-failures')[0], 400)
+        code, body = self.get('/api/session/enrolment-failures?cwd=%2Fdesk')
+        self.assertEqual(code, 200)
+        self.assertEqual(body['failures'][0]['cwd'], '/desk')
+        self.assertEqual(seen['enrolment_failures'][0], ('/desk',))
+
     def test_a_desks_readme_comes_through_the_door_by_repo(self):
         seen = self.stub(readme=(200, {"repo": "acme/docs", "state": "ok",
                                        "name": "README.md", "text": "# acme docs"}))

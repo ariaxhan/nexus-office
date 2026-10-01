@@ -569,6 +569,7 @@ class Handler(BaseHTTPRequestHandler):
                 '/api/live': self._get_live,
                 '/api/live/transcript': self._get_live_transcript,
                 '/api/sessions': self._get_sessions,
+                '/api/session/enrolment-failures': self._get_enrolment_failures,
                 '/api/session': self._get_session,
                 '/api/readme': self._get_readme,
                 '/api/session/screen': self._get_session_screen,
@@ -687,6 +688,12 @@ class Handler(BaseHTTPRequestHandler):
     def _get_sessions(self, query):
         repo = (urllib.parse.parse_qs(query).get("repo") or [""])[0]
         return self._json(sessions.read(repo))
+
+    def _get_enrolment_failures(self, query):
+        cwd = (urllib.parse.parse_qs(query).get("cwd") or [""])[0]
+        if not cwd or not os.path.isabs(cwd):
+            return self._json({"error": "absolute cwd required"}, 400)
+        return self._json({"failures": sessions.enrolment_failures(cwd)})
 
     def _get_session(self, query):
         q = urllib.parse.parse_qs(query)

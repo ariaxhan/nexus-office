@@ -116,6 +116,27 @@ REACHABLE = ("active", "listening", "blocked", "unknown")
 _origin_cache: dict[str, str] = {}
 
 
+def enrolment_failures(cwd: str) -> list[dict]:
+    """Recent hook failures for one exact checkout; never return recorded errors."""
+    if not cwd or not os.path.isabs(cwd):
+        return []
+    path = pathlib.Path(os.environ.get("HCOM_DIR") or pathlib.Path.home() / ".hcom") / "session-enroll-failures.jsonl"
+    try:
+        if not path.is_file() or path.stat().st_size > 2_000_000:
+            return []
+        rows = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+                if isinstance(row, dict) and row.get("cwd") == cwd and isinstance(row.get("ts"), str) and isinstance(row.get("pid"), int):
+                    rows.append({"ts": row["ts"], "cwd": cwd, "pid": row["pid"]})
+            except (ValueError, TypeError):
+                continue
+        return rows[-20:]
+    except (OSError, UnicodeError):
+        return []
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
