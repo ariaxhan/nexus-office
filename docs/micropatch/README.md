@@ -75,6 +75,14 @@ Provenance for every model tried is in `models.jsonl`.
 
 ## Small-model screening, 2026-10-01
 
+**Historical workflow scores below use defective grading.** The 2026-10-02 audit
+reproduced a `threads`/`tags` mismatch that gave correct-format classifications zero,
+a caps/word-limit check that accepted violations, and full credit for empty extraction
+lists. The frontmatter prompt also left missing-delimiter behavior unspecified.
+These findings affect workflow rankings and individual failure interpretations,
+not the independent real-test micro-patch results above. See the corrected screening
+section below; retain these old receipts as provenance, not production routing evidence.
+
 **Outcome:** three new local candidates were exercised. All passed some workflow
 checks; none passed the whole suite. Qwen3-Coder is the fastest measured workflow
 candidate here, LFM2.5 has the smallest memory footprint, and Devstral Small 2 has
@@ -191,4 +199,109 @@ Reproduction (from the respective repository roots):
 
 # nexus-office; appends missing cases, so preserve existing receipts when rerunning.
 CLASSES=mechanical "$HOME/Library/Application Support/tradition-harness/imessage-venv/bin/python" scripts/micropatch_tradition.py lfm2.5:8b packet
+```
+
+
+## Corrected workflow screening and frontier control, 2026-10-02
+
+Commission: `Vaults/_meta/commissions/active/2026-10-02-correct-llm-bench-grading-defects-separate-routi.md`.
+Implementation: llm-bench `4991981`, `c2afc2a`, `82d83fd` (on origin/main).
+
+**Outcome:** the earlier workflow scores mixed real model limitations with grading
+errors. Qwen3-Coder and Devstral Small 2 each earned full grader scores on 11/12
+routine screens. Both now pass the frontmatter function test with the missing-closing-
+delimiter requirement stated explicitly. LFM still fails that executed test and the
+typo-instruction function test. Codex provides a strong stress-test control.
+These completion tests do not replace the separate 23-case Tradition coding evidence.
+
+### Revised scores
+
+Cohorts were selected before the reruns: 12 routine screens (standard extraction,
+classification, compression, email, code, planning and format tasks, plus JSON repair,
+typo instructions and mixed-format extraction); the remaining 30 are stress tests.
+This is a synthetic task mix, not measured coordinator traffic.
+
+| model | routine mean | routine full scores | stress mean | stress full scores | total measured s |
+|---|---|---|---|---|---|
+| LFM2.5 8B | 0.7567 | 7/12 | 0.8494 | 22/30 | 259.1 |
+| Qwen3-Coder 30B-A3B | 0.9881 | 11/12 | 0.8051 | 18/30 | 102.5 |
+| Devstral Small 2 24B | 0.9881 | 11/12 | 0.8029 | 14/30 | 380.2 |
+| GPT-6.1 Sol via Codex CLI | 0.9750 | 11/12 | 1.0000 | 30/30 | 739.7 |
+
+A full score means satisfying that grader, not independently established correctness.
+The local pair's remaining routine miss is an extra `open-models` tag on an open-source
+CLI release; the prompt's taxonomy reserves that tag for models, deployment and fine-tuning.
+Codex's remaining miss is a subjective novelty rating: two stars instead of the reference's
+three. The routine averages therefore do not establish local models outperforming Codex.
+
+### Repairs and scope
+
+- Classification reads the requested `threads` field. Open-source tooling is no longer
+  treated as evidence of released model weights; thread matching follows its stated taxonomy.
+- ALL CAPS checks the entire answer and enforces the stated 20-word limit.
+- Noisy extraction now uses claim IDs with explicit firsthand/secondhand/speculation rules;
+  empty lists cannot receive full credit. This is a revised task, not a regrade of old answers.
+- Frontmatter behavior without a closing delimiter is explicit and checks both returned values.
+- Writing scores have a reachable 1.0 and check stated length, term presence and forbidden words;
+  artistic merit, metaphor quality and mathematical correctness are not automatically judged.
+- Literal JSON formatting must preserve the entire supplied text, including injection strings,
+  as data. The old grader incorrectly punished that exact requested behavior.
+- The echo guard rejects literal copies, not substantive answers that share prompt vocabulary.
+- Correcting a premise may quote it: saying “does not raise a TypeError” is not agreement;
+  an 8-hour estimate is not penalized because its explanation rejects “500 hours.”
+- Parallel-group checks inspect JSON structure instead of requiring the word `sequential`.
+- Unstated JSON line limits are removed. Spreadsheet checking compares all six records and fields.
+- Open-ended migration plans check topic coverage and numbered presentation, not where a keyword
+  first appears in an introduction. Recommendation checks no longer demand the word `unknown`.
+  These remain coverage proxies, not proof of sound dependency reasoning or recommendations.
+- `PASS` now requires 1.0 rather than 0.5. Invented Claude comparison columns/tier labels are removed.
+  Responses, definitions, fingerprints and cohort summaries are archived for inspection.
+
+### Evidence and interpretation
+
+All four models answered the same 42 revised prompts once. The first three defects and the
+frontmatter specification were fixed before generation (revision `2026-10-02-grading-v2`).
+The control exposed additional grader defects. Revision `2026-10-02-grading-v3` rescored
+**all 168 saved answers**, with model-facing prompts unchanged and no answer regeneration or
+selection. Original scores remain in the two source receipts. Full-score counts changed
+23→29 for LFM, 25→29 for Qwen-Coder, 23→25 for Devstral and 31→41 for Codex.
+This was a post-hoc calibration exercise, not held-out validation or production reliability proof.
+
+The code checks pass on the actual generated functions. Other checks still include lexical and
+structural proxies; do not use the overall average as a routing success probability. A frontier
+control can expose grading defects without making every remaining grader semantically complete.
+A future production acceptance set should use real coordinator calls and independently checked
+outcomes, with stress and lifecycle work reported separately.
+
+Local configuration: Mac Studio M5 Max / 64 GB, Ollama 0.34.2, existing Q4_K_M weights,
+32,768 context, temperature 0, 4,096 requested output tokens; local inference sequential.
+Control: `gpt-6.1-sol`, Codex CLI 0.159.3, ChatGPT login, medium reasoning, temporary working
+directory, replaced model instructions, ignored user config, disabled tools/apps/plugins;
+any observed tool execution invalidates a response. CLI temperature and output-token limits
+are not enforced, and CLI framing remains, so this is a harness control, not raw-API parity.
+The cloud run overlapped local inference; timing is observational. No routing changes were made.
+Ollama residency was released after completion; downloaded weights remain installed.
+
+Verification: 71 unit tests and full-repo ruff passed. The comparison CLI rendered all four
+models and both cohorts without invented baselines. All 168 responses were checked against
+source receipts, with matching 42 test IDs, matching original fingerprints, valid receipt
+hashes, recomputed means/pass thresholds and zero provider errors. An initial Codex smoke
+probe hit a CLI warning; it was fixed before the complete run and is not a model test failure.
+
+Receipts in llm-bench:
+
+- [Original local responses and v2 scores](../../../llm-bench/results/community/20261002-calibration-local.json)
+- [Original Codex responses and v2 scores](../../../llm-bench/results/community/20261002-calibration-codex.json)
+- [All responses, v3 scores, definitions and rescore provenance](../../../llm-bench/results/community/20261002-calibration-rescored.json)
+
+V3 test-definition SHA-256: `0b4a021f993a266a70d7c1947a6cbb029ede903043ef18304c636ce581191d34`.
+
+Reproduce fresh v3 responses with the documented runner (not expected to reproduce single-run
+scores exactly):
+
+```sh
+# From llm-bench; same three installed local candidates, sequential.
+.venv/bin/llm-bench run lfm2.5:8b qwen3-coder:30b devstral-small-2:24b --full --max-tokens 4096 -o results/local-v3.json
+.venv/bin/llm-bench run gpt-6.1-sol -p codex-cli --full --max-tokens 4096 -o results/codex-v3.json
+.venv/bin/llm-bench compare results/local-v3.json results/codex-v3.json
 ```
