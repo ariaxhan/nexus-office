@@ -1,6 +1,15 @@
 # Cross-repository work
 
 Commission for the Tower recovery: `Vaults/_meta/commissions/active/2026-10-02-make-tower-work-ready-issue-to-merged-verified-c.md`.
+Execution record: `Vaults/_meta/chronicles/2026/2026-10-02-tower-landing-recovery.md`.
+
+Recovery implementation is on `origin/main` at `75245073d52e82491d0ec268f0022c32ae07e517`.
+`npm test` passed (1,678 Python tests across 111 suites, JavaScript and Swift gates);
+the final targeted checks also passed (11 Git landing, 21 contract-flow, 92 work-flow tests).
+The app builds from that revision. Screenshots were denied by macOS capture permissions.
+Live rollout is pending: the Vaults deployment-script commit timed out on another writer's mutex,
+and the release script refuses to restart while unrelated work flights remain active. The deploy
+hold, three quarantines, and disabled Office coding plan remain in place; no live landing is claimed.
 
 `python3 -m nexus work status --registry PATH --json` reads coverage and the ledger without GitHub calls, cloning, migration, or hydration. `run --registry PATH [--repo OWNER/NAME]` captures all open issues through paginated GitHub REST responses, then processes independent items synchronously in bounded repository rounds. No seven-day cutoff applies. Registry configuration is separate from issue obligations; durable tasks, attempts, claims, proof and retry records stay in the existing ledger.
 
