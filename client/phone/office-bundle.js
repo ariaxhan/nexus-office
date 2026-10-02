@@ -148,25 +148,25 @@ var init_office_active = __esm({
 
 // client/phone/office-ui.js
 function el(tag, className = "", text = "") {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== void 0) node.textContent = String(text);
-  return node;
+  const node2 = document.createElement(tag);
+  if (className) node2.className = className;
+  if (text !== void 0) node2.textContent = String(text);
+  return node2;
 }
 function button(text, action, className = "") {
-  const node = el("button", className, text);
-  node.type = "button";
-  node.addEventListener("click", async () => {
-    node.disabled = true;
+  const node2 = el("button", className, text);
+  node2.type = "button";
+  node2.addEventListener("click", async () => {
+    node2.disabled = true;
     try {
       await action();
     } catch (error) {
       notice(error.message);
     } finally {
-      node.disabled = false;
+      node2.disabled = false;
     }
   });
-  return node;
+  return node2;
 }
 function diagnosticMessage(error) {
   const message = String(error?.message || error?.name || "Error");
@@ -210,11 +210,11 @@ async function api(path, body) {
   return data;
 }
 function notice(text) {
-  const node = $("#notice");
-  node.textContent = text;
-  node.hidden = false;
+  const node2 = $("#notice");
+  node2.textContent = text;
+  node2.hidden = false;
   clearTimeout(notice.timer);
-  notice.timer = setTimeout(() => node.hidden = true, 6e3);
+  notice.timer = setTimeout(() => node2.hidden = true, 6e3);
 }
 function sheet(title, file = null) {
   active.show(file);
@@ -236,16 +236,16 @@ function section(parent, title) {
   return body;
 }
 function card(title, detail2, action) {
-  const node = action ? button("", action, "card") : el("article", "card");
-  node.append(el("h3", "", title));
-  if (detail2) node.append(el("p", "muted", detail2));
-  return node;
+  const node2 = action ? button("", action, "card") : el("article", "card");
+  node2.append(el("h3", "", title));
+  if (detail2) node2.append(el("p", "muted", detail2));
+  return node2;
 }
 function intro(parent, eyebrow, title, description) {
-  const node = el("div", "intro");
-  node.append(el("div", "eyebrow", eyebrow), el("h1", "", title));
-  if (description) node.append(el("p", "", description));
-  parent.append(node);
+  const node2 = el("div", "intro");
+  node2.append(el("div", "eyebrow", eyebrow), el("h1", "", title));
+  if (description) node2.append(el("p", "", description));
+  parent.append(node2);
 }
 function empty(parent, text) {
   parent.append(el("p", "empty", text));
@@ -254,7 +254,7 @@ function failure(parent, error) {
   parent.append(el("p", "error", error.message || error));
 }
 function link(label, url) {
-  const node = el("a", "", label);
+  const node2 = el("a", "", label);
   let parsed;
   try {
     parsed = new URL(url, location.origin);
@@ -262,40 +262,40 @@ function link(label, url) {
     return el("span", "muted", label);
   }
   if (!["http:", "https:"].includes(parsed.protocol)) return el("span", "muted", "Unavailable link");
-  node.href = parsed.href;
-  node.target = "_blank";
-  node.rel = "noopener noreferrer";
-  return node;
+  node2.href = parsed.href;
+  node2.target = "_blank";
+  node2.rel = "noopener noreferrer";
+  return node2;
 }
-function field(parent, label, node) {
+function field(parent, label, node2) {
   const wrap = el("label", "field");
-  node.setAttribute("aria-label", label);
-  wrap.append(el("span", "", label), node);
-  if (node.tagName === "SELECT") {
+  node2.setAttribute("aria-label", label);
+  wrap.append(el("span", "", label), node2);
+  if (node2.tagName === "SELECT") {
     const selected = el("small", "selected-value");
     wrap.append(selected);
     const update = () => {
-      const text = node.selectedOptions[0]?.textContent || "";
+      const text = node2.selectedOptions[0]?.textContent || "";
       selected.textContent = text;
       selected.hidden = text.length < 30;
     };
-    node.addEventListener("change", update);
-    node.addEventListener("input", update);
+    node2.addEventListener("change", update);
+    node2.addEventListener("input", update);
     update();
     requestAnimationFrame(update);
   }
   parent.append(wrap);
-  return node;
+  return node2;
 }
 function select(options, value3) {
-  const node = el("select");
+  const node2 = el("select");
   for (const [id, label] of options) {
     const option = el("option", "", label);
     option.value = id;
-    node.append(option);
+    node2.append(option);
   }
-  node.value = value3;
-  return node;
+  node2.value = value3;
+  return node2;
 }
 function time(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -355,9 +355,9 @@ function transcriptNavigation(body, content) {
   picker.addEventListener("change", () => jump(Number(picker.value)));
   body.insertBefore(nav, body.firstChild);
   function update() {
-    nodes = [...content.children].filter((node) => node.textContent.trim());
+    nodes = [...content.children].filter((node2) => node2.textContent.trim());
     picker.replaceChildren();
-    nodes.forEach((node, i) => {
+    nodes.forEach((node2, i) => {
       const option = el("option", "", `Message ${i + 1}`);
       option.value = String(i);
       picker.append(option);
@@ -374,7 +374,7 @@ function transcriptNavigation(body, content) {
   function scroll() {
     following = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
     const top = nav.getBoundingClientRect().bottom;
-    const visible = nodes.findIndex((node) => node.getBoundingClientRect().bottom > top + 8);
+    const visible = nodes.findIndex((node2) => node2.getBoundingClientRect().bottom > top + 8);
     index = following ? nodes.length - 1 : Math.max(0, visible);
     picker.value = String(index);
   }
@@ -552,15 +552,15 @@ function toggle(parent, key, title, description) {
   return setting(parent, key, title, control, description);
 }
 function range(parent, key, title, min, max, step) {
-  const node = el("input");
-  Object.assign(node, { type: "range", min, max, step, value: prefs[key] });
-  return setting(parent, key, title, node, `${prefs[key]}${key === "size" ? "%" : "\xD7"}`);
+  const node2 = el("input");
+  Object.assign(node2, { type: "range", min, max, step, value: prefs[key] });
+  return setting(parent, key, title, node2, `${prefs[key]}${key === "size" ? "%" : "\xD7"}`);
 }
 function color(parent, key, title) {
-  const node = el("input");
-  node.type = "color";
-  node.value = prefs[key] || "#f5f1e8";
-  return setting(parent, key, title, node);
+  const node2 = el("input");
+  node2.type = "color";
+  node2.value = prefs[key] || "#f5f1e8";
+  return setting(parent, key, title, node2);
 }
 function settings() {
   rememberDetail("settings", "preferences");
@@ -635,10 +635,10 @@ var init_office_settings = __esm({
 
 // client/phone/office-markdown.js
 function make(tag, className, value3) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (value3 !== void 0) node.textContent = value3;
-  return node;
+  const node2 = document.createElement(tag);
+  if (className) node2.className = className;
+  if (value3 !== void 0) node2.textContent = value3;
+  return node2;
 }
 function markdownView(raw, options = {}) {
   const view = make("div", "markdown");
@@ -701,30 +701,30 @@ function blocks(view, lines, text) {
   flush2();
 }
 function table(rows, text) {
-  const node = make("table");
+  const node2 = make("table");
   const divider = rows[1] && rows[1].every((cell) => /^:?-+:?$/.test(cell));
   rows.forEach((row, index) => {
     if (divider && index === 1) return;
     const tr = make("tr");
     for (const cell of row) tr.append(inline(make(divider && index === 0 ? "th" : "td"), cell, text));
-    node.append(tr);
+    node2.append(tr);
   });
   const wrap = make("div", "mdtable");
-  wrap.append(node);
+  wrap.append(node2);
   return wrap;
 }
-function inline(node, raw, text) {
+function inline(node2, raw, text) {
   let from = 0;
   for (const match of raw.matchAll(TOKEN)) {
-    if (match.index > from) text(node, raw.slice(from, match.index));
-    if (match[1] !== void 0) node.append(anchor(match[1], match[2]));
-    else if (match[3] !== void 0) node.append(inline(make("strong"), match[3], text));
-    else if (match[4] !== void 0) node.append(make("code", "", match[4]));
-    else node.append(inline(make("em"), match[5], text));
+    if (match.index > from) text(node2, raw.slice(from, match.index));
+    if (match[1] !== void 0) node2.append(anchor(match[1], match[2]));
+    else if (match[3] !== void 0) node2.append(inline(make("strong"), match[3], text));
+    else if (match[4] !== void 0) node2.append(make("code", "", match[4]));
+    else node2.append(inline(make("em"), match[5], text));
     from = match.index + match[0].length;
   }
-  if (from < raw.length) text(node, raw.slice(from));
-  return node;
+  if (from < raw.length) text(node2, raw.slice(from));
+  return node2;
 }
 function anchor(label, href) {
   if (!/^(?:https?:\/\/|#)/i.test(href)) return document.createTextNode(label);
@@ -741,20 +741,20 @@ function tokenText(tokens, render) {
   if (!byText.size) return plain;
   const escaped = [...byText.keys()].sort((a, b) => b.length - a.length).map((key) => key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const pattern = new RegExp(escaped.join("|"), "g");
-  return (node, value3) => {
+  return (node2, value3) => {
     let from = 0;
     for (const match of value3.matchAll(pattern)) {
-      if (match.index > from) plain(node, value3.slice(from, match.index));
-      node.append(render(byText.get(match[0])));
+      if (match.index > from) plain(node2, value3.slice(from, match.index));
+      node2.append(render(byText.get(match[0])));
       from = match.index + match[0].length;
     }
-    if (from < value3.length) plain(node, value3.slice(from));
+    if (from < value3.length) plain(node2, value3.slice(from));
   };
 }
 var plain, TABLE_ROW, LIST_ITEM, cells, TOKEN;
 var init_office_markdown = __esm({
   "client/phone/office-markdown.js"() {
-    plain = (node, value3) => node.append(document.createTextNode(value3));
+    plain = (node2, value3) => node2.append(document.createTextNode(value3));
     TABLE_ROW = /^\s*\|.*\|\s*$/;
     LIST_ITEM = /^\s*([-*+]|\d+[.)])\s+(.*)$/;
     cells = (row) => row.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
@@ -806,9 +806,9 @@ async function openFile(id, offset = 0, claimed = active.claim()) {
   if (data.editable) actions.append(button("Edit file", () => editFile(data)));
   if (data.is_text) {
     actions.append(button("View source", () => {
-      const source = sheet(data.name + " source", file);
-      source.append(numberedSource(data));
-      source.append(contextSelection(data));
+      const source2 = sheet(data.name + " source", file);
+      source2.append(numberedSource(data));
+      source2.append(contextSelection(data));
     }));
     const text = data.name.endsWith(".md") ? markdownView(data.text) : el("pre", "", data.text);
     text.classList.add("reading");
@@ -850,13 +850,13 @@ function preview(body, data) {
 function restoreReading(body, id) {
   if (!prefs.remember) return;
   body.scrollTop = Number(value("reading", id) ?? localStorage.getItem(`office-read:${id}`) ?? 0);
-  let timer;
+  let timer2;
   body.onscroll = () => {
     if (!prefs.remember) return;
     const position = body.scrollTop;
     localStorage.setItem(`office-read:${id}`, String(position));
-    clearTimeout(timer);
-    timer = setTimeout(() => record("reading", id, position), 300);
+    clearTimeout(timer2);
+    timer2 = setTimeout(() => record("reading", id, position), 300);
   };
 }
 function editFile(data) {
@@ -978,14 +978,14 @@ function attachments(parent, initial, onChange) {
   panel.append(progress);
   const list = el("div", "stack");
   panel.append(el("p", "muted", "Photos or files \xB7 up to eight, 5 MiB each. Uploaded to your Mac."), input, list);
-  function draw() {
+  function draw2() {
     list.replaceChildren();
     for (const item of values) {
       const row = el("div", "row");
       row.append(link(item.name || "Attached file", `/api/uploads/content?id=${encodeURIComponent(item.id)}&revision=${item.revision}`), button("Remove", () => {
         values = values.filter((other) => other.id !== item.id);
         onChange(values);
-        draw();
+        draw2();
       }));
       list.append(row);
     }
@@ -1001,7 +1001,7 @@ function attachments(parent, initial, onChange) {
         const receipt = await api("/api/uploads", { name: file.name, base64: encoded });
         if (!values.some((item) => item.id === receipt.id)) values.push(receipt);
         onChange(values);
-        draw();
+        draw2();
       }
     } catch (error) {
       notice(error.message);
@@ -1011,11 +1011,11 @@ function attachments(parent, initial, onChange) {
       progress.textContent = "";
     }
   });
-  draw();
+  draw2();
   return { ready: () => !input.disabled, references: () => values.map(({ id, revision: revision2 }) => ({ id, revision: revision2 })), clear: () => {
     values = [];
     onChange(values);
-    draw();
+    draw2();
   } };
 }
 function encode(file) {
@@ -1104,7 +1104,7 @@ function renderPlayer() {
   player.append(slider);
 }
 for (const event of ["play", "pause"]) audio.addEventListener(event, () => {
-  for (const node of document.querySelectorAll(".play-toggle")) node.textContent = node.dataset.episodeId && node.dataset.episodeId !== current?.id ? "Play episode" : audio.paused ? "Play" : "Pause";
+  for (const node2 of document.querySelectorAll(".play-toggle")) node2.textContent = node2.dataset.episodeId && node2.dataset.episodeId !== current?.id ? "Play episode" : audio.paused ? "Play" : "Pause";
   if (!audio.isNative && "mediaSession" in navigator) navigator.mediaSession.playbackState = audio.paused ? "paused" : "playing";
 });
 audio.addEventListener("timeupdate", () => {
@@ -1132,9 +1132,9 @@ async function mediaList(parent, kind = "all", cursor = 0) {
   const data = await api(`/api/media?kind=${encodeURIComponent(kind)}&cursor=${cursor}`);
   for (const error of data.errors) parent.append(el("p", "error", `${error.source}: ${error.error}`));
   for (const item of data.items) {
-    const node = card(item.title || item.file, `${item.kind === "podcast" ? Math.round(item.duration_s / 60) + " min \xB7 " : ""}${item.date || ""}`, () => mediaDetail(item.id));
-    if (item.excerpt) node.append(el("p", "muted", item.excerpt));
-    parent.append(node);
+    const node2 = card(item.title || item.file, `${item.kind === "podcast" ? Math.round(item.duration_s / 60) + " min \xB7 " : ""}${item.date || ""}`, () => mediaDetail(item.id));
+    if (item.excerpt) node2.append(el("p", "muted", item.excerpt));
+    parent.append(node2);
   }
   if (!data.total) empty(parent, "Nothing published here yet.");
   if (data.next_cursor !== null) parent.append(button("Load more", async () => mediaList(parent, kind, data.next_cursor)));
@@ -1169,7 +1169,7 @@ async function mediaDetail(id) {
   const transcript = section(body, "Transcript");
   transcript.append(el("div", "reading", data.text || "Transcript unavailable."));
   const sources = section(body, "Sources");
-  for (const source of data.sources || []) sources.append(link(source.title, source.url));
+  for (const source2 of data.sources || []) sources.append(link(source2.title, source2.url));
 }
 async function seekEpisode(episode, delta) {
   if (current?.id !== episode.id) await play(episode);
@@ -1188,14 +1188,14 @@ function showPoem(body, data) {
   body.append(frame, el("div", "reading", data.text));
   if (data.provenance) poemProvenance(body, data.provenance);
 }
-function poemProvenance(body, source) {
+function poemProvenance(body, source2) {
   const details = el("details");
   details.append(el("summary", "", "Source & publishing"));
-  details.append(el("p", "muted", source.publication), el("p", "muted", source.generation_receipt));
-  for (const [key, label] of [["source", "Read source"], ["manifest", "Read catalog"], ["pipeline", "How this is generated"]]) if (source[key]) details.append(button(label, () => openFile(source[key])));
-  details.append(el("p", "muted", "File SHA256: " + source.sha256));
-  if (source.source_commit) details.append(el("p", "muted", `Latest recorded source change: ${source.source_commit.subject} \xB7 ${source.source_commit.at} \xB7 ${source.source_commit.sha}`));
-  for (const job of source.configured_producers || []) {
+  details.append(el("p", "muted", source2.publication), el("p", "muted", source2.generation_receipt));
+  for (const [key, label] of [["source", "Read source"], ["manifest", "Read catalog"], ["pipeline", "How this is generated"]]) if (source2[key]) details.append(button(label, () => openFile(source2[key])));
+  details.append(el("p", "muted", "File SHA256: " + source2.sha256));
+  if (source2.source_commit) details.append(el("p", "muted", `Latest recorded source change: ${source2.source_commit.subject} \xB7 ${source2.source_commit.at} \xB7 ${source2.source_commit.sha}`));
+  for (const job of source2.configured_producers || []) {
     const url = new URL(location.href);
     url.searchParams.set("detail", JSON.stringify({ kind: "job-history", id: job }));
     details.append(link("Configured producer history: " + job, url.pathname + url.search + url.hash));
@@ -1207,16 +1207,136 @@ function poemProvenance(body, source) {
 init_office_files();
 init_office_markdown();
 
+// client/phone/office-doc.js
+init_office_ui();
+init_office_markdown();
+var REPO = "ariaxhan/thinking-brain-school";
+var PATH = "_meta/state/office-doc.md";
+var MARK = "**Aria:**";
+var source = () => `/api/context?repo=${encodeURIComponent(REPO)}&path=${encodeURIComponent(PATH)}`;
+function parse(text) {
+  const parts2 = [];
+  let part = { lines: [], note: null };
+  for (const line of String(text).split("\n")) {
+    if (/^#{1,3} /.test(line)) {
+      if (part.lines.length || part.note !== null) parts2.push(part);
+      part = { lines: [line], note: null };
+    } else if (part.note === null && line.trim() === MARK) part.note = [];
+    else if (part.note !== null) part.note.push(line);
+    else part.lines.push(line);
+  }
+  parts2.push(part);
+  return parts2;
+}
+function compose(parts2) {
+  return parts2.map((part) => part.note === null ? part.lines.join("\n") : [...part.lines, MARK, ...part.note].join("\n")).join("\n");
+}
+var written = (note) => note.join("\n").replace(/\s+$/, "");
+var node = null;
+var saved = "";
+var parts = [];
+var dirty = /* @__PURE__ */ new Map();
+var timer = 0;
+var saving = false;
+function fit(area) {
+  area.style.height = "auto";
+  area.style.height = Math.max(44, area.scrollHeight + 2) + "px";
+}
+function draw(status) {
+  const body = node.querySelector(".office-doc-body");
+  body.replaceChildren();
+  parts.forEach((part, index) => {
+    if (!part.lines.length && part.note === null) return;
+    const item = el("article", "office-doc-item" + (/^### /.test(part.lines[0] || "") ? " is-item" : ""));
+    item.append(markdownView(part.lines.join("\n")));
+    if (part.note !== null) {
+      const area = el("textarea", "office-doc-note");
+      area.placeholder = "Your guidance";
+      area.value = written(part.note);
+      area.rows = 1;
+      area.addEventListener("input", () => {
+        dirty.set(part.lines[0], area.value);
+        fit(area);
+        status.textContent = "Typing\u2026";
+        clearTimeout(timer);
+        timer = setTimeout(() => save2(status), 1200);
+      });
+      area.addEventListener("blur", () => {
+        if (dirty.size) {
+          clearTimeout(timer);
+          save2(status);
+        }
+      });
+      item.append(area);
+      requestAnimationFrame(() => fit(area));
+    }
+    body.append(item);
+  });
+}
+function apply2() {
+  for (const part of parts) if (part.note !== null && dirty.has(part.lines[0])) part.note = [...dirty.get(part.lines[0]).split("\n"), ""];
+}
+async function save2(status, retried = false) {
+  if (saving) return;
+  saving = true;
+  try {
+    apply2();
+    const text = compose(parts);
+    try {
+      await api("/api/context", { repo: REPO, path: PATH, text, expected: saved });
+      saved = text;
+      dirty.clear();
+      status.textContent = "Saved";
+    } catch (error) {
+      if (retried) throw error;
+      const fresh = await api(source());
+      saved = fresh.text;
+      parts = parse(saved);
+      saving = false;
+      return save2(status, true);
+    }
+  } catch (error) {
+    status.textContent = "Not saved";
+    notice(error.message);
+  } finally {
+    saving = false;
+  }
+}
+function officeDocument() {
+  if (node) {
+    if (!dirty.size) void load(node.querySelector(".office-doc-status"));
+    return node;
+  }
+  node = el("section", "office-doc");
+  const status = el("p", "office-doc-status muted", "Loading\u2026");
+  node.append(status, el("div", "office-doc-body"));
+  void load(status);
+  return node;
+}
+async function load(status) {
+  try {
+    const fresh = await api(source());
+    if (fresh.text === saved && node.querySelector(".office-doc-item")) return;
+    if (dirty.size) return;
+    saved = fresh.text;
+    parts = parse(saved);
+    draw(status);
+    status.textContent = "";
+  } catch (error) {
+    status.textContent = "The document is unavailable: " + error.message;
+  }
+}
+
 // client/phone/office-selection.js
-function selecting(node) {
+function selecting(node2) {
   const selection = globalThis.getSelection?.();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
-  return node.contains(selection.anchorNode) || node.contains(selection.focusNode);
+  return node2.contains(selection.anchorNode) || node2.contains(selection.focusNode);
 }
-function redrawIfChanged(node, signature, draw) {
-  if (node.dataset.signature === signature || selecting(node)) return false;
-  node.dataset.signature = signature;
-  draw();
+function redrawIfChanged(node2, signature, draw2) {
+  if (node2.dataset.signature === signature || selecting(node2)) return false;
+  node2.dataset.signature = signature;
+  draw2();
   return true;
 }
 function mergeAskState(base, next, limit = 500) {
@@ -1249,12 +1369,12 @@ function token(part) {
     file: () => openFile(part.id),
     sha: () => commit(part.sha, part.checkout)
   }[part.kind];
-  const node = el("button", "coord-link", part.text);
-  node.type = "button";
-  node.dataset.kind = part.kind;
-  node.title = { issue: `${part.repo} #${part.number}`, file: part.path, sha: `Commit in ${part.checkout}` }[part.kind];
-  node.addEventListener("click", () => Promise.resolve(open()).catch((error) => notice(error.message)));
-  return node;
+  const node2 = el("button", "coord-link", part.text);
+  node2.type = "button";
+  node2.dataset.kind = part.kind;
+  node2.title = { issue: `${part.repo} #${part.number}`, file: part.path, sha: `Commit in ${part.checkout}` }[part.kind];
+  node2.addEventListener("click", () => Promise.resolve(open()).catch((error) => notice(error.message)));
+  return node2;
 }
 function segments(parent, list) {
   for (const part of list || []) parent.append(part.kind ? token(part) : document.createTextNode(part.text));
@@ -1301,10 +1421,10 @@ function runEnd(item) {
 function conversation(parent, data) {
   for (const item of data.items) {
     if (item.kind === "message") {
-      const node = el("article", "coord-you");
-      rich(node.appendChild(el("div", "coord-text")), item.segments);
-      node.append(el("small", "", `You \xB7 ${clock(item.at)} \xB7 ${item.read_at ? "read by the coordinator " + clock(item.read_at) : "waiting for the coordinator"}`));
-      parent.append(node);
+      const node2 = el("article", "coord-you");
+      rich(node2.appendChild(el("div", "coord-text")), item.segments);
+      node2.append(el("small", "", `You \xB7 ${clock(item.at)} \xB7 ${item.read_at ? "read by the coordinator " + clock(item.read_at) : "waiting for the coordinator"}`));
+      parent.append(node2);
       continue;
     }
     parent.append(runHead(item));
@@ -1317,16 +1437,16 @@ function conversation(parent, data) {
         parent.append(row);
         continue;
       }
-      const node = el("article", event.kind === "result" ? "coord-say coord-result" : "coord-say");
-      rich(node, event.segments);
-      node.append(el("small", "coord-time", clock(event.at)));
-      parent.append(node);
+      const node2 = el("article", event.kind === "result" ? "coord-say coord-result" : "coord-say");
+      rich(node2, event.segments);
+      node2.append(el("small", "coord-time", clock(event.at)));
+      parent.append(node2);
     }
     for (const hold of item.holds) {
-      const node = el("article", "coord-say coord-hold");
-      node.append(el("strong", "", "Hold \xB7 "));
-      rich(node, hold.segments);
-      parent.append(node);
+      const node2 = el("article", "coord-say coord-hold");
+      node2.append(el("strong", "", "Hold \xB7 "));
+      rich(node2, hold.segments);
+      parent.append(node2);
     }
     parent.append(runEnd(item));
   }
@@ -1343,22 +1463,22 @@ function changes(parent, data) {
     group.append(el("h2", "section-head", `Run \xB7 ${clock(item.at)}`));
     parent.append(group);
     for (const row of found.publishes) {
-      const node = el("p", "coord-change");
-      node.append(el("span", "coord-tag", row.outcome === "PASS" ? "Live" : "Publish " + (row.outcome || "")));
-      segments(node, [row.id ? { kind: "file", id: row.id, path: row.path, text: row.path } : { text: row.path }]);
-      group.append(node);
+      const node2 = el("p", "coord-change");
+      node2.append(el("span", "coord-tag", row.outcome === "PASS" ? "Live" : "Publish " + (row.outcome || "")));
+      segments(node2, [row.id ? { kind: "file", id: row.id, path: row.path, text: row.path } : { text: row.path }]);
+      group.append(node2);
     }
     for (const row of found.commits) {
-      const node = el("p", "coord-change");
-      node.append(el("span", "coord-tag", row.checkout));
-      segments(node, [{ kind: "sha", sha: row.sha, checkout: row.checkout, text: row.sha.slice(0, 8) }, { text: " " }, ...row.segments || [{ text: row.subject }]]);
-      group.append(node);
+      const node2 = el("p", "coord-change");
+      node2.append(el("span", "coord-tag", row.checkout));
+      segments(node2, [{ kind: "sha", sha: row.sha, checkout: row.checkout, text: row.sha.slice(0, 8) }, { text: " " }, ...row.segments || [{ text: row.subject }]]);
+      group.append(node2);
     }
     for (const row of found.issues) {
-      const node = el("p", "coord-change");
-      node.append(el("span", "coord-tag", "Issue " + row.action));
-      segments(node, row.number ? [{ kind: "issue", repo: row.repo, number: row.number, text: `${row.repo}#${row.number}` }] : [{ text: row.repo }]);
-      group.append(node);
+      const node2 = el("p", "coord-change");
+      node2.append(el("span", "coord-tag", "Issue " + row.action));
+      segments(node2, row.number ? [{ kind: "issue", repo: row.repo, number: row.number, text: `${row.repo}#${row.number}` }] : [{ text: row.repo }]);
+      group.append(node2);
     }
   }
   if (!any) parent.append(el("p", "empty", "No landed commits, publishes or issue changes in the recorded runs."));
@@ -1369,10 +1489,10 @@ var needsAttention = (row) => ["failing", "stalled", "error"].includes(row.healt
 var systemName = (row) => SYSTEM_NAME[row.id] || row.name;
 var systemOutcome = (row) => SYSTEM_OUTCOME[row.id] || "Moving its assigned work forward.";
 function healthLine(row) {
-  const node = el("span", "coord-health");
-  node.dataset.health = needsAttention(row) ? "error" : "ok";
-  node.textContent = needsAttention(row) ? "Needs attention" : "Working normally";
-  return node;
+  const node2 = el("span", "coord-health");
+  node2.dataset.health = needsAttention(row) ? "error" : "ok";
+  node2.textContent = needsAttention(row) ? "Needs attention" : "Working normally";
+  return node2;
 }
 function detail(parent, row) {
   parent.replaceChildren();
@@ -1394,10 +1514,10 @@ function detail(parent, row) {
   if (!(row.lanes || []).length) lanes.append(el("p", "empty", "No lanes named in the latest run."));
   const shipped = section(evidence, "Recent changes");
   for (const c of row.commits || []) {
-    const node = el("p", "coord-change");
-    node.append(el("span", "coord-tag", c.checkout));
-    segments(node, [{ kind: "sha", sha: c.sha, checkout: c.checkout, text: c.sha.slice(0, 8) }, { text: ` ${c.subject} \xB7 ${clock(c.at)}` }]);
-    shipped.append(node);
+    const node2 = el("p", "coord-change");
+    node2.append(el("span", "coord-tag", c.checkout));
+    segments(node2, [{ kind: "sha", sha: c.sha, checkout: c.checkout, text: c.sha.slice(0, 8) }, { text: ` ${c.subject} \xB7 ${clock(c.at)}` }]);
+    shipped.append(node2);
   }
   if (!(row.commits || []).length) shipped.append(el("p", "empty", "No recent changes recorded."));
 }
@@ -1463,13 +1583,13 @@ async function coordinator(parent) {
       view = key;
       signature = "";
       stream.dataset.drawn = key === "chat" ? "" : "1";
-      draw();
+      draw2();
       if (key !== "chat") scrollTo(0, 0);
     });
     b.dataset.view = key;
     tabs.append(b);
   }
-  function draw() {
+  function draw2() {
     for (const b of tabs.children) b.setAttribute("aria-pressed", String(b.dataset.view === view));
     if (!data) return;
     const next = view + JSON.stringify(data.items);
@@ -1492,7 +1612,7 @@ async function coordinator(parent) {
       const live = data.items.some((item) => item.live);
       if (shown !== seen) {
         seen = shown;
-        draw();
+        draw2();
       }
     } catch (error) {
       status.textContent = "Mac unreachable; showing the last view. " + error.message;
@@ -1534,8 +1654,8 @@ async function coordinator(parent) {
   });
   await refresh();
   let ticks = 0, masterTicks = 0;
-  const timer = setInterval(() => {
-    if (!parent.isConnected) clearInterval(timer);
+  const timer2 = setInterval(() => {
+    if (!parent.isConnected) clearInterval(timer2);
     else {
       if (!idle || ++ticks % 5 === 0) refresh();
       if (++masterTicks % 5 === 0) drawMaster().catch(() => {
@@ -1564,7 +1684,7 @@ async function issueInventory(parent, open, fresh = false) {
   for (const group of data.groups) groups.append(groupCard(group, (repo) => {
     filters.group = group.name;
     filters.repo = repo;
-    draw();
+    draw2();
   }));
   const list = section(parent, "Open issues");
   const search2 = field(list, "Search", el("input"));
@@ -1575,45 +1695,45 @@ async function issueInventory(parent, open, fresh = false) {
   const rows = el("div", "stack");
   list.append(scope, rows);
   let limit = 60;
-  function draw() {
+  function draw2() {
     const q2 = search2.value.toLowerCase();
     const matches = data.issues.filter((item) => (!filters.group || item.groups.includes(filters.group)) && (!filters.repo || item.repo === filters.repo) && (!state.value || item.state === state.value) && (!q2 || `${item.repo}#${item.number} ${item.title} ${item.labels.join(" ")}`.toLowerCase().includes(q2))).sort(ORDER[sort.value]);
     scope.replaceChildren(el("span", "", `${matches.length} of ${data.issues.length} issues${filters.group ? ` \xB7 ${filters.group}` : ""}${filters.repo ? ` \xB7 ${filters.repo}` : ""} `));
     if (filters.group || filters.repo) scope.append(button("Show all", () => {
       filters.group = "";
       filters.repo = "";
-      draw();
+      draw2();
     }));
     rows.replaceChildren();
     for (const item of matches.slice(0, limit)) rows.append(issueCard(item, open));
     if (!matches.length) empty(rows, "No open issue matches.");
     if (matches.length > limit) rows.append(button(`Show all ${matches.length}`, () => {
       limit = matches.length;
-      draw();
+      draw2();
     }));
   }
-  for (const input of [search2, state, sort]) input.addEventListener("input", draw);
-  draw();
+  for (const input of [search2, state, sort]) input.addEventListener("input", draw2);
+  draw2();
 }
 function groupCard(group, pick2) {
-  const node = el("article", "card");
-  node.append(el("h3", "", group.denominator), el("p", "muted", group.source));
+  const node2 = el("article", "card");
+  node2.append(el("h3", "", group.denominator), el("p", "muted", group.source));
   const counts = Object.entries(group.counts).map(([key, value3]) => `${value3} ${key.replace("_", " ")}`).join(" \xB7 ");
-  node.append(el("p", "", `${counts || "no open issues"} \xB7 ${group.stale} untouched 30+ days`));
-  if (group.oldest) node.append(el("p", "muted", `Oldest: ${group.oldest.repo}#${group.oldest.number} \xB7 ${group.oldest.age_days} days \xB7 ${group.oldest.title}`));
+  node2.append(el("p", "", `${counts || "no open issues"} \xB7 ${group.stale} untouched 30+ days`));
+  if (group.oldest) node2.append(el("p", "muted", `Oldest: ${group.oldest.repo}#${group.oldest.number} \xB7 ${group.oldest.age_days} days \xB7 ${group.oldest.title}`));
   const repos = el("details");
   repos.append(el("summary", "", `Per repository (${group.repos_configured})`));
   for (const row of group.repos) repos.append(button(`${row.repo} \xB7 ${row.open ?? "unknown"} open \xB7 ${row.status}${row.error ? ` \xB7 ${row.error}` : ""}${row.status !== "fresh" && row.fetched_at ? ` \xB7 as of ${row.fetched_at}` : ""}`, () => pick2(row.repo), "link-row"));
-  node.append(repos);
+  node2.append(repos);
   const outside = [...group.excluded.map((row) => `${row.repo}: ${row.reason}`), ...(group.registry_only || []).map((repo) => `${repo}: in registry, not in the org`), ...(group.org_only || []).map((repo) => `${repo}: in the org, missing from registry (counted)`)];
   if (outside.length) {
     const away = el("details");
     away.append(el("summary", "", `Not counted or mismatched (${outside.length})`));
     for (const line of outside) away.append(el("p", "muted", line));
-    node.append(away);
+    node2.append(away);
   }
-  node.append(button(`Show ${group.name} issues`, () => pick2("")));
-  return node;
+  node2.append(button(`Show ${group.name} issues`, () => pick2("")));
+  return node2;
 }
 function issueCard(item, open) {
   const tower = item.tower ? ` \xB7 Tower: ${item.tower.state}${item.tower.detail ? ` (${item.tower.detail})` : ""}` : "";
@@ -1789,17 +1909,17 @@ function composerControls(body, data, project2) {
   };
 }
 function restoreComposer(controls, context, project2, storageKey = "office-new-task") {
-  const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
-  for (const [key, control] of Object.entries(controls)) if (saved[key] && !(key === "project" && project2)) control.value = saved[key];
-  controls.source_ref.dataset.savedValue = saved.source_ref || "HEAD";
-  const reference = context ? { id: context.id, revision: context.revision, ...context.start_line ? { start_line: context.start_line, end_line: context.end_line } : {} } : saved.context || null;
+  const saved2 = JSON.parse(localStorage.getItem(storageKey) || "{}");
+  for (const [key, control] of Object.entries(controls)) if (saved2[key] && !(key === "project" && project2)) control.value = saved2[key];
+  controls.source_ref.dataset.savedValue = saved2.source_ref || "HEAD";
+  const reference = context ? { id: context.id, revision: context.revision, ...context.start_line ? { start_line: context.start_line, end_line: context.end_line } : {} } : saved2.context || null;
   if (context) controls.prompt.value = `Regarding ${context.project}/${context.path} at revision ${context.revision}${context.start_line ? ` lines ${context.start_line}\u2013${context.end_line}` : ""}:
 
 ${controls.prompt.value}`;
-  return { request_id: saved.request_id || crypto.randomUUID(), context: reference, uploads: saved.uploads || [] };
+  return { request_id: saved2.request_id || crypto.randomUUID(), context: reference, uploads: saved2.uploads || [] };
 }
 function composerPayload(controls, draft2) {
-  return { ...draft2, uploads: (draft2.uploads || []).map(({ id, revision: revision2 }) => ({ id, revision: revision2 })), ...Object.fromEntries(Object.entries(controls).map(([key, node]) => [key, node.value])) };
+  return { ...draft2, uploads: (draft2.uploads || []).map(({ id, revision: revision2 }) => ({ id, revision: revision2 })), ...Object.fromEntries(Object.entries(controls).map(([key, node2]) => [key, node2.value])) };
 }
 async function taskDetail(id) {
   rememberDetail("task", id);
@@ -1930,9 +2050,9 @@ function renderEvent(turns, live, state, event, taskId) {
     "office.phase": () => state.textContent = payload.state,
     "office.message": () => {
       if (!payload.initial) {
-        const node = card("You", payload.text);
-        showAttachments(node, payload.attachments);
-        turns.insertBefore(node, live);
+        const node2 = card("You", payload.text);
+        showAttachments(node2, payload.attachments);
+        turns.insertBefore(node2, live);
       }
     },
     "office.delivery": () => turns.insertBefore(el("p", "muted", `Message ${payload.message_id}: ${payload.state}${payload.consumption === "unknown" ? " \xB7 provider acknowledged; consumption unconfirmed" : ""}`), live),
@@ -1995,7 +2115,7 @@ function showAttachments(parent, items = []) {
 async function loadSources(controls, body) {
   const project2 = controls.project.value;
   const picker = controls.source_ref;
-  const saved = picker.dataset.savedValue || picker.value || "HEAD";
+  const saved2 = picker.dataset.savedValue || picker.value || "HEAD";
   picker.disabled = true;
   const token2 = crypto.randomUUID();
   picker.dataset.request = token2;
@@ -2005,7 +2125,7 @@ async function loadSources(controls, body) {
     if (!sourceCurrent(controls, project2, token2)) return;
     const options = [["HEAD", "Current checkout \xB7 " + data.revision.slice(0, 12)], ...data.items.map((item) => [item.id, item.label])];
     picker.replaceChildren(...select(options, "HEAD").children);
-    picker.value = options.some(([id]) => id === saved) ? saved : "HEAD";
+    picker.value = options.some(([id]) => id === saved2) ? saved2 : "HEAD";
     picker.disabled = false;
     delete picker.dataset.savedValue;
     picker.dispatchEvent(new Event("input", { bubbles: true }));
@@ -2063,9 +2183,9 @@ function invalidateView(name) {
   delete cache2[name];
   localStorage.setItem(VIEW_CACHE_KEY, JSON.stringify(cache2));
 }
-function cacheState(node, row, state = "saved") {
+function cacheState(node2, row, state = "saved") {
   const age = formatAge(Date.now() - (row?.saved_at || 0));
-  node.textContent = state === "refreshing" ? `Showing saved update \xB7 ${age} \xB7 refreshing\u2026` : state === "offline" ? `Showing saved update \xB7 ${age} \xB7 refresh unavailable` : `Up to date \xB7 checked ${formatAge(Date.now() - (row?.checked_at || Date.now()))}`;
+  node2.textContent = state === "refreshing" ? `Showing saved update \xB7 ${age} \xB7 refreshing\u2026` : state === "offline" ? `Showing saved update \xB7 ${age} \xB7 refresh unavailable` : `Up to date \xB7 checked ${formatAge(Date.now() - (row?.checked_at || Date.now()))}`;
 }
 async function world() {
   if (!snapshot || Date.now() - snapshotReadAt > 15e3) {
@@ -2090,18 +2210,18 @@ async function today(parent) {
   await guarded(coords, async () => {
     const data = await api("/api/coordinators");
     for (const row of data.coordinators) {
-      const node = button("", () => {
+      const node2 = button("", () => {
         location.hash = "coordinator";
       }, "card coord-row");
-      node.dataset.id = row.id;
-      node.addEventListener("click", () => {
+      node2.dataset.id = row.id;
+      node2.addEventListener("click", () => {
         try {
           localStorage.setItem("office-coordinator-pick", row.id);
         } catch {
         }
       }, { capture: true });
-      node.append(el("h3", "", row.name), healthLine(row));
-      coords.append(node);
+      node2.append(el("h3", "", row.name), healthLine(row));
+      coords.append(node2);
     }
   });
   const needs = section(parent, "Needs you");
@@ -2134,13 +2254,13 @@ function reportLead(text) {
 async function dailyReports(parent) {
   const data = await api("/api/reports");
   for (const row of data.reports) {
-    const node = el("details", "card report");
+    const node2 = el("details", "card report");
     const summary = el("summary");
     const when = row.at ? new Date(row.at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "no report yet";
     summary.append(el("strong", "", row.name), el("span", "muted", ` \xB7 ${when}${row.stale ? " \xB7 showing the last one that loaded" : ""}${row.ok === false ? " \xB7 failed" : ""}`), el("p", "report-lead", reportLead(row.text || row.error || "")));
-    node.append(summary);
-    if (row.text) node.append(markdownView(row.text));
-    parent.append(node);
+    node2.append(summary);
+    if (row.text) node2.append(markdownView(row.text));
+    parent.append(node2);
   }
 }
 async function work(parent) {
@@ -2175,17 +2295,17 @@ async function projectRoster(parent) {
   const rows = el("div", "grid");
   parent.append(rows);
   let limit = 8;
-  function draw() {
+  function draw2() {
     rows.replaceChildren();
     const matches = desks.filter((desk) => (desk.repo + " " + (desk.label || "")).toLowerCase().includes(filter.value.toLowerCase()));
     for (const desk of matches.slice(0, limit)) rows.append(card(desk.repo, desk.label || desk.detail || desk.outcome, () => project(desk)));
     if (matches.length > limit) rows.append(button(`Show all ${matches.length} projects`, () => {
       limit = matches.length;
-      draw();
+      draw2();
     }));
   }
-  filter.addEventListener("input", draw);
-  draw();
+  filter.addEventListener("input", draw2);
+  draw2();
   const inactive = (data.stations || []).filter((desk) => desk.hidden);
   if (inactive.length) {
     const away = el("details", "find-group");
@@ -2273,9 +2393,9 @@ async function githubDetail(repo, item, kind) {
   });
 }
 function commentView(comment) {
-  const node = el("article", "card");
-  node.append(el("h3", "", comment.user?.login || "Comment"), markdownView(comment.body || ""));
-  return node;
+  const node2 = el("article", "card");
+  node2.append(el("h3", "", comment.user?.login || "Comment"), markdownView(comment.body || ""));
+  return node2;
 }
 async function githubComments(parent, repo, number, cursor) {
   const data = await api(`/api/github/comments?repo=${encodeURIComponent(repo)}&number=${number}&cursor=${cursor}`);
@@ -2338,18 +2458,18 @@ async function githubBranches(repo, cursor = 1, parent = null) {
   });
   return loaded;
 }
-async function refreshRunningSource(source) {
-  if (source.busy || selecting(source.rows)) return;
-  source.busy = true;
+async function refreshRunningSource(source2) {
+  if (source2.busy || selecting(source2.rows)) return;
+  source2.busy = true;
   const next = el("div");
   try {
-    await source.render(next);
-    redrawIfChanged(source.rows, next.innerHTML, () => source.rows.replaceChildren(...next.childNodes));
-    source.status.textContent = `Checked ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`;
+    await source2.render(next);
+    redrawIfChanged(source2.rows, next.innerHTML, () => source2.rows.replaceChildren(...next.childNodes));
+    source2.status.textContent = `Checked ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`;
   } catch (error) {
-    source.status.textContent = `${source.name} unavailable; last view retained. ${error.message}`;
+    source2.status.textContent = `${source2.name} unavailable; last view retained. ${error.message}`;
   } finally {
-    source.busy = false;
+    source2.busy = false;
   }
 }
 async function observedProcesses(parent) {
@@ -2361,25 +2481,25 @@ async function observedProcesses(parent) {
 }
 async function runningNow(parent) {
   const sources = [
-    { name: "Office tasks", render: (node) => taskList(node, true) },
-    { name: "Agent sessions", render: (node) => sessions(node, true) },
+    { name: "Office tasks", render: (node2) => taskList(node2, true) },
+    { name: "Agent sessions", render: (node2) => sessions(node2, true) },
     { name: "Mac processes", render: observedProcesses, collapsed: true }
   ];
-  for (const source of sources) {
-    const container = el(source.collapsed ? "details" : "div");
-    if (source.collapsed) container.append(el("summary", "", "Observed Mac processes"));
-    source.status = el("p", "muted");
-    source.rows = el("div");
-    container.append(source.status, source.rows);
+  for (const source2 of sources) {
+    const container = el(source2.collapsed ? "details" : "div");
+    if (source2.collapsed) container.append(el("summary", "", "Observed Mac processes"));
+    source2.status = el("p", "muted");
+    source2.rows = el("div");
+    container.append(source2.status, source2.rows);
     parent.append(container);
   }
   function refresh() {
     if (!parent.isConnected) return;
-    for (const source of sources) void refreshRunningSource(source);
+    for (const source2 of sources) void refreshRunningSource(source2);
   }
   refresh();
-  const timer = setInterval(() => {
-    if (!parent.isConnected) clearInterval(timer);
+  const timer2 = setInterval(() => {
+    if (!parent.isConnected) clearInterval(timer2);
     else refresh();
   }, 1e4);
 }
@@ -2641,7 +2761,6 @@ ${item.excerpt}`, () => openSearchResult(item)));
     if (data.next_cursor !== null) parent.append(button("More results", () => search(data.next_cursor)));
   });
 }
-var decisionIndex = 0;
 var feedCategory = "all";
 async function watch(parent) {
   let cached = cachedView("watch");
@@ -2673,7 +2792,6 @@ async function watch(parent) {
 }
 function renderWatch(parent, data, cached, state = "current") {
   attention = data.attention || { items: [], errors: [], failures: [] };
-  const rows = attention.items.filter(requiresYou);
   const failures = attention.failures;
   const coordinatorRows = data.coordinators || [];
   const coordinatorError = data.coordinator_error || "";
@@ -2685,9 +2803,7 @@ function renderWatch(parent, data, cached, state = "current") {
   const freshness = el("p", "view-freshness");
   cacheState(freshness, cached, state);
   overview.append(freshness);
-  if (attention.errors.length) overview.append(el("h1", "", "Checking what needs you"));
-  else if (rows.length) overview.append(el("h1", "", rows.length === 1 ? "One thing needs you" : `${rows.length} things need you`));
-  else overview.append(el("h1", "", "Nothing needs you"));
+  overview.append(el("h1", "", "Open work"));
   if (coordinatorError) overview.append(el("p", "watch-summary-muted", "I can\u2019t confirm system status right now."));
   else {
     const summary = [];
@@ -2696,45 +2812,8 @@ function renderWatch(parent, data, cached, state = "current") {
     if (!summary.length) summary.push("No systems are reporting a problem");
     overview.append(el("p", exceptions.length ? "watch-summary-attention" : "watch-summary-normal", summary.join(" \xB7 ")));
   }
-  if (attention.errors.length) overview.append(el("p", "watch-summary-muted", "The decision checks are unavailable, so I can\u2019t confirm yet."));
   parent.append(overview);
-  if (rows.length || attention.errors.length) {
-    const decisions = section(parent, "Needs you");
-    decisions.parentElement.classList.add("watch-decisions");
-    if (rows.length) {
-      decisionIndex = Math.max(0, Math.min(decisionIndex, rows.length - 1));
-      const stack = el("div", "decision-stack");
-      decisions.append(stack);
-      const draw = () => {
-        const entry = rows[decisionIndex];
-        stack.replaceChildren();
-        stack.append(el("p", "decision-count", `${decisionIndex + 1} of ${rows.length} decisions`));
-        const nav = el("div", "decision-nav");
-        const previous = button("\u2190 Previous", () => {
-          decisionIndex = (decisionIndex - 1 + rows.length) % rows.length;
-          draw();
-        });
-        const next = button("Next \u2192", () => {
-          decisionIndex = (decisionIndex + 1) % rows.length;
-          draw();
-        });
-        nav.append(previous, next, button("Full list", () => {
-          const body = sheet("All decisions");
-          for (const item of rows) body.append(attentionCard(item));
-        }));
-        stack.append(nav, attentionCard(entry));
-      };
-      draw();
-    } else if (attention.errors.length) {
-      decisions.append(el("p", "watch-unconfirmed", "I can't confirm yet. A source for decisions is unavailable."));
-    }
-    if (attention.errors.length) {
-      const source = el("details", "watch-source-note");
-      source.append(el("summary", "", "Check details"));
-      for (const problem of attention.errors) source.append(el("p", "muted", problem));
-      decisions.append(source);
-    }
-  }
+  parent.append(officeDocument());
   if (failures.length) {
     const stalled = section(parent, "Automation needs repair");
     stalled.append(el("p", "muted", `${failures.length} automated ${failures.length === 1 ? "pass needs" : "passes need"} diagnosis. Inspect the original work and blocker before retrying.`));
@@ -2816,20 +2895,20 @@ async function feedDetail(post) {
   const body = sheet(data.title);
   body.append(el("p", "muted", `${data.category} \xB7 ${new Date(data.published_at * 1e3).toLocaleString()} \xB7 ${data.model}`), el("p", "", data.body));
   const sources = section(body, "Sources");
-  for (const source of data.sources) {
-    const issue = source.url.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
-    if (source.url === "/#watch") sources.append(button(source.title, () => {
+  for (const source2 of data.sources) {
+    const issue = source2.url.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
+    if (source2.url === "/#watch") sources.append(button(source2.title, () => {
       document.querySelector("#detail").close();
       location.hash = "watch";
     }));
-    else if (source.url.startsWith("/api/media/detail?id=")) {
-      const id = decodeURIComponent(source.url.split("id=")[1]);
-      sources.append(button(source.title, () => mediaDetail(id)));
-    } else if (source.url.startsWith("/api/buzz/detail?id=")) {
-      const id = decodeURIComponent(source.url.split("id=")[1]);
-      sources.append(button(source.title, () => buzzSourceDetail(id)));
-    } else if (issue) sources.append(button(source.title, () => githubDetail(issue[1], { number: Number(issue[3]) }, issue[2] === "pull" ? "prs" : "issues")));
-    else sources.append(link(source.title, source.url));
+    else if (source2.url.startsWith("/api/media/detail?id=")) {
+      const id = decodeURIComponent(source2.url.split("id=")[1]);
+      sources.append(button(source2.title, () => mediaDetail(id)));
+    } else if (source2.url.startsWith("/api/buzz/detail?id=")) {
+      const id = decodeURIComponent(source2.url.split("id=")[1]);
+      sources.append(button(source2.title, () => buzzSourceDetail(id)));
+    } else if (issue) sources.append(button(source2.title, () => githubDetail(issue[1], { number: Number(issue[3]) }, issue[2] === "pull" ? "prs" : "issues")));
+    else sources.append(link(source2.title, source2.url));
   }
   if (data.media?.length) {
     const media = section(body, "Media");
@@ -3096,7 +3175,7 @@ async function ask(parent) {
       steerHint.textContent = working && !steerVerified ? "Checking Send now availability\u2026" : working && !state.steer?.available ? state.steer?.reason || "Send now is unavailable; Queue remains available." : "";
       steerHint.hidden = !steerHint.textContent;
     };
-    const draw = (state, toBottom = false) => {
+    const draw2 = (state, toBottom = false) => {
       const follow = toBottom || !rendered || distanceFromBottom() < 64, previousTop = thread.scrollTop;
       current2 = state;
       thread.dataset.signature = JSON.stringify(state);
@@ -3153,7 +3232,7 @@ async function ask(parent) {
       rendered = true;
       updateJump();
     };
-    draw(data);
+    draw2(data);
     let refreshing = false;
     async function refreshAsk(toBottom = false, force = false) {
       if (refreshing) return;
@@ -3171,7 +3250,7 @@ async function ask(parent) {
           updateControls(merged);
           return;
         }
-        redrawIfChanged(thread, JSON.stringify(merged), () => draw(merged, toBottom));
+        redrawIfChanged(thread, JSON.stringify(merged), () => draw2(merged, toBottom));
       } catch (error) {
         if (cached) cacheState(freshness, cached, "offline");
         throw error;
@@ -3190,9 +3269,9 @@ async function ask(parent) {
       }
       picker.value = chosen;
     }).catch((error) => notice("Model list: " + error.message));
-    const timer = setInterval(async () => {
+    const timer2 = setInterval(async () => {
       if (!chat.isConnected) {
-        clearInterval(timer);
+        clearInterval(timer2);
         return;
       }
       if (!current2?.busy) return;
@@ -3274,16 +3353,16 @@ async function ask(parent) {
     if (steerPending) void sendSteerPending(steerPending);
   });
 }
-function officeLinkText(node, value3) {
+function officeLinkText(node2, value3) {
   const expression = /https:\/\/[^\s<>]+/g;
   let at = 0;
   for (const match of value3.matchAll(expression)) {
-    if (match.index > at) node.append(document.createTextNode(value3.slice(at, match.index)));
+    if (match.index > at) node2.append(document.createTextNode(value3.slice(at, match.index)));
     const url = match[0].replace(/[.,;!?]+$/, "");
-    node.append(link(url, url));
+    node2.append(link(url, url));
     at = match.index + url.length;
   }
-  if (at < value3.length) node.append(document.createTextNode(value3.slice(at)));
+  if (at < value3.length) node2.append(document.createTextNode(value3.slice(at)));
 }
 async function find(parent) {
   intro(parent, "Find", "Everything has a place", "Search, read, and follow an object back to the work that made it.");
@@ -3420,9 +3499,9 @@ async function archives(parent, cursor = 0) {
 }
 function archiveMessages(parent, items) {
   for (const item of items) {
-    const node = item.structured ? el("details", "card") : el("article", "card");
-    node.append(el(item.structured ? "summary" : "h3", "", item.role), item.structured ? el("pre", "", item.text) : markdownView(item.text));
-    parent.append(node);
+    const node2 = item.structured ? el("details", "card") : el("article", "card");
+    node2.append(el(item.structured ? "summary" : "h3", "", item.role), item.structured ? el("pre", "", item.text) : markdownView(item.text));
+    parent.append(node2);
   }
 }
 async function archiveDetail(id) {
@@ -3676,28 +3755,28 @@ async function refreshAttention() {
   badge.setAttribute("aria-label", `${needsYou ? `${needsYou} items need you` : "Nothing needs you right now"}${errors.length ? "; a decision source is unavailable" : ""}`);
   const label = $('.tabs a[href="#watch"]');
   label.setAttribute("aria-label", needsYou ? `Watch, ${needsYou} items need you` : "Watch, nothing needs you right now");
-  const node = $("#needs-list");
-  if (node) drawAttention(node);
+  const node2 = $("#needs-list");
+  if (node2) drawAttention(node2);
 }
 function drawAttention(parent) {
-  const existing = new Map([...parent.querySelectorAll("[data-attention-key]")].map((node) => [node.dataset.attentionKey, node]));
+  const existing = new Map([...parent.querySelectorAll("[data-attention-key]")].map((node2) => [node2.dataset.attentionKey, node2]));
   const nodes = attention.errors.map((error) => el("p", "error", error));
   if (!attention.items.length && !attention.errors.length) nodes.push(el("p", "empty", "Nothing waiting for you."));
   const shown = parent.id === "needs-list" ? attention.items.slice(0, 3) : attention.items;
   for (const entry of shown) {
     const key = `${entry.kind}:${entry.item.id}`;
-    const node = attentionCard(entry);
-    node.dataset.attentionKey = key;
-    nodes.push(node);
+    const node2 = attentionCard(entry);
+    node2.dataset.attentionKey = key;
+    nodes.push(node2);
   }
   if (shown.length < attention.items.length) nodes.push(button(`View all ${attention.items.length} items`, () => attentionList(sheet("Needs you"))));
   reconcileChildren(parent, nodes);
 }
 function reconcileChildren(parent, nodes) {
   let cursor = parent.firstChild;
-  for (const node of nodes) {
-    if (node === cursor) cursor = cursor.nextSibling;
-    else parent.insertBefore(node, cursor);
+  for (const node2 of nodes) {
+    if (node2 === cursor) cursor = cursor.nextSibling;
+    else parent.insertBefore(node2, cursor);
   }
   while (cursor) {
     const next = cursor.nextSibling;
@@ -3710,9 +3789,9 @@ function attentionCard(entry) {
   return humanAskCard(entry.item);
 }
 function coordinatorQuestionCard(entry) {
-  const issue = entry.item, node = el("article", "card attention-choice");
-  node.append(el("p", "attention-source", `${entry.repo} #${issue.number}`), el("h3", "", issue.title), el("p", "attention-question", issue.decision.question));
-  for (const option of issue.decision.options) node.append(button(`${option.label}${option.recommended ? " (recommended)" : ""}`, async () => {
+  const issue = entry.item, node2 = el("article", "card attention-choice");
+  node2.append(el("p", "attention-source", `${entry.repo} #${issue.number}`), el("h3", "", issue.title), el("p", "attention-question", issue.decision.question));
+  for (const option of issue.decision.options) node2.append(button(`${option.label}${option.recommended ? " (recommended)" : ""}`, async () => {
     const result = await api("/api/decision", { kind: "choose", repo: entry.repo, issue: issue.number, n: option.n, label: option.label });
     if (!result.ok) throw Error(result.result || "Answer was not recorded");
     snapshot = null;
@@ -3721,8 +3800,8 @@ function coordinatorQuestionCard(entry) {
     notice("Answer recorded on the issue");
     await route();
   }, "attention-option"));
-  node.append(button("Talk to agent", () => newIssueTask(entry.repo, issue.number, issue.title), "attention-option"), button("Close issue", () => closeWatchIssue(entry.repo, issue.number), "attention-close"), link("Open on GitHub", issue.url));
-  return node;
+  node2.append(button("Talk to agent", () => newIssueTask(entry.repo, issue.number, issue.title), "attention-option"), button("Close issue", () => closeWatchIssue(entry.repo, issue.number), "attention-close"), link("Open on GitHub", issue.url));
+  return node2;
 }
 async function closeWatchIssue(repo, number) {
   const result = await githubAction({ action: "close", repo, number });
@@ -3733,12 +3812,12 @@ async function closeWatchIssue(repo, number) {
   await route();
 }
 function humanAskCard(ask2) {
-  const node = el("article", "card attention-choice");
-  node.append(el("p", "attention-source", ask2.source_ref), el("h3", "", "Input needed"), el("p", "attention-question", ask2.action));
+  const node2 = el("article", "card attention-choice");
+  node2.append(el("p", "attention-source", ask2.source_ref), el("h3", "", "Input needed"), el("p", "attention-question", ask2.action));
   const input = el("input");
   input.type = "text";
   input.setAttribute("aria-label", "Answer this exact request");
-  node.append(input, button("Answer and resume", async () => {
+  node2.append(input, button("Answer and resume", async () => {
     const answer = input.value.trim();
     if (!answer) throw Error("Enter an answer first");
     await api("/api/human-input/answer", { id: ask2.id, answer });
@@ -3746,7 +3825,7 @@ function humanAskCard(ask2) {
     notice("Answer recorded; Office resumed the task");
     await refreshAttention();
   }, "attention-option"));
-  return node;
+  return node2;
 }
 async function attentionList(parent) {
   await refreshAttention();
@@ -3759,22 +3838,22 @@ function meaningfulFailureLine(text) {
 }
 function automationFailureCard(entry) {
   const issue = entry.item, askedAt = Date.parse(issue.last_word_at || "");
-  const node = el("article", "card attention-choice");
-  node.append(el("h3", "", `${entry.repo} #${issue.number} \xB7 ${issue.title}`), el("p", "muted", `Unexplained pass${Number.isFinite(askedAt) ? ` \xB7 ${formatAge(Date.now() - askedAt)}` : ""}`));
+  const node2 = el("article", "card attention-choice");
+  node2.append(el("h3", "", `${entry.repo} #${issue.number} \xB7 ${issue.title}`), el("p", "muted", `Unexplained pass${Number.isFinite(askedAt) ? ` \xB7 ${formatAge(Date.now() - askedAt)}` : ""}`));
   const receipt = el("p", "muted", "Checking earlier work and failure receipt\u2026");
-  node.append(receipt);
+  node2.append(receipt);
   const actions = el("div", "actions");
   actions.append(button("Talk to agent", () => newIssueTask(entry.repo, issue.number, issue.title)), button("Inspect history or add guidance", () => githubDetail(entry.repo, issue, "issues")), button("Close issue", () => closeWatchIssue(entry.repo, issue.number), "attention-close"), link("Open on GitHub", issue.url || `https://github.com/${entry.repo}/issues/${issue.number}`));
-  node.append(actions);
+  node2.append(actions);
   api(`/api/github/detail?repo=${encodeURIComponent(entry.repo)}&number=${issue.number}&kind=issues`).then((data) => {
-    if (!node.isConnected) return;
+    if (!node2.isConnected) return;
     const comments = (data.comments || []).filter((row) => !String(row.body || "").includes("The automated pass could not resolve this and did not say what to decide.") && !String(row.body || "").includes("<!-- office-request:"));
     const meaningful = comments.at(-1), lead = meaningfulFailureLine(meaningful?.body || "");
     receipt.textContent = lead ? `Last substantive report (${formatAge(Date.now() - Date.parse(meaningful.created_at))}): ${lead.slice(0, 350)}` : "No substantive run receipt found in the available issue comments. Inspect the history before retrying.";
   }).catch((error) => {
-    if (node.isConnected) receipt.textContent = `Issue history unavailable: ${error.message}. Inspect on GitHub before retrying.`;
+    if (node2.isConnected) receipt.textContent = `Issue history unavailable: ${error.message}. Inspect on GitHub before retrying.`;
   });
-  return node;
+  return node2;
 }
 var layoutObserver = new ResizeObserver(() => {
   document.documentElement.style.setProperty("--tabs-height", `${$(".tabs").getBoundingClientRect().height}px`);
@@ -3828,11 +3907,11 @@ function showSearchCoverage(parent, coverage) {
   const details = el("details", "card");
   details.append(el("summary", "", "What search can see"));
   const groups = /* @__PURE__ */ new Map();
-  for (const source of coverage.sources || []) {
-    if (!groups.has(source.kind)) groups.set(source.kind, []);
-    groups.get(source.kind).push(source);
+  for (const source2 of coverage.sources || []) {
+    if (!groups.has(source2.kind)) groups.set(source2.kind, []);
+    groups.get(source2.kind).push(source2);
   }
-  for (const [kind, rows] of groups) coverageGroup(details, kind, rows, (source) => `${source.source}: ${source.indexed} indexed \xB7 ${source.coverage} \xB7 ${source.state}${source.total === 0 ? " \xB7 0 retained" : ""}`);
+  for (const [kind, rows] of groups) coverageGroup(details, kind, rows, (source2) => `${source2.source}: ${source2.indexed} indexed \xB7 ${source2.coverage} \xB7 ${source2.state}${source2.total === 0 ? " \xB7 0 retained" : ""}`);
   coverageGroup(details, "GitHub collection", coverage.github || [], (repo) => `${repo.repo} \xB7 ${repo.state} \xB7 ${repo.indexed}/${repo.fetched} records${repo.error ? " \xB7 " + repo.error : ""}`);
   parent.append(details);
 }
@@ -3924,10 +4003,10 @@ ${item.body || JSON.stringify(item)}`));
 async function githubChecks(parent, repo, head, cursor = 1, kind = "checks") {
   const data = await api(`/api/github/checks?repo=${encodeURIComponent(repo)}&head=${head}&cursor=${cursor}&kind=${kind}`);
   for (const check of data.items) {
-    const node = card(check.name || check.context, check.conclusion || check.state || check.status);
+    const node2 = card(check.name || check.context, check.conclusion || check.state || check.status);
     const url = check.html_url || check.target_url;
-    if (url) node.append(link("Open check", url));
-    parent.append(node);
+    if (url) node2.append(link("Open check", url));
+    parent.append(node2);
   }
   if (data.next_cursor) parent.append(button("More checks", () => githubChecks(parent, repo, head, data.next_cursor, kind)));
   if (kind === "checks" && cursor === 1) await githubChecks(parent, repo, head, 1, "statuses");
@@ -4037,10 +4116,10 @@ async function restoreBot(id) {
 }
 async function restoreConversation(id) {
   const route2 = location.href;
-  const saved = JSON.parse(id);
+  const saved2 = JSON.parse(id);
   const data = await api("/api/sessions");
   if (location.href !== route2) return;
-  const session = data.sessions.find((item) => saved.session_id ? item.session_id === saved.session_id : item.name === saved.name && item.started_at === saved.started_at && item.directory === saved.directory);
+  const session = data.sessions.find((item) => saved2.session_id ? item.session_id === saved2.session_id : item.name === saved2.name && item.started_at === saved2.started_at && item.directory === saved2.directory);
   if (!session) throw Error("This session is no longer addressable. Its retained history is available in Work.");
   return conversation2(session);
 }
@@ -4059,13 +4138,13 @@ function githubLineSelection(parent, reference, text) {
     box.append(el("p", "muted", "This file has no lines to select."));
     return;
   }
-  const source = el("details");
-  source.append(el("summary", "", "Numbered source"));
-  box.append(source);
+  const source2 = el("details");
+  source2.append(el("summary", "", "Numbered source"));
+  box.append(source2);
   let rendered = false;
-  source.addEventListener("toggle", () => {
-    if (source.open && !rendered) {
-      source.append(numberedSource({ text, line_start: 1 }));
+  source2.addEventListener("toggle", () => {
+    if (source2.open && !rendered) {
+      source2.append(numberedSource({ text, line_start: 1 }));
       rendered = true;
     }
   });

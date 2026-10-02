@@ -5,6 +5,7 @@ import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
 import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
+import {officeDocument} from './office-doc.js';
 import {selecting,redrawIfChanged,mergeAskState} from './office-selection.js';
 import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
 import {issueInventory,issueControls} from './office-issues.js';
@@ -314,7 +315,7 @@ async function search(cursor=0){
  const parent=$('#content');if(cursor===0){parent.replaceChildren();intro(parent,'Everywhere',`“${query}”`,'Names, paths, and contents across your office.');const filters=el('div','actions');for(const [kind,label] of [['','All'],['file','Files'],['conversation','Conversations'],['github','GitHub'],['event','Events'],['log','Logs'],['podcast','Podcasts'],['substrate','Poetry']])filters.append(button(label,()=>{searchKind=kind;search();}));parent.append(filters);}
  await guarded(parent,async()=>{const data=await api(`/api/search/all?q=${encodeURIComponent(query)}&cursor=${cursor}&kind=${searchKind}`);parent.append(el('p','muted',`${data.total||0} results · index ${data.coverage.state} · ${data.coverage.count||0} objects · updated ${data.coverage.finished_at?new Date(data.coverage.finished_at*1000).toLocaleTimeString():'never'}`));showSearchCoverage(parent,data.coverage);for(const problem of data.coverage.errors||[])parent.append(el('p','error',`${problem.source}: ${problem.error}`));if(data.coverage.refresh?.state==='indexing')parent.append(button('Index updating · refresh results',()=>search()));for(const item of data.items)parent.append(card(item.title,`${item.project} / ${item.path}\n${item.excerpt}`,()=>openSearchResult(item)));if(data.next_cursor!==null)parent.append(button('More results',()=>search(data.next_cursor)));});
 }
-let decisionIndex=0,feedCategory='all';
+let feedCategory='all';
 async function watch(parent){
   let cached=cachedView('watch');
   if(cached?.data)renderWatch(parent,cached.data,cached,'refreshing');
@@ -331,7 +332,6 @@ async function watch(parent){
 }
 function renderWatch(parent,data,cached,state='current'){
   attention=data.attention||{items:[],errors:[],failures:[]};
-  const rows=attention.items.filter(requiresYou);
   const failures=attention.failures;
   const coordinatorRows=data.coordinators||[];
   const coordinatorError=data.coordinator_error||'';
@@ -342,9 +342,7 @@ function renderWatch(parent,data,cached,state='current'){
   const overview=el('header','watch-overview');
   overview.append(el('div','eyebrow','Watch'));
   const freshness=el('p','view-freshness');cacheState(freshness,cached,state);overview.append(freshness);
-  if(attention.errors.length)overview.append(el('h1','','Checking what needs you'));
-  else if(rows.length)overview.append(el('h1','',rows.length===1?'One thing needs you':`${rows.length} things need you`));
-  else overview.append(el('h1','','Nothing needs you'));
+  overview.append(el('h1','','Open work'));
   if(coordinatorError)overview.append(el('p','watch-summary-muted','I can’t confirm system status right now.'));
   else{
    const summary=[];
@@ -353,32 +351,9 @@ function renderWatch(parent,data,cached,state='current'){
    if(!summary.length)summary.push('No systems are reporting a problem');
    overview.append(el('p',exceptions.length?'watch-summary-attention':'watch-summary-normal',summary.join(' · ')));
   }
-  if(attention.errors.length)overview.append(el('p','watch-summary-muted','The decision checks are unavailable, so I can’t confirm yet.'));
   parent.append(overview);
 
-  if(rows.length||attention.errors.length){
-  const decisions=section(parent,'Needs you');decisions.parentElement.classList.add('watch-decisions');
-  if(rows.length){
-  decisionIndex=Math.max(0,Math.min(decisionIndex,rows.length-1));
-  const stack=el('div','decision-stack');decisions.append(stack);
-  const draw=()=>{
-   const entry=rows[decisionIndex];stack.replaceChildren();
-   stack.append(el('p','decision-count',`${decisionIndex+1} of ${rows.length} decisions`));
-   const nav=el('div','decision-nav');
-   const previous=button('← Previous',()=>{decisionIndex=(decisionIndex-1+rows.length)%rows.length;draw();});
-   const next=button('Next →',()=>{decisionIndex=(decisionIndex+1)%rows.length;draw();});
-    nav.append(previous,next,button('Full list',()=>{const body=sheet('All decisions');for(const item of rows)body.append(attentionCard(item));}));
-    stack.append(nav,attentionCard(entry));
-  };draw();
-  }else if(attention.errors.length){
-   decisions.append(el('p','watch-unconfirmed',"I can't confirm yet. A source for decisions is unavailable."));
-  }
-
-  if(attention.errors.length){
-   const source=el('details','watch-source-note');source.append(el('summary','','Check details'));
-   for(const problem of attention.errors)source.append(el('p','muted',problem));decisions.append(source);
-  }
-  }
+  parent.append(officeDocument());
 
   if(failures.length){
    const stalled=section(parent,'Automation needs repair');
