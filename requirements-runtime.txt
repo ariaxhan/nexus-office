@@ -37,6 +37,12 @@ click==8.5.0
     #   uvicorn
 cryptography==50.0.1
     # via pyjwt
+cuda-bindings==13.4.3
+    # via torch
+cuda-pathfinder==1.8.3
+    # via cuda-bindings
+cuda-toolkit[cublas,cudart,cufft,cufile,cupti,curand,cusolver,cusparse,nvjitlink,nvrtc,nvtx]==13.0.3.0
+    # via torch
 filelock==3.32.5
     # via
     #   huggingface-hub
@@ -99,14 +105,11 @@ miniaudio==1.71
 mlx==0.32.2
     # via
     #   mlx-audio
-    #   mlx-lm
     #   mlx-whisper
 mlx-audio==0.4.4
     # via -r requirements-runtime.in
 mlx-lm==0.31.3
     # via mlx-audio
-mlx-metal==0.32.2
-    # via mlx
 mlx-whisper==0.4.3
     # via -r requirements-runtime.in
 more-itertools==11.1.0
@@ -126,6 +129,47 @@ numpy==2.5.3
     #   scipy
     #   soundfile
     #   transformers
+nvidia-cublas==13.1.1.3
+    # via
+    #   cuda-toolkit
+    #   nvidia-cudnn-cu13
+    #   nvidia-cusolver
+nvidia-cuda-cupti==13.0.85
+    # via cuda-toolkit
+nvidia-cuda-nvrtc==13.0.88
+    # via
+    #   cuda-toolkit
+    #   nvidia-cublas
+nvidia-cuda-runtime==13.0.96
+    # via cuda-toolkit
+nvidia-cudnn-cu13==9.24.0.43
+    # via torch
+nvidia-cufft==12.0.0.61
+    # via cuda-toolkit
+nvidia-cufile==1.15.1.6
+    # via cuda-toolkit
+nvidia-curand==10.4.0.35
+    # via cuda-toolkit
+nvidia-cusolver==12.0.4.66
+    # via cuda-toolkit
+nvidia-cusparse==12.6.3.3
+    # via
+    #   cuda-toolkit
+    #   nvidia-cusolver
+nvidia-cusparselt-cu13==0.8.1
+    # via torch
+nvidia-nccl-cu13==2.30.7
+    # via torch
+nvidia-nvjitlink==13.4.92
+    # via
+    #   cuda-toolkit
+    #   nvidia-cufft
+    #   nvidia-cusolver
+    #   nvidia-cusparse
+nvidia-nvshmem-cu13==3.4.5
+    # via torch
+nvidia-nvtx==13.0.85
+    # via cuda-toolkit
 opentelemetry-api==1.44.0
     # via mcp
 packaging==26.3
@@ -144,7 +188,7 @@ pydantic-core==2.46.5
     # via pydantic
 pygments==2.21.0
     # via rich
-pyjwt==2.13.0
+pyjwt[crypto]==2.15.0
     # via mcp
 python-multipart==0.0.32
     # via mcp
@@ -177,8 +221,6 @@ scipy==1.18.1
     #   mlx-whisper
 sentencepiece==0.2.2
     # via mlx-lm
-setuptools==84.0.0
-    # via torch
 shellingham==1.5.4
     # via typer
 sniffio==1.3.1
@@ -211,6 +253,8 @@ transformers==5.16.1
     # via
     #   mlx-audio
     #   mlx-lm
+triton==3.8.0
+    # via torch
 truststore==0.10.4
     # via
     #   httpcore2
@@ -220,15 +264,12 @@ typer==0.27.2
 typing-extensions==4.16.0
     # via
     #   anyio
-    #   httpx2
     #   huggingface-hub
     #   mcp
     #   mcp-types
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
-    #   referencing
-    #   starlette
     #   torch
     #   typing-inspection
 typing-inspection==0.4.4
