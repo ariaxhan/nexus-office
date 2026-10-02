@@ -3,6 +3,8 @@
 Frozen evidence for nexus-office #235 and subsequent screening. Scores come from the JSON/JSONL receipts beside this README; cancelled-run observations are labelled separately.
 
 2026-10-01 extension commission: `Vaults/_meta/commissions/active/2026-10-01-find-small-local-models-that-pass-our-frozen-tra.md`.
+Chronicle: `Vaults/_meta/chronicles/2026/2026-10-01-completed-local-model-screening-126-comparable-w.md`.
+Screening evidence landed on `origin/main` in nexus-office commit `1ae672e`.
 
 ## Setup
 
