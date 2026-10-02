@@ -17,7 +17,7 @@ def classify(rules, labels, paths, lines, first_road=False):
     rules, labels = rules or {}, {str(l).lower() for l in labels}
     if first_road or _hits(paths, rules.get("human_globs", ())) or labels & set(rules.get("human_labels", ())):
         return "human"
-    if _hits(paths, rules.get("review_globs", ())) or _hits(paths, SENSITIVE) or lines > 300:
+    if rules.get("no_direct") or _hits(paths, rules.get("review_globs", ())) or _hits(paths, SENSITIVE) or lines > 300:
         return "review"
     direct = rules.get("direct_globs", ())
     if paths and all(_hits([p], direct) for p in paths):

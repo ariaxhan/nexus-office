@@ -110,7 +110,7 @@ class Lanes(unittest.TestCase):
     def test_failed_check_hold_says_which_check_and_what_it_printed(self):
         said = []
         def run(argv, cwd=None, **kw):
-            if kw.get("timeout") == 1800:
+            if argv == ["npm", "test"]:
                 return Fake(2, stdout="FAIL test_gate\n")
             self.write("a.txt", "edit\n")
             return Fake()
@@ -212,13 +212,170 @@ class Lanes(unittest.TestCase):
         [result] = lanes.recover(self.repo, comment_for=lambda flight: lambda body: said.append(flight) or "u")
         self.assertEqual(("HELD", ["flt_dead"]), (result["state"], said))
 
-    def test_whole_repo_recovery_never_reverts_the_shared_checkout(self):
+    def test_whole_repo_recovery_never_reverts_a_persons_dirty_bytes(self):
+        self.write("human.txt", "another session\n")  # dirty before the flight: never the flight's to move
         record = lease.acquire(self.repo, "main", "flt_whole", os.getpid(), 600)
-        self.write("human.txt", "another session\n")
+        self.write("a.txt", "crashed flight\n")
         with open(lease.path(self.repo), "w") as f:
             json.dump(dict(record, pid=999999), f)
         self.assertEqual("HELD", lease.recover(self.repo, lambda b: "c")["state"])
         self.assertEqual("another session\n", self.read("human.txt"))
+
+    def test_failed_landing_is_recovered_to_held_and_the_checkout_is_usable_again(self):
+        """A landing that raised (PR creation, check timeout, origin down) left the dead flight's bytes dirty;
+        recovery restored nothing and every later flight met `collision` or `behind_origin:dirty`."""
+        self.write("human.txt", "a person's edit\n")
+        self.write("notes.txt", "a person's untracked file\n")
+        before = lease.dirty(self.repo)
+
+        def run(argv, cwd=None, **kw):
+            self.write("a.txt", "flight\n")
+            self.write("new.txt", "flight\n")
+            os.remove(os.path.join(self.repo, "b.txt"))
+            return Fake()
+
+        def pr_create(*_):
+            raise RuntimeError("gh: could not create pull request")
+        issue = {"number": 9, "title": "t9", "labels": []}
+        with unittest.mock.patch("nexus.risk.classify", return_value="review"), self.assertRaises(RuntimeError):
+            executor.fly(self.entry, issue, "flt_failed", pr_create=pr_create, comment=lambda b: "c", run=run)
+        record = lease.read(self.repo)  # the landing raised: the lease and the flight's bytes are still here
+        with open(lease.path(self.repo), "w") as f:
+            json.dump(dict(record, pid=999999), f)  # and the runner process is gone
+        result = lease.recover(self.repo, lambda b: "c")
+        self.assertEqual(("HELD", "crashed"), (result["state"], result["reason"]))
+        held = result["sha"]
+        self.assertEqual(held, git(self.origin, "rev-parse", "aria/held/flt_failed"))
+        self.assertEqual(["a.txt", "b.txt", "new.txt"], sorted(git(self.origin, "diff", "--name-only", "main", held).split()))
+        self.assertEqual("flight", git(self.origin, "show", f"{held}:a.txt"))
+        self.assertEqual(before, lease.dirty(self.repo))  # only the person's two files are dirty, byte-identical
+        self.assertEqual(("base\n", "base\n"), (self.read("a.txt"), self.read("b.txt")))
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "new.txt")))
+        self.assertEqual("a person's untracked file\n", self.read("notes.txt"))
+        self.assertIsNone(lease.read(self.repo))
+        lease.acquire(self.repo, "main", "flt_next", os.getpid(), 600)  # the next flight flies
+
+    def test_recovery_leaves_a_baseline_dirty_path_the_flight_wrote_on(self):
+        self.write("human.txt", "a person's edit\n")
+        record = lease.acquire(self.repo, "main", "flt_top", os.getpid(), 600)
+        self.write("human.txt", "a person's edit\nflight on top\n")
+        self.write("a.txt", "flight\n")
+        with open(lease.path(self.repo), "w") as f:
+            json.dump(dict(record, pid=999999), f)
+        result = lease.recover(self.repo, lambda b: "c")
+        self.assertEqual(["a.txt"], git(self.origin, "diff", "--name-only", "main", result["sha"]).split())
+        self.assertEqual("a person's edit\nflight on top\n", self.read("human.txt"))  # never captured, never reverted
+        self.assertEqual("base\n", self.read("a.txt"))
+
+    def asleep(self, target, record, pid=None, started=None):
+        """The record as a Mac that slept an hour left it: no beat, and past its own expiry."""
+        now = time.time()
+        old = dict(record, started_at=now - 3700, heartbeat_at=now - 3600, renewed_at=now - 3600, expires=now - 2700)
+        old.update({"pid": pid} if pid else {}, **({"pid_started": started} if started else {}))
+        with open(target, "w") as f:
+            json.dump(old, f)
+        return old
+
+    def test_live_holder_renews_after_a_long_sleep_and_a_dead_one_is_recovered(self):
+        target = lease.path(self.repo)
+        record = lease.acquire(self.repo, "main", "flt_slept", os.getpid(), 900)
+        self.write("a.txt", "still working\n")
+        self.assertTrue(lease.stale(self.asleep(target, record)))
+        self.assertEqual(1, lease.heartbeat())
+        self.assertFalse(lease.stale(lease.read(self.repo)))
+        self.assertGreater(lease.read(self.repo)["expires"], time.time() + 800)  # the sleep was not its budget
+        self.asleep(target, record)
+        self.assertIsNone(lease.recover(self.repo, lambda b: "c"))  # a recover that beats the heartbeat renews too
+        self.assertEqual("still working\n", self.read("a.txt"))
+        self.assertFalse(lease.stale(lease.read(self.repo)))
+        self.asleep(target, record, started="Thu Jan  1 00:00:00 1970")  # the pid answers, but as another process
+        self.assertEqual(0, lease.heartbeat())
+        self.asleep(target, record, pid=999999)
+        self.assertEqual(0, lease.heartbeat())
+        self.assertEqual("HELD", lease.recover(self.repo, lambda b: "c")["state"])
+        self.assertEqual("base\n", self.read("a.txt"))
+
+    def test_live_holder_that_overran_its_budget_with_tower_ticking_is_not_renewed(self):
+        record = lease.acquire(self.repo, "main", "flt_wedged", os.getpid(), 900)
+        now = time.time()
+        with open(lease.path(self.repo), "w") as f:
+            json.dump(dict(record, heartbeat_at=now - 30, renewed_at=now - 30, expires=now - 1), f)
+        self.assertEqual(0, lease.heartbeat())
+        self.assertTrue(lease.stale(lease.read(self.repo)))
+
+    def test_live_write_set_lane_is_not_recovered_after_a_long_sleep(self):
+        record = lanes.acquire(self.repo, "main", "flt_lane", os.getpid(), 900, ["a.txt"])
+        self.write("a.txt", "still working\n")
+        target = os.path.join(lanes._dir(self.repo), "flt_lane.json")
+        self.asleep(target, record)
+        self.assertEqual([], lanes.recover(self.repo, lambda b: "c"))
+        self.assertEqual("still working\n", self.read("a.txt"))
+        self.assertEqual(["flt_lane"], [r["flight"] for r in lanes.live(self.repo)])
+        self.asleep(target, record, pid=999999)
+        self.assertEqual(["HELD"], [r["state"] for r in lanes.recover(self.repo, lambda b: "c")])
+
+    def check_lane(self, timeout_s, check):
+        seen = []
+        def run(argv, cwd=None, **kw):
+            if argv == ["npm", "test"]:
+                seen.append(kw.get("timeout"))
+                return check(argv, kw)
+            self.write("a.txt", "edit\n")
+            return Fake()
+        self.entry["check"] = ["npm", "test"]
+        issue = {"number": 1, "title": "fix", "labels": []}
+        with unittest.mock.patch("nexus.risk.classify", return_value="direct"):
+            result = executor.fly(self.entry, issue, f"flt_check_{timeout_s}", pr_create=None, comment=lambda b: "c",
+                                  run=run, write_set=["a.txt"], timeout_s=timeout_s)
+        return result, seen
+
+    def test_lane_check_is_bounded_by_the_lanes_remaining_budget(self):
+        result, [budget] = self.check_lane(900, lambda argv, kw: Fake())  # lease 1500 s, less the landing tail
+        self.assertEqual("LANDED", result["state"])
+        self.assertTrue(1100 < budget <= 1500 - lanes.LAND_TAIL_S, budget)
+        self.assertEqual(lanes.CHECK_FLOOR_S, lanes.check_budget(self.repo, {"flight": "gone", "expires": time.time()}))
+        self.assertEqual(lanes.CHECK_MAX_S, lanes.check_budget(self.repo, {"flight": "gone", "expires": time.time() + 9999}))
+
+    def test_lane_check_that_runs_out_of_budget_is_a_held_failed_check(self):
+        def slow(argv, kw):
+            raise subprocess.TimeoutExpired(argv, kw["timeout"])
+        result, [budget] = self.check_lane(1, slow)
+        self.assertTrue(lanes.CHECK_FLOOR_S <= budget <= 601 - lanes.LAND_TAIL_S, budget)
+        self.assertEqual(("HELD", "check_failed"), (result["state"], result["reason"]))
+        self.assertIn("timed out", result["detail"])
+        self.assertEqual("base\n", self.read("a.txt"))
+
+    def held(self, flight, message, text):
+        self.write("a.txt", text)
+        sha = landing.commit_paths(self.repo, git(self.repo, "rev-parse", "HEAD"), ["a.txt"], message)
+        git(self.repo, "push", "-q", "origin", f"{sha}:refs/heads/aria/held/{flight}")
+        self.write("a.txt", "base\n")
+        return sha
+
+    def branches(self):
+        return sorted(l.split("refs/heads/")[1] for l in git(self.origin, "show-ref").splitlines() if "aria/held/" in l)
+
+    def test_sweep_held_deletes_only_branches_whose_tip_is_that_flights_own_commit(self):
+        own = self.held("flt_a", "HELD crashed\n\nNexus-Flight: flt_a", "a\n")
+        self.held("flt_b", "a person's fix on the held branch", "b\n")
+        self.held("flt_c", "HELD crashed\n\nNexus-Flight: flt_other", "c\n")
+        swept = lanes.sweep_held(self.repo, ["flt_a", "flt_b", "flt_c", "flt_missing"])
+        self.assertEqual([{"flight": "flt_a", "branch": "aria/held/flt_a", "sha": own}], swept)
+        self.assertEqual(["aria/held/flt_b", "aria/held/flt_c"], self.branches())
+        self.assertEqual([], lanes.sweep_held(self.repo, ["flt_a"]))  # already gone: nothing, no error
+
+    def test_sweep_held_keeps_a_branch_that_moved_after_its_tip_was_read(self):
+        self.held("flt_a", "HELD crashed\n\nNexus-Flight: flt_a", "a\n")
+        later = self.held("flt_later", "a person's commit\n\nNexus-Flight: flt_a", "later\n")
+        real = landing._git
+
+        def racing(cwd, *args, **kw):
+            if args[0] == "push":  # someone pushes to the branch between our read and our delete
+                git(self.origin, "update-ref", "refs/heads/aria/held/flt_a", later)
+            return real(cwd, *args, **kw)
+        with unittest.mock.patch.object(landing, "_git", racing):
+            self.assertEqual([], lanes.sweep_held(self.repo, ["flt_a"]))
+        self.assertEqual(later, git(self.origin, "rev-parse", "aria/held/flt_a"))
 
     def test_held_push_is_idempotent_and_own_stale_branch_moves_with_lease(self):
         lanes.PUSH_PAUSE_S = 0
@@ -388,6 +545,31 @@ class PullRequestBranch(Lanes):
     def test_a_persons_commit_on_the_branch_is_never_overwritten(self):
         theirs = self.commit_on("aria/issue-7", "a person's fix")
         self.assertFalse(landing._replace_own(self.repo, self.rebuilt(), "aria/issue-7"))
+        self.assertEqual(theirs, git(self.origin, "rev-parse", "aria/issue-7"))
+
+
+    def repair(self, flight="flt_repair"):
+        def run(argv, cwd=None, **kw):
+            self.write("b.txt", "repair\n")
+            return Fake()
+        issue = {"number": 7, "title": "t7", "labels": []}
+        with unittest.mock.patch("nexus.risk.classify", return_value="review"):
+            return executor.fly(self.entry, issue, flight, pr_create=lambda *_: "https://example/pr/7",
+                                comment=lambda b: "c", run=run, write_set=["b.txt"])
+
+    def test_write_set_repair_replaces_its_own_pr_branch(self):
+        """A write-set repair held on branch_push_rejected while the repair still counted (58 of 77 held branches)."""
+        self.commit_on("aria/issue-7", "first\n\nNexus-Flight: flt_1")
+        result = self.repair()
+        self.assertEqual(("HELD", "in_review", "aria/issue-7"), (result["state"], result["reason"], result["branch"]))
+        self.assertEqual(result["sha"], git(self.origin, "rev-parse", "aria/issue-7"))
+        self.assertEqual("repair", git(self.origin, "show", "aria/issue-7:b.txt"))
+        self.assertEqual("", git(self.origin, "for-each-ref", "refs/heads/aria/held"))
+
+    def test_write_set_repair_never_overwrites_a_persons_commit_on_the_pr_branch(self):
+        theirs = self.commit_on("aria/issue-7", "a person's fix")
+        result = self.repair()
+        self.assertEqual(("HELD", "branch_push_rejected"), (result["state"], result["reason"]))
         self.assertEqual(theirs, git(self.origin, "rev-parse", "aria/issue-7"))
 
 

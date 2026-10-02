@@ -13,6 +13,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 
 from . import flights
@@ -30,7 +31,8 @@ SENSITIVE_WINDOW = os.environ.get("NEXUS_TBS_SENSITIVE_WINDOW", os.path.expandus
 _lane = ContextVar("work_lane", default=None)
 
 
-NOTIFY_FLOOR_S = 20  # a HELD notice after the flight spent its deadline still gets a real attempt
+NOTIFY_FLOOR_S = 20  # reporting an outcome (comment, label, close) after the flight spent its deadline still gets a
+                     # real attempt: a 0.066 s `gh issue comment` was recorded as the work failing (audit 2026-10-02)
 
 
 def notify_timeout(limit=120):
@@ -47,6 +49,14 @@ def remaining(limit):
     if left <= 0:
         raise WorkError("command budget exhausted")
     return min(limit, left)
+
+
+RECEIPT_FLOOR_S = 1
+
+
+def receipt_timeout(limit):
+    deadline = _deadline.get()
+    return limit if deadline is None else max(RECEIPT_FLOOR_S, min(limit, deadline - flights.clock()))
 
 
 class WorkError(LedgerError):
@@ -125,7 +135,16 @@ def capture(led, repo, issue):
             led._event("task.state", tid, {"to": "accepted", "dedupe_key": key}, "work")
         else:
             tid = task["id"]
-        led._event("work.issue", tid, issue, "work")
+        # The full issue only when it changed. Re-logging it every scan was 514k rows and 2.1 GB in 9 days
+        # (audit 2026-10-02); an unchanged one leaves a small `work.observed`, the proof polling looked.
+        seen = c.execute("SELECT id, payload FROM events WHERE kind='work.issue' AND subject=?"
+                         " ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+        closed = c.execute("SELECT MAX(id) FROM events WHERE kind='work.closed' AND subject=?", (tid,)).fetchone()[0]
+        # A capture after Nexus closed it is always written whole: `reopened_after_close` orders the two by id.
+        if seen and seen[0] > (closed or 0) and loads(seen[1], {}) == json.loads(json.dumps(issue)):
+            led._event("work.observed", tid, {"updated_at": issue.get("updated_at"), "state": issue["state"]}, "work")
+        else:
+            led._event("work.issue", tid, issue, "work")
     from . import lifecycle_observe
     lifecycle_observe.recognized(led, repo, tid, issue, eligibility)
     return tid
@@ -372,7 +391,7 @@ def close_issue(led, payload):
         raise WorkError("issue closure held by current eligibility")
     proc = subprocess.run(["gh", "api", "--method", "PATCH",
                            f"repos/{payload['repo']}/issues/{payload['issue']['number']}",
-                           "-f", "state=closed"], capture_output=True, text=True, timeout=remaining(60))
+                           "-f", "state=closed"], capture_output=True, text=True, timeout=notify_timeout(60))
     if proc.returncode:
         raise WorkError(proc.stderr.strip() or "issue closure failed")
     if json.loads(proc.stdout).get("state") != "closed":
@@ -648,6 +667,9 @@ def eligible(led, entries, repo):
 def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None, issue=None, registry_path=None,
         parallel=None):
     token = _lane.set(lane)
+    # One lane of a wave: the parent's SIGTERM becomes a recorded failure with its reason, never owner_exited.
+    lane_child = issue is not None and threading.current_thread() is threading.main_thread()
+    previous = signal.signal(signal.SIGTERM, _terminated) if lane_child else None
     try:
         if lane == TOWER_LABEL and led is not None:
             recover_terminal(led)
@@ -658,7 +680,13 @@ def run(led, entries, repo=None, *, budget_s=300, max_items=20, lane=None, issue
                 return cut + waved
         return cut + _run(led, entries, repo, budget_s=budget_s, max_items=max_items, issue=issue)
     finally:
+        if lane_child:
+            signal.signal(signal.SIGTERM, previous or signal.SIG_DFL)
         _lane.reset(token)
+
+
+def _terminated(_signum, _frame):
+    raise WorkError("terminated: the wave parent's wait ended")
 
 
 _registry = ContextVar("work_registry", default=None)
@@ -755,11 +783,13 @@ def reopen(led, task_id, reason):
 
 def dispatch_wave(led, entries, registry_path, budget_s, caps):
     """Run one wave's file-disjoint lanes at once, one child `work run --issue` each. None: fall back."""
+    end = flights.clock() + budget_s  # the same sleep-counting clock the child pays its own budget in
     picked = wave_candidates(led, entries, caps)
-    if not picked:
+    child_s = int(end - flights.clock() - WAVE_MARGIN_S)
+    if not picked or child_s < 1:
         return None
     base = [sys.executable, "-m", "nexus", "--ledger", str(led.path), "work", "run", "--registry", str(registry_path),
-            "--lane", TOWER_LABEL, "--max-items", "1", "--budget-s", str(int(budget_s))]
+            "--lane", TOWER_LABEL, "--max-items", "1", "--budget-s", str(child_s)]
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]))
     children = []
     for item in picked:
@@ -770,11 +800,16 @@ def dispatch_wave(led, entries, registry_path, budget_s, caps):
     report = []
     for item, proc in children:
         try:
-            out, err = proc.communicate(timeout=max(1, budget_s))
+            out, err = flights.communicate(proc, None, max(1, end - flights.clock()))
         except subprocess.TimeoutExpired:
             with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(proc.pid, signal.SIGKILL)
-            out, err = proc.communicate()
+                os.killpg(proc.pid, signal.SIGTERM)  # the lane records why it stopped (`run` handles it)
+            try:
+                out, err = proc.communicate(timeout=flights.KILL_GRACE_S)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                out, err = proc.communicate()
         try:
             rows = json.loads(out or "[]")
         except ValueError:
@@ -788,6 +823,10 @@ def dispatch_wave(led, entries, registry_path, budget_s, caps):
 MIN_FLIGHT_S = 300   # an executor started with less budget than this only times out (25s runs, 2026-09-14)
 LAND_RESERVE_S = 300  # kept back from the executor so checks, push and hold finish inside the runner's budget;
                       # given all of it, tower's kill landed first and the flight read as owner_exited (#235)
+WAVE_MARGIN_S = 120  # a wave child's budget is this much less than its parent's wait: its clock starts late
+                     # (interpreter, recovery, discovery) and floored notices may run past its deadline. The child
+                     # still keeps LAND_RESERVE_S inside its own budget; given the parent's whole budget, the
+                     # parent's kill landed mid-landing and read as owner_exited (105 in 9 days, audit 2026-10-02)
 WAIT_S = 120         # a lane lock, a leased path or an unpushable hold: retried after this, never an attempt
 
 
@@ -796,7 +835,9 @@ def open_pr(repo, number):
     proc = subprocess.run(["gh", "pr", "list", "-R", repo, "--head", f"aria/issue-{number}", "--state", "open",
                            "--json", "url", "--jq", ".[0].url // empty"],
                           capture_output=True, text=True, timeout=remaining(60))
-    return proc.stdout.strip() or None if proc.returncode == 0 else None
+    if proc.returncode:
+        raise WorkError(proc.stderr.strip() or "cannot read open PRs")
+    return proc.stdout.strip() or None
 
 
 def wait(led, fid, why):
@@ -869,6 +910,7 @@ def tower_execute(led, entry, task):
     """Tower v2: lease the canonical checkout, run, land in place, prove a terminal state."""
     from . import executor, tower
     entry = dict(entry, path=entry.get("canonical_path") or entry["path"])
+    entry["risk"] = dict(entry.get("risk") or {}, no_direct=not bool(entry.get("check")))
     deadline = _deadline.get()
     if deadline is not None and deadline - flights.clock() < MIN_FLIGHT_S + LAND_RESERVE_S:
         return "backoff"  # no claim, no flight: the next tick has a full budget
@@ -878,43 +920,45 @@ def tower_execute(led, entry, task):
     if reviewed:
         return reviewed
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
-    log = Path(led.path).resolve().parent / "logs" / f"{fid}.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.touch()
-    led.add_artifact(fid, "log", str(log))
-    from . import evidence
-    recorded, issue["nexus_evidence"] = evidence.packet(led, task, issue, entry["path"], flight=fid)
-    said, recorded["comments_error"] = evidence.comments(repo, number)
-    issue["nexus_evidence"] = said + issue["nexus_evidence"]
-    issue["nexus_evidence"] += repair_brief(led, fid, repair) + redesign_brief(led, fid, task)
-    led.event("work.evidence", fid, recorded, "work")  # retrieved; "used" is the agent naming an id
-
-    def gh(*args, timeout=None):
-        proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout or remaining(120))
-        if proc.returncode:
-            raise WorkError(proc.stderr.strip() or "gh failed")
-        return proc.stdout.strip()
-
-    def pr_create(head, base, body):
-        try:
-            return gh("pr", "create", "-R", repo, "--head", head, "--base", base,
-                      "--title", issue.get("title", f"#{number}"), "--body", body)
-        except WorkError:
-            existing = open_pr(repo, number)  # the branch moved under an open PR: the PR is the same obligation
-            if existing:
-                return existing
-            raise
-
-    from . import lanes
-    found, why = tower_gate(entry, issue)
-    if why:  # re-checked at the moment of flight: a dependency may have reopened
-        led.event("work.gated", fid, {"repo": repo, "issue": number, "reason": why}, "work")
-        return pending(led, fid, {"reason": f"gate: {why}", "retry_at": time.time() + 1800, "evidence": []})
-    write_set = (found or {}).get("write_set") or lanes.write_set_for(repo, number)
-    if (found or {}).get("route") == "antigravity":
-        issue = dict(issue, labels=list(issue.get("labels", [])) + [{"name": "route-antigravity"}])
-    per_repo = lanes_caps(_registry.get())[0] if _registry.get() else lanes.PER_REPO
     try:
+        log = Path(led.path).resolve().parent / "logs" / f"{fid}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.touch()
+        led.add_artifact(fid, "log", str(log))
+        from . import evidence
+        recorded, issue["nexus_evidence"] = evidence.packet(led, task, issue, entry["path"], flight=fid)
+        said, recorded["comments_error"] = evidence.comments(repo, number)
+        issue["nexus_evidence"] = said + issue["nexus_evidence"]
+        issue["nexus_evidence"] += repair_brief(led, fid, repair) + redesign_brief(led, fid, task)
+        if repair:
+            issue["nexus_repair"] = repair
+        led.event("work.evidence", fid, recorded, "work")  # retrieved; "used" is the agent naming an id
+
+        def gh(*args, timeout=None):
+            proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout or remaining(120))
+            if proc.returncode:
+                raise WorkError(proc.stderr.strip() or "gh failed")
+            return proc.stdout.strip()
+
+        def pr_create(head, base, body):
+            try:
+                return gh("pr", "create", "-R", repo, "--head", head, "--base", base,
+                          "--title", issue.get("title", f"#{number}"), "--body", body)
+            except WorkError:
+                existing = open_pr(repo, number)  # the branch moved under an open PR: the PR is the same obligation
+                if existing:
+                    return existing
+                raise
+
+        from . import lanes
+        found, why = tower_gate(entry, issue)
+        if why:  # re-checked at the moment of flight: a dependency may have reopened
+            led.event("work.gated", fid, {"repo": repo, "issue": number, "reason": why}, "work")
+            return pending(led, fid, {"reason": f"gate: {why}", "retry_at": time.time() + 1800, "evidence": []})
+        write_set = (found or {}).get("write_set") or lanes.write_set_for(repo, number)
+        if (found or {}).get("route") == "antigravity":
+            issue = dict(issue, labels=list(issue.get("labels", [])) + [{"name": "route-antigravity"}])
+        per_repo = lanes_caps(_registry.get())[0] if _registry.get() else lanes.PER_REPO
         led.event("work.executing", fid, {"repo": repo, "issue": number, "lane": TOWER_LABEL, "open_deps": [],
                                           "write_set": write_set, "started": time.time()}, "work")
         from . import lifecycle_observe
@@ -926,7 +970,7 @@ def tower_execute(led, entry, task):
             comment=lambda body: gh("issue", "comment", str(number), "-R", repo, "--body", body,
                                     timeout=notify_timeout()),
             comment_for=lambda flight: tower.owning_issue_comment(led, led.flight(flight)),
-            write_set=write_set, per_repo=per_repo, log=str(log))
+            write_set=write_set, per_repo=per_repo, log=str(log), repair=repair, baseline=True)
         led.event("work.lane", fid, {"repo": repo, "issue": number, "write_set": write_set, "state": result["state"],
                                      "sha": result.get("sha"), "ended": time.time()}, "work")
         state = _settle(led, fid, entry, task, issue, result, found)
@@ -952,27 +996,49 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                                  verification_id=verification_id, scope="tower terminal and done receipt",
                                  exact_head=result.get("sha"), proof_kind="work.receipt")
     tower.land_write_flight(led, fid, entry["path"], result)
+    if result.get("provider_failure"):
+        return transient_hold(led, fid, "provider_failed: " + result["provider_failure"])
     if result["state"] == "FAILED":  # the executor crashed: a failure, never a no-change close
         raise WorkError(f"executor failed: {result.get('reason')}")
     if result["state"] == "HELD":
         lifecycle_observe.for_flight(led, fid, "lifecycle.verification_finished",
                                      verification_id=verification_id, result="inconclusive",
                                      exact_head=result.get("sha"), proof_ref=None)
-        if result.get("reason") != "in_review" and not result.get("requeue"):  # parked for a person; never re-flown on the next tick
+        reason = str(result.get("reason", ""))
+        transient = (result.get("requeue") or result.get("check_baseline") or reason.startswith("exit_")
+                     or reason in {"not_at_origin", "push_rejected", "branch_push_rejected", "origin_moved"})
+        if result.get("check_baseline"):
+            led.event("work.check_baseline", fid, {"failure": result["check_baseline"]}, "work")
+        if transient and reason != "in_review" and not reason.startswith("review_fail:"):
+            return transient_hold(led, fid, reason, result)
+        human = reason.startswith("human:") or reason in {"collision", "check_failed", "local_commit"}
+        if human:  # operational holds retain ready; only an explicit human decision parks the issue
             subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
-                            "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
+                            "--add-label", "hold"], capture_output=True, text=True, timeout=notify_timeout(60))
         retry_s = result.get("retry_s") or (60 if result.get("reason") == "in_review" or result.get("requeue") else 3600)
         return pending(led, fid, {"reason": result.get("reason"), "retry_at": time.time() + retry_s,
                                   "hold": result.get("hold"), "pr_url": result.get("pr_url"),
                                   "comment_error": result.get("comment_error"),
                                   "evidence": [result.get("pr_url") or result.get("comment_url")]})
     from . import contract
+    if result["state"] == "LANDED":
+        landing_id = led.create_landing(fid, f"{repo}#{result.get('branch', 'main')}",
+                                        expected_sha=result["sha"], state="verified")
+        led.apply_landing(landing_id, result["sha"])
+    if result.get("reason") == "no_change":
+        previous = latest(led, "work.pending", task["id"])
+        repeated = "no_change" in previous.get("reason", "")
+        why = "no_change: " + (result.get("said") or "executor produced no patch")
+        if repeated:
+            why = contract.UNVERIFIED + " repeated " + why
+        return _not_done(led, fid, repo, number, why)
     review = review_verdict(led, result.get("pr_url"), result.get("reviewed_head"))  # the ledger, never caller text
-    done, why = contract.done_receipt(result, contract_, entry["path"], review=review)
+    done, why = contract.done_receipt(result, contract_, entry["path"], review=review, budget=receipt_timeout)
     if not done:  # an executor exit is never proof: no_change, a failed check or no commit stays open
         lifecycle_observe.for_flight(led, fid, "lifecycle.verification_finished",
                                      verification_id=verification_id, result="failed",
                                      exact_head=result.get("sha"), proof_ref=None)
+        led.event("work.receipt_failed", task["id"], {"flight": fid, "sha": result.get("sha"), "why": why}, "work")
         return _not_done(led, fid, repo, number, why)
     led.event("work.receipt", task["id"], {"flight": fid, "sha": result["sha"], "receipt": why}, "work")
     receipt_id = lifecycle_observe.latest_receipt_id(led, task["id"])
@@ -984,25 +1050,32 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
     if close_then_done(led, fid, {"repo": repo, "task": task["id"], "issue": issue},
                        "tower receipt: " + why, [proof_ref] if proof_ref else []) != "done":
         return "pending"
-    if not led.set_state(fid, "landing", expect="verified", source="work"):
-        raise WorkError(f"delivered flight {fid} lost its verified state")
-    led.set_state(fid, "landed", expect="landing", source="work", evidence=terminal.landed(result, why))
     lifecycle_observe.for_flight(led, fid, "lifecycle.attempt_finished", outcome="landed", finished_at=time.time())
     lifecycle_observe.for_flight(led, fid, "lifecycle.verified", verification_id=verification_id,
                                  verified_at=time.time(), exact_head=result["sha"], proof_ref=proof_ref,
                                  result_kind="tower receipt", evidence_ref=proof_ref)
+    cleanup_held(led, entry, task)
     return "done"
+
+
+def transient_hold(led, fid, reason, result=None):
+    tid = led.flight(fid)["task_id"]
+    previous = latest(led, "work.pending", tid)
+    attempt = previous.get("transient_attempt", 0) + 1
+    return pending(led, fid, dict(reason=reason, transient=True, transient_attempt=attempt,
+                                 retry_at=time.time() + min(86400, 60 * 2 ** min(attempt, 11)),
+                                 evidence=[(result or {}).get("pr_url") or (result or {}).get("comment_url")]))
 
 
 def _not_done(led, fid, repo, number, why):
     from . import contract
     url = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body",
-                          f"Nexus flight {fid}: not done. {why}. Left open for the next attempt."],
-                         capture_output=True, text=True, timeout=remaining(60)).stdout.strip()
+                          f"Nexus flight {fid}: not done. {why.splitlines()[0]}. Left open for the next attempt."],
+                         capture_output=True, text=True, timeout=notify_timeout(60)).stdout.strip()
     held = why.startswith(contract.UNVERIFIED)
     if held:  # the commit is on origin; another flight would only find no change
         subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
-                        "--add-label", "hold"], capture_output=True, text=True, timeout=remaining(60))
+                        "--add-label", "hold"], capture_output=True, text=True, timeout=notify_timeout(60))
     return pending(led, fid, {"reason": f"not_done: {why}", "retry_at": time.time() + 3600,
                               "hold": why if held else None, "evidence": [url] if url else []})
 
@@ -1048,7 +1121,7 @@ def review_repair(led, repo, pr_url):
     verdict = review_verdict(led, pr_url, pr.get("headRefOid"))
     if not verdict or verdict.get("verdict") != "FAIL" or repairs_spent(led, pr_url) >= MAX_REVIEW_REPAIRS:
         return None
-    return {"branch": pr["headRefName"], "head": pr["headRefOid"], "reason": str(verdict.get("reason", ""))[:400]}
+    return {"branch": pr["headRefName"], "head": pr["headRefOid"], "reason": str(verdict.get("reason", ""))}
 
 
 def open_pr_route(led, entry, task, repo, number):
@@ -1096,9 +1169,39 @@ def repair_brief(led, fid, repair):
     if not repair:
         return ""
     led.event("work.repair", fid, repair, "work")
-    return (f"\n\nRepair {repair['pr']}: its independent review failed: {repair['reason']}\n"
-            f"The PR branch `{repair['branch']}` holds the reviewed work: start from "
-            f"`git diff origin/main...origin/{repair['branch']}`, fix that finding, keep the rest.")
+    listed = "\n".join("- " + line for line in repair["reason"].splitlines() if line.strip())
+    return (f"\n\nRepair {repair['pr']}: its independent review failed:\n{listed}\n"
+            f"Tower restores the reviewed patch from `{repair['branch']}` before you run. "
+            f"Use `git diff origin/main...origin/{repair['branch']}` as context; fix ALL findings, keep the rest. "
+            "If main moved, the leased files contain Git's merge result: resolve every conflict marker before checking.")
+
+
+def repair_in_flight(led, entry, task, issue, fid, pr_url, pr, why, gh):
+    """Patch this reviewed head under a fresh lease, using the review flight's remaining budget."""
+    from . import executor, lanes, tower
+    current = issue_now(led, entry, task)
+    found, blocked = tower_gate(entry, current)
+    if eligibility(current) not in ("ready", "resume") or blocked:
+        return None
+    repair = {"pr": pr_url, "branch": pr["headRefName"], "head": pr["headRefOid"], "reason": why}
+    if repair["branch"] != f"aria/issue-{issue['number']}":
+        return None
+    current["nexus_evidence"] = repair_brief(led, fid, repair)
+    current["nexus_repair"] = repair
+    if (found or {}).get("route") == "antigravity":
+        current = dict(current, labels=list(current.get("labels", [])) + [{"name": "route-antigravity"}])
+    log = Path(led.path).resolve().parent / "logs" / f"{fid}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.touch(exist_ok=True)
+    led.add_artifact(fid, "log", str(log))
+    return executor.fly(
+        entry, current, fid, timeout_s=executor_budget(float(entry.get("timeout_s", 900))),
+        pr_create=lambda *_: pr_url,
+        comment=lambda body: gh("issue", "comment", str(issue["number"]), "-R", entry["repo"],
+                                "--body", body).stdout.strip(),
+        comment_for=lambda flight: tower.owning_issue_comment(led, led.flight(flight)),
+        write_set=(found or {}).get("write_set") or lanes.write_set_for(entry["repo"], issue["number"]),
+        per_repo=lanes_caps(_registry.get())[0] if _registry.get() else lanes.PER_REPO, log=str(log), repair=repair, baseline=True)
 
 
 def tower_review(led, entry, task, pr_url):
@@ -1110,33 +1213,62 @@ def tower_review(led, entry, task, pr_url):
     fid = claim(led, entry["repo"], issue["number"], os.getpid(), runner=True)
     repo = entry["repo"]
     try:
-        gh = lambda *a: subprocess.run(["gh", *a], capture_output=True, text=True, timeout=remaining(120))  # noqa: E731
-        pr = json.loads(gh("pr", "view", pr_url, "--json", "headRefName,headRefOid,baseRefName,labels,files").stdout)
-        cached = review_verdict(led, pr_url, pr["headRefOid"])
-        if cached:  # the same head was already judged: never restart review on an unchanged head
-            verdict, why = cached["verdict"], cached["reason"]
-        else:
-            led.event("work.executing", fid, {"repo": repo, "issue": issue["number"], "lane": TOWER_LABEL,
-                                              "review": pr_url, "head": pr["headRefOid"]}, "work")
-            from . import lifecycle_observe
-            lifecycle_observe.for_flight(led, fid, "lifecycle.execution_started",
-                                         execution_started_at=time.time(), runner_kind="tower_review", flight_id=fid)
-            verdict, why = executor.review(entry, pr_url, fid, timeout_s=remaining(900))
-        led.event("work.review", fid, {"pr": pr_url, "head": pr["headRefOid"], "verdict": verdict, "reason": why,
-                                       "cached": bool(cached)}, "work")
-        held = verdict == "PASS" and _sensitive_hold(entry, pr)
-        if held:  # outside the TBS KST window: stay in review, re-flown after the window opens
+        gh = lambda *a: subprocess.run(  # noqa: E731 - a verdict's comment or close is a notice: floored, never budget-starved
+            ["gh", *a], capture_output=True, text=True,
+            timeout=notify_timeout() if a[:2] in (("pr", "comment"), ("pr", "close")) else remaining(120))
+        while True:
+            pr = json.loads(gh("pr", "view", pr_url, "--json", "headRefName,headRefOid,baseRefName,labels,files").stdout)
+            cached = review_verdict(led, pr_url, pr["headRefOid"])
+            if not cached and _deadline.get() is not None and _deadline.get() - flights.clock() < LAND_RESERVE_S + 60:
+                return _settle(led, fid, entry, task, issue,
+                               dict(state="HELD", flight=fid, reason="in_review", pr_url=pr_url,
+                                    sha=pr["headRefOid"], branch=pr["headRefName"]))
+            if cached:  # the same head was already judged: never restart review on an unchanged head
+                verdict, why = cached["verdict"], cached["reason"]
+            else:
+                led.event("work.executing", fid, {"repo": repo, "issue": issue["number"], "lane": TOWER_LABEL,
+                                                  "review": pr_url, "head": pr["headRefOid"]}, "work")
+                from . import lifecycle_observe
+                lifecycle_observe.for_flight(led, fid, "lifecycle.execution_started",
+                                             execution_started_at=time.time(), runner_kind="tower_review", flight_id=fid)
+                verdict, why = executor.review(entry, pr_url, fid, timeout_s=executor_budget(900))
+            led.event("work.review", fid, {"pr": pr_url, "head": pr["headRefOid"], "verdict": verdict, "reason": why,
+                                           "findings": why.splitlines() if verdict == "FAIL" else [],
+                                           "cached": bool(cached)}, "work")
+            held = verdict == "PASS" and _sensitive_hold(entry, pr)
+            if held:  # outside the TBS KST window: stay in review, re-flown after the window opens
+                return _settle(led, fid, entry, task, issue,
+                               dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: HELD. {held}"),
+                                    state="HELD", flight=fid, reason="in_review", retry_s=3600, hold=held[:300],
+                                    pr_url=pr_url, sha=pr["headRefOid"], branch=pr["headRefName"]))
+            if verdict == "PASS":
+                from . import contract
+                found = tower_gate(entry, issue)[0]
+                check = (found or {}).get("check")
+                checked, detail = contract.check_at(pr["headRefOid"], check, entry["path"],
+                                                    budget=receipt_timeout) if check else ("passed", "")
+                if checked == "unrunnable":
+                    return _settle(led, fid, entry, task, issue,
+                                   dict(state="HELD", flight=fid, reason="in_review", hold=detail.splitlines()[0],
+                                        pr_url=pr_url, sha=pr["headRefOid"], branch=pr["headRefName"]))
+                if checked == "passed":
+                    return _merge(led, fid, entry, task, issue, pr, pr_url, gh)
+                verdict, why = "FAIL", detail
+                led.event("work.review", fid, {"pr": pr_url, "head": pr["headRefOid"], "verdict": verdict,
+                                               "reason": why, "check_failed": True}, "work")
+            repairs, note = after_fail(led, gh, task, pr_url)
+            deadline = _deadline.get()
+            if (repairs and repairs_spent(led, pr_url) < MAX_REVIEW_REPAIRS and deadline is not None
+                    and deadline - flights.clock() >= MIN_FLIGHT_S + LAND_RESERVE_S):
+                result = repair_in_flight(led, entry, task, issue, fid, pr_url, pr, why, gh)
+                if result and result.get("reason") == "in_review":
+                    continue  # same flight, same PR; every new head gets an independent review
+                if result:
+                    return _settle(led, fid, entry, task, issue, result, tower_gate(entry, issue)[0])
             return _settle(led, fid, entry, task, issue,
-                           dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: HELD. {held}"),
-                                state="HELD", flight=fid, reason="in_review", retry_s=3600, hold=held[:300],
-                                pr_url=pr_url, sha=pr["headRefOid"], branch=pr["headRefName"]))
-        if verdict == "PASS":
-            return _merge(led, fid, entry, task, issue, pr, pr_url, gh)
-        repairs, note = after_fail(led, gh, task, pr_url)
-        return _settle(led, fid, entry, task, issue,
-                       dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: FAIL, {note}. {why}"),
-                            state="HELD", flight=fid, reason=f"review_fail: {why}"[:300], pr_url=pr_url,
-                            sha=pr["headRefOid"], branch=pr["headRefName"], requeue=repairs))
+                           dict(_pr_comment(gh, pr_url, f"Nexus review flight {fid}: FAIL, {note}. {why.splitlines()[0]}"),
+                                state="HELD", flight=fid, reason=(f"review_fail: {why}"[:300] if repairs else "human:review_exhausted"), pr_url=pr_url,
+                                sha=pr["headRefOid"], branch=pr["headRefName"], requeue=repairs))
     except Exception as exc:  # noqa: BLE001
         fail(led, fid, exc)
         return "failed"
@@ -1154,7 +1286,7 @@ MERGE_RETRY_S = 600
 
 def _merge(led, fid, entry, task, issue, pr, pr_url, gh):
     """Merge, then believe GitHub's PR state, not the merge command's exit. Never parks for a person."""
-    merged = gh("pr", "merge", pr_url, "--squash", "--delete-branch")
+    merged = gh("pr", "merge", pr_url, "--squash", "--delete-branch", "--match-head-commit", pr["headRefOid"])
     view = gh("pr", "view", pr_url, "--json", "state,mergeCommit")
     try:
         now = json.loads(view.stdout) if view.returncode == 0 else None
@@ -1165,7 +1297,19 @@ def _merge(led, fid, entry, task, issue, pr, pr_url, gh):
         return _settle(led, fid, entry, task, issue,
                        {"state": "LANDED", "flight": fid, "sha": oid, "branch": pr["baseRefName"],
                         "pr_url": pr_url, "reviewed_head": pr["headRefOid"]},
-                       tower_gate(entry, issue)[0])
+                        tower_gate(entry, issue)[0])
+    if now and now.get("state") == "CLOSED":
+        subprocess.run(["gh", "issue", "edit", str(issue["number"]), "-R", entry["repo"],
+                        "--remove-label", "ready", "--add-label", "hold"],
+                       capture_output=True, text=True, timeout=notify_timeout(60))
+        return pending(led, fid, {"reason": "human:PR closed without merge", "hold": "PR closed without merge",
+                                  "evidence": [pr_url]})
+    if now and now.get("state") == "OPEN":
+        conflict = gh("pr", "view", pr_url, "--json", "mergeable")
+        if loads(conflict.stdout, {}).get("mergeable") == "CONFLICTING":
+            why = "rebase onto the default branch and resolve conflicts, preserving the reviewed change"
+            led.event("work.review", fid, {"pr": pr_url, "head": pr["headRefOid"], "verdict": "FAIL", "reason": why}, "work")
+            return pending(led, fid, {"reason": why, "pr_url": pr_url, "retry_at": time.time() + MERGE_RETRY_S})
     known = bool(now and now.get("state"))
     why = ("merge failed: " + (merged.stderr or "").strip()[:200] if known
            else "merge state unknown: " + (view.stderr or "unreadable PR").strip()[:200])
@@ -1296,7 +1440,10 @@ def next_retry(led, task):
 
 
 def disposition(led, task, state, reason, **details):
-    led.event("work.disposition", task["id"], dict(state=state, reason=reason, **details), "work")
+    """Recorded when it changes. Every pass re-recording the same answer was 497k rows in 9 days (audit 2026-10-02)."""
+    payload = json.loads(json.dumps(dict(state=state, reason=reason, **details)))  # as `latest` reads it back
+    if latest(led, "work.disposition", task["id"]) != payload:
+        led.event("work.disposition", task["id"], payload, "work")
 
 
 def run_task(led, entry, task):
@@ -1367,6 +1514,8 @@ def tower_step(led, entry, task, current):
     receipt = latest(led, "work.receipt", task["id"])
     if receipt:  # proven done, only the close was left: never re-fly landed work
         return close_received(led, entry, task, current, receipt)
+    if last_landed(led, task)[0]:
+        return reprove(led, entry, task, current)
     why = tower_gate(entry, current)[1]
     from . import lifecycle_observe
     lifecycle_observe.gate_state(led, task, current, why)
@@ -1385,8 +1534,18 @@ REPROVE_ATTEMPTS = 3
 def closed_step(led, entry, task, issue):
     """Tower proves a closed issue's merged change; the legacy lane reconciles one it executed. None: reconcile."""
     if _lane.get() == TOWER_LABEL:
+        cleanup_held(led, entry, task)
         return reprove(led, entry, task, issue)
     return None if any(latest(led, "work.executing", row["id"]) for row in led.flights(task_id=task["id"])) else "closed"
+
+
+def cleanup_held(led, entry, task):
+    """Called only after a live source close; sweep only this task's recorded held flights."""
+    from . import lanes
+    fids = [f["id"] for f in led.flights(task_id=task["id"])]
+    deleted = lanes.sweep_held(entry.get("canonical_path") or entry["path"], fids)
+    if deleted:
+        led.event("work.held_swept", task["id"], {"deleted": deleted}, "work")
 
 
 def last_landed(led, task):
@@ -1404,10 +1563,11 @@ def reprove(led, entry, task, issue):
     fid, result = last_landed(led, task)
     tries = len(led.events(kind="work.reprove", subject=task["id"]))
     if not fid or latest(led, "work.receipt", task["id"]) or tries >= REPROVE_ATTEMPTS or next_retry(led, task) > time.time():
-        return "closed"
+        return "closed" if issue.get("state") == "closed" else "held" if tries >= REPROVE_ATTEMPTS else "backoff"
     from . import contract
     done, why = contract.done_receipt(result, tower_gate(entry, issue)[0], entry["path"],
-                                      review=review_verdict(led, result.get("pr_url"), result.get("reviewed_head")))
+                                      review=review_verdict(led, result.get("pr_url"), result.get("reviewed_head")),
+                                      budget=receipt_timeout)
     led.event("work.reprove", task["id"], {"flight": fid, "sha": result["sha"], "done": done, "why": why}, "work")
     if not done:
         led.event("work.pending", task["id"], {"reason": f"not_done: {why}"[:300], "next_retry": time.time() + 3600}, "work")
@@ -1425,6 +1585,7 @@ def close_received(led, entry, task, issue, receipt):
         return "pending"
     decided_by = "tower receipt: " + str(receipt.get("receipt"))
     led.set_task_state(task["id"], "done", decided_by=decided_by, evidence=terminal.closed(decided_by, source))
+    cleanup_held(led, entry, task)
     return "done"
 
 

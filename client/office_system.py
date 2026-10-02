@@ -53,7 +53,7 @@ def flight(identifier):
         data=dict(row)
         data['artifacts']=[dict(r) for r in db.execute('SELECT * FROM artifacts WHERE flight_id=? ORDER BY created_at',(identifier,))]
         # Inspect: the durable trail behind the state Office shows, newest last; rediscovery rewrites are not trail.
-        data['evidence']=[dict(r,payload=json.loads(r['payload'])) for r in reversed(db.execute("SELECT id,ts,kind,source,payload FROM events WHERE subject IN (?,?) AND kind NOT IN ('work.issue','work.disposition','work.serviced') ORDER BY id DESC LIMIT 40",(identifier,data.get('task_id') or '')).fetchall())]
+        data['evidence']=[dict(r,payload=json.loads(r['payload'])) for r in reversed(db.execute("SELECT id,ts,kind,source,payload FROM events WHERE subject IN (?,?) AND kind NOT IN ('work.issue','work.observed','work.disposition','work.serviced') ORDER BY id DESC LIMIT 40",(identifier,data.get('task_id') or '')).fetchall())]
     return data
 
 

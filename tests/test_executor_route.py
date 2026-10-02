@@ -2,6 +2,7 @@
 import sys
 import subprocess
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -62,6 +63,20 @@ class Route(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 1, "", "provider unavailable")
         with self.assertRaisesRegex(executor.RoadError, "no verdict"):
             executor.review(ENTRY, "https://github.com/o/r/pull/1", "flt_2", run=run)
+
+    def test_review_keeps_all_findings_and_gives_primary_full_budget(self):
+        report = "a.py:2 first bug\n" + "context " * 100 + "\nb.py:9 second bug\nVERDICT: FAIL two blockers"
+        calls = []
+        def run(argv, **kw):
+            if argv[1:3] == ["model", "review"]:
+                return subprocess.CompletedProcess(argv, 0, "review-model", "")
+            calls.append(kw["timeout"])
+            self.assertIn("ALL blocking findings", argv[-1])
+            Path(argv[argv.index("-o") + 1]).write_text(report)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        verdict, reason = executor.review(ENTRY, "https://pr/1", "f", run=run, timeout_s=700)
+        self.assertEqual(("FAIL", report), (verdict, reason))
+        self.assertEqual([700], calls)
 
 
 if __name__ == "__main__":

@@ -558,6 +558,13 @@ class TriggerTest(TowerFixture, unittest.TestCase):
         self.addCleanup(led.close)
         work.capture(led, "acme/thing", dict(number=7, title="t", state="open", labels=[]))
         self.assertIn("captured acme/thing#7", wh.reconcile_obligation(ev, self.ledger))
+        # An unchanged re-capture writes only the small `work.observed`; it is the same proof.
+        again = dataclasses.replace(ev, at=wh.now_iso())
+        time.sleep(1.1)  # delivery times are whole seconds
+        work.capture(led, "acme/thing", dict(number=7, title="t", state="open", labels=[]))
+        self.assertEqual(1, len(led.events(kind="work.issue")))
+        self.assertEqual(1, len(led.events(kind="work.observed")))
+        self.assertIn("captured acme/thing#7", wh.reconcile_obligation(again, self.ledger))
         pr = dataclasses.replace(ev, event="pull_request", number=99)
         self.assertIsNone(wh.reconcile_obligation(pr, self.ledger))
         led.event("work.serviced", "acme/thing", {"at": time.time()}, "work")

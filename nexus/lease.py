@@ -46,6 +46,25 @@ def alive(pid):
         return False
 
 
+def started(pid):
+    """When this pid's process began, as `ps` prints it. A pid is reused; pid + start is one process."""
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))], capture_output=True, text=True,
+                             timeout=10, env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}).stdout.strip()
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        return None
+    return out or None
+
+
+def holder_alive(record):
+    """The one liveness rule: the pid answers and is still the process that took the lease."""
+    if not alive(record.get("pid")):
+        return False
+    was = record.get("pid_started")
+    now = was and started(record["pid"])
+    return not (was and now and now != was)
+
+
 def digest(repo, rel):
     full = os.path.join(repo, rel)
     if not os.path.lexists(full):
@@ -93,7 +112,7 @@ def read(repo):
         return None
 
 
-HEARTBEAT_S = 600  # a live holder's heartbeat older than this: the holder is wedged or gone
+HEARTBEAT_S = 600  # a heartbeat older than this is stale; a holder that is alive may still renew it (renew)
 MAX_HOLD_S = 1800  # whole-repo: no renewal for this long releases it
 MAX_HOLD_WRITE_SET_S = 3600
 INDEX = os.path.expanduser("~/Library/Application Support/nexus/lease-repos.json")  # NEXUS_LEASE_INDEX overrides
@@ -106,13 +125,13 @@ def _index():
 def stamp(flight, pid, ttl_s, reason, paths, now=None):
     """The common record head. Fields absent from legacy records keep the pid/expires rules alone."""
     now = now or time.time()
-    return {"flight": flight, "pid": pid, "expires": now + ttl_s, "host": socket.gethostname(),
-            "started_at": now, "renewed_at": now, "heartbeat_at": now, "reason": reason, "paths": paths}
+    return {"flight": flight, "pid": pid, "pid_started": started(pid), "expires": now + ttl_s,
+            "host": socket.gethostname(), "started_at": now, "renewed_at": now, "heartbeat_at": now, "reason": reason, "paths": paths}
 
 
 def stale(record, now=None):
     now = now or time.time()
-    if not alive(record.get("pid")) or record.get("expires", 0) < now:
+    if not holder_alive(record) or record.get("expires", 0) < now:
         return True
     if record.get("heartbeat_at") is not None and now - record["heartbeat_at"] > HEARTBEAT_S:
         return True
@@ -143,8 +162,27 @@ def _write(target, data):
     os.replace(tmp, target)
 
 
+def renew(target, record, now=None):
+    """Renew a record whose holder is alive and inside its own budget; False leaves it for recover().
+
+    A beat gap over HEARTBEAT_S means nobody ticked: the Mac slept or Tower was down. That time is not the
+    holder's, so `expires` moves by it and a record that only looks stale is renewed. A holder that overran
+    its budget while Tower was ticking still expires, and a dead or replaced pid is never renewed."""
+    now = now or time.time()
+    if record.get("heartbeat_at") is None or not holder_alive(record) or not os.path.exists(target):
+        return False
+    gap = now - record["heartbeat_at"]
+    expires = record.get("expires", 0) + (gap if gap > HEARTBEAT_S else 0)
+    if expires < now:
+        return False
+    with contextlib.suppress(OSError):
+        _write(target, dict(record, heartbeat_at=now, renewed_at=now, expires=expires))
+        return True
+    return False
+
+
 def heartbeat(now=None):
-    """Tower tick: renew every lease whose holder is alive and not already stale; dead ones stay for recover().
+    """Tower tick: renew every lease whose holder is alive (renew); dead ones stay for recover().
 
     Lock-free on purpose: a landing may hold the lanes mutex for a whole check, and a skipped beat would age a
     healthy flight. The only race is a release landing between exists() and replace(); the resurrected record
@@ -164,10 +202,7 @@ def heartbeat(now=None):
         if targets:
             keep.append(repo)
         for target, record in targets:
-            if "heartbeat_at" in record and not stale(record, now) and os.path.exists(target):
-                with contextlib.suppress(OSError):
-                    _write(target, dict(record, heartbeat_at=now, renewed_at=now))
-                    renewed += 1
+            renewed += renew(target, record, now)
     if keep != indexed():
         with contextlib.suppress(OSError):
             _write(_index(), keep)
@@ -245,7 +280,7 @@ def recover(repo, comment=None, comment_for=None):
 
     comment_for(flight) names the dead flight's own issue; `comment` is only for callers that know it."""
     record = read(repo)
-    if not record or not stale(record):
+    if not record or not stale(record) or renew(path(repo), record):  # asleep is not dead
         return None
     comment = comment_for(record["flight"]) if comment_for else comment
     held = landing.HELD_PREFIX + record["flight"]
@@ -254,10 +289,14 @@ def recover(repo, comment=None, comment_for=None):
         release(repo, record["flight"])
         return {"state": "HELD", "reason": "already_held", "flight": record["flight"], "sha": tip, "branch": held}
     paths, collisions = flight_paths(repo, record)
+    mine = [p for p in paths if p not in collisions]
     moved = landing._git(repo, "rev-parse", "HEAD").stdout.strip() != record["head"]
     result = {"state": "CLOSED", "reason": "no_change", "flight": record["flight"]}
-    if paths or moved:  # capture to a held ref, but restore nothing: the paths may be another session's bytes
-        result = landing.hold(repo, record, paths, list(paths), "crashed", comment)
+    # Paths clean at the baseline are the flight's own: pushed to its held ref, then put back, so the next
+    # flight gets a usable checkout. Paths dirty at the baseline may be a person's: never captured, never
+    # restored (the tower._hold_once rule, #187).
+    if mine or moved:
+        result = landing.hold(repo, record, mine, [], "crashed", comment)
     if landing.terminal(repo, result):
         release(repo, record["flight"])
     return result

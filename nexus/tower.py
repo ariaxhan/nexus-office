@@ -34,6 +34,13 @@ from .ledger import Ledger, loads
 
 DEFAULT_CONCURRENCY = 4
 QUARANTINE_AFTER = 5  # consecutive failures before a plan stops
+#: the command never ran (`flights.start_failure`, or the runner itself would not start): the
+#: environment failed, not the plan. Retried with doubling backoff, spending no retry budget.
+START_FAILED = ("start_failed", "spawn_failed")
+START_BACKOFF_S = 60.0
+START_BACKOFF_MAX_S = 3600.0
+START_QUARANTINE_AFTER = 12  # about six hours of backoff, then it stops where a person will see it
+HISTORY = 50  # flights of one plan read to judge it
 DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_MAX_RETRIES = 2
 #: a flight that is `running` with no pid yet has this long to have one recorded
@@ -555,7 +562,8 @@ def _retry_exhausted(ledger, now):
             continue
         plan = ledger.plan(flight["plan_id"])
         _, max_retries, _ = _budget(plan)
-        if flight["attempt"] > max_retries or plan["quarantined_at"] is not None:
+        ran = not _start_failed(flight)  # a flight that never started spent no attempt; _launch paces it
+        if (ran and flight["attempt"] > max_retries) or plan["quarantined_at"] is not None:
             if plan['name']=='office-conversations':
                 prior=ledger.conn.execute("SELECT 1 FROM events WHERE subject=? AND kind='office.phase' AND json_extract(payload,'$.flight_id')=? LIMIT 1",
                                           (task_id,flight['id'])).fetchone()
@@ -569,7 +577,7 @@ def _retry_exhausted(ledger, now):
                                   expect="running", reason="retries exhausted", now=now)
             continue
         new = ledger.create_flight(flight["plan_id"], task_id=task_id,
-                                   attempt=flight["attempt"] + 1, now=now,
+                                   attempt=flight["attempt"] + int(ran), now=now,
                                    unique_for_task=True)
         if new:
             made += 1
@@ -720,26 +728,137 @@ def _contains(target, sha):
         return False
 
 
+def _start_failed(flight):
+    error = (loads(flight["result"], {}) or {}).get("error") or {}
+    return flight["state"] == "failed" and error.get("code") in START_FAILED
+
+
+def _history(ledger, plan):
+    """This plan's flights since its last release, newest first."""
+    released = ledger.events(kind="plan.unquarantined", subject=plan["id"])
+    since = released[-1]["ts"] if released else 0
+    # a release means "count from here", or it would re-fire on the same failures
+    return [f for f in ledger.flights(plan_id=plan["id"], limit=HISTORY) if f["created_at"] > since]
+
+
+def _start_streak(history):
+    """The start failures at the head of the finished flights: [] once one of them ran."""
+    streak = []
+    for flight in history:
+        if flight["state"] not in ("failed", "produced", "landed"):
+            continue
+        if not _start_failed(flight):
+            break
+        streak.append(flight)
+    return streak
+
+
+def _start_backoff_until(ledger, plan):
+    """When a plan whose command would not start may try again: 1 min, doubling, to an hour."""
+    streak = _start_streak(_history(ledger, plan))
+    if not streak:
+        return 0
+    wait = min(START_BACKOFF_S * 2 ** (len(streak) - 1), START_BACKOFF_MAX_S)
+    return max(f["ended_at"] or f["created_at"] for f in streak) + wait
+
+
 def _quarantine(ledger, now):
-    """N consecutive failures and the plan stops, loudly, instead of failing forever."""
+    """N consecutive failures and the plan stops, loudly, instead of failing forever.
+
+    A flight that never started is not the plan failing and is left out of that count; a plan
+    that cannot start at all still stops, after START_QUARANTINE_AFTER tries in a row."""
     count = 0
     for plan in ledger.plans(runnable_only=True):
         if plan["kind"] == "work":
             continue
-        _, max_retries, _ = _budget(plan)
         limit = QUARANTINE_AFTER  # a scheduled plan failing once is Tuesday, not a quarantine
-        recent = ledger.flights(plan_id=plan["id"], limit=limit)
-        released = ledger.events(kind="plan.unquarantined", subject=plan["id"])
-        since = released[-1]["ts"] if released else 0
-        # a release means "count from here", or it would re-fire on the same failures
-        terminal = [f for f in recent if f["state"] in ("failed", "produced", "landed")
-                    and f["created_at"] > since]
-        if len(terminal) < limit:
+        history = _history(ledger, plan)
+        starts = len(_start_streak(history))
+        terminal = [f for f in [f for f in history if not _start_failed(f)][:limit]
+                    if f["state"] in ("failed", "produced", "landed")]
+        if starts >= START_QUARANTINE_AFTER:
+            reason = f"command could not start {starts} times in a row"
+        elif len(terminal) == limit and all(f["state"] == "failed" for f in terminal):
+            reason = f"{limit} consecutive failures"
+        else:
             continue
-        if all(f["state"] == "failed" for f in terminal[:limit]):
-            ledger.quarantine_plan(plan["id"], f"{limit} consecutive failures", now=now)
-            count += 1
+        ledger.quarantine_plan(plan["id"], reason, now=now)
+        count += 1
     return count
+
+
+def _human_asks():
+    """The sole human-input path lives with the Office; reached the way office_agent reaches it."""
+    client = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "client")
+    if client not in sys.path:
+        sys.path.insert(0, client)
+    import human_asks
+    return human_asks
+
+
+def _ask_ref(plan):
+    return f"nexus-plan:{plan['id']}"
+
+
+def _ask_release(plan, reason, last):
+    """One request per quarantine: its id carries when the plan stopped, so asking twice is one ask."""
+    asks = _human_asks()
+    name = plan["name"]
+    with contextlib.closing(asks.connect()) as db:
+        for error in (f" Last error: {last}.", ""):  # the gate judges the wording; the error text is not ours
+            try:
+                return asks.request_human_input(
+                    db, identifier=f"{_ask_ref(plan)}:{int(plan['quarantined_at'])}",
+                    execution_ref=_ask_ref(plan), gate_type="new_judgment",
+                    action=(f"Tower stopped plan `{name}`: {reason}.{error} Choose: let it fly again "
+                            f"(`nexus plans release {name}`) or leave it stopped."),
+                    why_agent_cannot_do_it="A quarantine is Tower refusing to keep failing; Tower never lifts its own.",
+                    authorization_gap="Tower may stop a plan; only a person may put a stopped plan back in the air.",
+                    resume_after_answer=f"`nexus plans release {name}` schedules it on the next tick; "
+                                        "left alone it stays stopped.")
+            except ValueError:
+                if not error:
+                    raise
+
+
+def _raise_quarantines(ledger, now=None):
+    """Tell a person about each quarantine, once (three plans sat stopped nine hours unseen).
+
+    The attempt is recorded whatever its outcome and is not repeated: one ask per quarantine,
+    never one per tick. Called beside the tick, not in it; nothing here can fail a tick."""
+    raised = 0
+    for plan in ledger.plans():
+        at = plan["quarantined_at"]
+        told = ledger.events(kind="plan.quarantine_raised", subject=plan["id"]) if at is not None else None
+        if at is None or (told and loads(told[-1]["payload"], {}).get("quarantined_at") == at):
+            continue
+        stopped = ledger.events(kind="plan.quarantined", subject=plan["id"])
+        reason = loads(stopped[-1]["payload"], {}).get("reason", "quarantined") if stopped else "quarantined"
+        failed = ledger.flights(states=("failed",), plan_id=plan["id"], limit=1)
+        error = ((loads(failed[0]["result"], {}) or {}).get("error") or {}) if failed else {}
+        last = f"{error.get('code', 'unknown')}: {str(error.get('detail', ''))[:200]}"
+        outcome = {"quarantined_at": at, "reason": reason, "last_error": last}
+        try:
+            outcome["ask"] = _ask_release(plan, reason, last)
+            raised += 1
+        except Exception as exc:  # noqa: BLE001 - a failed notification is recorded, never raised
+            outcome["error"] = repr(exc)[:200]
+        ledger.event("plan.quarantine_raised", plan["id"], outcome, "tower", now)
+    return raised
+
+
+def settle_quarantine_asks(plan, answer):
+    """A released plan's open ask is answered by the release. Best effort; returns how many closed."""
+    try:
+        asks = _human_asks()
+        with contextlib.closing(asks.connect()) as db:
+            rows = db.execute("SELECT id FROM asks WHERE source_ref=? AND state='open'",
+                              (_ask_ref(plan),)).fetchall()
+            for row in rows:
+                asks.resolve_human_input(db, row["id"], answer)
+            return len(rows)
+    except Exception:  # noqa: BLE001 - the release already happened in the ledger
+        return 0
 
 
 # ---- scheduling ------------------------------------------------------------
@@ -870,6 +989,8 @@ def _launch(ledger, now, root):
         timeout_s, _, concurrency = _budget(plan)
         if running.get(plan["id"], 0) >= concurrency:
             continue  # this plan is at its cap; another plan's flight may still go
+        if _start_backoff_until(ledger, plan) > now:
+            continue  # its command would not start last time; it waits its turn, queued
         resources = loads(plan["resources"], []) or []
         if resources and not ledger.acquire_leases(
                 flight["id"], resources, now + timeout_s + LEASE_SLACK_S, now=now):
@@ -988,16 +1109,33 @@ def run(ledger, interval=5.0, iterations=None, root=None):
         try:
             tick(ledger, root=root)
         except Exception as exc:  # a bad tick must never end the tower
-            ledger.event("tower.tick_error", None, {"error": repr(exc)}, "tower")
+            _tick_error(ledger, exc)
+        with contextlib.suppress(Exception):  # telling a person never ends the tower either
+            _raise_quarantines(ledger)
         count += 1
         if iterations is None or count < iterations:
             time.sleep(interval)
     return count
 
 
+def _tick_error(ledger, exc, now=None):
+    """A new error is written at once; the same one repeating, once a minute like the receipt."""
+    now = now if now is not None else time.time()
+    error = repr(exc)
+    last = ledger.last_event(("tower.tick_error",))
+    if last and loads(last["payload"], {}).get("error") == error \
+            and now - last["ts"] < TICK_RECEIPT_EVERY_S:
+        return
+    ledger.event("tower.tick_error", None, {"error": error}, "tower", now)
+
+
 def status(ledger, limit=15):
     """What the Office draws, as text: one read of the ledger, no other source."""
     lines = []
+    stopped = [f"{plan['name']} since {time.strftime('%m-%d %H:%M', time.localtime(plan['quarantined_at']))}"
+               for plan in ledger.plans() if plan["quarantined_at"]]
+    if stopped:  # first, alone: in the table below a stopped plan is one word among healthy rows
+        lines += [f"QUARANTINED  {'; '.join(stopped)}  (nexus plans release <plan>)", ""]
     lines.append(f"ledger  {ledger.path}  v{ledger.user_version()}"
                  f"{'  PAUSED' if is_paused(ledger) else ''}")
     problems = ledger.integrity_check()

@@ -1,6 +1,7 @@
 """One contract, one gate, receipts for done."""
 import sys
 import unittest
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,6 +55,20 @@ class Contract(unittest.TestCase):
                 done, why = contract.done_receipt({"state": "LANDED", "sha": "abc"}, c, "/", review=review)
                 self.assertFalse(done)
                 self.assertTrue(why.startswith(contract.UNVERIFIED))
+
+    def test_receipt_uses_remaining_budget_and_timeout_is_not_a_pass(self):
+        calls = []
+        def run(argv, **kw):
+            calls.append((argv, kw['timeout']))
+            if argv[:2] == ['bash', '-c']:
+                raise subprocess.TimeoutExpired(argv, kw['timeout'])
+            return SimpleNamespace(returncode=0)
+        done, why = contract.done_receipt({'state': 'LANDED', 'sha': 'abc'}, {'check': 'test-command'}, '/',
+                                          run=run, budget=lambda limit: min(limit, 17))
+        self.assertFalse(done)
+        self.assertIn('receipt budget exhausted', why)
+        self.assertTrue(all(timeout == 17 for argv, timeout in calls if argv[:3] != ['git', 'worktree', 'remove']))
+        self.assertEqual(['git', 'worktree', 'remove'], calls[-1][0][:3])
 
 
 class ReviewedChange(unittest.TestCase):

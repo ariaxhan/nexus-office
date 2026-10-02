@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from nexus import landing, lease, tower  # noqa: E402
+from nexus import executor, landing, lease, tower  # noqa: E402
 from nexus.ledger import Ledger  # noqa: E402
 
 landing.GIT_LOCK = "/nonexistent"  # fixtures stay out of the vault mutex
@@ -88,7 +88,7 @@ class Case(unittest.TestCase):
         result = lease.recover(self.repo, self.comment)
         self.assertEqual(result["state"], "HELD")
         self.assertEqual(self.remote("aria/held/f6"), [result["sha"]])
-        self.assertTrue(os.path.exists(os.path.join(self.repo, "wip.txt")))  # captured, never reverted
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "wip.txt")))  # durable on held branch, checkout reusable
         self.assertIsNone(lease.read(self.repo))
         self.assertEqual(git(self.repo, "show", f"{result['sha']}:wip.txt"), "half")
 
@@ -104,6 +104,57 @@ class Case(unittest.TestCase):
         self.assertEqual((result["state"], result["reason"], result["sha"]), ("HELD", "already_held", first["sha"]))
         self.assertIsNone(lease.read(self.repo))
         self.assertEqual(self.read("other-session.txt"), "live\n")
+
+    def test_repair_restores_entire_reviewed_patch_and_preserves_human_dirt(self):
+        entry = {"repo": "o/r", "path": self.repo}
+        issue = {"number": 7, "title": "fix", "labels": []}
+        budgets = []
+        def build(argv, **kw):
+            budgets.append(kw["timeout"])
+            self.write("README", "needs repair\n")
+            self.write("new.txt", "keep me\n")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        first = executor.fly(entry, issue, "build", run=build, timeout_s=900,
+                             pr_create=lambda *_: "https://pr/7", comment=self.comment)
+        self.write("human.txt", "human's unstaged bytes\n")
+        issue["nexus_repair"] = {"branch": first["branch"], "head": first["sha"]}
+        def repair(argv, **kw):
+            budgets.append(kw["timeout"])
+            self.assertEqual("needs repair\n", self.read("README"))
+            self.assertEqual("keep me\n", self.read("new.txt"))
+            self.write("README", "fixed\n")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        result = executor.fly(entry, issue, "repair", run=repair, timeout_s=600,
+                              pr_create=lambda *_: "https://pr/7", comment=self.comment)
+        self.assertEqual("in_review", result["reason"])
+        self.assertEqual("keep me", git(self.origin, "show", "aria/issue-7:new.txt"))
+        self.assertEqual("fixed", git(self.origin, "show", "aria/issue-7:README"))
+        self.assertEqual("human's unstaged bytes\n", self.read("human.txt"))
+        for expected, actual in zip([900, 600], budgets):
+            self.assertAlmostEqual(expected, actual, delta=2)
+        self.assertIsNone(lease.read(self.repo))
+
+    def test_repair_materializes_conflicts_without_switching_the_checkout(self):
+        base = git(self.repo, "rev-parse", "HEAD")
+        self.write("README", "PR version\n")
+        head = landing.commit_paths(self.repo, base, ["README"], "PR\n\nNexus-Flight: build")
+        landing.push_ref(self.repo, head, "aria/issue-7")
+        self.write("README", "main version\n")
+        git(self.repo, "commit", "-qam", "main advanced")
+        git(self.repo, "push", "-q", "origin", "main")
+        rec = lease.acquire(self.repo, "main", "repair", os.getpid(), 600)
+        executor.prepare_repair(self.repo, rec, {"branch": "aria/issue-7", "head": head})
+        self.assertIn("<<<<<<<", self.read("README"))
+        self.assertIn("PR version", self.read("README"))
+        self.assertIn("main version", self.read("README"))
+        self.assertEqual("main", git(self.repo, "branch", "--show-current"))
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".git", "MERGE_HEAD")))
+
+    def test_repair_refuses_a_changed_review_head_before_touching_files(self):
+        rec = lease.acquire(self.repo, "main", "repair", os.getpid(), 600)
+        with self.assertRaisesRegex(lease.Owned, "repair_head_changed"):
+            executor.prepare_repair(self.repo, rec, {"branch": "main", "head": "outdated"})
+        self.assertEqual("", git(self.repo, "status", "--porcelain"))
 
     def test_hold_restores_and_stays_held_when_the_comment_raises(self):
         """2026-09-25 01:40Z: gh timed out on the spent flight deadline; restore never ran and a

@@ -627,13 +627,14 @@ def _epoch(iso: str) -> float:
 def reconcile_obligation(ev, ledger=None):
     """A reason when Tower's own records prove this delivery needs nothing more, else None.
 
-    Proof: a `work.issue` capture of repo#number, or a `work.serviced` pass over the
-    repo, recorded after the delivery arrived. Polling covered it."""
+    Proof: a capture of repo#number (`work.issue` when it changed, `work.observed` when it
+    had not), or a `work.serviced` pass over the repo, recorded after the delivery arrived.
+    Polling covered it."""
     repo, since = ev.repo.lower(), _epoch(ev.at)
     uri = ledger_path(ledger).as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=LEDGER_TIMEOUT_S)) as db:
         if ev.number and db.execute(
-                "SELECT 1 FROM events e JOIN tasks t ON t.id=e.subject WHERE e.kind='work.issue'"
+                "SELECT 1 FROM events e JOIN tasks t ON t.id=e.subject WHERE e.kind IN ('work.issue','work.observed')"
                 " AND lower(t.dedupe_key)=? AND e.ts>? LIMIT 1", (f"github:{repo}#{ev.number}", since)).fetchone():
             return f"Tower captured {repo}#{ev.number} after the delivery"
         if db.execute("SELECT 1 FROM events WHERE kind='work.serviced' AND subject=? AND ts>? LIMIT 1",

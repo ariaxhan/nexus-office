@@ -182,7 +182,7 @@ def main():
 
 
 def install(ledger_path,vault_path):
-    root=Path(__file__).resolve().parents[1];vault=Path(vault_path).resolve()
+    root=Path(__file__).absolute().parents[1];vault=Path(vault_path).resolve()
     command=['env','OFFICE_RUNTIME_ROOT='+str(vault),'PYTHONPATH='+str(root),'NEXUS_LEDGER='+str(ledger_path),'OFFICE_NEXUS_LEDGER='+str(ledger_path),str(root/'.venv/bin/python'),'-m']
     with closing(Ledger(ledger_path)) as ledger:
         daily=install_owned_plan(ledger,'office-daily-podcast',{'at':NIGHTLY_TIME},

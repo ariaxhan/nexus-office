@@ -1,5 +1,7 @@
 # Cross-repository work
 
+Commission for the Tower recovery: `Vaults/_meta/commissions/active/2026-10-02-make-tower-work-ready-issue-to-merged-verified-c.md`.
+
 `python3 -m nexus work status --registry PATH --json` reads coverage and the ledger without GitHub calls, cloning, migration, or hydration. `run --registry PATH [--repo OWNER/NAME]` captures all open issues through paginated GitHub REST responses, then processes independent items synchronously in bounded repository rounds. No seven-day cutoff applies. Registry configuration is separate from issue obligations; durable tasks, attempts, claims, proof and retry records stay in the existing ledger.
 
 The registry is a JSON object with a `repositories` array. Each entry requires `repo` (canonical owner/name), `path` (absolute local checkout, including offloaded paths), `enabled` (boolean), `executor` (argv), `provider`, `account`, and `verify` (argv for the authoritative verification/delivery adapter). Optional `routes` maps routing labels to executor argv; zero matches uses `executor`, multiple matches fail. Optional `timeout_s` defaults to 600 and is capped at 3600. `max_attempts` defaults to 3 and is capped at 10. Repeated canonical names with identical configuration deduplicate to the first declared path; conflicting configuration fails. Disabled entries remain visible in coverage.
@@ -20,10 +22,14 @@ After an uncertain execution, `absent` also requires `retry_safe: true` before a
 - `work run --repo R --issue N` runs exactly one issue (used by wave dispatch).
 - A lane without a write_set (or on a road) takes the whole repo (`nexus-lease.json` + `tbs lock`); it waits for write-set lanes and session file locks and blocks them.
 - Landing a write-set lane: paths outside its write_set are never committed or reverted; one row goes to `_meta/state/lease-notes.jsonl` and the issue requeues for triage. Before commit the checkout catches up to origin for clean paths; origin moving inside the write set requeues. Checks re-run, then only own paths commit via a temporary index.
-- Stale-lease recovery holds the lane's own paths to `aria/held/<flight>` and reverts nothing in the shared checkout.
+- Dead-flight recovery pushes the lane's own paths to `aria/held/<flight>` and restores those paths, allowing the next flight to start. Paths already dirty when the flight began remain untouched. Edits made later to a previously clean flight-owned path move to the held branch too. Live holders renew across a missing heartbeat after sleep; PID start times guard against PID reuse.
 - Lands in place (`nexus/landing.py`): `direct` commits and pushes the flight's paths to the checkout branch; `review` pushes `aria/issue-N`, opens a PR and restores the tree. Collisions hold.
 
-- A review PR gets an independent reviewer flight (`executor.review`): PASS merges, FAIL holds the PR.
+- A review PR gets an independent reviewer (`executor.review`) that reports all blockers together. With sufficient budget, the review flight restores the reviewed patch, repairs the same PR, and reviews the new head. Repairs preserve unrelated dirty files, require the expected PR head, and cannot bypass review. Four repairs remain bounded by the existing one-redesign policy.
+- Primary coding and review providers receive their full allocated budget. Fallback uses only time left after an early failure. Landing checks and immutable-head receipts use the remaining budget; wave children finish before their parent's deadline.
+- PR contract checks run before merge. Infrastructure failures wait; failed checks and merge conflicts become repair findings. Merge requires the exact reviewed head. An unreadable PR list cannot authorize a new build.
+- Provider and transient landing failures retain `ready` with exponential backoff. Human-risk decisions, collisions, changed-code check failures, and repeated genuine no-change outcomes remain visible holds. A confirmed merge creates an applied landing receipt even if later task verification fails; only a passing task receipt permits closing the issue.
+- Once an issue is confirmed closed, its held branches may be swept. Deletion requires the matching flight trailer and a compare-and-delete lease on the observed remote tip; human changes survive.
 
 
 Each failed attempt keeps a log artifact outside temporary workspaces, structured error, attempt count and exponential next-retry time, capped at one day. Independent issues and repositories continue. Executor attempts are bounded; reconciliation remains possible after the execution budget is spent. SQLite transactions serialize claims and intake. A missing local path appears in coverage and execution fails without automatic hydration.

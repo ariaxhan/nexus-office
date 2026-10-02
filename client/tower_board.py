@@ -7,6 +7,8 @@ from pathlib import Path
 import sqlite3
 import time
 
+from sources import _card
+
 
 def _payload(db, kind, subject):
     row = db.execute("SELECT payload FROM events WHERE kind=? AND subject=? ORDER BY id DESC LIMIT 1",
@@ -15,6 +17,23 @@ def _payload(db, kind, subject):
         return json.loads(row[0]) if row else {}
     except (TypeError, ValueError):
         return {}
+
+
+def _latest(db, kind):
+    """Newest payload per subject for a RARE kind, in one walk of the kind index.
+
+    Asking per issue instead walks every event that issue ever had (thousands of
+    re-logged `work.issue` rows) to learn that it has no such event: 4 s a board.
+    """
+    out = {}
+    for subject, payload in db.execute("SELECT subject,payload FROM events INDEXED BY events_kind "
+                                       "WHERE kind=? ORDER BY id DESC", (kind,)):
+        if subject not in out:
+            try:
+                out[subject] = json.loads(payload)
+            except (TypeError, ValueError):
+                out[subject] = {}
+    return out
 
 
 def _next(due, now):
@@ -70,7 +89,7 @@ def _queued_state(labels, disposition):
     return None  # nothing asked Tower to fly it: not Tower work, so not on this board (#210 D4)
 
 
-def _row(db, task, now):
+def _row(db, task, now, pending, failure):
     """The board row for one issue-backed task, or None when it is not on the board."""
     target = (task['dedupe_key'] or '').removeprefix('github:')
     repo, _, number = target.rpartition('#')
@@ -85,8 +104,8 @@ def _row(db, task, now):
     disposition = _payload(db, 'work.disposition', task['id'])
     if 'labels' in disposition and set(disposition['labels']) != labels:
         disposition = {}  # decided about labels that have since changed: not authoritative any more
-    shown = _issue_state(attempt, labels, _payload(db, 'work.pending', task['id']),
-                         _payload(db, 'work.failure', task['id']), disposition,
+    shown = _issue_state(attempt, labels, pending.get(task['id']) or {},
+                         failure.get(task['id']) or {}, disposition,
                          _recovery_state(db, attempt), now)
     if shown is None:
         return None
@@ -148,10 +167,12 @@ def _age(seconds):
 
 
 def _completions(db, limit=5):
-    """Verified outcomes only: a LANDED terminal with a sha. A process exiting is not one."""
+    """A landed sha with its post-landing receipt; the terminal alone precedes verification."""
     rows = db.execute("SELECT e.subject,e.ts,e.payload,t.dedupe_key FROM events e LEFT JOIN flights f ON f.id=e.subject "
                       "LEFT JOIN tasks t ON t.id=f.task_id WHERE e.kind='flight.terminal' "
                       "AND json_extract(e.payload,'$.state')='LANDED' AND json_extract(e.payload,'$.sha') IS NOT NULL "
+                      "AND EXISTS (SELECT 1 FROM events r WHERE r.kind='work.receipt' AND r.subject=f.task_id "
+                      "AND json_extract(r.payload,'$.sha')=json_extract(e.payload,'$.sha')) "
                       "ORDER BY e.id DESC LIMIT ?", (limit,)).fetchall()
     return [{'flight': r[0], 'at': r[1], 'issue': (r[3] or '').removeprefix('github:'),
              'sha': json.loads(r[2]).get('sha', ''), 'url': json.loads(r[2]).get('pr_url') or ''} for r in rows]
@@ -231,18 +252,249 @@ def _aged(rows, key, now):
     return [dict(row, age=_age(now - row[key])) for row in rows]
 
 
+# ── did Tower do real work ────────────────────────────────────────────────────
+#
+# A flight count is not an outcome. Thousands of sub-second scheduler ticks end
+# `produced` with `artifacts: []` and read as green, so nothing below counts a
+# flight as work unless it executed an issue or landed a change. Every query is
+# bounded by an index and a LIMIT: the live ledger is gigabytes.
+
+DAY_S = 86400
+WEEK_S = 7 * DAY_S
+LOOP_FLIGHTS = 5  # one issue flown this often in a day with nothing landed is a loop, not a retry
+IN_AIR = ('running', 'verifying', 'verified', 'landing', 'resolving')
+SCAN = 5000  # ceiling on any one read; a day of flights is a few hundred
+
+
+def _json(text):
+    try:
+        value = json.loads(text or '{}')
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _issue_ref(key, title=''):
+    """`github:owner/repo#7` as (repo, '#7', title); anything else keeps its title."""
+    repo, _, number = (key or '').removeprefix('github:').rpartition('#')
+    return {'repo': repo.rpartition('/')[2], 'number': f'#{number}' if repo else '', 'title': title or ''}
+
+
+def _receipts(db, now):
+    """Landings by `work.receipt`: the week's, plus the newest of any age. Keyed by flight."""
+    found = {}
+    for ts, task, payload in db.execute("SELECT ts,subject,payload FROM events WHERE kind='work.receipt' "
+                                        "ORDER BY id DESC LIMIT ?", (SCAN,)):
+        if found and ts < now - WEEK_S:
+            break
+        data = _json(payload)
+        if data.get('sha'):
+            found[data.get('flight') or task] = {'at': ts, 'task': task, 'sha': str(data['sha'])}
+    return found
+
+
+def _landings(db, now):
+    """Every landed change in the last week plus the newest one of any age, newest first.
+
+    Two receipts for one fact: a `landed` flight, and the `work.receipt` that names the sha.
+    Either alone is a landing (a merged change whose post-merge step died still has its receipt).
+    """
+    found = _receipts(db, now)
+    for fid, task, ended in db.execute("SELECT id,task_id,ended_at FROM flights WHERE state='landed' "
+                                       "ORDER BY ended_at DESC LIMIT ?", (SCAN,)):
+        if found and (ended or 0) < now - WEEK_S:
+            break
+        if fid not in found:
+            sha = _payload(db, 'flight.terminal', fid).get('sha') or ''
+            found[fid] = {'at': ended or 0, 'task': task, 'sha': str(sha)}
+    rows = sorted(found.values(), key=lambda row: row['at'], reverse=True)
+    return [row for i, row in enumerate(rows) if i == 0 or row['at'] >= now - WEEK_S]
+
+
+def _last_landed(db, landings):
+    if not landings:
+        return None
+    last = landings[0]
+    task = db.execute("SELECT dedupe_key,title FROM tasks WHERE id=?", (last['task'],)).fetchone()
+    return dict(_issue_ref(task[0], task[1]) if task else _issue_ref(''), at=last['at'], sha=last['sha'][:7])
+
+
+def _executed(db, since):
+    """Flights that really started issue work: a `work.executing` receipt, not a flight row."""
+    flights = set()
+    for ts, fid in db.execute("SELECT ts,subject FROM events WHERE kind='work.executing' "
+                              "ORDER BY id DESC LIMIT ?", (SCAN,)):
+        if ts < since:
+            break
+        flights.add(fid)
+    return len(flights)
+
+
+def _day(db, now):
+    """One pass over the last day's flights: failures by cause, retry loops, no-op ticks."""
+    rows = db.execute(
+        "SELECT f.state,json_extract(f.result,'$.error.code'),json_array_length(f.result,'$.artifacts'),"
+        "t.origin,COALESCE(t.dedupe_key,f.task_id),t.title FROM flights f LEFT JOIN tasks t ON t.id=f.task_id "
+        "WHERE f.plan_id IN (SELECT id FROM plans) AND f.created_at>=? LIMIT ?", (now - DAY_S, SCAN)).fetchall()
+    failures, issues, ticks = {}, {}, 0
+    for state, code, artifacts, origin, key, title in rows:
+        if state == 'failed':
+            failures[code or 'unknown'] = failures.get(code or 'unknown', 0) + 1
+        if origin == 'plan':
+            ticks += state == 'produced' and not artifacts
+        elif key:
+            entry = issues.setdefault(key, {'flights': 0, 'landed': False, 'title': title})
+            entry['flights'] += 1
+            entry['landed'] = entry['landed'] or state == 'landed'
+    loops = [dict(_issue_ref(key, e['title']), flights=e['flights']) for key, e in issues.items()
+             if e['flights'] >= LOOP_FLIGHTS and not e['landed']]
+    return {'failures': sorted(failures.items(), key=lambda kv: -kv[1]),
+            'loops': sorted(loops, key=lambda row: -row['flights']), 'ticks': ticks}
+
+
+def _in_air(db, now):
+    rows = db.execute(
+        "SELECT f.id,COALESCE(f.started_at,f.created_at),p.name,p.budget,t.dedupe_key,t.title,t.origin "
+        "FROM flights f JOIN plans p ON p.id=f.plan_id LEFT JOIN tasks t ON t.id=f.task_id "
+        f"WHERE f.state IN ({','.join('?' * len(IN_AIR))}) ORDER BY f.created_at LIMIT 50", IN_AIR).fetchall()
+    out = []
+    for fid, since, plan, budget, key, title, origin in rows:
+        timeout = _json(budget).get('timeout_s')
+        ref = _issue_ref(key, title) if origin != 'plan' else _issue_ref('', plan)
+        out.append(dict(ref, flight=fid, plan=plan, age_s=now - since,
+                        overdue=bool(timeout) and now - since > float(timeout)))
+    return out
+
+
+def summary(db, now):
+    """The outcome numbers, raw. `card` turns them into the sentence a person reads."""
+    landings = _landings(db, now)
+    newest = db.execute("SELECT ts FROM events ORDER BY id DESC LIMIT 1").fetchone()
+    quarantined = db.execute("SELECT name,quarantined_at FROM plans WHERE quarantined_at IS NOT NULL "
+                             "ORDER BY quarantined_at").fetchall()
+    return dict(_day(db, now), now=now, as_of=newest[0] if newest else None,
+                last_landed=_last_landed(db, landings),
+                landed_24h=sum(row['at'] >= now - DAY_S for row in landings),
+                landed_7d=sum(row['at'] >= now - WEEK_S for row in landings),
+                executed_7d=_executed(db, now - WEEK_S),
+                quarantined=[{'plan': name, 'since': since} for name, since in quarantined],
+                running=_in_air(db, now))
+
+
+def _named(ref):
+    return ' '.join(x for x in (f"{ref['repo']}{ref['number']}", _card.clip(ref['title'], 48)) if x)
+
+
+def _problems(s, tower):
+    """What is wrong, worst first, as short clauses for one headline."""
+    out = []
+    if tower.get('state') in ('down', 'erroring', 'paused'):
+        out.append(f"Tower {tower['state']}")
+    last = s['last_landed']
+    if last is None:
+        out.append('No change has ever landed')
+    elif not s['landed_24h']:
+        age = s['now'] - last['at']
+        out.append('No change landed in ' + (f'{int(age // DAY_S)} days' if age >= 2 * DAY_S else _card.human(age)))
+    overdue = sum(r['overdue'] for r in s['running'])
+    for n, one, many in ((len(s['quarantined']), 'plan quarantined', 'plans quarantined'),
+                         (len(s['loops']), 'issue in a retry loop', 'issues in retry loops'),
+                         (overdue, 'flight past its timeout', 'flights past their timeout')):
+        if n:
+            out.append(f'{n} {one if n == 1 else many}')
+    return out
+
+
+def _needs(s):
+    """Things only a person can clear. A no-op tick, or a quiet day, is not one."""
+    return len(s['quarantined']) + len(s['loops']) + sum(r['overdue'] for r in s['running'])
+
+
+def _landed_fact(s):
+    last = s['last_landed']
+    if not last:
+        return _card.fact('last landed change', 'none on record', 'bad')
+    age = s['now'] - last['at']
+    return _card.fact('last landed change', f"{_named(last)} · {last['sha'] or 'no sha'} · {_card.human(age)} ago",
+                      'ok' if age < DAY_S else 'warn' if age < 3 * DAY_S else 'bad')
+
+
+def _count_facts(s):
+    if not s['executed_7d']:
+        ratio = 'dim'
+    else:
+        ratio = 'ok' if s['landed_7d'] * 2 >= s['executed_7d'] else 'bad'
+    return [
+        _card.fact('landed, 24 h / 7 d', f"{s['landed_24h']} / {s['landed_7d']}",
+                   'ok' if s['landed_24h'] else 'warn' if s['landed_7d'] else 'bad'),
+        _card.fact('issue flights, 7 d', f"{s['executed_7d']} executed, {s['landed_7d']} landed", ratio),
+        _card.fact('failed flights, 24 h', ', '.join(f'{n} {code}' for code, n in s['failures']) or 'none',
+                   'bad' if s['failures'] else 'ok'),
+    ]
+
+
+def _stuck_facts(s):
+    held = ', '.join(f"{q['plan']} ({_card.human(s['now'] - q['since'])})" for q in s['quarantined'])
+    loops = s['loops']
+    worst = f"{_named(loops[0])}: {loops[0]['flights']} flights, none landed" if loops else 'none'
+    more = f' (+{len(loops) - 1} more)' if len(loops) > 1 else ''
+    return [_card.fact('quarantined plans', held or 'none', 'bad' if held else 'ok'),
+            _card.fact('retry loops, 24 h', worst + more, 'bad' if loops else 'ok')]
+
+
+def _running_fact(s):
+    running = s['running']
+    shown = ', '.join(f"{_named(r)}, {_card.human(r['age_s'])}" + (' (past timeout)' if r['overdue'] else '')
+                      for r in running[:3])
+    more = f' (+{len(running) - 3} more)' if len(running) > 3 else ''
+    overdue = any(r['overdue'] for r in running)
+    return _card.fact('running now', shown + more or 'nothing', 'bad' if overdue else '' if running else 'dim')
+
+
+def _facts(s):
+    return [_landed_fact(s), *_count_facts(s), *_stuck_facts(s), _running_fact(s),
+            _card.fact('scheduler ticks, 24 h', f"{_card.count(s['ticks'])} no-op, not counted as work", 'dim')]
+
+
+def card(board):
+    """The card contract (`sources/_card.py`) for Tower: pure, from `read()`'s own data."""
+    s = board.get('summary')
+    if board.get('state') != 'ok' or not s:
+        return _card.trouble('Tower', board.get('state', 'missing'), board.get('detail', ''),
+                             {'missing': ('Tower ledger missing', 1), 'unreadable': ('Tower ledger unreadable', 1)})
+    problems, last = _problems(s, board.get('tower') or {}), s['last_landed']
+    headline = '; '.join(problems) if problems else (
+        f"{s['landed_24h']} {_card.plural(s['landed_24h'], 'change')} landed in 24 h; "
+        f"last {last['repo']}{last['number']} {_card.human(s['now'] - last['at'])} ago")
+    as_of = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(s['as_of'])) if s['as_of'] else ''
+    return _card.build('Tower', headline, _needs(s), as_of, _facts(s))
+
+
+def _carded(board):
+    """Attach the card, and let the two words the existing views already draw carry it."""
+    board['card'] = card(board)
+    if board.get('state') != 'ok':
+        return board
+    if board['card']['needs'] and board['activity'] in ('idle', 'queued'):
+        board['activity'] = 'failed'  # quarantined plans or a retry loop are not a green idle
+    if not board['tower'].get('detail'):
+        board['tower'] = dict(board['tower'], detail=board['card']['headline'])
+    return board
+
+
 def read(path=None, now=None):
     now = time.time() if now is None else now
     path = Path(path or os.environ.get('OFFICE_WORK_LEDGER') or
                 Path.home() / 'Library/Application Support/nexus/ledger.sqlite')
     if not path.exists():
-        return {'state': 'missing', 'detail': 'Tower ledger is unavailable', 'issues': []}
+        return _carded({'state': 'missing', 'detail': 'Tower ledger is unavailable', 'issues': []})
     try:
         with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=2)) as db:
             db.row_factory = sqlite3.Row
             tasks = db.execute("SELECT id,dedupe_key,title,state,created_at FROM tasks "
                                "WHERE origin='github-work' ORDER BY created_at DESC").fetchall()
             seen, issues, not_queued = set(), [], 0
+            pending, failure = _latest(db, 'work.pending'), _latest(db, 'work.failure')
             for task in tasks:
                 key = task['dedupe_key'] or ''
                 if not key.startswith('github:') or key in seen:
@@ -250,12 +502,13 @@ def read(path=None, now=None):
                 seen.add(key)
                 if task['state'] == 'done':
                     continue
-                row = _row(db, task, now)
+                row = _row(db, task, now, pending, failure)
                 if row is None:
                     not_queued += 1
                 else:
                     issues.append(row)
             tower, completions, runs = _liveness(db, now), _completions(db), _runs(db)
-        return _board(issues, not_queued, tower, now, completions, runs)
+            outcomes = summary(db, now)
+        return _carded(dict(_board(issues, not_queued, tower, now, completions, runs), summary=outcomes))
     except (OSError, sqlite3.Error) as exc:
-        return {'state': 'unreadable', 'detail': f'Tower ledger: {type(exc).__name__}', 'issues': []}
+        return _carded({'state': 'unreadable', 'detail': f'Tower ledger: {type(exc).__name__}', 'issues': []})

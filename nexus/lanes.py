@@ -16,6 +16,7 @@ import fcntl
 import fnmatch
 import json
 import os
+import subprocess
 import time
 from datetime import datetime
 
@@ -188,6 +189,8 @@ def recover(repo, comment=None, flight=None, comment_for=None):
     for record in records(repo):
         if not lease.stale(record) or (flight and record["flight"] != flight):
             continue
+        if lease.renew(os.path.join(_dir(repo), f"{record['flight']}.json"), record):  # asleep is not dead
+            continue
         comment = comment_for(record["flight"]) if comment_for else comment
         tip = landing.remote_tip(landing.target_key(repo, landing.HELD_PREFIX + record["flight"]))
         if tip:  # an earlier attempt already pushed this lane's work: re-holding could only fail non-fast-forward
@@ -251,6 +254,31 @@ def hold(repo, record, paths, reason, comment=None, detail=None):
             "comment_url": url, "comment_error": why, "paths": paths, **({"detail": detail} if detail else {})}
 
 
+def sweep_held(repo, flight_ids):
+    """Delete origin's aria/held/<flight> for flights whose work is closed; [{flight, branch, sha}] deleted.
+
+    A branch goes only while its tip is that flight's own commit (its `Nexus-Flight:` trailer, the
+    landing._replace_own ownership test) and only at the tip just read: a person's commit on it, or a push
+    landing in between, keeps the branch. Never raises: an unreachable origin deletes nothing."""
+    deleted = []
+    for fid in flight_ids:
+        branch = landing.HELD_PREFIX + str(fid)
+        ref = f"refs/heads/{branch}"
+        try:
+            tip = landing.remote_tip(landing.target_key(repo, branch))
+            if not tip or landing._git(repo, "fetch", "--quiet", "origin", ref, check=False).returncode:
+                continue
+            body = landing._git(repo, "log", "-1", "--format=%B", tip, check=False).stdout
+            if f"Nexus-Flight: {fid}" not in body.splitlines():
+                continue
+            if landing._git(repo, "push", "--quiet", f"--force-with-lease={ref}:{tip}", "origin", f":{ref}",
+                            check=False).returncode == 0:
+                deleted.append({"flight": fid, "branch": branch, "sha": tip})
+        except (landing.LandingError, subprocess.SubprocessError, OSError):
+            continue
+    return deleted
+
+
 def note(repo, number, record, paths, reason="needs paths outside write_set"):
     """One append-only lease-note; triage folds it into the next execution plan. No chat."""
     row = {"at": time.time(), "repo": repo, "issue": number, "flight": record["flight"],
@@ -285,6 +313,27 @@ def catch_up(repo, record, branch):
     return None
 
 
+CHECK_MAX_S, CHECK_FLOOR_S = 1800, 60
+LAND_TAIL_S = 360  # executor.fly leases timeout_s + 600 and work keeps a 300 s landing reserve: a check that
+#                    starts on a spent executor budget ends 60 s before that reserve does, leaving the push
+
+
+def check_budget(repo, record, now=None):
+    """Seconds the repo check may run while this lane holds the mutex: what its lease has left, floored."""
+    expires = (read(repo, record["flight"]) or lease.read(repo) or record)["expires"]
+    return max(CHECK_FLOOR_S, min(CHECK_MAX_S, expires - (now or time.time()) - LAND_TAIL_S))
+
+
+def _bounded(run, budget):
+    """`run` with the check's timeout replaced by `budget`; running out is a failed check, not a crash."""
+    def bounded(argv, **kw):
+        try:
+            return run(argv, **dict(kw, timeout=budget))
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(argv, 124, "", f"check timed out after {int(budget)}s")
+    return bounded
+
+
 def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, lines):
     """Enforce the write set, catch up to origin, re-check, commit only own paths, push."""
     repo, branch = entry["path"], record["branch"]
@@ -304,7 +353,8 @@ def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, 
             why = catch_up(repo, record, branch)
             if why:
                 return dict(hold(repo, record, mine, why, comment), requeue="plan")
-            failed = entry.get("check") and landing.failed_check(entry["check"], repo, run)
+            failed = entry.get("check") and landing.failed_check(
+                entry["check"], repo, _bounded(run, check_budget(repo, record)))
             if failed:
                 return hold(repo, record, mine, "check_failed", comment, failed)
             mode = forced or classify(entry.get("risk"), labels, mine, lines(repo, mine), entry.get("first_road", False))
@@ -322,7 +372,7 @@ def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, 
 def _review(repo, record, mine, head, message, issue, pr_create, comment, mode):
     sha = landing.commit_paths(repo, head, mine, f"{message}\n\nNexus-Flight: {record['flight']}")
     pr_branch = f"aria/issue-{issue['number']}"
-    if not landing.push_ref(repo, sha, pr_branch):
+    if not landing.push_ref(repo, sha, pr_branch) and not landing._replace_own(repo, sha, pr_branch, record.get("repair_head")):
         return hold(repo, record, mine, "branch_push_rejected", comment)
     reason = "in_review" if mode == "review" else "human:risk"
     url = pr_create(pr_branch, record["branch"], f"{message}\n\nCloses #{issue['number']}")

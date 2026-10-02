@@ -137,6 +137,41 @@ class TowerYield(unittest.TestCase):
         fly.assert_not_called()
         review.assert_called_once_with(self.led, unittest.mock.ANY, self.task, "https://github.com/x/pull/9")
 
+    def test_failed_review_repairs_and_reviews_new_head_in_same_flight(self):
+        token = work._deadline.set(work.flights.clock() + 1800)
+        self.addCleanup(lambda: work._deadline.reset(token))
+        seen = []
+        def fly(entry, issue, fid, **kw):
+            seen.append(fid)
+            self.assertIn("second blocker", issue["nexus_evidence"])
+            self.assertEqual("h1", issue["nexus_repair"]["head"])
+            self.pr["headRefOid"] = "h2"
+            return {"state": "HELD", "reason": "in_review", "pr_url": "https://pr/9"}
+        with patch("nexus.executor.review", side_effect=[("FAIL", "first blocker\nsecond blocker"), ("PASS", "ok")]), \
+                patch("nexus.executor.fly", side_effect=fly), patch("nexus.work._sensitive_hold", return_value=None), \
+                patch("nexus.work._merge", return_value="done") as merge:
+            self.assertEqual("done", work.tower_review(self.led, self.entry, self.task, "https://pr/9"))
+        self.assertEqual(1, len(self.led.flights()))
+        self.assertEqual([merge.call_args.args[1]], seen)
+        self.assertEqual(["h1", "h2"], [json.loads(e["payload"])["head"] for e in self.led.events(kind="work.review")])
+
+    def test_transient_hold_does_not_remove_ready(self):
+        fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
+        with patch("nexus.tower.land_write_flight"), patch("nexus.work.subprocess.run") as gh:
+            work._settle(self.led, fid, self.entry, self.task, self.issues[0],
+                         {"state": "HELD", "reason": "exit_124", "flight": fid})
+        gh.assert_not_called()
+        self.assertGreater(work.latest(self.led, "work.pending", self.task["id"])["next_retry"], work.time.time())
+
+    def test_closed_issue_sweeps_only_recorded_held_flights(self):
+        fid = work.claim(self.led, self.entry["repo"], 60, os.getpid(), runner=True)
+        self.led.event("flight.terminal", fid, {"branch": "aria/held/" + fid}, "test")
+        with patch("nexus.lanes.sweep_held", return_value=[{"flight": fid}]) as sweep, \
+                patch("nexus.work.reprove", return_value="closed"):
+            work.closed_step(self.led, self.entry, self.task, dict(self.issues[0], state="closed"))
+        sweep.assert_called_once_with(self.entry["path"], [fid])
+        self.assertEqual(1, len(self.led.events(kind="work.held_swept")))
+
     def test_review_runs_once_per_head(self):
         patch("nexus.tower.land_write_flight").start()
         patch("nexus.work._sensitive_hold", return_value=None).start()

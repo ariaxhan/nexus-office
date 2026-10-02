@@ -93,6 +93,38 @@ class RunnerCancellationTest(unittest.TestCase):
             self.assertTrue(flights.teardown_confirmed(tmp, runner.pid))
 
 
+class StartFailureTest(unittest.TestCase):
+    DEAD = (b"Python path configuration:\n  PYTHONHOME = (not set)\n"
+            b"Fatal Python error: Failed to import encodings module\n"
+            b"InterruptedError: [Errno 4] Interrupted system call: '/Volumes/x/release'\n")
+
+    def test_the_shell_not_finding_the_command_is_a_start_failure(self):
+        said = b"env: /x/.venv/bin/python: No such file or directory\n"
+        self.assertEqual("exit 127: env: /x/.venv/bin/python: No such file or directory",
+                         flights.start_failure(127, 0.02, said))
+        self.assertTrue(flights.start_failure(126, 0.02, b"sh: ./job: Permission denied\n"))
+
+    def test_an_interpreter_that_died_initialising_is_a_start_failure(self):
+        self.assertIn("Interrupted system call", flights.start_failure(1, 0.4, self.DEAD))
+        old = b"Fatal Python error: init_fs_encoding: failed to get the Python codec\n"
+        self.assertTrue(flights.start_failure(1, 9.0, old))
+
+    def test_work_that_ran_and_failed_is_not(self):
+        self.assertIsNone(flights.start_failure(1, 0.1, b"Traceback\nValueError: bad row\n"))
+        self.assertIsNone(flights.start_failure(127, 90.0, b"sh: jq: command not found\n"))
+        self.assertIsNone(flights.start_failure(0, 0.1, self.DEAD))
+
+    def test_the_runner_records_it_under_its_own_code(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            subprocess.run([sys.executable, "-m", "nexus", "flight-run", "--workspace", workspace,
+                            "--cmd", "/nonexistent/python job.py", "--timeout", "30"], check=False)
+            error = flights.read_result(workspace)[0]["error"]
+            self.assertEqual(("start_failed", 127), (error["code"], error["exit_code"]))
+            subprocess.run([sys.executable, "-m", "nexus", "flight-run", "--workspace", workspace,
+                            "--cmd", "exit 3", "--timeout", "30"], check=False)
+            self.assertEqual("exit_nonzero", flights.read_result(workspace)[0]["error"]["code"])
+
+
 class KillContractTest(unittest.TestCase):
     @mock.patch("nexus.flights.subprocess.run")
     def test_empty_pid_inventory_is_already_stopped(self, run):

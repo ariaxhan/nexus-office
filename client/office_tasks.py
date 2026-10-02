@@ -128,6 +128,11 @@ def answer_human_input(body):
                 subprocess.run(['gh','issue','comment',number,'-R',repo,
                                 '--body',answer+'\n\n'+marker],
                                capture_output=True,text=True,timeout=30,check=True)
+        elif ref.startswith('nexus-plan:'):
+            # A quarantine ask: the answer is the action. Anything but a release leaves the plan stopped.
+            if re.search(r'\b(release|fly)\b',answer,re.I) and not re.search(r'\b(leave|stopped|don.?t|do not)\b',answer,re.I):
+                with closing(Ledger(str(run_board.LEDGER))) as ledger:
+                    ledger.unquarantine_plan(ref.split(':',1)[1])
         else:
             key=hashlib.sha256((identifier+'\0'+answer).encode()).hexdigest()[:32]
             say({'task_id':ref,'request_id':key,

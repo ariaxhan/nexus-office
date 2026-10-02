@@ -153,6 +153,7 @@ def cmd_plans_set(args):
         return 1
     if args.plans_command == "release":
         led.unquarantine_plan(plan["id"])
+        tower.settle_quarantine_asks(plan, "released with `nexus plans release`")
     else:
         led.set_plan_enabled(plan["id"], args.plans_command == "enable",
                              reason=getattr(args, "reason", None))

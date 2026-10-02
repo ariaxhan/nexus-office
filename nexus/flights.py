@@ -52,6 +52,30 @@ class _Cancelled(Exception):
     pass
 
 
+# An exec failure is reported by the shell at once; the same code minutes in is the plan's own work.
+START_WINDOW_S = 5.0
+_INTERPRETER_DEAD = re.compile(rb"Fatal Python error: (?:init_\w+|Failed to import encodings)")
+
+
+def start_failure(code, wall_s, said: bytes):
+    """Why the command never ran any of the plan's work, or None when it did run.
+
+    Two mechanical signs: the shell could not execute it (126 not executable, 127 not found), or
+    Python died initialising itself, which it says in words no running script can produce by
+    accident. Both are the environment (a volume not answering, a venv that moved), so tower
+    retries them with backoff instead of counting them as the plan failing (2026-10-02: three
+    plans quarantined for nine hours on `Failed to import encodings`)."""
+    if not code:
+        return None
+    lines = said.decode(errors="replace").strip().splitlines()
+    last = lines[-1][:200] if lines else "no output"
+    if code in (126, 127) and wall_s < START_WINDOW_S:
+        return f"exit {code}: {last}"
+    if _INTERPRETER_DEAD.search(said):
+        return f"interpreter died starting: {last}"
+    return None
+
+
 def workspace_path(root: str, flight_id: str) -> str:
     return os.path.join(root, flight_id)
 
@@ -115,6 +139,7 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
     proc = None
     teardown_confirmed = True
     cwd = workspace
+    said_from, launched = 0, started
     previous_term = signal.getsignal(signal.SIGTERM)
 
     def cancel(_signum, _frame):
@@ -137,6 +162,7 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
             try:
                 previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
                 try:
+                    said_from, launched = log.seek(0, os.SEEK_END), time.time()
                     proc = subprocess.Popen(
                         ["/bin/sh", "-c", cmd], cwd=cwd, stdin=subprocess.DEVNULL,
                         stdout=log, stderr=log, start_new_session=True)
@@ -184,7 +210,9 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
                 continue
             artifacts.append({"kind": "file", "ref": os.path.join(rel, name)})
     if error is None and code != 0:
-        error = {"code": "exit_nonzero", "detail": f"exit {code}", "exit_code": code}
+        never_ran = start_failure(code, time.time() - launched, _said(workspace, said_from))
+        error = ({"code": "start_failed", "detail": never_ran, "exit_code": code} if never_ran
+                 else {"code": "exit_nonzero", "detail": f"exit {code}", "exit_code": code})
     if error is None and outputs:
         missing = [n for n in outputs if not declared_outputs(cwd, [n])]
         if missing:
@@ -206,6 +234,16 @@ def run_script(workspace: str, cmd: str, timeout_s: float = 600, outputs=None,
         return result
     finally:
         signal.signal(signal.SIGTERM, previous_term)
+
+
+def _said(workspace: str, offset: int, limit: int = 65536) -> bytes:
+    """What the command wrote to the log, from where it started writing."""
+    try:
+        with open(os.path.join(workspace, LOG_NAME), "rb") as log:
+            log.seek(offset)
+            return log.read(limit)
+    except OSError:
+        return b""
 
 
 def declared_outputs(cwd: str, outputs):

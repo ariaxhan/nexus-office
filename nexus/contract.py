@@ -88,11 +88,11 @@ def gate(issue, *, required=True, window_open=None, gh=_gh):
 UNVERIFIED = "unverified:"
 
 
-def _patch_id(git, *diff_args):
+def _patch_id(git, *diff_args, run=subprocess.run):
     diff = git("diff", "--binary", "--unified=0", *diff_args)  # no context: main moving nearby is not a new change
     if diff.returncode or not diff.stdout:
         return None
-    out = subprocess.run(["git", "patch-id", "--stable"], input=diff.stdout, capture_output=True, text=True)
+    out = run(["git", "patch-id", "--stable"], input=diff.stdout, capture_output=True, text=True, timeout=30)
     return out.stdout.split()[0] if out.stdout.split() else None
 
 
@@ -106,13 +106,26 @@ def reviewed_receipt(sha, review, checkout, run=subprocess.run):
     if git("fetch", "--quiet", "origin", sha, head).returncode:
         return False, f"{UNVERIFIED} cannot fetch landed {sha} and reviewed {head} to compare"
     base = git("merge-base", f"{sha}^", head).stdout.strip()
-    landed, reviewed = _patch_id(git, f"{sha}^", sha), base and _patch_id(git, base, head)
+    landed, reviewed = _patch_id(git, f"{sha}^", sha, run=run), base and _patch_id(git, base, head, run=run)
     if not landed or landed != reviewed:
         return False, f"{UNVERIFIED} landed {sha} is not the change reviewed at {head}"
     return True, f"landed {sha}; review PASS recorded for {head}, same change"
 
 
-def done_receipt(result, contract_, checkout, run=subprocess.run, review=None):
+def done_receipt(result, contract_, checkout, run=subprocess.run, review=None, budget=None):
+    """Prove the landed change within the caller's remaining budget; timeouts remain unproven."""
+    def bounded(argv, **kw):
+        if budget is not None:
+            cleanup = argv[:3] == ["git", "worktree", "remove"]
+            kw["timeout"] = 10 if cleanup else budget(kw.get("timeout", 300))
+        return run(argv, **kw)
+    try:
+        return _done_receipt(result, contract_, checkout, bounded, review)
+    except subprocess.TimeoutExpired:
+        return False, f"{UNVERIFIED} receipt budget exhausted at {result.get('sha')}"
+
+
+def _done_receipt(result, contract_, checkout, run, review):
     """(done, reason). Done needs a landed commit AND the contract CHECK passing at that exact sha.
 
     The check runs in a throwaway detached worktree of the landed sha, never the canonical checkout,
@@ -123,24 +136,41 @@ def done_receipt(result, contract_, checkout, run=subprocess.run, review=None):
     check = (contract_ or {}).get("check")
     if not check:  # a missing verifier is not a passing one; a recorded review PASS of this change is
         return reviewed_receipt(sha, review, checkout, run)
+    state, why = check_at(sha, check, checkout, run=run)
+    return state == "passed", why
+
+
+def check_at(sha, check, checkout, run=subprocess.run, budget=None):
+    """Check one immutable head. Unrunnable is infrastructure; failed is evidence about the change."""
+    underlying = run
+    def run(argv, **kw):
+        if budget is not None:
+            kw["timeout"] = 10 if argv[:3] == ["git", "worktree", "remove"] else budget(kw.get("timeout", 300))
+        return underlying(argv, **kw)
     tmp = tempfile.mkdtemp(prefix="nexus-receipt-")
     tree = os.path.join(tmp, "tree")
     git = lambda *a: run(["git", *a], cwd=checkout, capture_output=True, text=True, timeout=300)  # noqa: E731
     try:
-        git("fetch", "--quiet", "origin", sha)
+        if git("fetch", "--quiet", "origin", sha).returncode:
+            return "unrunnable", f"cannot fetch {sha} to verify"
         if git("worktree", "add", "--detach", tree, sha).returncode:
-            return False, f"cannot check out landed {sha} to verify"
+            return "unrunnable", f"cannot check out {sha} to verify"
         if os.path.exists(os.path.join(tree, "package-lock.json")):  # a fresh tree has no node_modules: an npm
             # check would fail on its own tools (esbuild exit 127, #192) and call merged work unproven
             if run(["bash", "-c", "npm ci --prefer-offline --no-audit --no-fund"], cwd=tree,
                    capture_output=True, text=True, timeout=900).returncode:
-                return False, f"cannot install dependencies at {sha} to verify"
+                return "unrunnable", f"cannot install dependencies at {sha} to verify"
         # Tower's own environment, not a login shell: a login PATH puts /usr/bin first (python3 3.9), so the
         # receipt would judge the change with different tools than every check that passed before merge
         proc = run(["bash", "-c", check], cwd=tree, capture_output=True, text=True, timeout=1800)
         if proc.returncode:
-            return False, f"contract check failed at {sha}: {check} (exit {proc.returncode})"
-        return True, f"landed {sha}; check passed at {sha}: {check}"
+            tail = ((getattr(proc, "stdout", "") or "") + (getattr(proc, "stderr", "") or "")).strip()[-1500:]
+            return ("unrunnable" if proc.returncode in (126, 127) else "failed"), f"contract check failed at {sha}: {check} (exit {proc.returncode})\n{tail}"
+        return "passed", f"landed {sha}; check passed at {sha}: {check}"
+    except subprocess.TimeoutExpired:
+        return "unrunnable", f"{UNVERIFIED} receipt budget exhausted at {sha}"
     finally:
-        git("worktree", "remove", "--force", tree)
-        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            git("worktree", "remove", "--force", tree)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

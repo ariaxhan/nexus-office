@@ -159,7 +159,7 @@ class CrashTowerV0(unittest.TestCase):
         failed = led.flights(states=("failed",))
         self.assertTrue(failed or produced, "the run did nothing at all")
         known = {"timeout", "vanished", "malformed_result", "missing_result",
-                 "exit_nonzero", "missing_output", "spawn_failed", "cancelled"}
+                 "exit_nonzero", "missing_output", "spawn_failed", "start_failed", "cancelled"}
         for flight in failed:
             result = loads(flight["result"], {}) or {}
             code = ((result.get("error") or {}).get("code"))

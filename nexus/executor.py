@@ -196,12 +196,16 @@ def invoke(argv, *, cwd, env, input, timeout, run, log=None):
 
 
 def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subprocess.run, write_set=None,
-        per_repo=lanes.PER_REPO, comment_for=None, log=None):
+        per_repo=lanes.PER_REPO, comment_for=None, log=None, repair=None, baseline=False):
     """write_set: this lane leases only those paths in the shared checkout; None leases the whole repo.
 
     comment_for(flight) comments on a recovered dead flight's OWN issue, never this one (#210 W5)."""
     repo, branch = entry["path"], entry.get("default_branch", "main")
+    if repair:
+        issue = dict(issue, nexus_repair=repair)
     argv, prompt, road, forced = plan(entry, issue)
+    if issue.get("nexus_repair"):
+        forced = "review"  # a repaired PR must be reviewed again, even if the patch now qualifies as small
     write_set = None if road else write_set  # roads (lessons) keep the whole-repo lane
     recovered = [lease.recover(repo, comment_for=comment_for)] + lanes.recover(repo, comment_for=comment_for)
     base = prompt
@@ -217,9 +221,19 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
         env["NEXUS_WRITE_SET"] = json.dumps(write_set)
         argv = [prompt if a == base else a for a in argv]
     started = flights.clock()
+    check_baseline = None
+    if baseline and entry.get("check"):
+        check_baseline = landing.failed_check(entry["check"], repo, lanes._bounded(run, min(300, timeout_s)))
+    if issue.get("nexus_repair"):
+        try:
+            prepare_repair(repo, record, issue["nexus_repair"])
+        except lease.Owned:
+            (lanes.release if write_set else lease.release)(repo, flight)
+            raise
     proc = invoke(argv, cwd=repo, env=env, input=prompt if road else None,
-                  timeout=max(1, timeout_s * .65), run=run, log=log)
-    fallback = provider_fallback(argv, prompt, repo) if proc.returncode else None
+                  timeout=max(1, timeout_s - (flights.clock() - started)), run=run, log=log)
+    left = timeout_s - (flights.clock() - started)
+    fallback = provider_fallback(argv, prompt, repo) if proc.returncode and left > 5 else None
     if fallback:
         proc = invoke(fallback, cwd=repo, env=env, input=None,
                       timeout=max(1, timeout_s - (flights.clock() - started) - 5), run=run, log=log)
@@ -233,12 +247,45 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
         lease.release(repo, flight)
     if fallback and proc.returncode and result["state"] == "HELD":
         result = dict(result, requeue=True, retry_s=3600)
-    return dict(result, recovered=[r for r in recovered if r], road=road)
+    said = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode and (proc.returncode == 124 or re.search(
+            r"rate.limit|not logged in|authentication|quota|provider unavailable|usage limit", said, re.I)):
+        result = dict(result, provider_failure=f"exit_{proc.returncode}: {said[:200]}")
+    if result.get("reason") == "check_failed" and check_baseline:
+        result = dict(result, check_baseline=check_baseline)
+    return dict(result, recovered=[r for r in recovered if r], road=road, said=said[-1200:])
+
+
+def prepare_repair(repo, record, repair):
+    """Restore the reviewed patch under our lease, without switching HEAD or touching human dirt."""
+    landing._git(repo, "fetch", "--quiet", "origin", repair["branch"])
+    head = landing._git(repo, "rev-parse", "FETCH_HEAD").stdout.strip()
+    if head != repair["head"]:
+        raise lease.Owned("repair_head_changed")
+    record["repair_head"] = head
+    base = landing._git(repo, "merge-base", record["head"], head).stdout.strip()
+    paths = landing._git(repo, "diff", "--name-only", "--no-renames", "-z", base, head).stdout.strip("\0").split("\0")
+    paths = [p for p in paths if p]
+    dirty = lease.dirty(repo)
+    if any(p in dirty or (record.get("write_set") and not lanes.inside(record["write_set"], p))
+           for p in paths):
+        raise lease.Owned("repair_paths_unavailable")
+    if not paths:
+        return
+    # Git computes the merged files without changing HEAD or entering a merge in the shared checkout.
+    # Conflicts become markers in these leased files for the repairer, never a permanent retry loop.
+    merged = landing._git(repo, "merge-tree", "--write-tree", record["head"], head, check=False)
+    tree = merged.stdout.splitlines()[0] if merged.stdout else ""
+    if merged.returncode not in (0, 1) or not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+        raise lease.Owned("repair_merge_unavailable")
+    landing.restore(repo, paths, tree)
 
 
 REVIEW_BAR = ("Bar: correctness, and the change does what the issue asks without breaking callers. "
               "The builder flight already ran the repo checks green before opening this PR. Nits, style and "
-              "optional improvements never block.")
+              "optional improvements never block. Inspect the complete diff and report ALL blocking findings "
+              "together, with file, line, concrete failure and required correction for each. Do not stop at the "
+              "first finding. On a repaired head, check every previous finding and the changed code.")
 
 
 def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
@@ -259,9 +306,9 @@ def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
         primary = [ROUTER, "run", "review", "--", "exec", "--ephemeral", "--ignore-user-config",
                    "--model", model, "--sandbox", "danger-full-access", "--skip-git-repo-check",
                    "-C", tmp, "-o", out, prompt]
-        proc = invoke(primary, cwd=tmp, env=env, input=None, timeout=max(1, timeout_s * .65), run=run)
+        proc = invoke(primary, cwd=tmp, env=env, input=None, timeout=max(1, timeout_s), run=run)
         text = open(out).read() if os.path.exists(out) else ""
-        if proc.returncode or not text.strip():
+        if (proc.returncode or not text.strip()) and timeout_s - (flights.clock() - started) > 5:
             fallback = [ROUTER, "run-provider", "review", "claude", "--", "-p",
                         "Codex review failed. Read the live PR and issue, then give only the requested verdict. "
                         "Do not edit, comment, merge or publish.\n\n" + prompt,
@@ -269,10 +316,10 @@ def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
             proc = invoke(fallback, cwd=tmp, env=env, input=None,
                           timeout=max(1, timeout_s - (flights.clock() - started) - 5), run=run)
             text = proc.stdout if not proc.returncode else ""
-    verdict = re.findall(r"VERDICT:\s*(PASS|FAIL)(.*)", text)
+    verdict = re.findall(r"^VERDICT:\s*(PASS|FAIL)([^\n]*)$", text.strip(), re.M)
     if not verdict:
         raise RoadError("review providers returned no verdict: " + text[-300:])
-    return verdict[-1][0], verdict[-1][1].strip() or text[-300:]
+    return verdict[-1][0], text.strip()
 
 
 def _land(entry, issue, record, proc, road, forced, pr_create, comment, run):
@@ -289,7 +336,8 @@ def _land(entry, issue, record, proc, road, forced, pr_create, comment, run):
     if proc.returncode:
         return (landing.hold(repo, record, paths, collisions, f"exit_{proc.returncode}", comment)
                 if paths else landing.nothing_landed(record, proc))
-    failed = paths and entry.get("check") and landing.failed_check(entry["check"], repo, run)
+    failed = paths and entry.get("check") and landing.failed_check(
+        entry["check"], repo, lanes._bounded(run, lanes.check_budget(repo, record)))
     if failed:
         return landing.hold(repo, record, paths, collisions, "check_failed", comment, failed)
     lines = _lines(repo, paths)

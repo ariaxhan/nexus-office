@@ -190,7 +190,7 @@ else:
         from nexus import cli, flights
         import time
         childfile=self.root/"session-child"
-        program="import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); open(sys.argv[1],'w').write(str(p.pid)); time.sleep(60)"
+        program="import subprocess,sys,time,os; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); open(sys.argv[1]+'.tmp','w').write(str(p.pid)); os.replace(sys.argv[1]+'.tmp',sys.argv[1]); time.sleep(60)"
         proc=subprocess.Popen([sys.executable,"-c",program,str(childfile)],start_new_session=True)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         deadline=time.monotonic()+3
@@ -481,8 +481,11 @@ else:
         self.assertEqual([], self.calls())
 
     def test_tower_review_holds_tbs_sensitive_merge_outside_kst_window(self):
-        if not Path(work.SENSITIVE_WINDOW).exists():
-            self.skipTest("thinking-brain-school checkout absent")
+        gate = self.root / "window.py"  # the gate's contract (exit 3 and its reason), not another repo's policy tonight
+        gate.write_text("import os, sys\nif os.environ['TBS_NOW'][11:13] >= '08':\n"
+                        "    sys.stderr.write('merge holds sensitive change: next window 2026-09-15 01:00 KST')\n"
+                        "    sys.exit(3)\n")
+        patch.object(work, "SENSITIVE_WINDOW", str(gate)).start()
         self.entry["repo"] = "thinking-brain-school/tbs-www"
         work.discover(self.led, self.entry)
         task = self.led.tasks()[0]
@@ -798,3 +801,372 @@ else:
         self.assertEqual('pending', self.run_work()[0]['state'])
         self.assertEqual([], self.calls())
         self.assertEqual([], self.led.events(kind='work.failure'))
+
+    def test_unchanged_disposition_is_recorded_once_and_a_change_once_more(self):
+        self.issues = [dict(number=1, title='Idle', state='open', labels=[])]
+        for _ in range(3):
+            work.discover(self.led, self.entry)
+            work.selection_queue(self.led, self.entry)
+        self.assertEqual(1, len(self.led.events(kind='work.disposition')))
+        self.issues[0]['labels'] = [{'name': 'hold'}]
+        for _ in range(2):
+            work.discover(self.led, self.entry)
+            work.selection_queue(self.led, self.entry)
+        states = [json.loads(e['payload'])['state'] for e in self.led.events(kind='work.disposition')]
+        self.assertEqual(['ineligible', 'held'], states)
+        self.issues[0]['labels'] = []  # back to an earlier answer is still a change from the latest
+        work.discover(self.led, self.entry)
+        work.selection_queue(self.led, self.entry)
+        self.assertEqual(3, len(self.led.events(kind='work.disposition')))
+
+    def test_outcome_notices_keep_a_timeout_floor_when_the_budget_is_spent(self):
+        from nexus import contract
+        work.discover(self.led, self.entry)
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        timeouts = []
+
+        def fake(argv, **kwargs):
+            timeouts.append(kwargs['timeout'])
+            return subprocess.CompletedProcess(argv, 0, 'https://comment/1' if 'comment' in argv else '{"state":"closed"}', '')
+
+        patch('nexus.work.subprocess.run', side_effect=fake).start()
+        for left in (0.066, -5):  # the live failure, then a deadline already passed
+            token = work._deadline.set(work.flights.clock() + left)
+            try:
+                self.assertEqual('pending', work._not_done(self.led, fid, self.entry['repo'], 1,
+                                                           contract.UNVERIFIED + ' landed abc'))
+            finally:
+                work._deadline.reset(token)
+        self.assertEqual(4, len(timeouts))  # comment and hold label, twice
+        self.assertTrue(all(t >= work.NOTIFY_FLOOR_S for t in timeouts), timeouts)
+
+    def test_wave_child_gets_less_budget_than_the_parent_waits_and_term_before_kill(self):
+        now, signals, spawned = [1000.0], [], []
+
+        class Lane:
+            pid, returncode = 4242, -9
+
+            def communicate(self, input=None, timeout=None):
+                if timeout is None:  # only after SIGKILL
+                    return '[]', ''
+                now[0] += timeout
+                raise subprocess.TimeoutExpired(['lane'], timeout)
+
+        def spawn(argv, **kwargs):
+            spawned.append(argv)
+            return Lane()
+
+        item = dict(repo='sample/product', number=1)
+        with patch('nexus.work.wave_candidates', return_value=[item]), \
+                patch('nexus.work.subprocess.Popen', side_effect=spawn), \
+                patch('nexus.work.flights.clock', side_effect=lambda: now[0]), \
+                patch('nexus.work.os.killpg', side_effect=lambda pid, sig: signals.append((pid, sig))):
+            report = work.dispatch_wave(self.led, [self.entry], self.root / 'registry.json', 900, (1, 1))
+            self.assertIsNone(work.dispatch_wave(self.led, [self.entry], self.root / 'registry.json',
+                                                 work.WAVE_MARGIN_S, (1, 1)))  # no budget to hand a child: run inline
+        self.assertEqual([], report)
+        self.assertEqual(1, len(spawned))
+        child_s = int(spawned[0][spawned[0].index('--budget-s') + 1])
+        self.assertEqual(900 - work.WAVE_MARGIN_S, child_s)
+        self.assertGreaterEqual(now[0] - 1000.0, 900)  # the parent waited its whole budget before signalling
+        self.assertEqual([(4242, work.signal.SIGTERM), (4242, work.signal.SIGKILL)], signals)
+
+    def test_wave_lane_turns_sigterm_into_a_recorded_error_and_restores_the_handler(self):
+        before = work.signal.getsignal(work.signal.SIGTERM)
+
+        def discover(led, entry):
+            self.assertIs(work._terminated, work.signal.getsignal(work.signal.SIGTERM))
+            os.kill(os.getpid(), work.signal.SIGTERM)
+            work.time.sleep(0.05)  # the handler runs between bytecodes
+
+        with patch('nexus.work.discover', side_effect=discover):
+            report = work.run(self.led, [self.entry], issue=1)
+        self.assertEqual('failed', report[0]['state'])
+        self.assertIn('terminated', report[0]['error'])
+        self.assertEqual(before, work.signal.getsignal(work.signal.SIGTERM))
+
+    def test_unchanged_capture_leaves_a_small_observation_and_a_change_the_full_issue(self):
+        issue = dict(number=1, title='First', state='open', labels=[{'name': 'ready'}], body='b' * 5000,
+                     assignees=[], updated_at='2026-10-01T00:00:00Z')
+        count = lambda kind: len(self.led.events(kind=kind))  # noqa: E731
+        tid = work.capture(self.led, self.entry['repo'], issue)
+        for _ in range(3):
+            self.assertEqual(tid, work.capture(self.led, self.entry['repo'], dict(issue)))
+        self.assertEqual((1, 3), (count('work.issue'), count('work.observed')))
+        seen = self.led.events(kind='work.observed')[-1]
+        self.assertEqual(tid, seen['subject'])
+        self.assertLess(len(seen['payload']), 200)
+        self.assertEqual({'updated_at': '2026-10-01T00:00:00Z', 'state': 'open'}, json.loads(seen['payload']))
+        self.assertEqual(issue, work.latest(self.led, 'work.issue', tid))  # readers still get the whole issue
+        for field, value in (('labels', [{'name': 'hold'}]), ('title', 'Renamed'), ('body', 'new'),
+                             ('assignees', [{'login': 'tim'}]), ('updated_at', '2026-10-02T00:00:00Z'),
+                             ('state', 'closed')):
+            issue[field] = value
+            before = count('work.issue')
+            work.capture(self.led, self.entry['repo'], dict(issue))
+            self.assertEqual(before + 1, count('work.issue'), field)
+            self.assertEqual(issue, work.latest(self.led, 'work.issue', tid))
+        self.assertEqual(3, count('work.observed'))
+
+    def test_reopen_after_close_survives_unchanged_reobservation(self):
+        self.assertEqual('done', self.run_work()[0]['state'])
+        task = self.led.tasks()[0]
+        self.assertTrue(work.latest(self.led, 'work.closed', task['id']))
+        closed = dict(self.issues[0], state='closed')
+        full = len(self.led.events(kind='work.issue', subject=task['id']))
+        for _ in range(2):  # closed, then seen closed again: nothing new to say
+            work.capture(self.led, self.entry['repo'], dict(closed))
+        self.assertFalse(work.reopened_after_close(self.led, task))
+        for _ in range(2):  # reopened on GitHub, then seen open again
+            work.capture(self.led, self.entry['repo'], dict(self.issues[0]))
+            self.assertTrue(work.reopened_after_close(self.led, task))
+        self.assertEqual(full + 2, len(self.led.events(kind='work.issue', subject=task['id'])))  # closed, reopened
+
+
+CONTRACT = ('```tbs-contract\ndepends_on: []\nwrite_set: null\nroute: "claude"\ncheck: "make test"\n'
+            'acceptance: "x"\n```')
+
+
+class TowerFlow(unittest.TestCase):
+    """Tower v2 flight outcomes (audit 2026-10-02: 70 flights, one issue merged unattended in two)."""
+    github = WorkTests.github
+
+    def setUp(self):
+        WorkTests.setUp(self)
+        self.issues = [dict(number=7, title="t", state="open", body="", labels=[{"name": "ready"}])]
+        self.open_pr, self.pr_list_rc = "", 0
+        self.pr = dict(headRefName="aria/issue-7", headRefOid="h1", baseRefName="main", labels=[], files=[])
+        self.after, self.mergeable = {"state": "MERGED", "mergeCommit": {"oid": "m1"}}, "MERGEABLE"
+        self.edits, self.comments, self.merges = [], [], []
+        github = self.github
+
+        def gh(argv, **kw):
+            done = lambda rc=0, out="", err="": subprocess.CompletedProcess(argv, rc, out, err)  # noqa: E731
+            if argv[:3] == ["gh", "pr", "list"]:
+                return done(self.pr_list_rc, self.open_pr, "HTTP 502")
+            if argv[:3] == ["gh", "pr", "view"]:
+                if "state,mergeCommit" in argv:
+                    return done(out=json.dumps(self.after))
+                return done(out=json.dumps({"mergeable": self.mergeable} if "mergeable" in argv else self.pr))
+            if argv[:3] == ["gh", "pr", "merge"]:
+                self.merges.append(argv)
+                return done()
+            if argv[:2] == ["gh", "pr"] or argv[:3] == ["gh", "issue", "comment"]:
+                self.comments.append(argv[-1])
+                return done(out="https://c/1")
+            if argv[:3] == ["gh", "issue", "edit"]:
+                self.edits.append(argv)
+                return done()
+            return github(argv, **kw)
+        patch("nexus.work.subprocess.run", side_effect=gh).start()
+        patch("nexus.work._sensitive_hold", return_value=None).start()
+
+        def landed(ledger, fid, repo, result):
+            ledger.event("flight.terminal", fid, result, "tower")
+            if result["state"] == "LANDED":
+                ledger.set_state(fid, "produced")
+                ledger.set_state(fid, "verified", evidence=terminal.landed(result, result["sha"]))
+        patch("nexus.tower.land_write_flight", side_effect=landed).start()
+        work.discover(self.led, self.entry)
+        self.task = self.led.tasks()[0]
+        token = work._lane.set(work.TOWER_LABEL)
+        self.addCleanup(lambda: work._lane.reset(token))
+
+    def budget(self, seconds=3600):
+        token = work._deadline.set(work.flights.clock() + seconds)
+        self.addCleanup(lambda: work._deadline.reset(token))
+
+    def waiting(self):
+        return work.latest(self.led, "work.pending", self.task["id"])
+
+    def holds(self):
+        return [e for e in self.edits if "hold" in e]
+
+    def settle(self, **result):
+        fid = work.claim(self.led, self.entry["repo"], 7, os.getpid(), runner=True)
+        return fid, work._settle(self.led, fid, self.entry, self.task, self.issues[0], dict(result, flight=fid))
+
+    def builds(self, flown):
+        def fly(entry, issue, flight, **kw):
+            flown.append(dict(kw, entry=entry, evidence=issue["nexus_evidence"]))
+            self.open_pr, self.pr["headRefOid"] = "https://pr/7\n", f"h{len(flown)}"
+            return {"state": "HELD", "reason": "in_review", "pr_url": "https://pr/7", "flight": flight,
+                    "sha": self.pr["headRefOid"], "branch": "aria/issue-7"}
+        return patch("nexus.executor.fly", side_effect=fly)
+
+    def review(self, verdict="PASS", why="ok"):
+        with patch("nexus.executor.review", return_value=(verdict, why)):
+            return work.tower_review(self.led, self.entry, self.task, "https://pr/7")
+
+    # 1: one review, every finding; the repair and its re-review in the same runner
+
+    def test_a_failed_review_is_repaired_and_rereviewed_in_the_same_runner(self):
+        self.budget()
+        flown, verdicts = [], [("FAIL", "hides a failure\nleaks the token"), ("PASS", "ok")]
+        with self.builds(flown), patch("nexus.executor.review", side_effect=lambda *a, **k: verdicts.pop(0)):
+            self.assertEqual("done", work.tower_execute(self.led, self.entry, self.task))
+        self.assertEqual(2, len(flown))  # build, then one repair that was handed both findings
+        self.assertIsNone(flown[0]["repair"])
+        self.assertEqual(("aria/issue-7", "h1"), (flown[1]["repair"]["branch"], flown[1]["repair"]["head"]))
+        self.assertIn("- hides a failure", flown[1]["evidence"])
+        self.assertIn("- leaks the token", flown[1]["evidence"])
+        self.assertEqual(1, len(self.merges))
+        self.assertEqual(1, len(self.led.events(kind="work.repair")))
+        failed = [json.loads(e["payload"]) for e in self.led.events(kind="work.review")][0]
+        self.assertEqual(["hides a failure", "leaks the token"], failed["findings"])
+        self.assertEqual([], self.holds())
+
+    def test_the_repair_cap_queues_the_existing_redesign_and_a_fail_never_merges(self):
+        self.budget()
+        flown = []
+        with self.builds(flown), patch("nexus.executor.review", return_value=("FAIL", "still wrong")):
+            self.assertEqual("pending", work.tower_execute(self.led, self.entry, self.task))
+        self.assertEqual(1 + work.MAX_REVIEW_REPAIRS, len(flown))
+        self.assertEqual([], self.merges)
+        self.assertEqual([], self.holds())
+        self.assertEqual(1, len(self.led.events(kind="work.redesign")))
+
+    def test_a_fail_without_a_flights_budget_left_waits_for_the_next_runner(self):
+        self.budget(work.MIN_FLIGHT_S)
+        with patch("nexus.executor.fly") as fly:
+            self.assertEqual("pending", self.review("FAIL", "bug"))
+        fly.assert_not_called()
+
+    # 4: only a hold a person must clear takes `ready` away
+
+    def test_transient_holds_leave_the_issue_eligible_with_exponential_backoff(self):
+        for n, reason in enumerate(("exit_124", "not_at_origin", "exit_-9"), 1):
+            self.settle(state="HELD", reason=reason, sha="s", branch="aria/held/f", comment_url="u")
+            self.assertTrue(self.waiting()["transient"], reason)
+            self.assertAlmostEqual(60 * 2 ** n, self.waiting()["next_retry"] - work.time.time(), delta=5)
+        self.settle(state="HELD", reason="check_failed", check_baseline="`make` exited 2", sha="s",
+                    branch="aria/held/f", comment_url="u")  # the base fails its own check: not this flight's fault
+        self.assertEqual(1, len(self.led.events(kind="work.check_baseline")))
+        self.settle(state="HELD", reason="exit_1", provider_failure="exit_1: rate limit", requeue=True, sha="s",
+                    branch="aria/held/f", comment_url="u")
+        self.assertTrue(self.waiting()["transient"])
+        self.assertEqual([], self.edits)
+        self.assertEqual([], self.led.events(kind="work.failure"))
+
+    def test_holds_that_need_a_person_label_the_issue(self):
+        for reason in ("collision", "check_failed", "human:risk", "local_commit"):
+            self.edits.clear()
+            self.settle(state="HELD", reason=reason, sha="s", branch="aria/held/f", comment_url="u")
+            self.assertEqual(1, len(self.holds()), reason)
+            self.assertFalse(self.waiting().get("transient"), reason)
+
+    # 2, 5: a provider that failed is a wait; a second genuine no-change is a person's
+
+    def test_a_provider_failure_is_a_backoff_not_a_failed_attempt(self):
+        for result in (dict(state="CLOSED", reason="no_change", provider_failure="no change after 9s"),
+                       dict(state="FAILED", reason="exit_1", provider_failure="exit_1: rate limit")):
+            fid, state = self.settle(**result)
+            self.assertEqual("pending", state)
+            self.assertEqual("cancelled", self.led.flight(fid)["state"])
+            self.assertTrue(self.waiting()["reason"].startswith("provider_failed: "), self.waiting())
+            self.assertTrue(self.waiting()["transient"])
+        self.assertEqual(([], [], []), (self.comments, self.edits, self.led.events(kind="work.failure")))
+
+    def test_the_second_consecutive_no_change_holds_once_with_what_the_agent_said(self):
+        self.settle(state="CLOSED", reason="no_change", said="already fixed by abc123")
+        self.assertEqual((1, []), (len(self.comments), self.holds()))
+        self.settle(state="CLOSED", reason="no_change", said="already fixed by abc123")
+        self.assertEqual(1, len(self.holds()))
+        self.assertIn("already fixed by abc123", self.comments[-1])
+        self.assertIn("no_change", self.waiting()["hold"])
+
+    # 7: merged is landed; the receipt and the close are the task's, and retry without the flight
+
+    def test_a_merged_pr_is_a_landed_flight_with_a_landing_row(self):
+        self.assertEqual("done", self.review())
+        [flight] = self.led.flights()
+        self.assertEqual("landed", flight["state"])
+        [row] = self.led.landings()
+        self.assertEqual((flight["id"], "applied", "m1"), (row["flight_id"], row["state"], row["applied_sha"]))
+        self.assertEqual([], self.led.integrity_check())
+
+    def test_a_failed_receipt_after_the_merge_is_its_own_problem_not_a_cancelled_flight(self):
+        with patch("nexus.contract.done_receipt", return_value=(False, "contract check failed at m1: make test (exit 127)")):
+            self.assertEqual("pending", self.review())
+        [flight] = self.led.flights()
+        self.assertEqual("landed", flight["state"])
+        self.assertEqual("m1", self.led.landings(states=("applied",))[0]["applied_sha"])
+        [problem] = self.led.events(kind="work.receipt_failed")
+        self.assertIn("exit 127", json.loads(problem["payload"])["why"])
+        self.assertIn("exit 127", self.comments[-1])  # raised on the issue
+        self.assertEqual([], self.led.integrity_check())
+
+    def test_the_receipt_gets_the_runners_deadline_with_a_floor(self):
+        self.assertEqual(1800, work.receipt_timeout(1800))
+        self.budget(700)
+        self.assertTrue(690 < work.receipt_timeout(1800) <= 700)
+        self.budget(-5)
+        self.assertEqual(work.RECEIPT_FLOOR_S, work.receipt_timeout(1800))
+
+    # A-E: review findings 2026-10-02
+
+    def test_an_unreadable_pr_list_is_never_no_pr(self):
+        self.pr_list_rc = 1
+        with self.assertRaises(work.WorkError):
+            work.open_pr(self.entry["repo"], 7)
+        with patch("nexus.executor.fly") as fly:
+            self.assertEqual("failed", work._run_task(self.led, self.entry, self.task))
+        fly.assert_not_called()
+
+    def test_a_failure_right_after_the_claim_never_leaves_the_flight_running(self):
+        with patch("nexus.work.tower_gate", side_effect=work.WorkError("gh: HTTP 502")), patch("nexus.executor.fly"):
+            self.assertEqual("failed", work.tower_execute(self.led, self.entry, self.task))
+        self.assertEqual(["failed"], [f["state"] for f in self.led.flights()])
+
+    def test_the_contract_check_runs_on_the_pr_head_before_the_merge(self):
+        self.issues[0]["body"] = CONTRACT
+        with patch("nexus.contract.check_at", return_value=("failed", "contract check failed at h1: make test (exit 1)\n"
+                                                                     "FAIL test_x")) as check:
+            self.assertEqual("pending", self.review())
+        self.assertEqual("h1", check.call_args[0][0])
+        self.assertEqual([], self.merges)
+        repair = work.review_repair(self.led, self.entry["repo"], "https://pr/7")
+        self.assertIn("FAIL test_x", repair["reason"])
+        self.assertNotIn("FAIL test_x", self.comments[-1])  # check output stays in the ledger
+        with patch("nexus.contract.check_at", return_value=("unrunnable", "cannot check out h1 to verify")):
+            self.pr["headRefOid"] = "h2"
+            self.assertEqual("pending", self.review())
+        self.assertEqual([], self.merges)
+        self.assertIsNone(work.review_repair(self.led, self.entry["repo"], "https://pr/7"))  # not the change's fault
+        self.assertEqual("https://pr/7", self.waiting()["pr_url"])
+
+    def test_a_conflicting_pr_is_repaired_not_retried_forever(self):
+        self.after, self.mergeable = {"state": "OPEN", "mergeCommit": None}, "CONFLICTING"
+        self.assertEqual("pending", self.review())
+        repair = work.review_repair(self.led, self.entry["repo"], "https://pr/7")
+        self.assertIn("rebase onto the default branch and resolve conflicts", repair["reason"])
+        self.assertEqual([], self.holds())
+
+    def test_a_pr_a_person_closed_is_held_once_and_its_pointer_dropped(self):
+        self.after = {"state": "CLOSED", "mergeCommit": None}
+        self.assertEqual("pending", self.review())
+        self.assertEqual(1, len(self.holds()))
+        self.assertNotEqual("merge", self.waiting().get("requeue"))
+        self.assertFalse(self.waiting().get("pr_url"))
+
+    def test_a_repo_with_no_check_never_lands_direct(self):
+        flown = []
+        with self.builds(flown), patch("nexus.work.tower_review", return_value="pending"):
+            work.tower_execute(self.led, self.entry, self.task)
+            self.entry["check"] = ["npm", "test"]
+            self.open_pr = ""
+            with patch("nexus.work.next_retry", return_value=0):
+                work.tower_execute(self.led, self.entry, self.task)
+        self.assertTrue(flown[0]["entry"]["risk"]["no_direct"])
+        self.assertFalse((flown[1]["entry"].get("risk") or {}).get("no_direct"))
+        self.assertTrue(flown[0]["baseline"])
+
+    def test_closing_a_proven_issue_sweeps_its_held_branches(self):
+        fid = work.claim(self.led, self.entry["repo"], 7, os.getpid(), runner=True)
+        work.pending(self.led, fid, {"reason": "exit_124"})
+        receipt = {"receipt": "landed abc; check passed"}
+        with patch("nexus.lanes.sweep_held", return_value=[{"flight": fid, "branch": "aria/held/" + fid, "sha": "s"}]) as sweep:
+            self.assertEqual("done", work.close_received(self.led, self.entry, self.task, self.issues[0], receipt))
+        self.assertEqual((self.entry["path"], [fid]), sweep.call_args[0])
+        [swept] = self.led.events(kind="work.held_swept")
+        self.assertEqual(fid, json.loads(swept["payload"])["deleted"][0]["flight"])
