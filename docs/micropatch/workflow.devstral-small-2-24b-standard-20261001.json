@@ -1,0 +1,177 @@
+{
+  "timestamp": "2026-10-02T05:34:13.891892+00:00",
+  "runs": [
+    {
+      "model": "devstral-small-2:24b",
+      "provider": "ollama",
+      "total_score": 0.8555862193362193,
+      "total_latency_ms": 103112.22729099973,
+      "tier_equivalent": "sonnet-class",
+      "results": [
+        {
+          "test_id": "tag-extraction",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 4646.688749999157,
+          "tokens_used": 233,
+          "details": {
+            "expected_tags": [
+              "agents",
+              "research",
+              "safety",
+              "tools"
+            ],
+            "got_tags": [
+              "agents",
+              "prompting",
+              "research",
+              "safety",
+              "tools"
+            ],
+            "precision": 0.8,
+            "recall": 1.0,
+            "f1": 0.89
+          }
+        },
+        {
+          "test_id": "novelty-rating",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 2344.180875006714,
+          "tokens_used": 214,
+          "details": {
+            "expected_rating": 3,
+            "got_rating": 3,
+            "rating_correct": true,
+            "justification_sentences": 3
+          }
+        },
+        {
+          "test_id": "fluff-strip",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 1874.3781250086613,
+          "tokens_used": 219,
+          "details": {
+            "word_count": 33,
+            "max_words": 60,
+            "under_limit": true,
+            "facts_found": 5,
+            "facts_required": 5
+          }
+        },
+        {
+          "test_id": "thread-match",
+          "score": 0.8571428571428571,
+          "passed": true,
+          "latency_ms": 4356.742124989978,
+          "tokens_used": 367,
+          "details": {
+            "correct_threads": [
+              "agents",
+              "open-models",
+              "tools"
+            ],
+            "matched": [
+              "agents",
+              "open-models",
+              "tools"
+            ],
+            "wrong_matches": [
+              "research"
+            ]
+          }
+        },
+        {
+          "test_id": "collision-detect",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 25505.69920799171,
+          "tokens_used": 959,
+          "details": {
+            "connections_found": 2,
+            "connections_required": 2,
+            "has_reasoning": false
+          }
+        },
+        {
+          "test_id": "draft-email",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 2406.80662500381,
+          "tokens_used": 191,
+          "details": {
+            "word_count": 63,
+            "length_ok": true,
+            "points_found": 3,
+            "tone_score": 1.0
+          }
+        },
+        {
+          "test_id": "code-gen",
+          "score": 0.2,
+          "passed": false,
+          "latency_ms": 6667.680667000241,
+          "tokens_used": 346,
+          "details": {
+            "executed": false,
+            "error": "Traceback (most recent call last):\n  File \"/var/folders/p3/d5l5rshj0pv8r7wqhg0tdlyh0000gn/T/tmplrqulww8.py\", line 47, in <module>\n    assert result5[0] == {}\n           ^^^^^^^^^^^^^^^^\nAssertionError\n",
+            "code_found": true
+          }
+        },
+        {
+          "test_id": "bug-detection",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 22210.25095799996,
+          "tokens_used": 869,
+          "details": {
+            "bug_found": true,
+            "fix_found": true,
+            "false_positives": 0
+          }
+        },
+        {
+          "test_id": "multi-step-plan",
+          "score": 0.85,
+          "passed": true,
+          "latency_ms": 27975.616832991363,
+          "tokens_used": 1002,
+          "details": {
+            "steps_found": 5,
+            "steps_required": 5,
+            "ordering_correct": false
+          }
+        },
+        {
+          "test_id": "creative-piece",
+          "score": 0.5043055555555556,
+          "passed": true,
+          "latency_ms": 3590.9477079985663,
+          "tokens_used": 249,
+          "details": {
+            "word_count": 86,
+            "length_ok": true,
+            "elements_found": 5,
+            "forbidden_found": 0,
+            "variety_score": 0.18
+          }
+        },
+        {
+          "test_id": "instruction-follow",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 1533.2354170095641,
+          "tokens_used": 146,
+          "details": {
+            "check_is_valid_json": true,
+            "check_not_contains": true,
+            "check_contains": true,
+            "lines": 5,
+            "check_max_lines": true
+          }
+        }
+      ]
+    }
+  ]
+}

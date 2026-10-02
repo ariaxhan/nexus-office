@@ -1,0 +1,173 @@
+{
+  "timestamp": "2026-10-02T05:26:33.313071+00:00",
+  "runs": [
+    {
+      "model": "lfm2.5:8b",
+      "provider": "ollama",
+      "total_score": 0.5650378787878787,
+      "total_latency_ms": 46776.945248027914,
+      "tier_equivalent": "haiku-class",
+      "results": [
+        {
+          "test_id": "tag-extraction",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 5949.743709003087,
+          "tokens_used": 1017,
+          "details": {
+            "expected_tags": [
+              "agents",
+              "research",
+              "safety",
+              "tools"
+            ],
+            "got_tags": [
+              "agents",
+              "research",
+              "safety",
+              "tools"
+            ],
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0
+          }
+        },
+        {
+          "test_id": "novelty-rating",
+          "score": 0.8,
+          "passed": true,
+          "latency_ms": 4979.156667002826,
+          "tokens_used": 1075,
+          "details": {
+            "expected_rating": 3,
+            "got_rating": 3,
+            "rating_correct": true,
+            "justification_sentences": 1
+          }
+        },
+        {
+          "test_id": "fluff-strip",
+          "score": 0.88,
+          "passed": true,
+          "latency_ms": 1393.8911659934092,
+          "tokens_used": 473,
+          "details": {
+            "word_count": 34,
+            "max_words": 60,
+            "under_limit": true,
+            "facts_found": 4,
+            "facts_required": 5
+          }
+        },
+        {
+          "test_id": "thread-match",
+          "score": 0.6666666666666666,
+          "passed": true,
+          "latency_ms": 5138.23254100862,
+          "tokens_used": 1200,
+          "details": {
+            "correct_threads": [
+              "agents",
+              "open-models",
+              "tools"
+            ],
+            "matched": [
+              "agents",
+              "tools"
+            ],
+            "wrong_matches": [
+              "research"
+            ]
+          }
+        },
+        {
+          "test_id": "collision-detect",
+          "score": 0.0,
+          "passed": false,
+          "latency_ms": 5392.934415998752,
+          "tokens_used": 1187,
+          "details": {
+            "connections_found": 0,
+            "connections_required": 2,
+            "has_reasoning": false
+          }
+        },
+        {
+          "test_id": "draft-email",
+          "score": 0.35,
+          "passed": false,
+          "latency_ms": 1223.4111249999842,
+          "tokens_used": 384,
+          "details": {
+            "word_count": 0,
+            "length_ok": false,
+            "points_found": 0,
+            "tone_score": 1.0
+          }
+        },
+        {
+          "test_id": "code-gen",
+          "score": 0.0,
+          "passed": false,
+          "latency_ms": 5569.2376250081,
+          "tokens_used": 1170,
+          "details": {
+            "reason": "no code block found"
+          }
+        },
+        {
+          "test_id": "bug-detection",
+          "score": 0,
+          "passed": false,
+          "latency_ms": 5567.054458006169,
+          "tokens_used": 1227,
+          "details": {
+            "bug_found": false,
+            "fix_found": false,
+            "false_positives": 0
+          }
+        },
+        {
+          "test_id": "multi-step-plan",
+          "score": 0.85,
+          "passed": true,
+          "latency_ms": 5547.218750012689,
+          "tokens_used": 1154,
+          "details": {
+            "steps_found": 5,
+            "steps_required": 5,
+            "ordering_correct": false
+          }
+        },
+        {
+          "test_id": "creative-piece",
+          "score": 0.66875,
+          "passed": true,
+          "latency_ms": 4117.711625003722,
+          "tokens_used": 956,
+          "details": {
+            "word_count": 56,
+            "length_ok": true,
+            "elements_found": 5,
+            "forbidden_found": 0,
+            "variety_score": 1.0
+          }
+        },
+        {
+          "test_id": "instruction-follow",
+          "score": 1.0,
+          "passed": true,
+          "latency_ms": 1898.3531659905566,
+          "tokens_used": 526,
+          "details": {
+            "check_is_valid_json": true,
+            "check_not_contains": true,
+            "check_contains": true,
+            "lines": 5,
+            "check_max_lines": true
+          }
+        }
+      ]
+    }
+  ]
+}
