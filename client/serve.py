@@ -58,6 +58,7 @@ import bot_reports  # noqa: E402
 import buzz  # noqa: E402  (needs the path above)
 import chat  # noqa: E402
 import context  # noqa: E402
+import desktops  # noqa: E402
 import office_api  # noqa: E402
 import live  # noqa: E402
 import lesson_status  # noqa: E402
@@ -178,6 +179,8 @@ NO_PAGE = "the office is at /; there is nothing else here"
 PHONE = HERE / "phone"
 REPORTS = {}  # bot -> the last report that loaded, shown when the harness blinks
 PAGE = {"/": "office.html", "/index.html": "office.html",
+        "/desktops": "desktops.html", "/desktops.html": "desktops.html",
+        "/desktops.css": "desktops.css", "/desktops-bundle.js": "vendor/desktops-bundle.js",
         "/lessons": "lessons.html", "/lessons.html": "lessons.html",
         "/lessons.css": "lessons.css", "/lessons.js": "lessons.js",
         "/outlines": "outlines.html", "/outlines.html": "outlines.html", "/outlines.js": "outlines.js"}
@@ -603,6 +606,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             left -= len(chunk)
 
+    def _read_body(self, n):
+        # Unbuffered headers leave WebSocket bytes on the socket. Body reads
+        # still need the old buffered read(n) behavior across TCP packets.
+        chunks = []
+        left = n
+        while left > 0:
+            chunk = self.rfile.read(left)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+        return b''.join(chunks)
+
     def _read_json(self, limit=WRITE_LIMIT):
         n = int(self.headers.get("content-length") or 0)
         if n > limit:
@@ -611,7 +627,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.close_connection = True
             raise ValueError("payload too large")
-        payload = self.rfile.read(n) if n else b""
+        payload = self._read_body(n)
         if len(payload) != n:
             self.close_connection = True
             raise ValueError("request body ended before its declared length")
@@ -629,6 +645,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._identity_ok():
             return self._json({'error': 'not you'}, 403)
         try:
+            if desktops.get(self, path):
+                return
             if office_api.get(self, path, query):
                 return
             routes = {
@@ -1032,7 +1050,7 @@ class Handler(BaseHTTPRequestHandler):
                     "refusing it, because unsigned is never accepted")
             return self._json({"error": "no webhook secret configured"}, 503)
 
-        raw = self.rfile.read(n) if n else b""
+        raw = self._read_body(n)
         ok = webhook.verify(webhook.SECRET, raw, self.headers.get("x-hub-signature-256") or "")
         run = webhook.note_signature(ok)
         if not ok:
@@ -1151,7 +1169,7 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return self._json({"error": NO_PAGE}, 404)
         self._send(200, body, TYPES[target.suffix], {
-            "content-security-policy": CSP,
+            "content-security-policy": desktops.desktop_csp(self.headers['Host']) if name == 'desktops.html' else CSP,
             "x-content-type-options": "nosniff",
             "referrer-policy": "no-referrer",
         })
@@ -1170,7 +1188,7 @@ def make_server(world: World, port: int = 8790):
                               refresh=world.refresh_desk,
                               receipts=office_sync.RECEIPTS)
     handler = type("BoundHandler", (Handler,),
-                   {"world": world,
+                   {"world": world, "rbufsize": 0,
                     "chatroom": chat.Chatroom(world.bot_evidence, world.bot_decisions),
                     "mailbox": mailbox, "trigger": trigger})
     return ThreadingHTTPServer(("127.0.0.1", port), handler)

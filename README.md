@@ -176,6 +176,12 @@ tailnet with `tailscale serve --bg 8790`, then name the tailnet host in
 must carry the `Tailscale-User-Login` that matches, or it is 403 before it reads
 a thing. That check is why the page has nothing to log in to.
 
+**Desktops** in the Office header opens the free browser Screen Sharing viewer.
+It discovers this Mac and your own Macs on Tailscale, supports iPhone touch and
+keyboard controls, and asks for the selected Mac's login. Enable Screen Sharing
+in that Mac's System Settings → General → Sharing. Office never saves the Mac
+password. See [remote desktop](docs/remote-desktop.md) for setup and verification.
+
 ## The automation, and the agents already running
 
 Two questions the office used to answer only in a terminal.

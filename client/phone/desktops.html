@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f5f1e8">
+  <title>Mac desktops · Nexus Office</title>
+  <link rel="stylesheet" href="/desktops.css">
+  <script type="module" src="/desktops-bundle.js"></script>
+</head>
+<body>
+  <header class="topbar"><a href="/">← Office</a><h1>Mac desktops</h1><button id="refresh">Refresh</button></header>
+  <main id="chooser">
+    <p class="intro">Your Macs, from here.</p>
+    <p>Choose a Mac to see and control its desktop. Sign in with that Mac's login.</p>
+    <p id="list-status" role="status">Looking for your Macs…</p>
+    <div id="machines"></div>
+    <p class="footnote">Free, powered by noVNC. The Mac must be awake with Screen Sharing enabled.</p>
+  </main>
+  <section id="session" hidden aria-label="Remote Mac desktop">
+    <div class="session-bar"><h2 id="machine-name"></h2><span id="status" role="status"></span><button id="disconnect">Disconnect</button></div>
+    <div class="controls" aria-label="Desktop controls">
+      <button id="keyboard">Keyboard</button>
+      <button id="fit" aria-pressed="true">Fit screen</button>
+      <button id="pan" aria-pressed="false">Pan</button>
+      <button id="command" aria-pressed="false">⌘ Command</button>
+      <button data-key="Tab">Tab</button><button data-key="Escape">Esc</button><button data-key="BackSpace">Delete</button><button data-key="Return">Enter</button>
+      <button data-key="Left" aria-label="Left arrow">←</button><button data-key="Down" aria-label="Down arrow">↓</button><button data-key="Up" aria-label="Up arrow">↑</button><button data-key="Right" aria-label="Right arrow">→</button>
+    </div>
+    <label id="typing-label" hidden>Type on your Mac <input id="typing" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="enter" placeholder="Type here to use the Mac keyboard"></label>
+    <p id="hint">Tap to click. Two fingers scroll; tap with two fingers to right-click. Turn off Fit screen and use Pan to move around a larger desktop.</p>
+    <div id="screen" tabindex="0" aria-label="Remote desktop; tap to click or type with a physical keyboard"></div>
+  </section>
+  <dialog id="login" aria-labelledby="login-title">
+    <form id="login-form">
+      <h2 id="login-title">Sign in to your Mac</h2>
+      <p id="login-message">Use the account name and password you use on this Mac.</p>
+      <label id="username-label">Mac account name<input id="username" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
+      <label>Password<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+      <p class="footnote">Office doesn't save your password.</p>
+      <div class="login-actions"><button type="button" id="cancel-login">Cancel</button><button type="submit">Connect</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
