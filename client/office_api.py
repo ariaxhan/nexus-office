@@ -1,6 +1,10 @@
 """Additive mobile routes. Access checks stay at the existing HTTP door."""
 from pathlib import Path
+import hashlib
+import json
+import re
 import sys
+import time
 import office_github_context as github_context
 import urllib.parse
 
@@ -61,8 +65,9 @@ def get(handler, path, query):
         '/api/buzz': office_buzz.listing,
         '/api/human-asks': human_asks.listing,
         '/api/buzz/detail': lambda: office_buzz.detail(q['id']),
-        '/api/ask': ask.read,
+        '/api/ask': lambda: ask.read(q.get('since_revision')),
         '/api/ask/models': ask.models,
+        '/api/watch': lambda: watch_snapshot(handler.world, q.get('since')),
         '/api/github/collection': lambda: github.collection(handler.world.access(),known,q),
         '/api/github/checks': lambda: github.checks(handler.world.access(),known,q),
         '/api/github/timeline': lambda: github.timeline(handler.world.access(),known,q),
@@ -126,6 +131,47 @@ def hidden_desks(handler):
     return {repo.lower() for repo in sys.modules['office_sync'].read_hidden()}
 
 
+def watch_snapshot(world, since=''):
+    snapshot = world.snapshot or {}
+    questions, failures = [], []
+    keep = ('number', 'title', 'decision', 'url', 'last_word', 'last_word_at',
+            'bot_last', 'automation_failure')
+    for station in snapshot.get('stations', []):
+        repo = station.get('repo', '')
+        for issue in station.get('issues', []):
+            row = {key: issue.get(key) for key in keep if key in issue}
+            row['id'] = f'{repo}#{issue.get("number")}'
+            if (issue.get('bot_last') is True and issue.get('decision') and
+                    re_question(issue.get('last_word', ''))):
+                questions.append({'kind': 'coordinator-question', 'repo': repo, 'item': row})
+            if issue.get('bot_last') is True and issue.get('automation_failure') == 'missing_decision':
+                failures.append({'kind': 'issue', 'repo': repo, 'item': row})
+    human = human_asks.listing()
+    attention = {
+        'items': ([{'kind': 'human-ask', 'item': item} for item in human.get('items', [])[:100]] +
+                  questions[:100]),
+        'errors': human.get('errors', [])[:20], 'failures': failures[:100],
+    }
+    coordinators = []
+    for row in coordinator_chat.overview().get('coordinators', [])[:20]:
+        coordinators.append({**row, 'commits': row.get('commits', [])[:10]})
+    data = {'attention': attention, 'coordinators': coordinators,
+            'tower': snapshot.get('automation', {}).get('tower') or
+                     {'state': 'unavailable', 'detail': 'Tower state is unavailable'}}
+    encoded = json.dumps(data, sort_keys=True, separators=(',', ':')).encode()
+    revision = hashlib.sha256(encoded).hexdigest()
+    result = {'revision': revision, 'checked_at': time.time()}
+    if since == revision:
+        result['not_modified'] = True
+    else:
+        result['data'] = data
+    return result
+
+
+def re_question(value):
+    return bool(re.search(r'<!-- aria-question:[a-f0-9]+ -->', value))
+
+
 def bump_check(access,known,q):
     repo=q.get('repo','');who,token=github.read_identity(access,repo,known)
     issue,_=github.fresh(f"repos/{repo}/issues/{github.number(q.get('number'))}",who,token)
@@ -156,7 +202,7 @@ def post(handler, path):
     routes = {'/api/user-state': user_state.save, '/api/uploads': uploads.upload, '/api/objects/diff': objects.diff, '/api/system/command': system.command, '/api/objects/save': objects.save, '/api/objects/active': objects.activate, '/api/preferences': preferences.save,
               '/api/feed/react': feed.react, '/api/feed/reply': feed.reply,
               '/api/feed/follow': feed.follow,
-              '/api/ask/send': ask.send, '/api/ask/rate': ask.rate,
+              '/api/ask/send': ask.send, '/api/ask/steer': ask.steer, '/api/ask/rate': ask.rate,
               '/api/tasks/start': lambda body: office_direct.start(body,handler.world) if body.get('issue') else tasks.start(body), '/api/tasks/say': tasks.say,
               '/api/tasks/control': tasks.control,
               '/api/human-input/answer': tasks.answer_human_input}

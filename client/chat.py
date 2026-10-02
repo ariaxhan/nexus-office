@@ -394,7 +394,7 @@ class Chatroom:
             if bot in self.busy:
                 return 409, {"error": "busy"}
             self.busy.add(bot)
-        threading.Thread(target=self._turn, args=(bot, message, attachments, uploads),
+        threading.Thread(target=self._turn, args=(bot, message, attachments, uploads, rt._url()),
                          daemon=True).start()
         return 202, {"ok": True, "bot": bot}
 
@@ -417,7 +417,7 @@ class Chatroom:
                 self.errors[bot] = (f"decision {r.get('repo', '?')}#{r.get('issue', '?')} "
                                     f"did not apply: {r.get('result')}")[:300]
 
-    def _turn(self, bot: str, message: str, attachments=(), uploads=()) -> None:
+    def _turn(self, bot: str, message: str, attachments=(), uploads=(), runtime_url=None) -> None:
         # No attachment means no key: a turn without a picture goes on the wire
         # exactly as it always has, so nothing already talking to the harness has
         # to learn a new shape to keep working.
@@ -431,7 +431,7 @@ class Chatroom:
         if attachments:
             turn["attachments"] = list(attachments)
         try:
-            answer = rt.post("/api/chat", turn, timeout=TURN_TIMEOUT_S)
+            answer = rt.post("/api/chat", turn, timeout=TURN_TIMEOUT_S, base_url=runtime_url)
         except Exception as exc:  # noqa: BLE001
             # Kept until the bot manages a whole turn. A failure that clears
             # itself on the next poll is a failure nobody ever sees.

@@ -5,13 +5,28 @@ import {loadSettings,settings} from './office-settings.js';
 import {mediaList,mediaDetail} from './office-media.js';
 import {browse,openFile,numberedSource} from './office-files.js';
 import {markdownView} from './office-markdown.js';
-import {selecting,redrawIfChanged} from './office-selection.js';
+import {selecting,redrawIfChanged,mergeAskState} from './office-selection.js';
 import {coordinator,healthLine,commit as openCoordinatorCommit} from './office-coordinator.js';
 import {issueInventory,issueControls} from './office-issues.js';
-import {coordinatorQuestions} from './office-questions.js';
 import {newTask,newIssueTask,taskList,taskDetail} from './office-tasks.js';
 let attention={items:[],errors:[],failures:[]};
 let snapshot=null,snapshotReadAt=0;
+const VIEW_CACHE_KEY='office-view-cache-v1',VIEW_CACHE_SCHEMA=1;
+let forceViewRefresh=false,watchPageRequest=0,attentionRequest=0;
+function viewCaches(){try{const value=JSON.parse(localStorage.getItem(VIEW_CACHE_KEY)||'{}');return value.schema===VIEW_CACHE_SCHEMA?value:{schema:VIEW_CACHE_SCHEMA};}catch{return {schema:VIEW_CACHE_SCHEMA};}}
+function cachedView(name){return viewCaches()[name]||null;}
+function saveView(name,revision,data,checkedAt=Date.now()){
+ const cache=viewCaches(),previous=cache[name];
+ if(previous&&Number(previous.checked_at)>Number(checkedAt))return previous;
+ const row={revision,data,saved_at:previous?.revision===revision?previous.saved_at:Date.now(),checked_at:checkedAt};cache[name]=row;
+ try{localStorage.setItem(VIEW_CACHE_KEY,JSON.stringify(cache));}catch{}
+ return row;
+}
+function invalidateView(name){const cache=viewCaches();delete cache[name];localStorage.setItem(VIEW_CACHE_KEY,JSON.stringify(cache));}
+function cacheState(node,row,state='saved'){
+ const age=formatAge(Date.now()-(row?.saved_at||0));
+ node.textContent=state==='refreshing'?`Showing saved update · ${age} · refreshing…`:state==='offline'?`Showing saved update · ${age} · refresh unavailable`:`Up to date · checked ${formatAge(Date.now()-(row?.checked_at||Date.now()))}`;
+}
 async function world(){if(!snapshot||Date.now()-snapshotReadAt>15000){const data=await api('/api/world');snapshot=data.world||{stations:[],sections:{},automation:{}};snapshotReadAt=data.world?Date.now():0;}return snapshot;}
 async function guarded(parent,work){try{await work();}catch(error){failure(parent,error);}}
 function subtitle(data){return [data.state,data.detail,data.at].filter(Boolean).join(' · ');}
@@ -301,21 +316,32 @@ async function search(cursor=0){
 }
 let decisionIndex=0,feedCategory='all';
 async function watch(parent){
-  await refreshAttention();
+  let cached=cachedView('watch');
+  if(cached?.data)renderWatch(parent,cached.data,cached,'refreshing');
+  else parent.append(el('p','muted watch-loading','Checking your office…'));
+  try{
+   const request=++watchPageRequest;
+   const query=!forceViewRefresh&&cached?.revision?`?since=${encodeURIComponent(cached.revision)}`:'';
+   const result=await api('/api/watch'+query);if(request!==watchPageRequest||!parent.isConnected)return;
+   if(result.not_modified&&cached){cached=saveView('watch',cached.revision,cached.data,result.checked_at*1000);const state=parent.querySelector('.view-freshness');if(state)cacheState(state,cached);return;}
+   if(!result.data)throw Error('Watch returned no current data');
+   cached=saveView('watch',result.revision,result.data,result.checked_at*1000);
+   const next=el('div');renderWatch(next,cached.data,cached);const y=scrollY;parent.replaceChildren(...next.childNodes);requestAnimationFrame(()=>scrollTo(0,y));
+  }catch(error){const state=parent.querySelector('.view-freshness');if(state&&cached)cacheState(state,cached,'offline');else failure(parent,error);}
+}
+function renderWatch(parent,data,cached,state='current'){
+  attention=data.attention||{items:[],errors:[],failures:[]};
   const rows=attention.items.filter(requiresYou);
   const failures=attention.failures;
-  let coordinatorRows=[];
-  let coordinatorError='';
-  try{const data=await api('/api/coordinators');coordinatorRows=data.coordinators||[];}
-  catch(error){coordinatorError=error.message;}
-  let tower={state:'unavailable',detail:'Tower state is unavailable'};
-  try{tower=(await world()).automation?.tower||tower;}
-  catch(error){tower.detail=error.message;}
+  const coordinatorRows=data.coordinators||[];
+  const coordinatorError=data.coordinator_error||'';
+  const tower=data.tower||{state:'unavailable',detail:'Tower state is unavailable'};
 
   const exceptions=coordinatorRows.filter(row=>['failing','stalled','error'].includes(row.health));
   const healthy=coordinatorRows.length-exceptions.length;
   const overview=el('header','watch-overview');
   overview.append(el('div','eyebrow','Watch'));
+  const freshness=el('p','view-freshness');cacheState(freshness,cached,state);overview.append(freshness);
   if(attention.errors.length)overview.append(el('h1','','Checking what needs you'));
   else if(rows.length)overview.append(el('h1','',rows.length===1?'One thing needs you':`${rows.length} things need you`));
   else overview.append(el('h1','','Nothing needs you'));
@@ -386,7 +412,7 @@ async function watch(parent){
    parent.append(systems);
   }
 
-  await guarded(parent,async()=>{
+  try{
    const done=coordinatorRows.flatMap(row=>(row.commits||[]).map(item=>({...item,checkout:item.checkout||row.id})))
     .filter(item=>item.sha&&item.checkout).sort((a,b)=>new Date(b.at||0)-new Date(a.at||0)).slice(0,3);
    const recent=el('details','watch-state watch-recent');
@@ -400,7 +426,8 @@ async function watch(parent){
    }
    if(!done.length)list.append(el('p','muted',coordinatorRows.length?'No recent commit receipts.':'Commit evidence is unavailable right now.'));
    recent.append(list);parent.append(recent);
-  });
+  }catch(error){failure(parent,error);}
+  if(state==='refreshing')requestAnimationFrame(()=>scrollTo(0,Number(localStorage.getItem('office-scroll:watch'))||0));
 
 }
 function requiresYou(entry){return entry.kind==='human-ask'||entry.kind==='coordinator-question';}
@@ -508,24 +535,41 @@ async function ask(parent){
   const header=el('div','ask-header');const refresh=button('↻',()=>refreshOffice().catch(error=>notice(error.message)),'ask-refresh office-refresh');
   refresh.setAttribute('aria-label','Refresh Office');refresh.title='Refresh Office';header.append(refresh);
   const advanced=el('details','ask-advanced');advanced.append(el('summary','','Advanced · model choice'));
-  const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);header.append(advanced);chat.append(header);
+  const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);header.append(advanced);
+  const freshness=el('p','view-freshness ask-freshness');header.append(freshness);chat.append(header);
  const scrollRegion=el('div','ask-scroll-region');const thread=el('div','ask-thread');
  const jump=button('↓',()=>{thread.scrollTop=thread.scrollHeight;updateJump();},'ask-jump');jump.setAttribute('aria-label','Jump to latest message');jump.hidden=true;
  scrollRegion.append(thread,jump);chat.append(scrollRegion);
   const form=el('form','ask-compose');const input=el('textarea');input.placeholder='Ask what happened, why work is waiting, or what to fix…';input.setAttribute('aria-label','Ask Office');input.rows=2;
  const queueStatus=el('p','ask-queue-status');queueStatus.setAttribute('aria-live','polite');
- const submit=el('button','primary','Send');submit.type='submit';form.append(input,submit);chat.append(queueStatus,form);
- let current=null,rendered=false;
+ const steerHint=el('p','ask-steer-hint');steerHint.setAttribute('aria-live','polite');
+ const submit=el('button','primary','Queue');submit.type='submit';
+ const steerSubmit=button('Send now / Steer',()=>sendSteer(),'ask-steer');steerSubmit.hidden=true;
+ form.append(input,submit,steerSubmit);chat.append(queueStatus,steerHint,form);
+ let current=null,rendered=false,steerVerified=false;
+ const scrollKey='office-scroll:ask';let restoredScroll=false;
  const distanceFromBottom=()=>thread.scrollHeight-thread.scrollTop-thread.clientHeight;
  const updateJump=()=>{jump.hidden=!rendered||distanceFromBottom()<64;};
- thread.addEventListener('scroll',updateJump);
+ thread.addEventListener('scroll',()=>{updateJump();localStorage.setItem(scrollKey,String(thread.scrollTop));},{passive:true});
  await guarded(chat,async()=>{
-   const data=await api('/api/ask');
-   const clearDraft=restoreDraft(input,['ask']);const pendingKey='office-ask-pending';
+   let cached=cachedView('ask'),data=cached?.data,hadCache=!!data;
+   if(!data){data=await api('/api/ask');cached=saveView('ask',data.revision,data,data.checked_at*1000);}
+   steerVerified=!hadCache;cacheState(freshness,cached,hadCache?'refreshing':'current');
+   const clearDraft=restoreDraft(input,['ask']);const pendingKey='office-ask-pending',steerPendingKey='office-ask-steer-pending';
    let pending;try{pending=JSON.parse(localStorage.getItem(pendingKey)||'null');}catch{localStorage.removeItem(pendingKey);}
    if(!pending?.request_id||!pending?.text||!pending?.model)pending=null;
+   let steerPending;try{steerPending=JSON.parse(localStorage.getItem(steerPendingKey)||'null');}catch{localStorage.removeItem(steerPendingKey);}
+   if(!steerPending?.request_id||!steerPending?.text||!steerPending?.expected_turn_id)steerPending=null;
    const initial=el('option','',data.selection||data.model);initial.value=data.selection||data.model;picker.append(initial);
-  const draw=(state,toBottom=false)=>{
+   const updateControls=state=>{
+    const queued=state.queue?.queued||0,working=state.queue?.working||0;
+    queueStatus.textContent=[working?`${working} working`:'',queued?`${queued} queued`:''].filter(Boolean).join(' · ');
+    queueStatus.hidden=!working&&!queued;
+    steerSubmit.hidden=!steerVerified||!state.steer?.available;
+    steerHint.textContent=working&&!steerVerified?'Checking Send now availability…':working&&!state.steer?.available?(state.steer?.reason||'Send now is unavailable; Queue remains available.'):'';
+    steerHint.hidden=!steerHint.textContent;
+   };
+   const draw=(state,toBottom=false)=>{
    const follow=toBottom||!rendered||distanceFromBottom()<64,previousTop=thread.scrollTop;
    current=state;thread.dataset.signature=JSON.stringify(state);thread.replaceChildren();
     if(!state.messages.length){thread.append(el('p','ask-intro','Ask in your own words. Office will bring back the answer and where it came from.'));
@@ -533,44 +577,67 @@ async function ask(parent){
       thread.append(button(prompt,()=>{input.value=prompt;input.focus();},'ask-prompt'));
    }
     const lastAnswer=[...state.messages].reverse().find(row=>row.role==='office'&&row.status==='completed');
-    for(const row of state.messages){const bubble=el('article','ask-bubble '+row.role);
-    const label=row.role==='user'?'You':row.role==='office'?'Office · '+(row.model||''):row.text;
-    const heading=el('small','',label);if(row.role!=='system')heading.append(el('span','ask-status is-'+row.status,row.status));bubble.append(heading);
+    for(const row of state.messages){const bubble=el('article','ask-bubble '+row.role+(row.kind==='steer'?' steer':''));
+    const label=row.role==='user'?(row.kind==='steer'?'You · Send now':'You'):row.role==='office'?'Office · '+(row.model||''):row.text;
+    const statusLabel={sending:'sending',delivered:'delivered',not_delivered:'not delivered'}[row.status]||row.status;
+    const heading=el('small','',label);if(row.role!=='system')heading.append(el('span','ask-status is-'+row.status,statusLabel));bubble.append(heading);
     if(row.role!=='system'){
-     const waiting=row.status==='queued'?'Queued behind earlier messages…':row.status==='working'?'Working…':'';
+     const waiting=row.delivery_error||(row.status==='queued'?'Queued behind earlier messages…':row.status==='working'?'Working…':row.status==='sending'?'Sending to the active turn…':'');
      const copy=markdownView(row.text||waiting,{text:officeLinkText});copy.classList.add('ask-copy');
      copy.addEventListener('click',event=>{const anchor=event.target.closest('a');if(!anchor)return;
       const match=anchor.href.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
       if(match){event.preventDefault();githubDetail(match[1],{number:Number(match[3])},match[2]==='pull'?'prs':'issues').catch(error=>notice(error.message));}
-      });bubble.append(copy);
+      });bubble.append(copy);if(row.delivery_error)bubble.append(el('p','ask-delivery-error',row.delivery_error));
       if(row.id===lastAnswer?.id){const rating=el('div','ask-rating');rating.append(el('span','muted','Useful?'));
        for(const [kind,label] of [['helpful','Yes'],['missed','Missed it']])rating.append(button(label,async()=>{
-        await api('/api/ask/rate',{reply_id:row.id,kind});draw(await api('/api/ask'));
+        await api('/api/ask/rate',{reply_id:row.id,kind});await refreshAsk();
        },'ask-rate'+(row.rating===kind?' active':'')));
        bubble.append(rating);}
     }
     thread.append(bubble);
    }
-   const queued=state.queue?.queued||0,working=state.queue?.working||0;
-   queueStatus.textContent=[working?`${working} working`:'',queued?`${queued} queued`:''].filter(Boolean).join(' · ');
-   queueStatus.hidden=!working&&!queued;
+   updateControls(state);
    thread.scrollTop=follow?thread.scrollHeight:previousTop;
+   if(!restoredScroll&&hadCache){thread.scrollTop=Math.min(Number(localStorage.getItem(scrollKey))||0,thread.scrollHeight-thread.clientHeight);restoredScroll=true;}
    rendered=true;updateJump();
    };draw(data);
+   let refreshing=false;
+   async function refreshAsk(toBottom=false,force=false){
+    if(refreshing)return;refreshing=true;
+    try{
+     const query=!force&&current?.revision?`?since_revision=${current.revision}`:'';
+     const next=await api('/api/ask'+query);if(!chat.isConnected)return;
+     const merged=mergeAskState(current,next);steerVerified=true;cached=saveView('ask',merged.revision,merged,(next.checked_at||Date.now()/1000)*1000);
+     cacheState(freshness,cached);if(next.not_modified){current=merged;updateControls(merged);return;}redrawIfChanged(thread,JSON.stringify(merged),()=>draw(merged,toBottom));
+    }catch(error){if(cached)cacheState(freshness,cached,'offline');throw error;}finally{refreshing=false;}
+   }
+   if(hadCache)refreshAsk(false,forceViewRefresh).catch(error=>notice(error.message));
    api('/api/ask/models').then(models=>{const chosen=picker.value;picker.replaceChildren();
     for(const row of models.items){const option=el('option','',row.name);option.value=row.id;picker.append(option);}
     picker.value=chosen;}).catch(error=>notice('Model list: '+error.message));
   const timer=setInterval(async()=>{if(!chat.isConnected){clearInterval(timer);return;}if(!current?.busy)return;
-   try{const next=await api('/api/ask');redrawIfChanged(thread,JSON.stringify(next),()=>draw(next));}catch(error){notice(error.message);}},2500);
+   try{await refreshAsk();}catch(error){notice(error.message);}},1000);
   async function sendPending(payload){
    submit.disabled=true;
-   try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);draw(await api('/api/ask'),true);}
+   try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);await refreshAsk(true);}
    catch(error){if([400,403,404,409,413,422].includes(error.status)){localStorage.removeItem(pendingKey);pending=null;}notice(error.message);}
    finally{submit.disabled=false;}
+  }
+  async function sendSteerPending(payload){
+   steerSubmit.disabled=true;
+   try{await api('/api/ask/steer',payload);if(JSON.parse(localStorage.getItem(steerPendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(steerPendingKey);steerPending=null;}clearDraft(payload.text);await refreshAsk(true);}
+   catch(error){if([400,403,404,409,413,422].includes(error.status)){localStorage.removeItem(steerPendingKey);steerPending=null;}notice(error.message);}
+   finally{steerSubmit.disabled=false;}
+  }
+  function sendSteer(){
+   if(steerPending)return sendSteerPending(steerPending);const text=input.value.trim();if(!text)return;
+   if(!current?.steer?.available){notice(current?.steer?.reason||'No active Codex turn can be steered. Use Queue instead.');return;}
+   input.value=text;input.dispatchEvent(new Event('input'));steerPending={request_id:crypto.randomUUID(),text,expected_turn_id:current.steer.expected_turn_id};localStorage.setItem(steerPendingKey,JSON.stringify(steerPending));return sendSteerPending(steerPending);
   }
   form.addEventListener('submit',event=>{event.preventDefault();if(pending){void sendPending(pending);return;}const text=input.value.trim();if(!text)return;
    input.value=text;input.dispatchEvent(new Event('input'));pending={request_id:crypto.randomUUID(),text,model:picker.value};localStorage.setItem(pendingKey,JSON.stringify(pending));void sendPending(pending);});
   if(pending)void sendPending(pending);
+  if(steerPending)void sendSteerPending(steerPending);
  });
 }
 function officeLinkText(node,value){
@@ -630,18 +697,19 @@ async function refreshOffice(){
   const distance=oldThread?oldThread.scrollHeight-oldThread.scrollTop-oldThread.clientHeight:null;
   const data=await api('/api/world?fresh=1');
   snapshot=data.world||null;snapshotReadAt=data.world?Date.now():0;
-  await connection();await route();
+  forceViewRefresh=true;await connection();await route();forceViewRefresh=false;
   if($('#detail').open&&new URL(location.href).searchParams.has('detail'))await restoreFromURL();
   if(distance!==null&&distance>64){const thread=$('.ask-thread');if(thread)thread.scrollTop=Math.max(0,thread.scrollHeight-thread.clientHeight-distance);}
   notice(data.fresh?'Office updated':'Showing the latest available update');
- }finally{document.querySelectorAll('.office-refresh').forEach(control=>{control.disabled=false;});}
+ }finally{forceViewRefresh=false;document.querySelectorAll('.office-refresh').forEach(control=>{control.disabled=false;});}
 }
 $('#settings').addEventListener('click',settings);$('#new-task').addEventListener('click',()=>newTask().catch(error=>notice(error.message)));$('#close-detail').addEventListener('click',backDetail);
 $('#refresh-office').addEventListener('click',()=>refreshOffice().catch(error=>notice(error.message)));
 $('#search-go').addEventListener('click',()=>search());$('#global-search').addEventListener('keydown',event=>{if(event.key==='Enter')search();});window.addEventListener('hashchange',route);
+window.addEventListener('scroll',()=>{if((location.hash||'#watch').startsWith('#watch'))localStorage.setItem('office-scroll:watch',String(scrollY));},{passive:true});
 $('#settings').disabled=false;$('#new-task').disabled=false;$('#refresh-office').disabled=false;
 async function connection(){try{const data=await api('/api/health');$('#connection').textContent=data.ok?'Mac connected':'Mac needs attention';}catch{$('#connection').textContent='Mac unreachable';}}
-await userState.synchronize();await loadSettings().catch(error=>notice(error.message));await connection();await route();if(new URL(location.href).searchParams.has('detail')&&!$('#detail').open)await restoreFromURL();setInterval(connection,30000);
+const stateSync=userState.synchronize(),settingsSync=loadSettings().catch(error=>notice(error.message));void connection();await route();void Promise.allSettled([stateSync,settingsSync]);if(new URL(location.href).searchParams.has('detail')&&!$('#detail').open)await restoreFromURL();setInterval(connection,30000);
 
 async function archives(parent,cursor=0){
  const data=await api(`/api/archives?cursor=${cursor}`);
@@ -757,21 +825,11 @@ async function githubCollection(repo,kind,cursor=1,parent=null){const body=paren
 async function githubReviews(repo,number,cursor=1,parent=null,inline=false){const body=parent||sheet(repo+' reviews');const data=await api(`/api/github/reviews?repo=${encodeURIComponent(repo)}&number=${number}&cursor=${cursor}&inline=${inline}`);for(const item of data.items){body.append(commentView(item));if(item.diff_hunk)body.append(el('p','muted',`${item.path} · ${item.commit_id}`),el('pre','',item.diff_hunk));}if(data.next_cursor)body.append(button('More reviews',()=>githubReviews(repo,number,data.next_cursor,body,inline)));if(!parent)body.append(button('Inline comments',()=>githubReviews(repo,number,1,body,true)));}
 
 async function refreshAttention(){
-  const results=await Promise.allSettled([api('/api/human-asks'),world()]);
-  const items=[],errors=[],failures=[];
-  for(const [index,result] of results.entries()){
-   if(result.status==='rejected'){errors.push(result.reason.message);continue;}
-   if(index===0){
-    errors.push(...(result.value.errors||[]));
-    items.push(...(result.value.items||[]).map(item=>({kind:'human-ask',item})));
-    }else{
-     items.push(...coordinatorQuestions(result.value));
-    failures.push(...(result.value.stations||[]).flatMap(station=>(station.issues||[])
-     .filter(issue=>issue.bot_last===true&&issue.automation_failure==='missing_decision')
-     .map(issue=>({kind:'issue',repo:station.repo,item:{...issue,id:`${station.repo}#${issue.number}`}}))));
-   }
- }
- attention={items,errors,failures};
+  let cached=cachedView('watch');const query=cached?.revision?`?since=${encodeURIComponent(cached.revision)}`:'';
+  try{const request=++attentionRequest,result=await api('/api/watch'+query);if(request!==attentionRequest)return;if(result.data)cached=saveView('watch',result.revision,result.data,result.checked_at*1000);else if(cached)cached=saveView('watch',cached.revision,cached.data,result.checked_at*1000);}
+  catch(error){if(!cached)attention={items:[],errors:[error.message],failures:[]};}
+  if(cached?.data)attention=cached.data.attention;
+  const {items=[],errors=[]}=attention;
   const needsYou=items.filter(requiresYou).length;
   const badge=$('#detail-attention');badge.title=needsYou?`${needsYou} items need you`:'Nothing needs you right now';badge.setAttribute('aria-label',`${needsYou?`${needsYou} items need you`:'Nothing needs you right now'}${errors.length?'; a decision source is unavailable':''}`);
   const label=$('.tabs a[href="#watch"]');label.setAttribute('aria-label',needsYou?`Watch, ${needsYou} items need you`:'Watch, nothing needs you right now');
@@ -805,14 +863,14 @@ function coordinatorQuestionCard(entry){
  for(const option of issue.decision.options)node.append(button(`${option.label}${option.recommended?' (recommended)':''}`,async()=>{
   const result=await api('/api/decision',{kind:'choose',repo:entry.repo,issue:issue.number,n:option.n,label:option.label});
   if(!result.ok)throw Error(result.result||'Answer was not recorded');
-  snapshot=null;snapshotReadAt=0;notice('Answer recorded on the issue');await route();
+  snapshot=null;snapshotReadAt=0;invalidateView('watch');notice('Answer recorded on the issue');await route();
  },'attention-option'));
  node.append(button('Talk to agent',()=>newIssueTask(entry.repo,issue.number,issue.title),'attention-option'),button('Close issue',()=>closeWatchIssue(entry.repo,issue.number),'attention-close'),link('Open on GitHub',issue.url));return node;
 }
 async function closeWatchIssue(repo,number){
  const result=await githubAction({action:'close',repo,number});
  if(result.state!=='closed')throw Error('GitHub did not confirm the issue is closed');
- snapshot=null;snapshotReadAt=0;await route();
+ snapshot=null;snapshotReadAt=0;invalidateView('watch');await route();
 }
 function humanAskCard(ask){
   const node=el('article','card attention-choice');
@@ -820,7 +878,7 @@ function humanAskCard(ask){
   const input=el('input');input.type='text';input.setAttribute('aria-label','Answer this exact request');
   node.append(input,button('Answer and resume',async()=>{
    const answer=input.value.trim();if(!answer)throw Error('Enter an answer first');
-   await api('/api/human-input/answer',{id:ask.id,answer});
+   await api('/api/human-input/answer',{id:ask.id,answer});invalidateView('watch');
    notice('Answer recorded; Office resumed the task');await refreshAttention();
   },'attention-option'));
   return node;

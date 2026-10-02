@@ -395,6 +395,197 @@ class AskQueueTest(unittest.TestCase):
         self.assertEqual([row["text"] for row in ask.read()["messages"] if row["role"] == "user"],
                          ["From old client"])
 
+    def test_steer_is_durable_idempotent_and_does_not_join_fifo(self):
+        with ask.connect() as db:
+            cursor = db.execute("""INSERT INTO messages(
+                role,text,model,status,created_at,request_id,requested_model,provider_turn_id
+            ) VALUES('user','Long task','model-a','working',0,'active-request-001','model-a','turn-live')""")
+            active_id = cursor.lastrowid
+            db.execute("INSERT INTO messages(role,text,model,status,created_at,parent_id) "
+                       "VALUES('office','','model-a','working',0,?)", (active_id,))
+            ask._set(db, 'thread_id', 'thread-1')
+
+        body = {"request_id": "steer-request-0001", "text": "Correct this now",
+                "expected_turn_id": "turn-live"}
+        first = ask.steer(body)
+        self.assertEqual(ask.steer(dict(body)), first)
+        with self.assertRaisesRegex(ValueError, "request_id"):
+            ask.steer({**body, "text": "Different"})
+
+        state = ask.read()
+        steer = next(row for row in state["messages"] if row["request_id"] == body["request_id"])
+        self.assertEqual(steer["kind"], "steer")
+        self.assertEqual(steer["status"], "sending")
+        self.assertEqual(steer["target_turn_id"], "turn-live")
+        self.assertEqual(state["queue"], {"queued": 0, "working": 1})
+
+    def test_steer_rejects_claude_or_a_stale_turn_without_queueing(self):
+        with self.assertRaisesRegex(FileNotFoundError, "No active"):
+            ask.steer({"request_id": "steer-no-turn-0001", "text": "Now",
+                       "expected_turn_id": "turn-gone"})
+        with ask.connect() as db:
+            cursor = db.execute("""INSERT INTO messages(
+                role,text,model,status,created_at,request_id,requested_model,provider_turn_id
+            ) VALUES('user','Long task','claude:sonnet','working',0,'claude-active-0001',
+                     'claude:sonnet','turn-claude')""")
+            db.execute("INSERT INTO messages(role,text,model,status,created_at,parent_id) "
+                       "VALUES('office','','claude:sonnet','working',0,?)", (cursor.lastrowid,))
+        with self.assertRaisesRegex(ValueError, "Claude"):
+            ask.steer({"request_id": "steer-claude-0001", "text": "Now",
+                       "expected_turn_id": "turn-claude"})
+        self.assertFalse(any(row.get("kind") == "steer" for row in ask.read()["messages"]))
+
+    def test_worker_sends_pending_steer_to_same_turn_before_completion(self):
+        with ask.connect() as db:
+            cursor = db.execute("""INSERT INTO messages(
+                role,text,model,status,created_at,request_id,requested_model,provider_turn_id
+            ) VALUES('user','Long task','model-a','working',0,'active-request-002','model-a','turn-live')""")
+            active_id = cursor.lastrowid
+            reply = db.execute("INSERT INTO messages(role,text,model,status,created_at,parent_id) "
+                               "VALUES('office','','model-a','working',0,?)", (active_id,)).lastrowid
+            ask._set(db, 'thread_id', 'thread-1')
+        receipt = ask.steer({"request_id": "steer-delivery-0001", "text": "Use the blue version",
+                             "expected_turn_id": "turn-live"})
+
+        class SteeringServer:
+            calls = []
+            def request(self, method, params, timeout=20):
+                self.calls.append((method, params))
+                if method == 'turn/steer':
+                    return {'turnId': 'turn-live'}
+                return {}
+            def receive(self, timeout):
+                return {'method': 'turn/completed', 'params': {'turn': {
+                    'id': 'turn-live', 'status': 'completed',
+                    'items': [{'type': 'agentMessage', 'text': 'Done after correction'}]}}}
+
+        server = SteeringServer()
+        answer = ask._started_answer(server, 'thread-1', active_id, 'Long task',
+                                     {'request_id': 'active-request-002'},
+                                     {'turn': {'id': 'turn-live'}}, reply)
+        self.assertEqual(answer, 'Done after correction')
+        call = next(params for method, params in server.calls if method == 'turn/steer')
+        self.assertEqual(call, {'threadId': 'thread-1', 'expectedTurnId': 'turn-live',
+                                'input': [{'type': 'text', 'text': 'Use the blue version'}],
+                                'clientUserMessageId': 'steer-delivery-0001'})
+        delivered = next(row for row in ask.read()['messages'] if row['id'] == receipt['user_id'])
+        self.assertEqual(delivered['status'], 'delivered')
+
+    def test_pending_steer_is_reconciled_without_replay_after_restart(self):
+        with ask.connect() as db:
+            cursor = db.execute("""INSERT INTO messages(
+                role,text,model,status,created_at,request_id,requested_model,provider_turn_id
+            ) VALUES('user','Long task','model-a','working',0,'active-request-003','model-a','turn-live')""")
+            active_id = cursor.lastrowid
+            db.execute("INSERT INTO messages(role,text,model,status,created_at,parent_id) "
+                       "VALUES('office','','model-a','working',0,?)", (active_id,))
+            ask._set(db, 'thread_id', 'thread-1')
+        receipt = ask.steer({"request_id": "steer-restart-0001", "text": "Keep the first chart",
+                             "expected_turn_id": "turn-live"})
+        saved = {'id': 'turn-live', 'status': 'completed', 'items': [
+            {'id': 'steer-restart-0001', 'type': 'userMessage',
+             'content': [{'type': 'text', 'text': 'Keep the first chart'}]},
+            {'type': 'agentMessage', 'text': 'Done'}]}
+
+        class ReconcileServer:
+            calls = []
+            def request(self, method, params, timeout=20):
+                self.calls.append(method)
+                if method == 'thread/read':
+                    return {'thread': {'turns': [saved]}}
+                return {}
+
+        server = ReconcileServer()
+        ask._reconcile_steers(server, 'thread-1', 'turn-live', saved)
+        self.assertNotIn('turn/steer', server.calls)
+        row = next(row for row in ask.read()['messages'] if row['id'] == receipt['user_id'])
+        self.assertEqual(row['status'], 'delivered')
+
+    def test_provider_rejection_is_visible_and_never_queued(self):
+        with ask.connect() as db:
+            cursor = db.execute("""INSERT INTO messages(
+                role,text,model,status,created_at,request_id,requested_model,provider_turn_id
+            ) VALUES('user','Long task','model-a','working',0,'active-request-004','model-a','turn-live')""")
+            active_id = cursor.lastrowid
+            db.execute("INSERT INTO messages(role,text,model,status,created_at,parent_id) "
+                       "VALUES('office','','model-a','working',0,?)", (active_id,))
+        receipt = ask.steer({"request_id": "steer-rejected-0001", "text": "Change course",
+                             "expected_turn_id": "turn-live"})
+
+        class RejectingServer:
+            def request(self, method, params, timeout=20):
+                if method == 'turn/steer':
+                    raise ask.ProviderRejected('active turn is not steerable')
+                return {'thread': {'turns': [{'id': 'turn-live', 'status': 'inProgress', 'items': []}]}}
+
+        ask._reconcile_steers(RejectingServer(), 'thread-1', 'turn-live')
+        row = next(row for row in ask.read()['messages'] if row['id'] == receipt['user_id'])
+        self.assertEqual(row['status'], 'not_delivered')
+        self.assertIn('rejected', row['delivery_error'])
+        self.assertEqual(ask.read()['queue'], {'queued': 0, 'working': 1})
+
+    def test_completion_race_marks_unconfirmed_steer_not_delivered(self):
+        with ask.connect() as db:
+            cursor = db.execute("""INSERT INTO messages(
+                role,text,model,status,created_at,request_id,requested_model,provider_turn_id
+            ) VALUES('user','Long task','model-a','working',0,'active-request-005','model-a','turn-live')""")
+            active_id = cursor.lastrowid
+            reply_id = db.execute("INSERT INTO messages(role,text,model,status,created_at,parent_id) "
+                                  "VALUES('office','','model-a','working',0,?)", (active_id,)).lastrowid
+        receipt = ask.steer({"request_id": "steer-race-000001", "text": "Too late",
+                             "expected_turn_id": "turn-live"})
+        ask._finish({'user_id': active_id, 'reply_id': reply_id}, 'Finished first', 'completed')
+        row = next(row for row in ask.read()['messages'] if row['id'] == receipt['user_id'])
+        self.assertEqual(row['status'], 'not_delivered')
+        self.assertIn('ended', row['delivery_error'])
+
+    def test_timed_out_steer_response_reconciles_before_saved_completion(self):
+        with ask.connect() as db:
+            active_id = db.execute("""INSERT INTO messages(
+                role,text,model,status,created_at,request_id,requested_model,provider_turn_id
+            ) VALUES('user','Long task','model-a','working',0,'active-request-006','model-a','turn-live')""").lastrowid
+            reply_id = db.execute("INSERT INTO messages(role,text,model,status,created_at,parent_id) "
+                                  "VALUES('office','','model-a','working',0,?)", (active_id,)).lastrowid
+        receipt = ask.steer({'request_id': 'steer-timeout-0001', 'text': 'Keep this correction',
+                             'expected_turn_id': 'turn-live'})
+        running = {'id': 'turn-live', 'status': 'inProgress', 'items': []}
+        completed = {'id': 'turn-live', 'status': 'completed', 'items': [
+            {'id': 'steer-timeout-0001', 'type': 'userMessage',
+             'content': [{'type': 'text', 'text': 'Keep this correction'}]},
+            {'type': 'agentMessage', 'text': 'Corrected answer'}]}
+
+        class TimedOutReceiptServer:
+            def __init__(self):
+                self.read_count = 0
+            def request(self, method, params, timeout=20):
+                if method == 'turn/steer':
+                    raise TimeoutError('response lost')
+                self.read_count += 1
+                turn = running if self.read_count == 1 else completed
+                return {'thread': {'turns': [turn]}}
+            def receive(self, timeout):
+                raise TimeoutError('notification lost')
+
+        answer = ask._started_answer(TimedOutReceiptServer(), 'thread-1', active_id, 'Long task',
+                                     {'request_id': 'active-request-006'},
+                                     {'turn': {'id': 'turn-live'}}, reply_id)
+        self.assertEqual(answer, 'Corrected answer')
+        row = next(row for row in ask.read()['messages'] if row['id'] == receipt['user_id'])
+        self.assertEqual(row['status'], 'delivered')
+
+    def test_incremental_read_returns_only_changed_rows(self):
+        first = ask.send({"request_id": "delta-request-0001", "text": "One", "model": "model-a"})
+        full = ask.read()
+        unchanged = ask.read(full['revision'])
+        self.assertTrue(unchanged['not_modified'])
+        self.assertEqual(unchanged['messages'], [])
+        with ask.connect() as db:
+            ask._update_message(db, first['user_id'], status='working')
+        delta = ask.read(full['revision'])
+        self.assertTrue(delta['delta'])
+        self.assertEqual([row['id'] for row in delta['messages']], [first['user_id']])
+        self.assertEqual(delta['messages'][0]['status'], 'working')
+
     def test_read_keeps_newest_messages_and_auto_ignores_nonterminal_answers(self):
         with ask.connect() as db:
             db.executemany("INSERT INTO messages(role,text,status,created_at) VALUES('system',?,'completed',0)",

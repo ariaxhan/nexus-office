@@ -28,6 +28,10 @@ class UnsafeReplay(RuntimeError):
     """An interrupted provider turn cannot be safely executed again."""
 
 
+class ProviderRejected(RuntimeError):
+    """The app-server returned an explicit JSON-RPC rejection."""
+
+
 class Connection(sqlite3.Connection):
     def __exit__(self, exc_type, exc_value, traceback):
         try:
@@ -101,7 +105,10 @@ def connect():
                              ('recovering', 'INTEGER NOT NULL DEFAULT 0'),
                              ('next_attempt_at', 'REAL NOT NULL DEFAULT 0'),
                              ('failure_count', 'INTEGER NOT NULL DEFAULT 0'),
-                             ('claimed_at', 'REAL')):
+                             ('claimed_at', 'REAL'),
+                             ('kind', "TEXT NOT NULL DEFAULT 'queue'"),
+                             ('target_turn_id', 'TEXT'), ('delivery_error', 'TEXT'),
+                             ('message_revision', 'INTEGER NOT NULL DEFAULT 0')):
         if name not in columns:
             db.execute(f'ALTER TABLE messages ADD COLUMN {name} {definition}')
     db.execute("UPDATE messages SET status='completed' WHERE status='complete'")
@@ -112,6 +119,10 @@ def connect():
                   ) WHERE role='office' AND parent_id IS NULL''')
     db.execute('''CREATE UNIQUE INDEX IF NOT EXISTS messages_request_id
                   ON messages(request_id) WHERE request_id IS NOT NULL''')
+    if _state(db, 'ask_revision') is None:
+        revision = db.execute('SELECT COALESCE(MAX(id),0) FROM messages').fetchone()[0]
+        db.execute('UPDATE messages SET message_revision=id WHERE message_revision=0')
+        _set(db, 'ask_revision', revision)
     db.commit()
     return db
 
@@ -126,25 +137,77 @@ def _set(db, key, value):
                   ON CONFLICT(key) DO UPDATE SET value=excluded.value''', (key, str(value)))
 
 
-def read():
+def _revision(db):
+    return int(_state(db, 'ask_revision', '0'))
+
+
+def _next_revision(db):
+    db.execute("INSERT INTO state(key,value) VALUES('ask_revision','0') ON CONFLICT(key) DO NOTHING")
+    return int(db.execute("""UPDATE state SET value=CAST(value AS INTEGER)+1
+                             WHERE key='ask_revision' RETURNING value""").fetchone()[0])
+
+
+def _update_message(db, identifier, **values):
+    allowed = {'text', 'model', 'status', 'completed_at', 'recovering', 'next_attempt_at',
+               'failure_count', 'claimed_at', 'provider_turn_id', 'delivery_error'}
+    if not values or not set(values) <= allowed:
+        raise ValueError('Unsupported Ask message update')
+    values['message_revision'] = _next_revision(db)
+    assignments = ','.join(f'{name}=?' for name in values)
+    return db.execute(f'UPDATE messages SET {assignments} WHERE id=?', (*values.values(), identifier))
+
+
+def _steer_state(db):
+    row = db.execute("""SELECT model,provider_turn_id FROM messages
+                        WHERE role='user' AND status='working' AND kind='queue'
+                        ORDER BY id LIMIT 1""").fetchone()
+    if not row:
+        return {'available': False, 'reason': 'No active turn. Queue this message instead.'}
+    if row['model'].startswith('claude:'):
+        return {'available': False, 'reason': 'Send now is unavailable for Claude Code; Queue remains available.'}
+    if not row['provider_turn_id']:
+        return {'available': False, 'reason': 'The Codex turn is starting; Queue remains available.'}
+    return {'available': True, 'expected_turn_id': row['provider_turn_id'],
+            'label': 'Send now / Steer'}
+
+
+def read(since_revision=None):
     with connect() as db:
-        messages = [dict(row) for row in db.execute('''SELECT * FROM (
-                                                       SELECT id,role,text,model,status,created_at,completed_at,
-                                                              request_id,parent_id
-                                                       FROM messages ORDER BY id DESC LIMIT 500
-                                                     ) ORDER BY id''')]
+        revision = _revision(db)
+        try:
+            since = int(since_revision) if since_revision not in (None, '') else None
+        except (TypeError, ValueError):
+            raise ValueError('Invalid Ask revision')
+        columns = '''id,role,text,model,status,created_at,completed_at,request_id,parent_id,
+                     kind,target_turn_id,delivery_error,message_revision'''
+        delta = since is not None and 0 <= since < revision
+        if since == revision:
+            messages = []
+        elif delta:
+            rows = db.execute(f'''SELECT {columns} FROM messages
+                                  WHERE message_revision>? ORDER BY id LIMIT 501''', (since,)).fetchall()
+            if len(rows) <= 500:
+                messages = [dict(row) for row in rows]
+            else:
+                delta = False
+                messages = [dict(row) for row in db.execute(
+                    f'SELECT * FROM (SELECT {columns} FROM messages ORDER BY id DESC LIMIT 500) ORDER BY id')]
+        else:
+            messages = [dict(row) for row in db.execute(
+                f'SELECT * FROM (SELECT {columns} FROM messages ORDER BY id DESC LIMIT 500) ORDER BY id')]
         ratings = {row['reply_id']: row['kind'] for row in db.execute('SELECT reply_id,kind FROM ratings')}
         for message in messages:
             if message['id'] in ratings:
                 message['rating'] = ratings[message['id']]
         counts = {row['status']: row['count'] for row in db.execute(
-            "SELECT status,COUNT(*) count FROM messages WHERE role='user' GROUP BY status")}
+            "SELECT status,COUNT(*) count FROM messages WHERE role='user' AND kind='queue' GROUP BY status")}
         queue = {'queued': counts.get('queued', 0), 'working': counts.get('working', 0)}
         return {'messages': messages, 'model': _state(db, 'model', DEFAULT_MODEL),
                 'selection': _state(db, 'selection', _state(db, 'model', DEFAULT_MODEL)),
                 'busy': queue['working'] > 0 or queue['queued'] > 0, 'queue': queue,
                 'thread_id': _state(db, 'thread_id'),
-                'checked_at': time.time()}
+                'checked_at': time.time(), 'revision': revision, 'delta': delta,
+                'not_modified': since == revision, 'steer': _steer_state(db)}
 
 
 def auto_model(db, available):
@@ -179,6 +242,7 @@ def rate(body):
         db.execute('''INSERT INTO ratings(reply_id,kind,updated_at) VALUES(?,?,?)
                       ON CONFLICT(reply_id) DO UPDATE SET kind=excluded.kind,updated_at=excluded.updated_at''',
                    (reply_id, kind, time.time()))
+        _update_message(db, reply_id, status='completed')
     return {'reply_id': reply_id, 'kind': kind}
 
 
@@ -228,7 +292,7 @@ class AppServer:
             if item.get('id') != request_id:
                 continue
             if item.get('error'):
-                raise RuntimeError(str(item['error'])[:500])
+                raise ProviderRejected(str(item['error'])[:500])
             return item['result']
         raise TimeoutError(method + ' timed out')
 
@@ -313,18 +377,24 @@ def send(body):
         model = auto_model(db, available) if requested == 'auto' else requested
         previous = _state(db, 'model', DEFAULT_MODEL)
         if previous != model:
-            db.execute('INSERT INTO messages(role,text,model,status,created_at) VALUES(?,?,?,?,?)',
-                       ('system', f'Model changed from {previous} to {model}', model, 'completed', time.time()))
+            db.execute('''INSERT INTO messages(role,text,model,status,created_at,message_revision)
+                          VALUES(?,?,?,?,?,?)''',
+                       ('system', f'Model changed from {previous} to {model}', model, 'completed',
+                        time.time(), _next_revision(db)))
         _set(db, 'model', model)
         _set(db, 'selection', requested)
-        cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,request_id,requested_model)
-                               VALUES(?,?,?,?,?,?,?)''',
-                            ('user', message, model, 'queued', time.time(), request_id, requested))
+        revision = _next_revision(db)
+        cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,request_id,
+                                                    requested_model,message_revision)
+                               VALUES(?,?,?,?,?,?,?,?)''',
+                            ('user', message, model, 'queued', time.time(), request_id, requested, revision))
         user_id = cursor.lastrowid
+        revision = _next_revision(db)
         cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,parent_id)
                                VALUES(?,?,?,?,?,?)''',
                             ('office', '', model, 'queued', time.time(), user_id))
         reply_id = cursor.lastrowid
+        db.execute('UPDATE messages SET message_revision=? WHERE id=?', (revision, reply_id))
         receipt = _receipt(request_id, user_id, reply_id, model)
         db.commit()
     return receipt
@@ -336,7 +406,8 @@ def _receipt(request_id, user_id, reply_id, model):
 
 
 def _retry_receipt(db, row, message, requested):
-    if row['text'] != message or (row['requested_model'] or row['model']) != requested:
+    if (row['kind'] != 'queue' or row['text'] != message or
+            (row['requested_model'] or row['model']) != requested):
         raise ValueError('That request_id was already used for a different Ask message')
     reply = db.execute("SELECT id FROM messages WHERE role='office' AND parent_id=?", (row['id'],)).fetchone()
     if not reply:
@@ -344,26 +415,64 @@ def _retry_receipt(db, row, message, requested):
     return _receipt(row['request_id'], row['id'], reply['id'], row['model'])
 
 
+def steer(body):
+    message = body.get('text')
+    request_id = body.get('request_id')
+    expected = body.get('expected_turn_id')
+    if not isinstance(message, str) or not 1 <= len(message.strip()) <= 8000:
+        raise ValueError('Send now needs a message of at most 8000 characters')
+    if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
+        raise ValueError('Send now request_id must be 16 to 80 letters, numbers, underscores, or hyphens')
+    if not isinstance(expected, str) or not expected:
+        raise ValueError('Send now needs the active Codex turn ID')
+    message = message.strip()
+    with LOCK, connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        existing = db.execute("SELECT * FROM messages WHERE role='user' AND request_id=?",
+                              (request_id,)).fetchone()
+        if existing:
+            if (existing['kind'] != 'steer' or existing['text'] != message or
+                    existing['target_turn_id'] != expected):
+                raise ValueError('That request_id was already used for a different Ask message')
+            return {'accepted': True, 'request_id': request_id, 'user_id': existing['id'],
+                    'delivery': existing['status'], 'expected_turn_id': expected}
+        active = db.execute("""SELECT id,model,provider_turn_id FROM messages
+                               WHERE role='user' AND status='working' AND kind='queue'
+                               ORDER BY id LIMIT 1""").fetchone()
+        if not active:
+            raise FileNotFoundError('No active turn can be steered. Use Queue instead.')
+        if active['model'].startswith('claude:'):
+            raise ValueError('Send now is unavailable for Claude Code. Use Queue instead.')
+        if not active['provider_turn_id'] or active['provider_turn_id'] != expected:
+            raise FileExistsError('That Codex turn is no longer active. Refresh, then Queue or steer the current turn.')
+        revision = _next_revision(db)
+        cursor = db.execute('''INSERT INTO messages(
+            role,text,model,status,created_at,request_id,parent_id,kind,target_turn_id,message_revision
+        ) VALUES('user',?,?, 'sending',?,?,?,?,?,?)''',
+                            (message, active['model'], time.time(), request_id, active['id'],
+                             'steer', expected, revision))
+        return {'accepted': True, 'request_id': request_id, 'user_id': cursor.lastrowid,
+                'delivery': 'sending', 'expected_turn_id': expected}
+
+
 def _claim():
     with LOCK, connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        changed = db.execute('''UPDATE messages SET status='working',claimed_at=? WHERE id=(
-                                   SELECT id FROM messages WHERE role='user' AND status='queued'
-                                   AND next_attempt_at <= ?
-                                   ORDER BY id LIMIT 1
-                                ) AND NOT EXISTS (
-                                  SELECT 1 FROM messages WHERE role='user' AND status='working'
-                                 )''', (time.time(), time.time())).rowcount
-        if changed != 1:
+        working = db.execute("SELECT 1 FROM messages WHERE role='user' AND status='working' LIMIT 1").fetchone()
+        row = None if working else db.execute('''SELECT id,text,model FROM messages
+                                                 WHERE role='user' AND status='queued' AND kind='queue'
+                                                 AND next_attempt_at<=? ORDER BY id LIMIT 1''',
+                                              (time.time(),)).fetchone()
+        if not row:
             db.commit()
             return None
-        row = db.execute("SELECT id,text,model FROM messages WHERE role='user' AND status='working' ORDER BY id LIMIT 1").fetchone()
+        _update_message(db, row['id'], status='working', claimed_at=time.time())
         reply = db.execute("SELECT id FROM messages WHERE role='office' AND parent_id=?", (row['id'],)).fetchone()
         if not reply:
-            db.execute("UPDATE messages SET status='failed',completed_at=? WHERE id=?", (time.time(), row['id']))
+            _update_message(db, row['id'], status='failed', completed_at=time.time())
             db.commit()
             return None
-        db.execute("UPDATE messages SET status='working' WHERE id=? AND status='queued'", (reply['id'],))
+        _update_message(db, reply['id'], status='working')
         db.commit()
         return {'user_id': row['id'], 'reply_id': reply['id'], 'text': row['text'], 'model': row['model']}
 
@@ -371,10 +480,15 @@ def _claim():
 def _finish(turn, answer, status):
     with LOCK, connect() as db:
         now = time.time()
-        db.execute("UPDATE messages SET status=?,completed_at=?,recovering=0 WHERE id=? AND status='working'",
-                   (status, now, turn['user_id']))
-        db.execute("UPDATE messages SET text=?,status=?,completed_at=? WHERE id=? AND status='working'",
-                   (answer, status, now, turn['reply_id']))
+        if db.execute("SELECT status FROM messages WHERE id=?", (turn['user_id'],)).fetchone()['status'] == 'working':
+            _update_message(db, turn['user_id'], status=status, completed_at=now, recovering=0)
+        if db.execute("SELECT status FROM messages WHERE id=?", (turn['reply_id'],)).fetchone()['status'] == 'working':
+            _update_message(db, turn['reply_id'], text=answer, status=status, completed_at=now)
+        pending = db.execute("SELECT id FROM messages WHERE parent_id=? AND kind='steer' AND status='sending'",
+                             (turn['user_id'],)).fetchall()
+        for row in pending:
+            _update_message(db, row['id'], status='not_delivered', completed_at=now,
+                            delivery_error='The active turn ended before Send now delivery could be confirmed.')
 
 
 def _retry(turn, error):
@@ -382,10 +496,11 @@ def _retry(turn, error):
         row = db.execute('SELECT failure_count FROM messages WHERE id=?', (turn['user_id'],)).fetchone()
         failures = (row['failure_count'] if row else 0) + 1
         due = time.time() + min(3600, 60 * 3 ** min(failures - 1, 4))
-        db.execute("UPDATE messages SET status='queued',recovering=1,claimed_at=NULL,failure_count=?,next_attempt_at=? "
-                   "WHERE id=? AND status='working'", (failures, due, turn['user_id']))
-        db.execute("UPDATE messages SET text=?,status='queued',completed_at=NULL WHERE id=? AND status='working'",
-                   (f'Both providers failed; Office will retry automatically. {error}'[:1000], turn['reply_id']))
+        _update_message(db, turn['user_id'], status='queued', recovering=1, claimed_at=None,
+                        failure_count=failures, next_attempt_at=due)
+        _update_message(db, turn['reply_id'],
+                        text=f'Both providers failed; Office will retry automatically. {error}'[:1000],
+                        status='queued', completed_at=None)
 
 
 def _drain():
@@ -410,8 +525,8 @@ def _drain():
                             f'Original request:\n{turn["text"]}')
                         answer = _answer_turn(continuation, alternate, turn['reply_id'])
                         with connect() as db:
-                            db.execute('UPDATE messages SET model=? WHERE id IN (?,?)',
-                                       (alternate, turn['user_id'], turn['reply_id']))
+                            _update_message(db, turn['user_id'], model=alternate)
+                            _update_message(db, turn['reply_id'], model=alternate)
                         _finish(turn, answer, 'completed')
                         continue
                     except Exception as fallback_exc:
@@ -439,13 +554,14 @@ def recover():
                                     (o.status='failed' AND o.text=?))
                              ORDER BY u.id''', (INTERRUPTED,)).fetchall()
         for row in rows:
-            db.execute("UPDATE messages SET status='queued',claimed_at=NULL,completed_at=NULL,recovering=1 WHERE id=?",
-                       (row['user_id'],))
-            db.execute("UPDATE messages SET status='queued',completed_at=NULL WHERE id=?",
-                       (row['reply_id'],))
-        db.execute('''UPDATE messages SET status='failed',completed_at=?
-                      WHERE role='user' AND status='working' AND NOT EXISTS
-                      (SELECT 1 FROM messages o WHERE o.parent_id=messages.id)''', (time.time(),))
+            _update_message(db, row['user_id'], status='queued', claimed_at=None,
+                            completed_at=None, recovering=1)
+            _update_message(db, row['reply_id'], status='queued', completed_at=None)
+        orphaned = db.execute('''SELECT id FROM messages WHERE role='user' AND status='working'
+                                 AND kind='queue' AND NOT EXISTS
+                                 (SELECT 1 FROM messages o WHERE o.parent_id=messages.id)''').fetchall()
+        for row in orphaned:
+            _update_message(db, row['id'], status='failed', completed_at=time.time())
         db.commit()
     return {'resuming': len(rows)}
 
@@ -553,8 +669,62 @@ def _saved_turn(client, thread_id, user_id, message, request_id, provider_turn_i
 
 def _record_turn(user_id, turn_id):
     with connect() as db:
-        db.execute("UPDATE messages SET provider_turn_id=? WHERE id=? AND status='working'",
-                   (turn_id, user_id))
+        row = db.execute("SELECT status FROM messages WHERE id=?", (user_id,)).fetchone()
+        if row and row['status'] == 'working':
+            _update_message(db, user_id, provider_turn_id=turn_id)
+
+
+def _turn_has_steer(turn, request_id):
+    return any(item.get('type') == 'userMessage' and item.get('id') == request_id
+               for item in (turn or {}).get('items', []))
+
+
+def _pending_steers(target_turn_id):
+    with connect() as db:
+        return [dict(row) for row in db.execute(
+            "SELECT id,text,request_id FROM messages WHERE kind='steer' "
+            "AND target_turn_id=? AND status='sending' ORDER BY id", (target_turn_id,))]
+
+
+def _mark_steer(identifier, status, error=None):
+    with connect() as db:
+        row = db.execute("SELECT status FROM messages WHERE id=?", (identifier,)).fetchone()
+        if row and row['status'] == 'sending':
+            _update_message(db, identifier, status=status, delivery_error=error,
+                            completed_at=time.time())
+
+
+def _reconcile_steers(client, thread_id, target_turn_id, saved=None):
+    for row in _pending_steers(target_turn_id):
+        current = saved
+        if current is None:
+            try:
+                current = _saved_turn(client, thread_id, 0, '', None, target_turn_id)
+            except Exception:
+                current = None
+        if _turn_has_steer(current, row['request_id']):
+            _mark_steer(row['id'], 'delivered')
+            continue
+        if current and current.get('status') not in ('inProgress', None):
+            _mark_steer(row['id'], 'not_delivered',
+                        'The active turn finished before this correction reached it.')
+            continue
+        try:
+            result = client.request('turn/steer', {
+                'threadId': thread_id, 'expectedTurnId': target_turn_id,
+                'input': [{'type': 'text', 'text': row['text']}],
+                'clientUserMessageId': row['request_id']}, 10)
+            if result.get('turnId') != target_turn_id:
+                _mark_steer(row['id'], 'not_delivered',
+                            'Codex did not confirm delivery to the active turn.')
+            else:
+                _mark_steer(row['id'], 'delivered')
+        except ProviderRejected as exc:
+            _mark_steer(row['id'], 'not_delivered', f'Codex rejected Send now: {exc}'[:500])
+        except Exception:
+            # Keep `sending`: a timed-out response may still have been accepted.
+            # The same clientUserMessageId makes the next reconciliation idempotent.
+            pass
 
 
 def _recovered_answer(client, thread_id, user_id, message, user):
@@ -563,10 +733,12 @@ def _recovered_answer(client, thread_id, user_id, message, user):
         raise UnsafeReplay('Codex turn could not be found in its durable thread; external effects are unknown.')
     deadline = time.monotonic() + 1800
     while previous.get('status') == 'inProgress' and time.monotonic() < deadline:
-        time.sleep(2)
+        _reconcile_steers(client, thread_id, previous['id'], previous)
+        time.sleep(.25)
         previous = _saved_turn(client, thread_id, user_id, message, user['request_id'], previous['id'])
         if not previous:
             raise UnsafeReplay('Codex turn disappeared while reconnecting; external effects are unknown.')
+    _reconcile_steers(client, thread_id, previous['id'], previous)
     if previous.get('status') == 'completed':
         answer = _turn_answer(previous)
         if answer:
@@ -650,15 +822,21 @@ def _saved_answer(saved, answer):
 def _started_answer(client, thread_id, user_id, message, user, started, reply_id):
     answer = ''
     deadline = time.monotonic() + 1800
+    next_saved_check = time.monotonic()
     while time.monotonic() < deadline:
+        _reconcile_steers(client, thread_id, started['turn']['id'])
         try:
-            item = client.receive(min(30, max(.1, deadline - time.monotonic())))
+            item = client.receive(min(.25, max(.1, deadline - time.monotonic())))
         except TimeoutError:
             # Notifications can be lost while the provider's durable turn has finished.
-            # Read the recorded turn before waiting again, so one finished answer
-            # cannot hold every later Ask message until the 30-minute timeout.
-            saved = _saved_answer(_saved_turn(client, thread_id, user_id, message,
-                                              user['request_id'], started['turn']['id']), answer)
+            # Bound durable reads while still unblocking a lost completion promptly.
+            if time.monotonic() < next_saved_check:
+                continue
+            next_saved_check = time.monotonic() + 2
+            saved_turn = _saved_turn(client, thread_id, user_id, message,
+                                     user['request_id'], started['turn']['id'])
+            _reconcile_steers(client, thread_id, started['turn']['id'], saved_turn)
+            saved = _saved_answer(saved_turn, answer)
             if saved:
                 return saved
             continue
@@ -667,7 +845,9 @@ def _started_answer(client, thread_id, user_id, message, user, started, reply_id
             if output.get('type') == 'agentMessage':
                 answer = output.get('text', '')
                 with connect() as db:
-                    db.execute("UPDATE messages SET text=? WHERE id=? AND status='working'", (answer, reply_id))
+                    row = db.execute("SELECT status FROM messages WHERE id=?", (reply_id,)).fetchone()
+                    if row and row['status'] == 'working':
+                        _update_message(db, reply_id, text=answer)
         if item.get('method') == 'turn/completed':
             turn = item.get('params', {}).get('turn', {})
             if turn.get('status') != 'completed':
@@ -675,6 +855,7 @@ def _started_answer(client, thread_id, user_id, message, user, started, reply_id
             if not answer:
                 answer = next((x.get('text', '') for x in reversed(turn.get('items', []))
                                if x.get('type') == 'agentMessage'), '')
+            _reconcile_steers(client, thread_id, started['turn']['id'], turn)
             break
     else:
         raise TimeoutError('Ask turn exceeded 30 minutes')

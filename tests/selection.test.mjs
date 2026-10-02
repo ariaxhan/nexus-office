@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { redrawIfChanged, selecting } from "../client/phone/office-selection.js";
+import { mergeAskState, redrawIfChanged, selecting } from "../client/phone/office-selection.js";
 
 // A node that owns some text children, and a page selection that can sit in one of them.
 const text = {}, outside = {};
@@ -31,4 +31,14 @@ test("a selection elsewhere on the page does not freeze the node", () => {
   node.dataset = { signature: "a" }; select(outside);
   assert.equal(selecting(node), false);
   assert.equal(redrawIfChanged(node, "b", () => {}), true);
+});
+
+test("Ask deltas patch changed rows, stay bounded, and cannot roll back", () => {
+  const base = { revision: 4, messages: [{ id: 1, status: "working" }, { id: 2, status: "queued" }] };
+  const patched = mergeAskState(base, { revision: 5, delta: true,
+    messages: [{ id: 1, status: "completed" }, { id: 3, status: "delivered" }] }, 2);
+  assert.deepEqual(patched.messages, [{ id: 2, status: "queued" }, { id: 3, status: "delivered" }]);
+  assert.equal(mergeAskState(patched, { revision: 3, delta: false, messages: [] }), patched);
+  assert.deepEqual(mergeAskState(patched, { revision: 5, not_modified: true, delta: false, messages: [] }).messages,
+    patched.messages);
 });

@@ -11,9 +11,23 @@ export function button(text, action, className='') {
   node.addEventListener('click',async()=>{node.disabled=true;try{await action();}catch(error){notice(error.message);}finally{node.disabled=false;}});
   return node;
 }
+const clientErrorTimes=[];
+function diagnosticMessage(error){
+ const message=String(error?.message||error?.name||'Error');
+ return message.length<=160&&/^[A-Za-z .:()_-]+$/.test(message)?message:String(error?.name||'Error').slice(0,80);
+}
+function reportClientError(detail){
+ const now=Date.now();while(clientErrorTimes.length&&clientErrorTimes[0]<now-60000)clientErrorTimes.shift();
+ if(clientErrorTimes.length>=3)return;clientErrorTimes.push(now);
+ void fetch('/api/client-errors',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(detail),keepalive:true}).catch(()=>{});
+}
 export async function api(path, body) {
-  const response=await fetch(path,{method:body===undefined?'GET':'POST',headers:{Accept:'application/json',...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});
-  const data=await response.json();
+  const requestId=crypto.randomUUID(),safePath=path.split('?')[0];let response;
+  try{response=await fetch(path,{method:body===undefined?'GET':'POST',headers:{Accept:'application/json','X-Office-Request-ID':requestId,...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});}
+  catch(error){reportClientError({kind:'network',path:safePath,request_id:requestId,status:0,message:diagnosticMessage(error)});const failure=new Error(`Office connection failed · request ${requestId}`);failure.cause=error;throw failure;}
+  let data;
+  try{data=JSON.parse(await response.text());}
+  catch(error){const receipt=response.headers.get('x-office-request-id')||requestId;reportClientError({kind:'invalid_json',path:safePath,request_id:receipt,status:response.status,message:diagnosticMessage(error)});const failure=new Error(`Office returned an invalid response · request ${receipt}`);failure.status=response.status;failure.cause=error;throw failure;}
   if(!response.ok){const error=new Error(data.error||data.message||`Request failed (${response.status})`);error.status=response.status;throw error;}
   return data;
 }

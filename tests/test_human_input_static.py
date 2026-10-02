@@ -53,8 +53,10 @@ class SingleCreationPath(unittest.TestCase):
                 with self.subTest(path=str(path),phrase=phrase):
                     self.assertNotIn(phrase,content)
         office=(ROOT/'client/phone/office.js').read_text()
-        self.assertIn("items.push(...(result.value.items||[]).map(item=>({kind:'human-ask',item})))",office)
-        self.assertEqual(office.count("kind:'human-ask'"),1)
+        api=(ROOT/'client/office_api.py').read_text()
+        self.assertIn("human = human_asks.listing()",api)
+        self.assertEqual(api.count("'kind': 'human-ask'"),1)
+        self.assertIn("api('/api/watch'",office)
         self.assertNotIn("items.push(...(result.value.stations",office)
         self.assertNotIn("kind:'gate'",office)
         self.assertNotIn("kind:'buzz'",office)

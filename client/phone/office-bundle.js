@@ -168,9 +168,40 @@ function button(text, action, className = "") {
   });
   return node;
 }
+function diagnosticMessage(error) {
+  const message = String(error?.message || error?.name || "Error");
+  return message.length <= 160 && /^[A-Za-z .:()_-]+$/.test(message) ? message : String(error?.name || "Error").slice(0, 80);
+}
+function reportClientError(detail2) {
+  const now = Date.now();
+  while (clientErrorTimes.length && clientErrorTimes[0] < now - 6e4) clientErrorTimes.shift();
+  if (clientErrorTimes.length >= 3) return;
+  clientErrorTimes.push(now);
+  void fetch("/api/client-errors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(detail2), keepalive: true }).catch(() => {
+  });
+}
 async function api(path, body) {
-  const response = await fetch(path, { method: body === void 0 ? "GET" : "POST", headers: { Accept: "application/json", ...body === void 0 ? {} : { "Content-Type": "application/json" } }, ...body === void 0 ? {} : { body: JSON.stringify(body) } });
-  const data = await response.json();
+  const requestId = crypto.randomUUID(), safePath = path.split("?")[0];
+  let response;
+  try {
+    response = await fetch(path, { method: body === void 0 ? "GET" : "POST", headers: { Accept: "application/json", "X-Office-Request-ID": requestId, ...body === void 0 ? {} : { "Content-Type": "application/json" } }, ...body === void 0 ? {} : { body: JSON.stringify(body) } });
+  } catch (error) {
+    reportClientError({ kind: "network", path: safePath, request_id: requestId, status: 0, message: diagnosticMessage(error) });
+    const failure2 = new Error(`Office connection failed \xB7 request ${requestId}`);
+    failure2.cause = error;
+    throw failure2;
+  }
+  let data;
+  try {
+    data = JSON.parse(await response.text());
+  } catch (error) {
+    const receipt = response.headers.get("x-office-request-id") || requestId;
+    reportClientError({ kind: "invalid_json", path: safePath, request_id: receipt, status: response.status, message: diagnosticMessage(error) });
+    const failure2 = new Error(`Office returned an invalid response \xB7 request ${receipt}`);
+    failure2.status = response.status;
+    failure2.cause = error;
+    throw failure2;
+  }
   if (!response.ok) {
     const error = new Error(data.error || data.message || `Request failed (${response.status})`);
     error.status = response.status;
@@ -367,12 +398,13 @@ function restoreDraft(input, identity) {
     localStorage.removeItem(key);
   };
 }
-var $, active, rememberObjects;
+var $, clientErrorTimes, active, rememberObjects;
 var init_office_ui = __esm({
   "client/phone/office-ui.js"() {
     init_office_state();
     init_office_active();
     $ = (selector) => document.querySelector(selector);
+    clientErrorTimes = [];
     active = viewer((body) => api("/api/objects/active", body));
     rememberObjects = true;
     document.addEventListener("office-preferences", (event) => {
@@ -1187,6 +1219,13 @@ function redrawIfChanged(node, signature, draw) {
   draw();
   return true;
 }
+function mergeAskState(base, next, limit = 500) {
+  if (base && Number(next.revision) < Number(base.revision)) return base;
+  if (!base || !next.delta) return next.not_modified && base ? { ...base, ...next, messages: base.messages } : next;
+  const rows = new Map(base.messages.map((row) => [row.id, row]));
+  for (const row of next.messages) rows.set(row.id, row);
+  return { ...base, ...next, messages: [...rows.values()].sort((a, b) => a.id - b.id).slice(-limit), not_modified: false };
+}
 
 // client/phone/office-coordinator.js
 init_office_ui();
@@ -1642,11 +1681,6 @@ function editIssue(repo, data, act, reload) {
   title.focus();
 }
 
-// client/phone/office-questions.js
-function coordinatorQuestions(world2) {
-  return (world2.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.decision && /<!-- aria-question:[a-f0-9]+ -->/.test(issue.last_word || "")).map((issue) => ({ kind: "coordinator-question", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } })));
-}
-
 // client/phone/office-tasks.js
 init_office_ui();
 init_office_markdown();
@@ -1997,6 +2031,42 @@ function sourceCurrent(controls, project2, token2) {
 var attention = { items: [], errors: [], failures: [] };
 var snapshot = null;
 var snapshotReadAt = 0;
+var VIEW_CACHE_KEY = "office-view-cache-v1";
+var VIEW_CACHE_SCHEMA = 1;
+var forceViewRefresh = false;
+var watchPageRequest = 0;
+var attentionRequest = 0;
+function viewCaches() {
+  try {
+    const value3 = JSON.parse(localStorage.getItem(VIEW_CACHE_KEY) || "{}");
+    return value3.schema === VIEW_CACHE_SCHEMA ? value3 : { schema: VIEW_CACHE_SCHEMA };
+  } catch {
+    return { schema: VIEW_CACHE_SCHEMA };
+  }
+}
+function cachedView(name) {
+  return viewCaches()[name] || null;
+}
+function saveView(name, revision2, data, checkedAt = Date.now()) {
+  const cache2 = viewCaches(), previous = cache2[name];
+  if (previous && Number(previous.checked_at) > Number(checkedAt)) return previous;
+  const row = { revision: revision2, data, saved_at: previous?.revision === revision2 ? previous.saved_at : Date.now(), checked_at: checkedAt };
+  cache2[name] = row;
+  try {
+    localStorage.setItem(VIEW_CACHE_KEY, JSON.stringify(cache2));
+  } catch {
+  }
+  return row;
+}
+function invalidateView(name) {
+  const cache2 = viewCaches();
+  delete cache2[name];
+  localStorage.setItem(VIEW_CACHE_KEY, JSON.stringify(cache2));
+}
+function cacheState(node, row, state = "saved") {
+  const age = formatAge(Date.now() - (row?.saved_at || 0));
+  node.textContent = state === "refreshing" ? `Showing saved update \xB7 ${age} \xB7 refreshing\u2026` : state === "offline" ? `Showing saved update \xB7 ${age} \xB7 refresh unavailable` : `Up to date \xB7 checked ${formatAge(Date.now() - (row?.checked_at || Date.now()))}`;
+}
 async function world() {
   if (!snapshot || Date.now() - snapshotReadAt > 15e3) {
     const data = await api("/api/world");
@@ -2574,27 +2644,47 @@ ${item.excerpt}`, () => openSearchResult(item)));
 var decisionIndex = 0;
 var feedCategory = "all";
 async function watch(parent) {
-  await refreshAttention();
+  let cached = cachedView("watch");
+  if (cached?.data) renderWatch(parent, cached.data, cached, "refreshing");
+  else parent.append(el("p", "muted watch-loading", "Checking your office\u2026"));
+  try {
+    const request = ++watchPageRequest;
+    const query = !forceViewRefresh && cached?.revision ? `?since=${encodeURIComponent(cached.revision)}` : "";
+    const result = await api("/api/watch" + query);
+    if (request !== watchPageRequest || !parent.isConnected) return;
+    if (result.not_modified && cached) {
+      cached = saveView("watch", cached.revision, cached.data, result.checked_at * 1e3);
+      const state = parent.querySelector(".view-freshness");
+      if (state) cacheState(state, cached);
+      return;
+    }
+    if (!result.data) throw Error("Watch returned no current data");
+    cached = saveView("watch", result.revision, result.data, result.checked_at * 1e3);
+    const next = el("div");
+    renderWatch(next, cached.data, cached);
+    const y = scrollY;
+    parent.replaceChildren(...next.childNodes);
+    requestAnimationFrame(() => scrollTo(0, y));
+  } catch (error) {
+    const state = parent.querySelector(".view-freshness");
+    if (state && cached) cacheState(state, cached, "offline");
+    else failure(parent, error);
+  }
+}
+function renderWatch(parent, data, cached, state = "current") {
+  attention = data.attention || { items: [], errors: [], failures: [] };
   const rows = attention.items.filter(requiresYou);
   const failures = attention.failures;
-  let coordinatorRows = [];
-  let coordinatorError = "";
-  try {
-    const data = await api("/api/coordinators");
-    coordinatorRows = data.coordinators || [];
-  } catch (error) {
-    coordinatorError = error.message;
-  }
-  let tower = { state: "unavailable", detail: "Tower state is unavailable" };
-  try {
-    tower = (await world()).automation?.tower || tower;
-  } catch (error) {
-    tower.detail = error.message;
-  }
+  const coordinatorRows = data.coordinators || [];
+  const coordinatorError = data.coordinator_error || "";
+  const tower = data.tower || { state: "unavailable", detail: "Tower state is unavailable" };
   const exceptions = coordinatorRows.filter((row) => ["failing", "stalled", "error"].includes(row.health));
   const healthy = coordinatorRows.length - exceptions.length;
   const overview = el("header", "watch-overview");
   overview.append(el("div", "eyebrow", "Watch"));
+  const freshness = el("p", "view-freshness");
+  cacheState(freshness, cached, state);
+  overview.append(freshness);
   if (attention.errors.length) overview.append(el("h1", "", "Checking what needs you"));
   else if (rows.length) overview.append(el("h1", "", rows.length === 1 ? "One thing needs you" : `${rows.length} things need you`));
   else overview.append(el("h1", "", "Nothing needs you"));
@@ -2680,7 +2770,7 @@ async function watch(parent) {
     }
     parent.append(systems);
   }
-  await guarded(parent, async () => {
+  try {
     const done = coordinatorRows.flatMap((row) => (row.commits || []).map((item) => ({ ...item, checkout: item.checkout || row.id }))).filter((item) => item.sha && item.checkout).sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)).slice(0, 3);
     const recent = el("details", "watch-state watch-recent");
     const summary = el("summary");
@@ -2696,7 +2786,10 @@ async function watch(parent) {
     if (!done.length) list.append(el("p", "muted", coordinatorRows.length ? "No recent commit receipts." : "Commit evidence is unavailable right now."));
     recent.append(list);
     parent.append(recent);
-  });
+  } catch (error) {
+    failure(parent, error);
+  }
+  if (state === "refreshing") requestAnimationFrame(() => scrollTo(0, Number(localStorage.getItem("office-scroll:watch")) || 0));
 }
 function requiresYou(entry) {
   return entry.kind === "human-ask" || entry.kind === "coordinator-question";
@@ -2929,6 +3022,8 @@ async function ask(parent) {
   picker.setAttribute("aria-label", "Office model");
   advanced.append(picker);
   header.append(advanced);
+  const freshness = el("p", "view-freshness ask-freshness");
+  header.append(freshness);
   chat.append(header);
   const scrollRegion = el("div", "ask-scroll-region");
   const thread = el("div", "ask-thread");
@@ -2947,20 +3042,35 @@ async function ask(parent) {
   input.rows = 2;
   const queueStatus = el("p", "ask-queue-status");
   queueStatus.setAttribute("aria-live", "polite");
-  const submit = el("button", "primary", "Send");
+  const steerHint = el("p", "ask-steer-hint");
+  steerHint.setAttribute("aria-live", "polite");
+  const submit = el("button", "primary", "Queue");
   submit.type = "submit";
-  form.append(input, submit);
-  chat.append(queueStatus, form);
-  let current2 = null, rendered = false;
+  const steerSubmit = button("Send now / Steer", () => sendSteer(), "ask-steer");
+  steerSubmit.hidden = true;
+  form.append(input, submit, steerSubmit);
+  chat.append(queueStatus, steerHint, form);
+  let current2 = null, rendered = false, steerVerified = false;
+  const scrollKey = "office-scroll:ask";
+  let restoredScroll = false;
   const distanceFromBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight;
   const updateJump = () => {
     jump.hidden = !rendered || distanceFromBottom() < 64;
   };
-  thread.addEventListener("scroll", updateJump);
+  thread.addEventListener("scroll", () => {
+    updateJump();
+    localStorage.setItem(scrollKey, String(thread.scrollTop));
+  }, { passive: true });
   await guarded(chat, async () => {
-    const data = await api("/api/ask");
+    let cached = cachedView("ask"), data = cached?.data, hadCache = !!data;
+    if (!data) {
+      data = await api("/api/ask");
+      cached = saveView("ask", data.revision, data, data.checked_at * 1e3);
+    }
+    steerVerified = !hadCache;
+    cacheState(freshness, cached, hadCache ? "refreshing" : "current");
     const clearDraft = restoreDraft(input, ["ask"]);
-    const pendingKey2 = "office-ask-pending";
+    const pendingKey2 = "office-ask-pending", steerPendingKey = "office-ask-steer-pending";
     let pending2;
     try {
       pending2 = JSON.parse(localStorage.getItem(pendingKey2) || "null");
@@ -2968,9 +3078,24 @@ async function ask(parent) {
       localStorage.removeItem(pendingKey2);
     }
     if (!pending2?.request_id || !pending2?.text || !pending2?.model) pending2 = null;
+    let steerPending;
+    try {
+      steerPending = JSON.parse(localStorage.getItem(steerPendingKey) || "null");
+    } catch {
+      localStorage.removeItem(steerPendingKey);
+    }
+    if (!steerPending?.request_id || !steerPending?.text || !steerPending?.expected_turn_id) steerPending = null;
     const initial = el("option", "", data.selection || data.model);
     initial.value = data.selection || data.model;
     picker.append(initial);
+    const updateControls = (state) => {
+      const queued = state.queue?.queued || 0, working = state.queue?.working || 0;
+      queueStatus.textContent = [working ? `${working} working` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(" \xB7 ");
+      queueStatus.hidden = !working && !queued;
+      steerSubmit.hidden = !steerVerified || !state.steer?.available;
+      steerHint.textContent = working && !steerVerified ? "Checking Send now availability\u2026" : working && !state.steer?.available ? state.steer?.reason || "Send now is unavailable; Queue remains available." : "";
+      steerHint.hidden = !steerHint.textContent;
+    };
     const draw = (state, toBottom = false) => {
       const follow = toBottom || !rendered || distanceFromBottom() < 64, previousTop = thread.scrollTop;
       current2 = state;
@@ -2986,13 +3111,14 @@ async function ask(parent) {
       }
       const lastAnswer = [...state.messages].reverse().find((row) => row.role === "office" && row.status === "completed");
       for (const row of state.messages) {
-        const bubble = el("article", "ask-bubble " + row.role);
-        const label = row.role === "user" ? "You" : row.role === "office" ? "Office \xB7 " + (row.model || "") : row.text;
+        const bubble = el("article", "ask-bubble " + row.role + (row.kind === "steer" ? " steer" : ""));
+        const label = row.role === "user" ? row.kind === "steer" ? "You \xB7 Send now" : "You" : row.role === "office" ? "Office \xB7 " + (row.model || "") : row.text;
+        const statusLabel = { sending: "sending", delivered: "delivered", not_delivered: "not delivered" }[row.status] || row.status;
         const heading = el("small", "", label);
-        if (row.role !== "system") heading.append(el("span", "ask-status is-" + row.status, row.status));
+        if (row.role !== "system") heading.append(el("span", "ask-status is-" + row.status, statusLabel));
         bubble.append(heading);
         if (row.role !== "system") {
-          const waiting = row.status === "queued" ? "Queued behind earlier messages\u2026" : row.status === "working" ? "Working\u2026" : "";
+          const waiting = row.delivery_error || (row.status === "queued" ? "Queued behind earlier messages\u2026" : row.status === "working" ? "Working\u2026" : row.status === "sending" ? "Sending to the active turn\u2026" : "");
           const copy = markdownView(row.text || waiting, { text: officeLinkText });
           copy.classList.add("ask-copy");
           copy.addEventListener("click", (event) => {
@@ -3005,26 +3131,55 @@ async function ask(parent) {
             }
           });
           bubble.append(copy);
+          if (row.delivery_error) bubble.append(el("p", "ask-delivery-error", row.delivery_error));
           if (row.id === lastAnswer?.id) {
             const rating = el("div", "ask-rating");
             rating.append(el("span", "muted", "Useful?"));
             for (const [kind, label2] of [["helpful", "Yes"], ["missed", "Missed it"]]) rating.append(button(label2, async () => {
               await api("/api/ask/rate", { reply_id: row.id, kind });
-              draw(await api("/api/ask"));
+              await refreshAsk();
             }, "ask-rate" + (row.rating === kind ? " active" : "")));
             bubble.append(rating);
           }
         }
         thread.append(bubble);
       }
-      const queued = state.queue?.queued || 0, working = state.queue?.working || 0;
-      queueStatus.textContent = [working ? `${working} working` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(" \xB7 ");
-      queueStatus.hidden = !working && !queued;
+      updateControls(state);
       thread.scrollTop = follow ? thread.scrollHeight : previousTop;
+      if (!restoredScroll && hadCache) {
+        thread.scrollTop = Math.min(Number(localStorage.getItem(scrollKey)) || 0, thread.scrollHeight - thread.clientHeight);
+        restoredScroll = true;
+      }
       rendered = true;
       updateJump();
     };
     draw(data);
+    let refreshing = false;
+    async function refreshAsk(toBottom = false, force = false) {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const query = !force && current2?.revision ? `?since_revision=${current2.revision}` : "";
+        const next = await api("/api/ask" + query);
+        if (!chat.isConnected) return;
+        const merged = mergeAskState(current2, next);
+        steerVerified = true;
+        cached = saveView("ask", merged.revision, merged, (next.checked_at || Date.now() / 1e3) * 1e3);
+        cacheState(freshness, cached);
+        if (next.not_modified) {
+          current2 = merged;
+          updateControls(merged);
+          return;
+        }
+        redrawIfChanged(thread, JSON.stringify(merged), () => draw(merged, toBottom));
+      } catch (error) {
+        if (cached) cacheState(freshness, cached, "offline");
+        throw error;
+      } finally {
+        refreshing = false;
+      }
+    }
+    if (hadCache) refreshAsk(false, forceViewRefresh).catch((error) => notice(error.message));
     api("/api/ask/models").then((models) => {
       const chosen = picker.value;
       picker.replaceChildren();
@@ -3042,12 +3197,11 @@ async function ask(parent) {
       }
       if (!current2?.busy) return;
       try {
-        const next = await api("/api/ask");
-        redrawIfChanged(thread, JSON.stringify(next), () => draw(next));
+        await refreshAsk();
       } catch (error) {
         notice(error.message);
       }
-    }, 2500);
+    }, 1e3);
     async function sendPending(payload) {
       submit.disabled = true;
       try {
@@ -3057,7 +3211,7 @@ async function ask(parent) {
           pending2 = null;
         }
         clearDraft(payload.text);
-        draw(await api("/api/ask"), true);
+        await refreshAsk(true);
       } catch (error) {
         if ([400, 403, 404, 409, 413, 422].includes(error.status)) {
           localStorage.removeItem(pendingKey2);
@@ -3067,6 +3221,40 @@ async function ask(parent) {
       } finally {
         submit.disabled = false;
       }
+    }
+    async function sendSteerPending(payload) {
+      steerSubmit.disabled = true;
+      try {
+        await api("/api/ask/steer", payload);
+        if (JSON.parse(localStorage.getItem(steerPendingKey) || "null")?.request_id === payload.request_id) {
+          localStorage.removeItem(steerPendingKey);
+          steerPending = null;
+        }
+        clearDraft(payload.text);
+        await refreshAsk(true);
+      } catch (error) {
+        if ([400, 403, 404, 409, 413, 422].includes(error.status)) {
+          localStorage.removeItem(steerPendingKey);
+          steerPending = null;
+        }
+        notice(error.message);
+      } finally {
+        steerSubmit.disabled = false;
+      }
+    }
+    function sendSteer2() {
+      if (steerPending) return sendSteerPending(steerPending);
+      const text = input.value.trim();
+      if (!text) return;
+      if (!current2?.steer?.available) {
+        notice(current2?.steer?.reason || "No active Codex turn can be steered. Use Queue instead.");
+        return;
+      }
+      input.value = text;
+      input.dispatchEvent(new Event("input"));
+      steerPending = { request_id: crypto.randomUUID(), text, expected_turn_id: current2.steer.expected_turn_id };
+      localStorage.setItem(steerPendingKey, JSON.stringify(steerPending));
+      return sendSteerPending(steerPending);
     }
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -3083,6 +3271,7 @@ async function ask(parent) {
       void sendPending(pending2);
     });
     if (pending2) void sendPending(pending2);
+    if (steerPending) void sendSteerPending(steerPending);
   });
 }
 function officeLinkText(node, value3) {
@@ -3176,8 +3365,10 @@ async function refreshOffice() {
     const data = await api("/api/world?fresh=1");
     snapshot = data.world || null;
     snapshotReadAt = data.world ? Date.now() : 0;
+    forceViewRefresh = true;
     await connection();
     await route();
+    forceViewRefresh = false;
     if ($("#detail").open && new URL(location.href).searchParams.has("detail")) await restoreFromURL();
     if (distance !== null && distance > 64) {
       const thread = $(".ask-thread");
@@ -3185,6 +3376,7 @@ async function refreshOffice() {
     }
     notice(data.fresh ? "Office updated" : "Showing the latest available update");
   } finally {
+    forceViewRefresh = false;
     document.querySelectorAll(".office-refresh").forEach((control) => {
       control.disabled = false;
     });
@@ -3199,6 +3391,9 @@ $("#global-search").addEventListener("keydown", (event) => {
   if (event.key === "Enter") search();
 });
 window.addEventListener("hashchange", route);
+window.addEventListener("scroll", () => {
+  if ((location.hash || "#watch").startsWith("#watch")) localStorage.setItem("office-scroll:watch", String(scrollY));
+}, { passive: true });
 $("#settings").disabled = false;
 $("#new-task").disabled = false;
 $("#refresh-office").disabled = false;
@@ -3210,10 +3405,11 @@ async function connection() {
     $("#connection").textContent = "Mac unreachable";
   }
 }
-await synchronize();
-await loadSettings().catch((error) => notice(error.message));
-await connection();
+var stateSync = synchronize();
+var settingsSync = loadSettings().catch((error) => notice(error.message));
+void connection();
 await route();
+void Promise.allSettled([stateSync, settingsSync]);
 if (new URL(location.href).searchParams.has("detail") && !$("#detail").open) await restoreFromURL();
 setInterval(connection, 3e4);
 async function archives(parent, cursor = 0) {
@@ -3462,22 +3658,18 @@ async function githubReviews(repo, number, cursor = 1, parent = null, inline2 = 
   if (!parent) body.append(button("Inline comments", () => githubReviews(repo, number, 1, body, true)));
 }
 async function refreshAttention() {
-  const results = await Promise.allSettled([api("/api/human-asks"), world()]);
-  const items = [], errors = [], failures = [];
-  for (const [index, result] of results.entries()) {
-    if (result.status === "rejected") {
-      errors.push(result.reason.message);
-      continue;
-    }
-    if (index === 0) {
-      errors.push(...result.value.errors || []);
-      items.push(...(result.value.items || []).map((item) => ({ kind: "human-ask", item })));
-    } else {
-      items.push(...coordinatorQuestions(result.value));
-      failures.push(...(result.value.stations || []).flatMap((station) => (station.issues || []).filter((issue) => issue.bot_last === true && issue.automation_failure === "missing_decision").map((issue) => ({ kind: "issue", repo: station.repo, item: { ...issue, id: `${station.repo}#${issue.number}` } }))));
-    }
+  let cached = cachedView("watch");
+  const query = cached?.revision ? `?since=${encodeURIComponent(cached.revision)}` : "";
+  try {
+    const request = ++attentionRequest, result = await api("/api/watch" + query);
+    if (request !== attentionRequest) return;
+    if (result.data) cached = saveView("watch", result.revision, result.data, result.checked_at * 1e3);
+    else if (cached) cached = saveView("watch", cached.revision, cached.data, result.checked_at * 1e3);
+  } catch (error) {
+    if (!cached) attention = { items: [], errors: [error.message], failures: [] };
   }
-  attention = { items, errors, failures };
+  if (cached?.data) attention = cached.data.attention;
+  const { items = [], errors = [] } = attention;
   const needsYou = items.filter(requiresYou).length;
   const badge = $("#detail-attention");
   badge.title = needsYou ? `${needsYou} items need you` : "Nothing needs you right now";
@@ -3525,6 +3717,7 @@ function coordinatorQuestionCard(entry) {
     if (!result.ok) throw Error(result.result || "Answer was not recorded");
     snapshot = null;
     snapshotReadAt = 0;
+    invalidateView("watch");
     notice("Answer recorded on the issue");
     await route();
   }, "attention-option"));
@@ -3536,6 +3729,7 @@ async function closeWatchIssue(repo, number) {
   if (result.state !== "closed") throw Error("GitHub did not confirm the issue is closed");
   snapshot = null;
   snapshotReadAt = 0;
+  invalidateView("watch");
   await route();
 }
 function humanAskCard(ask2) {
@@ -3548,6 +3742,7 @@ function humanAskCard(ask2) {
     const answer = input.value.trim();
     if (!answer) throw Error("Enter an answer first");
     await api("/api/human-input/answer", { id: ask2.id, answer });
+    invalidateView("watch");
     notice("Answer recorded; Office resumed the task");
     await refreshAttention();
   }, "attention-option"));

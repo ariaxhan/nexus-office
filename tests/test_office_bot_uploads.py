@@ -10,7 +10,7 @@ class BotUploads(unittest.TestCase):
         room=chat.Chatroom();refs=[{'id':'upload:'+'a'*64,'revision':'b'*64}]
         with patch.object(office_uploads,'attachments',return_value=[{'name':'fixture.txt'}]),patch.object(chat,'read_bots',return_value=[{'id':'relay'}]),patch.object(chat.threading,'Thread') as thread:
             status,_=room.say({'bot':'relay','message':'','uploads':refs})
-        self.assertEqual(status,202);self.assertEqual(thread.call_args.kwargs['args'][-1],refs)
+        self.assertEqual(status,202);self.assertEqual(thread.call_args.kwargs['args'][3],refs)
         with patch.object(chat.rt,'post',return_value={}) as post:
             room._turn('relay','',(),refs)
         self.assertEqual(post.call_args.args[1]['uploads'],refs)

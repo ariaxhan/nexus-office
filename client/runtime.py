@@ -76,11 +76,11 @@ def _get(path: str):
         return json.loads(r.read().decode() or "{}")
 
 
-def post(path: str, body: dict, timeout: float = 20):
+def post(path: str, body: dict, timeout: float = 20, base_url: str | None = None):
     """`timeout` is the caller's, because not every POST is a quick one: a chat
     turn is a whole agent run and holds the connection open for minutes."""
     data = json.dumps(body).encode()
-    req = urllib.request.Request(_url() + path, data=data, method="POST")
+    req = urllib.request.Request((base_url or _url()).rstrip("/") + path, data=data, method="POST")
     req.add_header("content-type", "application/json")
     req.add_header("user-agent", "nexus-office-sync/1.0")
     with urllib.request.urlopen(req, timeout=timeout) as r:

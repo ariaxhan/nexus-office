@@ -47,6 +47,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -109,6 +110,9 @@ RUNTIME_KINDS = {"chat", "run", "stop"}
 # neither of which the Worker's JS regexes allowed. Parity, not paranoia.
 REPO_RE = re.compile(r"[\w.-]+/[\w.-]+\Z", re.ASCII)
 QID_RE = re.compile(r"[A-Za-z0-9:_-]{8,100}\Z", re.ASCII)
+REQUEST_ID_RE = re.compile(r"[A-Za-z0-9_-]{16,80}\Z", re.ASCII)
+CLIENT_ERROR_PATH_RE = re.compile(r"/api/[A-Za-z0-9_./-]{0,180}\Z", re.ASCII)
+CLIENT_ERROR_MESSAGE_RE = re.compile(r"[A-Za-z .:()_-]{0,160}\Z", re.ASCII)
 NUM_RE = re.compile(r"\d+\Z", re.ASCII)
 
 # The bind address keeps the network out. It does not keep the browser out: any
@@ -472,10 +476,75 @@ class Handler(BaseHTTPRequestHandler):
     # one per delivery is a wall.
     _no_secret_said = 0.0
 
+    def handle_one_request(self):
+        self.request_started = time.monotonic()
+        self.request_id = str(uuid.uuid4())
+        self.response_status = 0
+        self.request_exception = None
+        self.request_disconnect = None
+        self.request_seen = False
+        self.command = ''
+        self.path = ''
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            self.request_disconnect = exc
+            self.close_connection = True
+        finally:
+            self._request_diagnostic()
+
+    def parse_request(self):
+        self.request_seen = True
+        parsed = super().parse_request()
+        if parsed:
+            supplied = self.headers.get('x-office-request-id', '')
+            if REQUEST_ID_RE.fullmatch(supplied):
+                self.request_id = supplied
+        return parsed
+
+    def send_response(self, code, message=None):
+        self.response_status = code
+        return super().send_response(code, message)
+
+    def end_headers(self):
+        self.send_header('x-office-request-id', self.request_id)
+        return super().end_headers()
+
     def log_message(self, fmt, *args):
-        # One line per API call, on stderr. The page and its two files are noise.
-        if getattr(self, "path", "").startswith("/api/"):
-            log(f"{self.command} {self.path} {args[1] if len(args) > 1 else ''}".rstrip())
+        pass
+
+    def _request_diagnostic(self):
+        if not self.request_seen and not self.request_exception and not self.request_disconnect:
+            return
+        path = getattr(self, 'path', '').partition('?')[0]
+        if not path.startswith('/api/') and not self.request_exception and not self.request_disconnect:
+            return
+        row = {'event': 'request', 'method': getattr(self, 'command', '') or 'unknown',
+               'path': path or 'unknown', 'request_id': self.request_id,
+               'status': self.response_status,
+               'duration_ms': round((time.monotonic() - self.request_started) * 1000, 1)}
+        problem = self.request_exception or self.request_disconnect
+        if problem:
+            row['outcome'] = 'disconnect' if self.request_disconnect else 'error'
+            row['exception'] = type(problem).__name__
+            row['detail'] = self._safe_exception_detail(problem)
+        else:
+            row['outcome'] = 'ok'
+        log(json.dumps(row, sort_keys=True, separators=(',', ':')))
+
+    def _record_exception(self, exc):
+        self.request_exception = exc
+
+    @staticmethod
+    def _safe_exception_detail(exc):
+        if isinstance(exc, json.JSONDecodeError):
+            return f'{exc.msg} at char {exc.pos}'
+        detail = str(exc).replace('\n', ' ')
+        detail = re.sub(r'https?://\S+', '[url]', detail)
+        detail = re.sub(r'(?i)(token|secret|password|authorization)\s*[=:]\s*\S+',
+                        r'\1=[redacted]', detail)
+        detail = re.sub(r'[A-Za-z0-9+/=_-]{20,}', '[redacted]', detail)
+        return detail[:300]
 
     # ── the door ────────────────────────────────────────────────────────────
     def _host_ok(self) -> bool:
@@ -542,7 +611,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.close_connection = True
             raise ValueError("payload too large")
-        raw = self.rfile.read(n).decode("utf-8") if n else ""
+        payload = self.rfile.read(n) if n else b""
+        if len(payload) != n:
+            self.close_connection = True
+            raise ValueError("request body ended before its declared length")
+        raw = payload.decode("utf-8")
         out = json.loads(raw or "{}")
         if not isinstance(out, dict):
             raise ValueError("expected an object")
@@ -589,9 +662,13 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/api/'):
                 return self._json({'error': 'not found'}, 404)
             return self._page(path)
+        except (BrokenPipeError, ConnectionResetError):
+            raise
         except (FileNotFoundError, PermissionError, FileExistsError, ValueError, KeyError) as exc:
+            self._record_exception(exc)
             return self._mobile_error(exc)
         except Exception as exc:
+            self._record_exception(exc)
             self._json({'error': f'{type(exc).__name__}: {exc}'[:300]}, 500)
 
     def _mobile_error(self, exc):
@@ -766,14 +843,21 @@ class Handler(BaseHTTPRequestHandler):
             if office_api.post(self, path):
                 return
             return self._post_route(path)
+        except (BrokenPipeError, ConnectionResetError):
+            raise
         except ValueError as exc:
+            self._record_exception(exc)
             self._json({"error": str(exc)[:200]}, 400)
         except (FileNotFoundError, PermissionError, FileExistsError) as exc:
+            self._record_exception(exc)
             return self._mobile_error(exc)
         except Exception as exc:  # noqa: BLE001
+            self._record_exception(exc)
             self._json({"error": f"{type(exc).__name__}: {exc}"[:300]}, 500)
 
     def _post_route(self, path):
+        if path == '/api/client-errors':
+            return self._client_error(self._read_json(limit=2048))
         immediate = {
             '/api/decision': self._decision, '/api/gate': self._gate,
             '/api/board': self._board, '/api/desks': self._desks,
@@ -794,6 +878,27 @@ class Handler(BaseHTTPRequestHandler):
         action, limit = services[path]
         code, body = action(self._read_json(limit=limit))
         return self._json(body, code)
+
+    def _client_error(self, body):
+        kind = body.get('kind')
+        path = body.get('path')
+        request_id = body.get('request_id', '')
+        message = body.get('message', '')
+        status = body.get('status', 0)
+        if kind not in ('network', 'invalid_json'):
+            raise ValueError('unknown client error kind')
+        if not isinstance(path, str) or not CLIENT_ERROR_PATH_RE.fullmatch(path):
+            raise ValueError('invalid client error path')
+        if request_id and (not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id)):
+            raise ValueError('invalid client request ID')
+        if type(status) is not int or not 0 <= status <= 599:
+            raise ValueError('invalid client error status')
+        if not isinstance(message, str) or not CLIENT_ERROR_MESSAGE_RE.fullmatch(message):
+            raise ValueError('invalid client error message')
+        log(json.dumps({'event': 'client_error', 'kind': kind, 'path': path,
+                        'request_id': request_id, 'status': status,
+                        'message': message}, sort_keys=True, separators=(',', ':')))
+        return self._json({'recorded': True}, 202)
 
     def _decision(self, body):
         err, _ = validate(body)
