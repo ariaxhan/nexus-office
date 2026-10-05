@@ -56,11 +56,43 @@ async function dailyReports(parent){
 }
 async function work(parent){
  intro(parent,'Work','Pick up the thread.','Projects, conversations, and the files behind them.');
+ const allSessions=section(parent,'All agent sessions');allSessions.id='all-agent-sessions';void allAgentSessions(allSessions);
  const active=section(parent,'Running now');await runningNow(active);const history=section(parent,'Office conversations');await guarded(history,()=>taskList(history));
  const bots=section(parent,'Your office voices');bots.append(button('Open office voices',()=>guarded(bots,async()=>{const data=await api('/api/bots');bots.replaceChildren();for(const bot of data.bots)bots.append(card(bot.name,bot.purpose,()=>botConversation(bot)));})));
  const archive=section(parent,'All retained conversations');archive.append(button('Browse all retained conversations',()=>archives(archive)));
  const projects=section(parent,'Projects');parent.insertBefore(projects.parentElement,active.parentElement);
  await guarded(projects,()=>projectRoster(projects));
+}
+function sessionGroups(sessions){
+ const groups=new Map();
+ for(const item of sessions){
+  const repo=item.repo||item.directory||'Other';
+  if(!groups.has(repo))groups.set(repo,[]);
+  groups.get(repo).push(item);
+ }
+ return [...groups].map(([repo,items])=>({repo,items:items.sort((a,b)=>Number(b.status==='blocked')-Number(a.status==='blocked'))}))
+  .sort((a,b)=>Number(b.items.some(item=>item.status==='blocked'))-Number(a.items.some(item=>item.status==='blocked'))||a.repo.localeCompare(b.repo));
+}
+async function allAgentSessions(parent){
+ const status=el('p','muted');const rows=el('div','stack');parent.append(status,rows);
+ let lastGood=null,busy=false;
+ async function poll(){
+  if(!parent.isConnected||busy)return;
+  busy=true;
+  try{
+   let timeout;
+   const data=await Promise.race([api('/api/sessions'),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Request timed out')),8000);})]).finally(()=>clearTimeout(timeout));
+   if(!['ok','empty'].includes(data.state))throw Error(data.detail||data.state);
+   lastGood=data.at||new Date().toISOString();status.textContent='';rows.replaceChildren();
+   for(const group of sessionGroups(data.sessions||[])){
+    const sectionNode=section(rows,group.repo);
+    for(const item of group.items)sectionNode.append(card(item.name,`${item.tool} · hcom reports ${item.status}`,()=>conversation(item)));
+   }
+   if(!data.sessions?.length)empty(rows,'No addressable sessions currently active.');
+  }catch(error){status.textContent=lastGood?`Sessions stale · last good ${new Date(lastGood).toLocaleString()} · ${error.message}`:`Sessions unavailable · ${error.message}`;}
+  finally{busy=false;}
+ }
+ await poll();const timer=setInterval(()=>{if(!parent.isConnected)clearInterval(timer);else void poll();},10000);
 }
 async function projectRoster(parent){
  const loading=el('p','muted','Loading projects from your Mac…');parent.append(loading);

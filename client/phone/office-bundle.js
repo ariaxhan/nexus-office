@@ -2265,6 +2265,9 @@ async function dailyReports(parent) {
 }
 async function work(parent) {
   intro(parent, "Work", "Pick up the thread.", "Projects, conversations, and the files behind them.");
+  const allSessions = section(parent, "All agent sessions");
+  allSessions.id = "all-agent-sessions";
+  void allAgentSessions(allSessions);
   const active2 = section(parent, "Running now");
   await runningNow(active2);
   const history2 = section(parent, "Office conversations");
@@ -2280,6 +2283,49 @@ async function work(parent) {
   const projects = section(parent, "Projects");
   parent.insertBefore(projects.parentElement, active2.parentElement);
   await guarded(projects, () => projectRoster(projects));
+}
+function sessionGroups(sessions2) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const item of sessions2) {
+    const repo = item.repo || item.directory || "Other";
+    if (!groups.has(repo)) groups.set(repo, []);
+    groups.get(repo).push(item);
+  }
+  return [...groups].map(([repo, items]) => ({ repo, items: items.sort((a, b) => Number(b.status === "blocked") - Number(a.status === "blocked")) })).sort((a, b) => Number(b.items.some((item) => item.status === "blocked")) - Number(a.items.some((item) => item.status === "blocked")) || a.repo.localeCompare(b.repo));
+}
+async function allAgentSessions(parent) {
+  const status = el("p", "muted");
+  const rows = el("div", "stack");
+  parent.append(status, rows);
+  let lastGood = null, busy = false;
+  async function poll() {
+    if (!parent.isConnected || busy) return;
+    busy = true;
+    try {
+      let timeout;
+      const data = await Promise.race([api("/api/sessions"), new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(Error("Request timed out")), 8e3);
+      })]).finally(() => clearTimeout(timeout));
+      if (!["ok", "empty"].includes(data.state)) throw Error(data.detail || data.state);
+      lastGood = data.at || (/* @__PURE__ */ new Date()).toISOString();
+      status.textContent = "";
+      rows.replaceChildren();
+      for (const group of sessionGroups(data.sessions || [])) {
+        const sectionNode = section(rows, group.repo);
+        for (const item of group.items) sectionNode.append(card(item.name, `${item.tool} \xB7 hcom reports ${item.status}`, () => conversation2(item)));
+      }
+      if (!data.sessions?.length) empty(rows, "No addressable sessions currently active.");
+    } catch (error) {
+      status.textContent = lastGood ? `Sessions stale \xB7 last good ${new Date(lastGood).toLocaleString()} \xB7 ${error.message}` : `Sessions unavailable \xB7 ${error.message}`;
+    } finally {
+      busy = false;
+    }
+  }
+  await poll();
+  const timer2 = setInterval(() => {
+    if (!parent.isConnected) clearInterval(timer2);
+    else void poll();
+  }, 1e4);
 }
 async function projectRoster(parent) {
   const loading = el("p", "muted", "Loading projects from your Mac\u2026");
