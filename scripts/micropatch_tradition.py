@@ -80,14 +80,13 @@ def solve(case, model, mode):
         after = digests(tree)
         touched = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))
         written = [str(Path(f)) for f in info.get("files_written", [])]
-        out_of_scope = sorted({p for p in touched if p in before and p != case["path"]}
-                              | {f for f in written if Path(tree, f).resolve() != Path(tree, case["path"]).resolve()})
-        in_scope_only = not out_of_scope and case["path"] in touched
+        scope_violations = mp.out_of_scope(before, after, written, case["path"], tree)
+        in_scope_only = not scope_violations and case["path"] in touched
         passed = in_scope_only and not mp.run_tests(tree, case["tests"])
         disk = mp.disk_bytes(tree)
     return dict(model=model, harness="tradition", mode=mode, commit=case["commit"], path=case["path"],
                 changed=case["changed"], result="verified" if passed else "escalated", executor_ok=ok,
-                error=err, touched=touched, out_of_scope=out_of_scope, wall_s=round(time.time() - t0, 1),
+                error=err, touched=touched, out_of_scope=scope_violations, wall_s=round(time.time() - t0, 1),
                 disk_bytes=disk, leaked=mp.leaked(), resident_bytes=mp.resident_bytes(model), **info)
 
 

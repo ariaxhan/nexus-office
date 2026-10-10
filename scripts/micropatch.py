@@ -99,6 +99,14 @@ def leaked():
     return sorted(p for p in os.listdir(tempfile.gettempdir()) if p.startswith(PREFIX))
 
 
+def out_of_scope(before, after, written, allowed, tree):
+    """List every changed path outside the contract, including newly created files."""
+    changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
+    reported = {str(Path(f)) for f in written
+                if Path(tree, f).resolve() != Path(tree, allowed).resolve()}
+    return sorted((changed - {allowed}) | reported)
+
+
 def run_tests(tree, tests):
     env = dict(os.environ, PYTHONPATH=f"{tree}/client:{tree}")
     fails = []
