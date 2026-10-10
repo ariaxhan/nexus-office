@@ -2,6 +2,33 @@
 
 Frozen evidence for nexus-office #235 and subsequent screening. Scores come from the JSON/JSONL receipts beside this README; cancelled-run observations are labelled separately.
 
+## 2026-10-10 continuation
+
+The live checkout exposed a scope-verifier gap: a newly created file outside the
+contract was ignored if Tradition's write receipt omitted it. The regression in
+`tests/test_micropatch_scope.py` failed before the fix and passes after the verifier
+compares every path in the before/after digest maps. The current checkout has no
+`nexus-mp-*` snapshots left in `/tmp`.
+
+This was a real #235 microtask with one allowed implementation file and a focused
+test. The held flight's `tradition implement` attempt escalated before its first
+model step: Ollama returned HTTP 500, `unknown renderer "qwen3.8"`. Tradition
+reported zero writes, steps and model tokens. In this continuation, the same
+regression failed before the fix, then a Qwen3-Coder `tradition implement` call
+made no edit after several minutes waiting for its model response and was
+cancelled. The frontier completed the small fix after escalation. These attempts
+do **not** satisfy the required successful live dogfood case. The historical
+14/23 result still establishes the bounded benchmark region, but a real Nexus
+task completed by the local worker remains open. The frontier token/cost and
+before/after integrated-time comparison are likewise not measured by this run.
+
+Verification: two focused regression tests pass. The held flight's project
+`npm test` gate stopped in `tests/crash_tower/test_crash_v0.py`: 19 injected
+faults against its minimum of 30. This failure is outside the changed benchmark
+code. The continuation found the pinned Python 3.12 interpreter outside PATH and
+used the documented `OFFICE_TEST_PYTHON` override. The full gate then stopped in
+the same unrelated crash Tower test: `nexus tower once` timed out after 60 seconds.
+
 2026-10-01 extension commission: `Vaults/_meta/commissions/active/2026-10-01-find-small-local-models-that-pass-our-frozen-tra.md`.
 Chronicle: `Vaults/_meta/chronicles/2026/2026-10-01-completed-local-model-screening-126-comparable-w.md`.
 Screening evidence landed on `origin/main` in nexus-office commit `1ae672e`.
