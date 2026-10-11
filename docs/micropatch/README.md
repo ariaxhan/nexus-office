@@ -305,3 +305,13 @@ scores exactly):
 .venv/bin/llm-bench run gpt-6.1-sol -p codex-cli --full --max-tokens 4096 -o results/codex-v3.json
 .venv/bin/llm-bench compare results/local-v3.json results/codex-v3.json
 ```
+
+## Status, 2026-10-11 (after three HELD flights, exit_124)
+
+Reused from `aria/held/flt_885d17aeb6fa` (superset of the other two): reclaim, scope and verifier-interpreter tests.
+Added here: the MacBook small-model gate (Aria's ruling 2026-10-10).
+
+- **Model gate.** `micropatch.ensure_model_allowed` refuses any model outside `lfm2.5:8b`, `qwen2.5:3b`, `nomic-embed-text-v2-moe` on `arias-MacBook-Pro-2` before any snapshot or Ollama call; `micropatch_tradition` exits 2. The Nexus issue prompt adds `--model lfm2.5:8b` on that host only (`nexus/executor.local_implementation`). Tests: `tests/test_micropatch_model_gate.py`.
+- **Scope (acceptance 6).** `micropatch.out_of_scope` counts every changed or newly created file, not just pre-existing ones. Tests: `tests/test_micropatch_scope.py`.
+- **Reclaim (acceptance 7, 8).** Forced termination leaves zero `nexus-mp-*` workspaces. Tests: `tests/test_micropatch_reclaim.py`.
+- **Open: Phase 2 dogfood (acceptance 3, 5, 9).** The benchmarked safe region is non-lifecycle single-file patches on `qwen3.8:27b` (10/12), a model the MacBook may no longer load. `lfm2.5:8b` has no packet-arm result on the 23-case sample (`tradition.lfm2.5_8b.packet.jsonl` is a screen only), so a Phase 2 run must happen on the Studio, or first re-establish a safe region for `lfm2.5:8b`. Every flight that tried both in one session timed out.
