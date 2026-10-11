@@ -15,6 +15,8 @@ cd "$(dirname "$0")/.."
 # the flight tests. Pin the gate interpreter instead of following Homebrew's
 # rolling `python3`. The installed service has its own runtime.
 PYTHON=${OFFICE_TEST_PYTHON:-python3.12}
+# Homebrew can drop 3.12 from PATH; uv keeps a managed copy.
+command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=$(uv python find --no-project 3.12)
 TEST_STATE="$(mktemp -d)"
 trap 'rm -rf "$TEST_STATE"' EXIT
 export OFFICE_HUMAN_ASKS_DB="$TEST_STATE/human-asks.sqlite"
