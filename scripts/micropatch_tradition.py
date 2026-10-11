@@ -11,7 +11,6 @@ Run with tradition's interpreter:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -24,11 +23,6 @@ from tradition_harness.executors import ProviderAgentExecutor  # noqa: E402
 from tradition_harness.implement import code_packet  # noqa: E402
 
 MAX_STEPS = int(os.environ.get("MAX_STEPS", 16))
-
-
-def digests(tree):
-    return {str(p.relative_to(tree)): hashlib.sha1(p.read_bytes()).hexdigest()
-            for d in mp.SNAPSHOT for p in Path(tree, d).rglob("*") if p.is_file() and "__pycache__" not in p.parts}
 
 
 def trace(transcript):
@@ -64,7 +58,7 @@ def solve(case, model, mode):
     failure = mp.initial_failure(case, overlay)
     t0 = time.time()
     with mp.snapshot(case["commit"] + "^", overlay) as tree:
-        before = digests(tree)
+        before = mp.digests(tree)
         os.environ["PYTHONPATH"] = f"{tree}/client:{tree}"  # what run_tests inherits (nexus test convention)
         executor = ProviderAgentExecutor("ollama", model, max_steps=MAX_STEPS, allow_verification=True,
                                          expect_mutation=True, require_investigation=True, allowed_paths=(case["path"],),
@@ -77,17 +71,16 @@ def solve(case, model, mode):
                         files_read=list(result.files_read), **trace(result.transcript_jsonl))
         except Exception as exc:  # noqa: BLE001 - a crashed worker is an escalation, recorded
             ok, err, info = False, f"{type(exc).__name__}: {exc}"[:300], {}
-        after = digests(tree)
+        after = mp.digests(tree)
         touched = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))
         written = [str(Path(f)) for f in info.get("files_written", [])]
-        out_of_scope = sorted({p for p in touched if p in before and p != case["path"]}
-                              | {f for f in written if Path(tree, f).resolve() != Path(tree, case["path"]).resolve()})
-        in_scope_only = not out_of_scope and case["path"] in touched
+        scope_violations = mp.out_of_scope(before, after, written, case["path"], tree)
+        in_scope_only = not scope_violations and case["path"] in touched
         passed = in_scope_only and not mp.run_tests(tree, case["tests"])
         disk = mp.disk_bytes(tree)
     return dict(model=model, harness="tradition", mode=mode, commit=case["commit"], path=case["path"],
                 changed=case["changed"], result="verified" if passed else "escalated", executor_ok=ok,
-                error=err, touched=touched, out_of_scope=out_of_scope, wall_s=round(time.time() - t0, 1),
+                error=err, touched=touched, out_of_scope=scope_violations, wall_s=round(time.time() - t0, 1),
                 disk_bytes=disk, leaked=mp.leaked(), resident_bytes=mp.resident_bytes(model), **info)
 
 

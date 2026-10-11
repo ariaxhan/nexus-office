@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -97,6 +98,20 @@ def disk_bytes(path):
 
 def leaked():
     return sorted(p for p in os.listdir(tempfile.gettempdir()) if p.startswith(PREFIX))
+
+
+def digests(tree):
+    """Every file in the snapshot, so a file created anywhere counts as a change."""
+    return {str(p.relative_to(tree)): hashlib.sha1(p.read_bytes()).hexdigest()
+            for p in Path(tree).rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+
+
+def out_of_scope(before, after, written, allowed, tree):
+    """List every changed path outside the contract, including newly created files."""
+    changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
+    reported = {str(Path(f)) for f in written
+                if Path(tree, f).resolve() != Path(tree, allowed).resolve()}
+    return sorted((changed - {allowed}) | reported)
 
 
 def run_tests(tree, tests):
