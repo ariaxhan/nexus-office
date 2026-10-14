@@ -558,6 +558,45 @@ async function ask(parent){
  input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229){event.preventDefault();form.requestSubmit();}});
  input.addEventListener('input',()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,Math.round(innerHeight*.35))+'px';});
  let current=null,rendered=false,steerVerified=false;
+ // Voice output (item 4, the output half, Aria 2026-10-14): answers are
+ // spoken ON DEMAND by the Studio's local TTS — tap Listen on an answer, or
+ // turn on Speak replies and each new answer is spoken as it lands. Audio
+ // is generated per answer by /api/ask/speak and cached server-side, so a
+ // replay never regenerates. Input stays the plain composer above: it is a
+ // normal textarea, which iOS dictation drives natively — no custom
+ // dictation machinery ships in this build.
+ const voicePlayer=$('#audio');
+ let speakOn=localStorage.getItem('office-ask-speak')==='1',lastSpokenId=0,playingId=0,speakBusyId=0,readySpeakId=0,audioUnlocked=false,voiceUrl='';
+ const unlockAudio=()=>{if(audioUnlocked)return;audioUnlocked=true;
+  // One gesture-born play of a silent clip marks the shared player as
+  // user-activated, so a programmatic play that lands seconds later (when
+  // generation finishes) is allowed by the webview instead of gated.
+  voicePlayer.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+  voicePlayer.play().then(()=>voicePlayer.pause()).catch(()=>{});};
+ const paintSpeakBtn=id=>{const btn=thread.querySelector('[data-speak-for="'+id+'"]');if(!btn)return;
+  btn.disabled=speakBusyId===id;btn.textContent=playingId===id?'Stop':readySpeakId===id?'Play':speakBusyId===id?'Preparing…':'Listen';
+  btn.classList.toggle('is-ready',readySpeakId===id);};
+ const speakToggle=button('',()=>{speakOn=!speakOn;localStorage.setItem('office-ask-speak',speakOn?'1':'0');paintSpeakToggle();
+  if(speakOn){unlockAudio();const last=[...(current?.messages||[])].reverse().find(row=>row.role==='office'&&row.status==='completed');lastSpokenId=last?.id||0;}
+  else if(playingId){voicePlayer.pause();const id=playingId;playingId=0;paintSpeakBtn(id);}},'ask-speak-toggle');
+ const paintSpeakToggle=()=>{speakToggle.textContent=speakOn?'Speak replies: on':'Speak replies: off';speakToggle.classList.toggle('on',speakOn);};
+ paintSpeakToggle();header.append(speakToggle);
+ voicePlayer.addEventListener('ended',()=>{const id=playingId;playingId=0;paintSpeakBtn(id);});
+ const speakAnswer=async(row,btn)=>{
+  if(playingId===row.id){voicePlayer.pause();voicePlayer.currentTime=0;playingId=0;paintSpeakBtn(row.id);return;}
+  unlockAudio();if(playingId){const prev=playingId;playingId=0;voicePlayer.pause();paintSpeakBtn(prev);}
+  readySpeakId=0;speakBusyId=row.id;paintSpeakBtn(row.id);
+  try{const data=await api('/api/ask/speak',{text:row.text});
+   const bin=atob(data.audio_base64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+   if(voiceUrl)URL.revokeObjectURL(voiceUrl);voiceUrl=URL.createObjectURL(new Blob([bytes],{type:data.mime||'audio/wav'}));
+   voicePlayer.src=voiceUrl;playingId=row.id;
+   try{await voicePlayer.play();}
+   catch(error){ // the webview gesture-gated a play that arrived too long
+    // after the tap: degrade VISIBLY, never silently — this answer's
+    // button becomes Play, and one more tap plays it from the cache.
+    playingId=0;readySpeakId=row.id;notice('Tap Play on the answer to hear it.');}
+  }catch(error){notice(error.message);}
+  finally{speakBusyId=0;paintSpeakBtn(row.id);}};
  const scrollKey='office-scroll:ask';let restoredScroll=false;
  const distanceFromBottom=()=>thread.scrollHeight-thread.scrollTop-thread.clientHeight;
  const updateJump=()=>{jump.hidden=!rendered||distanceFromBottom()<64;};
@@ -582,6 +621,12 @@ async function ask(parent){
    };
    const draw=(state,toBottom=false)=>{
    const follow=toBottom||!rendered||distanceFromBottom()<64,previousTop=thread.scrollTop;
+   // Anchor the reading position to a bubble, not a pixel offset: a status
+   // line above the viewport changing height (Working… -> the answer, a
+   // delivery error, the rating row) shifts every pixel below it, so
+   // restoring previousTop landed mid-wrong-message on every poll (FM-2).
+   let anchor=null;
+   if(!follow){const kids=[...thread.children];const idx=kids.findIndex(node=>node.offsetTop+node.offsetHeight>previousTop);if(idx>=0)anchor={idx,delta:previousTop-kids[idx].offsetTop};}
    current=state;thread.dataset.signature=JSON.stringify(state);thread.replaceChildren();
     if(!state.messages.length){thread.append(el('p','ask-intro','Ask in your own words. Office will bring back the answer and where it came from.'));
      for(const prompt of ['Is anything blocked on me?','What happened while I was asleep?','Why isn’t HomeClass moving?'])
@@ -595,6 +640,7 @@ async function ask(parent){
      const statusText={queued:'waiting in line',working:'working…',sending:'sending…',not_delivered:'not delivered',failed:'failed'}[row.status]||'';
      if(statusText)heading.append(el('span','ask-status is-'+row.status,statusText));
      if(row.created_at)heading.append(el('time','ask-time',new Date(row.created_at*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})));
+     if(row.role==='office'&&row.status==='completed'&&row.text){const speakBtn=button(playingId===row.id?'Stop':readySpeakId===row.id?'Play':speakBusyId===row.id?'Preparing…':'Listen',()=>{const fresh=(current?.messages||[]).find(item=>item.id===row.id)||row;void speakAnswer(fresh,speakBtn);},'ask-speak'+(readySpeakId===row.id?' is-ready':''));speakBtn.dataset.speakFor=row.id;speakBtn.setAttribute('aria-label','Listen to this answer');if(speakBusyId===row.id)speakBtn.disabled=true;heading.append(speakBtn);}
      bubble.append(heading);}
     if(row.role!=='system'){
      const waiting=row.delivery_error||(row.status==='queued'?'Waiting in line…':row.status==='working'?'Working…':row.status==='sending'?'Sending…':'');
@@ -611,8 +657,12 @@ async function ask(parent){
     }
     thread.append(bubble);
    }
+   if(speakOn&&lastAnswer&&lastAnswer.text){if(!rendered)lastSpokenId=lastAnswer.id; // opening the view never speaks history
+    if(lastAnswer.id>lastSpokenId){lastSpokenId=lastAnswer.id;const btn=thread.querySelector('[data-speak-for="'+lastAnswer.id+'"]');void speakAnswer(lastAnswer,btn);}}
    updateControls(state);
-   thread.scrollTop=follow?thread.scrollHeight:previousTop;
+   if(follow)thread.scrollTop=thread.scrollHeight;
+   else if(anchor&&thread.children[anchor.idx])thread.scrollTop=thread.children[anchor.idx].offsetTop+anchor.delta;
+   else thread.scrollTop=previousTop;
    if(!restoredScroll&&hadCache){thread.scrollTop=Math.min(Number(localStorage.getItem(scrollKey))||0,thread.scrollHeight-thread.clientHeight);restoredScroll=true;}
    rendered=true;updateJump();
    };draw(data);
@@ -795,7 +845,7 @@ async function botConversation(bot){
  rememberDetail('bot',bot.id);
  const body=el('div');sheet(bot.name).append(body);const history=el('div');body.append(button('All retained messages',()=>botHistory('bot-history:'+bot.id+'.jsonl')),button('Archived office conversations',botArchives),history);
  let seen='',refreshing=false;
- const refresh=async()=>{if(refreshing||!body.isConnected)return;refreshing=true;try{const data=await api(`/api/chat?bot=${encodeURIComponent(bot.id)}`);if(!body.isConnected)return;const signature=JSON.stringify(data.turns||[]);if(signature===seen)return;seen=signature;history.replaceChildren();for(const turn of data.turns||[]){const row=card(turn.role,turn.content||turn.text);for(const item of turn.attachments||[])if(item.office_id)row.append(link(item.name||'Attached file',`/api/uploads/content?id=${encodeURIComponent(item.office_id)}&revision=${item.revision}`));history.append(row);}}finally{refreshing=false;}};
+ const refresh=async()=>{if(refreshing||!body.isConnected)return;refreshing=true;try{const data=await api(`/api/chat?bot=${encodeURIComponent(bot.id)}`);if(!body.isConnected)return;const signature=JSON.stringify(data.turns||[]);if(signature===seen)return;if(selecting(history))return;seen=signature;const scroller=body.closest('#detail-body')||body;const distanceFromBottom=scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight;history.replaceChildren();for(const turn of data.turns||[]){const row=card(turn.role,turn.content||turn.text);for(const item of turn.attachments||[])if(item.office_id)row.append(link(item.name||'Attached file',`/api/uploads/content?id=${encodeURIComponent(item.office_id)}&revision=${item.revision}`));history.append(row);}const restoreScroll=()=>{scroller.scrollTop=Math.max(0,scroller.scrollHeight-scroller.clientHeight-distanceFromBottom);};restoreScroll();requestAnimationFrame(restoreScroll);}finally{refreshing=false;}};
  transcriptNavigation(body,history);const message=field(body,'Message',el('textarea'));
  const clearMessage=restoreDraft(message,['bot',bot.id]);const key='office-bot-uploads:'+bot.id;
  const attached=attachments(body,JSON.parse(localStorage.getItem(key)||'[]'),items=>localStorage.setItem(key,JSON.stringify(items)));

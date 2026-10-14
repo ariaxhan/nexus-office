@@ -1344,8 +1344,10 @@ function redrawIfChanged(node2, signature, draw2) {
   return true;
 }
 function mergeAskState(base, next, limit = 500) {
-  if (base && Number(next.revision) < Number(base.revision)) return base;
-  if (!base || !next.delta) return next.not_modified && base ? { ...base, ...next, messages: base.messages } : next;
+  if (!base) return next;
+  if (next.not_modified) return { ...base, ...next, messages: base.messages };
+  if (!next.delta) return next;
+  if (Number(next.revision) < Number(base.revision)) return base;
   const rows = new Map(base.messages.map((row) => [row.id, row]));
   for (const row of next.messages) rows.set(row.id, row);
   return { ...base, ...next, messages: [...rows.values()].sort((a, b) => a.id - b.id).slice(-limit), not_modified: false };
@@ -3203,6 +3205,89 @@ async function ask(parent) {
     input.style.height = Math.min(input.scrollHeight, Math.round(innerHeight * 0.35)) + "px";
   });
   let current2 = null, rendered = false, steerVerified = false;
+  const voicePlayer = $("#audio");
+  let speakOn = localStorage.getItem("office-ask-speak") === "1", lastSpokenId = 0, playingId = 0, speakBusyId = 0, readySpeakId = 0, audioUnlocked = false, voiceUrl = "";
+  const unlockAudio = () => {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    voicePlayer.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+    voicePlayer.play().then(() => voicePlayer.pause()).catch(() => {
+    });
+  };
+  const paintSpeakBtn = (id) => {
+    const btn = thread.querySelector('[data-speak-for="' + id + '"]');
+    if (!btn) return;
+    btn.disabled = speakBusyId === id;
+    btn.textContent = playingId === id ? "Stop" : readySpeakId === id ? "Play" : speakBusyId === id ? "Preparing\u2026" : "Listen";
+    btn.classList.toggle("is-ready", readySpeakId === id);
+  };
+  const speakToggle = button("", () => {
+    speakOn = !speakOn;
+    localStorage.setItem("office-ask-speak", speakOn ? "1" : "0");
+    paintSpeakToggle();
+    if (speakOn) {
+      unlockAudio();
+      const last = [...current2?.messages || []].reverse().find((row) => row.role === "office" && row.status === "completed");
+      lastSpokenId = last?.id || 0;
+    } else if (playingId) {
+      voicePlayer.pause();
+      const id = playingId;
+      playingId = 0;
+      paintSpeakBtn(id);
+    }
+  }, "ask-speak-toggle");
+  const paintSpeakToggle = () => {
+    speakToggle.textContent = speakOn ? "Speak replies: on" : "Speak replies: off";
+    speakToggle.classList.toggle("on", speakOn);
+  };
+  paintSpeakToggle();
+  header.append(speakToggle);
+  voicePlayer.addEventListener("ended", () => {
+    const id = playingId;
+    playingId = 0;
+    paintSpeakBtn(id);
+  });
+  const speakAnswer = async (row, btn) => {
+    if (playingId === row.id) {
+      voicePlayer.pause();
+      voicePlayer.currentTime = 0;
+      playingId = 0;
+      paintSpeakBtn(row.id);
+      return;
+    }
+    unlockAudio();
+    if (playingId) {
+      const prev = playingId;
+      playingId = 0;
+      voicePlayer.pause();
+      paintSpeakBtn(prev);
+    }
+    readySpeakId = 0;
+    speakBusyId = row.id;
+    paintSpeakBtn(row.id);
+    try {
+      const data = await api("/api/ask/speak", { text: row.text });
+      const bin = atob(data.audio_base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      if (voiceUrl) URL.revokeObjectURL(voiceUrl);
+      voiceUrl = URL.createObjectURL(new Blob([bytes], { type: data.mime || "audio/wav" }));
+      voicePlayer.src = voiceUrl;
+      playingId = row.id;
+      try {
+        await voicePlayer.play();
+      } catch (error) {
+        playingId = 0;
+        readySpeakId = row.id;
+        notice("Tap Play on the answer to hear it.");
+      }
+    } catch (error) {
+      notice(error.message);
+    } finally {
+      speakBusyId = 0;
+      paintSpeakBtn(row.id);
+    }
+  };
   const scrollKey = "office-scroll:ask";
   let restoredScroll = false;
   const distanceFromBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight;
@@ -3250,6 +3335,12 @@ async function ask(parent) {
     };
     const draw2 = (state, toBottom = false) => {
       const follow = toBottom || !rendered || distanceFromBottom() < 64, previousTop = thread.scrollTop;
+      let anchor2 = null;
+      if (!follow) {
+        const kids = [...thread.children];
+        const idx = kids.findIndex((node2) => node2.offsetTop + node2.offsetHeight > previousTop);
+        if (idx >= 0) anchor2 = { idx, delta: previousTop - kids[idx].offsetTop };
+      }
       current2 = state;
       thread.dataset.signature = JSON.stringify(state);
       thread.replaceChildren();
@@ -3271,6 +3362,16 @@ async function ask(parent) {
           const statusText = { queued: "waiting in line", working: "working\u2026", sending: "sending\u2026", not_delivered: "not delivered", failed: "failed" }[row.status] || "";
           if (statusText) heading.append(el("span", "ask-status is-" + row.status, statusText));
           if (row.created_at) heading.append(el("time", "ask-time", new Date(row.created_at * 1e3).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })));
+          if (row.role === "office" && row.status === "completed" && row.text) {
+            const speakBtn = button(playingId === row.id ? "Stop" : readySpeakId === row.id ? "Play" : speakBusyId === row.id ? "Preparing\u2026" : "Listen", () => {
+              const fresh = (current2?.messages || []).find((item) => item.id === row.id) || row;
+              void speakAnswer(fresh, speakBtn);
+            }, "ask-speak" + (readySpeakId === row.id ? " is-ready" : ""));
+            speakBtn.dataset.speakFor = row.id;
+            speakBtn.setAttribute("aria-label", "Listen to this answer");
+            if (speakBusyId === row.id) speakBtn.disabled = true;
+            heading.append(speakBtn);
+          }
           bubble.append(heading);
         }
         if (row.role !== "system") {
@@ -3278,9 +3379,9 @@ async function ask(parent) {
           const copy = markdownView(row.text || waiting, { text: officeLinkText });
           copy.classList.add("ask-copy");
           copy.addEventListener("click", (event) => {
-            const anchor2 = event.target.closest("a");
-            if (!anchor2) return;
-            const match = anchor2.href.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
+            const anchor3 = event.target.closest("a");
+            if (!anchor3) return;
+            const match = anchor3.href.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
             if (match) {
               event.preventDefault();
               githubDetail(match[1], { number: Number(match[3]) }, match[2] === "pull" ? "prs" : "issues").catch((error) => notice(error.message));
@@ -3300,8 +3401,18 @@ async function ask(parent) {
         }
         thread.append(bubble);
       }
+      if (speakOn && lastAnswer && lastAnswer.text) {
+        if (!rendered) lastSpokenId = lastAnswer.id;
+        if (lastAnswer.id > lastSpokenId) {
+          lastSpokenId = lastAnswer.id;
+          const btn = thread.querySelector('[data-speak-for="' + lastAnswer.id + '"]');
+          void speakAnswer(lastAnswer, btn);
+        }
+      }
       updateControls(state);
-      thread.scrollTop = follow ? thread.scrollHeight : previousTop;
+      if (follow) thread.scrollTop = thread.scrollHeight;
+      else if (anchor2 && thread.children[anchor2.idx]) thread.scrollTop = thread.children[anchor2.idx].offsetTop + anchor2.delta;
+      else thread.scrollTop = previousTop;
       if (!restoredScroll && hadCache) {
         thread.scrollTop = Math.min(Number(localStorage.getItem(scrollKey)) || 0, thread.scrollHeight - thread.clientHeight);
         restoredScroll = true;
@@ -3694,13 +3805,21 @@ async function botConversation(bot) {
       if (!body.isConnected) return;
       const signature = JSON.stringify(data.turns || []);
       if (signature === seen) return;
+      if (selecting(history2)) return;
       seen = signature;
+      const scroller = body.closest("#detail-body") || body;
+      const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       history2.replaceChildren();
       for (const turn of data.turns || []) {
         const row = card(turn.role, turn.content || turn.text);
         for (const item of turn.attachments || []) if (item.office_id) row.append(link(item.name || "Attached file", `/api/uploads/content?id=${encodeURIComponent(item.office_id)}&revision=${item.revision}`));
         history2.append(row);
       }
+      const restoreScroll = () => {
+        scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - distanceFromBottom);
+      };
+      restoreScroll();
+      requestAnimationFrame(restoreScroll);
     } finally {
       refreshing = false;
     }

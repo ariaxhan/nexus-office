@@ -38,7 +38,22 @@ test("Ask deltas patch changed rows, stay bounded, and cannot roll back", () => 
   const patched = mergeAskState(base, { revision: 5, delta: true,
     messages: [{ id: 1, status: "completed" }, { id: 3, status: "delivered" }] }, 2);
   assert.deepEqual(patched.messages, [{ id: 2, status: "queued" }, { id: 3, status: "delivered" }]);
-  assert.equal(mergeAskState(patched, { revision: 3, delta: false, messages: [] }), patched);
+  assert.equal(mergeAskState(patched, { revision: 3, delta: true, messages: [] }), patched);
   assert.deepEqual(mergeAskState(patched, { revision: 5, not_modified: true, delta: false, messages: [] }).messages,
     patched.messages);
+});
+
+test("a full snapshot resyncs a client whose revision ran ahead of the server", () => {
+  // Ask DB recreated, or the phone reached a different door: the server
+  // counter is lower and read() answers with a full snapshot (delta: false).
+  // That snapshot is authoritative; refusing it froze the conversation and
+  // swallowed every later message (Lane E FM-1, reproduced 2026-10-13).
+  const cached = { revision: 900, messages: [{ id: 880, text: "old" }, { id: 881, text: "older" }] };
+  const full = { revision: 12, delta: false, not_modified: false,
+    messages: [{ id: 1, text: "fresh question" }, { id: 2, text: "fresh answer" }] };
+  const merged = mergeAskState(cached, full);
+  assert.equal(merged.revision, 12);
+  assert.deepEqual(merged.messages, full.messages);
+  const later = mergeAskState(merged, { revision: 13, delta: true, messages: [{ id: 3, text: "new" }] });
+  assert.deepEqual(later.messages.map((row) => row.text), ["fresh question", "fresh answer", "new"]);
 });

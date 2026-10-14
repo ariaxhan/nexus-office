@@ -134,3 +134,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .ask-time{margin-left:auto;font-size:.68rem;color:var(--muted)}
 .ask-send{min-height:48px;border-radius:99px;padding:0 22px;font-weight:600}
 .ask-bubble.user .ask-meta{margin-bottom:3px}
+
+/* Voice output (item 4): the Speak-replies pill in the Ask header and the
+   per-answer Listen button in the meta row. Quiet at rest; the accent only
+   for on / ready-to-play, so a gated autoplay degrades visibly. */
+.ask-speak-toggle{min-height:36px;border:1px solid var(--line);border-radius:99px;background:var(--paper);color:var(--muted);font:.78rem/1.3 system-ui;padding:4px 12px;margin:0}
+.ask-speak-toggle.on{color:var(--accent-text,var(--accent));border-color:var(--accent)}
+.ask-speak{background:transparent;border:0;border-radius:99px;color:var(--accent-text,var(--accent));font:.72rem/1.3 system-ui;padding:2px 6px;min-height:24px;margin-left:auto}
+.ask-speak[disabled]{color:var(--muted)}
+.ask-speak.is-ready{box-shadow:0 0 0 2px var(--accent);font-weight:600}

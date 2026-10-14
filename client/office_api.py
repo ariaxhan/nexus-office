@@ -23,6 +23,7 @@ import office_uploads as uploads
 import office_user_state as user_state
 import office_feed as feed
 import office_ask as ask
+import voice
 import office_bot_history as bot_history
 import office_github_actions as github_actions
 import office_direct
@@ -209,6 +210,7 @@ def post(handler, path):
               '/api/feed/react': feed.react, '/api/feed/reply': feed.reply,
               '/api/feed/follow': feed.follow,
               '/api/ask/send': ask.send, '/api/ask/steer': ask.steer, '/api/ask/rate': ask.rate,
+              '/api/ask/speak': voice.speak, '/api/ask/voice': voice.converse,
               '/api/tasks/start': lambda body: office_direct.start(body,handler.world) if body.get('issue') else tasks.start(body), '/api/tasks/say': tasks.say,
               '/api/tasks/control': tasks.control,
               '/api/human-input/answer': tasks.answer_human_input}
