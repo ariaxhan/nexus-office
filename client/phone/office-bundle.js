@@ -3206,7 +3206,7 @@ async function ask(parent) {
   });
   let current2 = null, rendered = false, steerVerified = false;
   const voicePlayer = $("#audio");
-  let speakOn = localStorage.getItem("office-ask-speak") === "1", lastSpokenId = 0, playingId = 0, speakBusyId = 0, readySpeakId = 0, audioUnlocked = false, voiceUrl = "";
+  let speakOn = localStorage.getItem("office-ask-speak") === "1", lastSpokenId = 0, playingId = 0, speakBusyId = 0, readySpeakId = 0, audioUnlocked = false, voiceUrl = "", readyPlay = null;
   const unlockAudio = () => {
     if (audioUnlocked) return;
     audioUnlocked = true;
@@ -3252,6 +3252,25 @@ async function ask(parent) {
       voicePlayer.pause();
       voicePlayer.currentTime = 0;
       playingId = 0;
+      readyPlay = null;
+      paintSpeakBtn(row.id);
+      return;
+    }
+    if (readyPlay && readyPlay.id === row.id) {
+      const url = readyPlay.url;
+      readyPlay = null;
+      readySpeakId = 0;
+      voicePlayer.src = url;
+      playingId = row.id;
+      paintSpeakBtn(row.id);
+      try {
+        await voicePlayer.play();
+      } catch (error) {
+        playingId = 0;
+        readySpeakId = row.id;
+        readyPlay = { id: row.id, url };
+        notice("Tap Play on the answer to hear it.");
+      }
       paintSpeakBtn(row.id);
       return;
     }
@@ -3263,6 +3282,7 @@ async function ask(parent) {
       paintSpeakBtn(prev);
     }
     readySpeakId = 0;
+    readyPlay = null;
     speakBusyId = row.id;
     paintSpeakBtn(row.id);
     try {
@@ -3279,6 +3299,7 @@ async function ask(parent) {
       } catch (error) {
         playingId = 0;
         readySpeakId = row.id;
+        readyPlay = { id: row.id, url: voiceUrl };
         notice("Tap Play on the answer to hear it.");
       }
     } catch (error) {

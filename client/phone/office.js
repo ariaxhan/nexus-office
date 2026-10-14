@@ -566,7 +566,7 @@ async function ask(parent){
  // normal textarea, which iOS dictation drives natively — no custom
  // dictation machinery ships in this build.
  const voicePlayer=$('#audio');
- let speakOn=localStorage.getItem('office-ask-speak')==='1',lastSpokenId=0,playingId=0,speakBusyId=0,readySpeakId=0,audioUnlocked=false,voiceUrl='';
+ let speakOn=localStorage.getItem('office-ask-speak')==='1',lastSpokenId=0,playingId=0,speakBusyId=0,readySpeakId=0,audioUnlocked=false,voiceUrl='',readyPlay=null;
  const unlockAudio=()=>{if(audioUnlocked)return;audioUnlocked=true;
   // One gesture-born play of a silent clip marks the shared player as
   // user-activated, so a programmatic play that lands seconds later (when
@@ -583,18 +583,27 @@ async function ask(parent){
  paintSpeakToggle();header.append(speakToggle);
  voicePlayer.addEventListener('ended',()=>{const id=playingId;playingId=0;paintSpeakBtn(id);});
  const speakAnswer=async(row,btn)=>{
-  if(playingId===row.id){voicePlayer.pause();voicePlayer.currentTime=0;playingId=0;paintSpeakBtn(row.id);return;}
+  if(playingId===row.id){voicePlayer.pause();voicePlayer.currentTime=0;playingId=0;readyPlay=null;paintSpeakBtn(row.id);return;}
+  if(readyPlay&&readyPlay.id===row.id){
+   // The Play tap: the audio is already generated and in hand, so play()
+   // runs inside this tap — no fetch between the gesture and playback
+   // for a strict autoplay policy to gate.
+   const url=readyPlay.url;readyPlay=null;readySpeakId=0;
+   voicePlayer.src=url;playingId=row.id;paintSpeakBtn(row.id);
+   try{await voicePlayer.play();}
+   catch(error){playingId=0;readySpeakId=row.id;readyPlay={id:row.id,url};notice('Tap Play on the answer to hear it.');}
+   paintSpeakBtn(row.id);return;}
   unlockAudio();if(playingId){const prev=playingId;playingId=0;voicePlayer.pause();paintSpeakBtn(prev);}
-  readySpeakId=0;speakBusyId=row.id;paintSpeakBtn(row.id);
+  readySpeakId=0;readyPlay=null;speakBusyId=row.id;paintSpeakBtn(row.id);
   try{const data=await api('/api/ask/speak',{text:row.text});
    const bin=atob(data.audio_base64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
    if(voiceUrl)URL.revokeObjectURL(voiceUrl);voiceUrl=URL.createObjectURL(new Blob([bytes],{type:data.mime||'audio/wav'}));
    voicePlayer.src=voiceUrl;playingId=row.id;
    try{await voicePlayer.play();}
-   catch(error){ // the webview gesture-gated a play that arrived too long
-    // after the tap: degrade VISIBLY, never silently — this answer's
-    // button becomes Play, and one more tap plays it from the cache.
-    playingId=0;readySpeakId=row.id;notice('Tap Play on the answer to hear it.');}
+   catch(error){ // a play that lands too long after the tap can be gated
+    // by the webview: degrade VISIBLY, never silently — this answer's
+    // button becomes Play, holding the audio for a synchronous replay.
+    playingId=0;readySpeakId=row.id;readyPlay={id:row.id,url:voiceUrl};notice('Tap Play on the answer to hear it.');}
   }catch(error){notice(error.message);}
   finally{speakBusyId=0;paintSpeakBtn(row.id);}};
  const scrollKey='office-scroll:ask';let restoredScroll=false;

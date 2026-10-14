@@ -191,7 +191,7 @@ TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
 
 # The page and its bundled scripts load only through this authenticated door.
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; "
-       "connect-src 'self'; img-src 'self' https:; media-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
+       "connect-src 'self'; img-src 'self' https:; media-src 'self' blob: data:; frame-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
 
 
 def now_iso() -> str:
