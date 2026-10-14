@@ -28,7 +28,7 @@ function cacheState(node,row,state='saved'){
  const age=formatAge(Date.now()-(row?.saved_at||0));
  node.textContent=state==='refreshing'?`Showing saved update · ${age} · refreshing…`:state==='offline'?`Showing saved update · ${age} · refresh unavailable`:`Up to date · checked ${formatAge(Date.now()-(row?.checked_at||Date.now()))}`;
 }
-async function world(){if(!snapshot||Date.now()-snapshotReadAt>15000){const data=await api('/api/world');snapshot=data.world||{stations:[],sections:{},automation:{}};snapshotReadAt=data.world?Date.now():0;}return snapshot;}
+async function world(){if(!snapshot||Date.now()-snapshotReadAt>15000){const data=await api('/api/world',undefined,0);snapshot=data.world||{stations:[],sections:{},automation:{}};snapshotReadAt=data.world?Date.now():0;}return snapshot;}
 async function guarded(parent,work){try{await work();}catch(error){failure(parent,error);}}
 function subtitle(data){return [data.state,data.detail,data.at].filter(Boolean).join(' · ');}
 async function today(parent){
@@ -622,8 +622,8 @@ async function ask(parent){
    api('/api/ask/models').then(models=>{const chosen=picker.value;picker.replaceChildren();
     for(const row of models.items){const option=el('option','',row.name);option.value=row.id;picker.append(option);}
     picker.value=chosen;}).catch(error=>notice('Model list: '+error.message));
-  const timer=setInterval(async()=>{if(!chat.isConnected){clearInterval(timer);return;}if(!current?.busy)return;
-   try{await refreshAsk();}catch(error){notice(error.message);}},1000);
+  let idleTicks=0;const timer=setInterval(async()=>{if(!chat.isConnected){clearInterval(timer);return;}const idle=!current?.busy;if(idle){idleTicks++;if(idleTicks<15)return;}else idleTicks=0;
+   try{await refreshAsk();}catch(error){if(!idle)notice(error.message);}},1000);
   async function sendPending(payload){
    submit.disabled=true;
    try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);await refreshAsk(true);}
@@ -702,7 +702,7 @@ async function refreshOffice(){
  try{
   const oldThread=$('.ask-thread');
   const distance=oldThread?oldThread.scrollHeight-oldThread.scrollTop-oldThread.clientHeight:null;
-  const data=await api('/api/world?fresh=1');
+  const data=await api('/api/world?fresh=1',undefined,0);
   snapshot=data.world||null;snapshotReadAt=data.world?Date.now():0;
   forceViewRefresh=true;await connection();await route();forceViewRefresh=false;
   if($('#detail').open&&new URL(location.href).searchParams.has('detail'))await restoreFromURL();
@@ -715,7 +715,7 @@ $('#refresh-office').addEventListener('click',()=>refreshOffice().catch(error=>n
 $('#search-go').addEventListener('click',()=>search());$('#global-search').addEventListener('keydown',event=>{if(event.key==='Enter')search();});window.addEventListener('hashchange',route);
 window.addEventListener('scroll',()=>{if((location.hash||'#watch').startsWith('#watch'))localStorage.setItem('office-scroll:watch',String(scrollY));},{passive:true});
 $('#settings').disabled=false;$('#new-task').disabled=false;$('#refresh-office').disabled=false;
-async function connection(){try{const data=await api('/api/health');$('#connection').textContent=data.ok?'Mac connected':'Mac needs attention';}catch{$('#connection').textContent='Mac unreachable';}}
+async function connection(){try{const data=await api('/api/health');const node=$('#connection');if(!data.ok){node.textContent='Mac needs attention';return;}const age=Date.parse(data.server_time)-Date.parse(data.snapshot_at);if(!data.snapshot_at||!Number.isFinite(age))node.textContent='Mac connected · no update yet';else if(age>20*60*1000)node.textContent=`Mac connected · update ${formatAge(age)}`;else node.textContent='Mac connected';}catch{$('#connection').textContent='Mac unreachable';}}
 const stateSync=userState.synchronize(),settingsSync=loadSettings().catch(error=>notice(error.message));void connection();await route();void Promise.allSettled([stateSync,settingsSync]);if(new URL(location.href).searchParams.has('detail')&&!$('#detail').open)await restoreFromURL();setInterval(connection,30000);
 
 async function archives(parent,cursor=0){
@@ -788,12 +788,13 @@ async function botConversation(bot){
  const body=el('div');sheet(bot.name).append(body);const history=el('div');body.append(button('All retained messages',()=>botHistory('bot-history:'+bot.id+'.jsonl')),button('Archived office conversations',botArchives),history);
  let seen='',refreshing=false;
  const refresh=async()=>{if(refreshing||!body.isConnected)return;refreshing=true;try{const data=await api(`/api/chat?bot=${encodeURIComponent(bot.id)}`);if(!body.isConnected)return;const signature=JSON.stringify(data.turns||[]);if(signature===seen)return;seen=signature;history.replaceChildren();for(const turn of data.turns||[]){const row=card(turn.role,turn.content||turn.text);for(const item of turn.attachments||[])if(item.office_id)row.append(link(item.name||'Attached file',`/api/uploads/content?id=${encodeURIComponent(item.office_id)}&revision=${item.revision}`));history.append(row);}}finally{refreshing=false;}};
- let initialError='';try{await refresh();}catch(error){initialError=error.message;}if(!body.isConnected)return;transcriptNavigation(body,history);const message=field(body,'Message',el('textarea'));
+ transcriptNavigation(body,history);const message=field(body,'Message',el('textarea'));
  const clearMessage=restoreDraft(message,['bot',bot.id]);const key='office-bot-uploads:'+bot.id;
  const attached=attachments(body,JSON.parse(localStorage.getItem(key)||'[]'),items=>localStorage.setItem(key,JSON.stringify(items)));
  body.append(button('Send',async()=>{if(!attached.ready())throw Error('Wait for the attachment upload to finish.');const payload={bot:bot.id,message:message.value,uploads:attached.references()};await api('/api/chat',payload);clearMessage(payload.message);const stored=JSON.parse(localStorage.getItem(key)||'[]').map(({id,revision})=>({id,revision}));if(attached.ready()&&JSON.stringify(stored)===JSON.stringify(payload.uploads)&&JSON.stringify(attached.references())===JSON.stringify(payload.uploads))attached.clear();notice('Agent turn queued');await refresh();},'primary'),button('Refresh conversation',refresh));
- const status=el('p','muted',initialError?'Connection interrupted; retrying. '+initialError:'');body.append(status);
+ const status=el('p','muted','');body.append(status);
  async function poll(){if(!body.isConnected||!$('#detail').open)return;try{await refresh();status.textContent='';}catch(error){status.textContent='Connection interrupted; retrying. '+error.message;}if(body.isConnected)setTimeout(poll,3000);}
+ try{await refresh();}catch(error){status.textContent='Connection interrupted; retrying. '+error.message;}
  setTimeout(poll,3000);
 }
 

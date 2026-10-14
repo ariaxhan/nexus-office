@@ -180,16 +180,20 @@ function reportClientError(detail2) {
   void fetch("/api/client-errors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(detail2), keepalive: true }).catch(() => {
   });
 }
-async function api(path, body) {
+async function api(path, body, timeoutMs = 3e4) {
   const requestId = crypto.randomUUID(), safePath = path.split("?")[0];
   let response;
+  const control = timeoutMs > 0 ? new AbortController() : null;
+  const timer2 = control ? setTimeout(() => control.abort(), timeoutMs) : null;
   try {
-    response = await fetch(path, { method: body === void 0 ? "GET" : "POST", headers: { Accept: "application/json", "X-Office-Request-ID": requestId, ...body === void 0 ? {} : { "Content-Type": "application/json" } }, ...body === void 0 ? {} : { body: JSON.stringify(body) } });
+    response = await fetch(path, { method: body === void 0 ? "GET" : "POST", headers: { Accept: "application/json", "X-Office-Request-ID": requestId, ...body === void 0 ? {} : { "Content-Type": "application/json" } }, ...control ? { signal: control.signal } : {}, ...body === void 0 ? {} : { body: JSON.stringify(body) } });
   } catch (error) {
     reportClientError({ kind: "network", path: safePath, request_id: requestId, status: 0, message: diagnosticMessage(error) });
-    const failure2 = new Error(`Office connection failed \xB7 request ${requestId}`);
+    const failure2 = new Error(control && error?.name === "AbortError" ? `Office did not answer in ${Math.round(timeoutMs / 1e3)} s \xB7 request ${requestId}` : `Office connection failed \xB7 request ${requestId}`);
     failure2.cause = error;
     throw failure2;
+  } finally {
+    if (timer2) clearTimeout(timer2);
   }
   let data;
   try {
@@ -998,7 +1002,7 @@ function attachments(parent, initial, onChange) {
         if (values.length >= 8) throw Error("Attach at most eight files.");
         if (file.size > 5 * 1024 * 1024) throw Error(`${file.name} exceeds 5 MiB.`);
         const encoded = await encode(file);
-        const receipt = await api("/api/uploads", { name: file.name, base64: encoded });
+        const receipt = await api("/api/uploads", { name: file.name, base64: encoded }, 12e4);
         if (!values.some((item) => item.id === receipt.id)) values.push(receipt);
         onChange(values);
         draw2();
@@ -2189,7 +2193,7 @@ function cacheState(node2, row, state = "saved") {
 }
 async function world() {
   if (!snapshot || Date.now() - snapshotReadAt > 15e3) {
-    const data = await api("/api/world");
+    const data = await api("/api/world", void 0, 0);
     snapshot = data.world || { stations: [], sections: {}, automation: {} };
     snapshotReadAt = data.world ? Date.now() : 0;
   }
@@ -3315,16 +3319,21 @@ async function ask(parent) {
       }
       picker.value = chosen;
     }).catch((error) => notice("Model list: " + error.message));
+    let idleTicks = 0;
     const timer2 = setInterval(async () => {
       if (!chat.isConnected) {
         clearInterval(timer2);
         return;
       }
-      if (!current2?.busy) return;
+      const idle = !current2?.busy;
+      if (idle) {
+        idleTicks++;
+        if (idleTicks < 15) return;
+      } else idleTicks = 0;
       try {
         await refreshAsk();
       } catch (error) {
-        notice(error.message);
+        if (!idle) notice(error.message);
       }
     }, 1e3);
     async function sendPending(payload) {
@@ -3487,7 +3496,7 @@ async function refreshOffice() {
   try {
     const oldThread = $(".ask-thread");
     const distance = oldThread ? oldThread.scrollHeight - oldThread.scrollTop - oldThread.clientHeight : null;
-    const data = await api("/api/world?fresh=1");
+    const data = await api("/api/world?fresh=1", void 0, 0);
     snapshot = data.world || null;
     snapshotReadAt = data.world ? Date.now() : 0;
     forceViewRefresh = true;
@@ -3525,7 +3534,15 @@ $("#refresh-office").disabled = false;
 async function connection() {
   try {
     const data = await api("/api/health");
-    $("#connection").textContent = data.ok ? "Mac connected" : "Mac needs attention";
+    const node2 = $("#connection");
+    if (!data.ok) {
+      node2.textContent = "Mac needs attention";
+      return;
+    }
+    const age = Date.parse(data.server_time) - Date.parse(data.snapshot_at);
+    if (!data.snapshot_at || !Number.isFinite(age)) node2.textContent = "Mac connected \xB7 no update yet";
+    else if (age > 20 * 60 * 1e3) node2.textContent = `Mac connected \xB7 update ${formatAge(age)}`;
+    else node2.textContent = "Mac connected";
   } catch {
     $("#connection").textContent = "Mac unreachable";
   }
@@ -3659,13 +3676,6 @@ async function botConversation(bot) {
       refreshing = false;
     }
   };
-  let initialError = "";
-  try {
-    await refresh();
-  } catch (error) {
-    initialError = error.message;
-  }
-  if (!body.isConnected) return;
   transcriptNavigation(body, history2);
   const message = field(body, "Message", el("textarea"));
   const clearMessage = restoreDraft(message, ["bot", bot.id]);
@@ -3681,7 +3691,7 @@ async function botConversation(bot) {
     notice("Agent turn queued");
     await refresh();
   }, "primary"), button("Refresh conversation", refresh));
-  const status = el("p", "muted", initialError ? "Connection interrupted; retrying. " + initialError : "");
+  const status = el("p", "muted", "");
   body.append(status);
   async function poll() {
     if (!body.isConnected || !$("#detail").open) return;
@@ -3692,6 +3702,11 @@ async function botConversation(bot) {
       status.textContent = "Connection interrupted; retrying. " + error.message;
     }
     if (body.isConnected) setTimeout(poll, 3e3);
+  }
+  try {
+    await refresh();
+  } catch (error) {
+    status.textContent = "Connection interrupted; retrying. " + error.message;
   }
   setTimeout(poll, 3e3);
 }

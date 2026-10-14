@@ -16,7 +16,11 @@ import office_preferences as preferences
 import office_profiles as profiles
 import private_state
 
-DEFAULT_MODEL = 'gpt-6-sol'
+# Default engine: Claude until the Codex personal seat (~/.codex-cli) is
+# re-logged-in - its refresh chain died 2026-09-15 and every Codex turn
+# 401s at workspace routing discovery (STAGE1-FIXES.md, 2026-10-14).
+# Flip back to 'gpt-6-sol' only after a seat Codex turn verifies green.
+DEFAULT_MODEL = 'claude:sonnet'
 LOCK = threading.RLock()
 CATALOG = (0, [])
 AUTO_CHOICE = {'engine': 'office', 'id': 'auto', 'name': 'Auto · learns from feedback'}
@@ -258,9 +262,24 @@ class AppServer:
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.proc.stdout, selectors.EVENT_READ)
         self.serial = 0
-        self.request('initialize', {'clientInfo': {'name': 'nexus-office', 'version': '1.0.0'},
-                                    'capabilities': None}, 15)
-        self.send({'method': 'initialized', 'params': {}})
+        try:
+            self.request('initialize', {'clientInfo': {'name': 'nexus-office', 'version': '1.0.0'},
+                                        'capabilities': None}, 15)
+            self.send({'method': 'initialized', 'params': {}})
+        except BaseException:
+            # A failed initialize must not leak the child: before this guard,
+            # every timed-out catalog fetch left an idle codex app-server
+            # process behind (four orphans found parented to the door,
+            # 2026-10-14). Terminate and reap, then propagate.
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=5)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+            raise
 
     def close(self):
         self.selector.close()

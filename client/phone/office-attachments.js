@@ -10,7 +10,7 @@ export function attachments(parent,initial,onChange){
   try{for(const file of input.files){
    if(values.length>=8)throw Error('Attach at most eight files.');
    if(file.size>5*1024*1024)throw Error(`${file.name} exceeds 5 MiB.`);
-   const encoded=await encode(file);const receipt=await api('/api/uploads',{name:file.name,base64:encoded});
+   const encoded=await encode(file);const receipt=await api('/api/uploads',{name:file.name,base64:encoded},120000);
    if(!values.some(item=>item.id===receipt.id))values.push(receipt);onChange(values);draw();
   }}catch(error){notice(error.message);}finally{input.disabled=false;input.value='';progress.textContent='';}
  });draw();

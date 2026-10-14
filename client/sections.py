@@ -22,9 +22,9 @@ summary going wrong must never cost the data it was summarising.
 
 from __future__ import annotations
 
-from sources import care, care_grader, clock, cost, flows, library, mail, money_swarm, podcasts, prs, tower, webhook
+from sources import care, care_grader, clock, cost, failure_wall, flows, library, mail, money_swarm, podcasts, prs, tower, webhook
 
-SOURCES = [care, care_grader, clock, cost, flows, library, mail, money_swarm, podcasts, prs, tower, webhook]
+SOURCES = [care, care_grader, clock, cost, flows, failure_wall, library, mail, money_swarm, podcasts, prs, tower, webhook]
 
 
 def _fallback(mod, headline: str) -> dict:

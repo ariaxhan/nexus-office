@@ -21,10 +21,12 @@ function reportClientError(detail){
  if(clientErrorTimes.length>=3)return;clientErrorTimes.push(now);
  void fetch('/api/client-errors',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(detail),keepalive:true}).catch(()=>{});
 }
-export async function api(path, body) {
+export async function api(path, body, timeoutMs=30000) {
   const requestId=crypto.randomUUID(),safePath=path.split('?')[0];let response;
-  try{response=await fetch(path,{method:body===undefined?'GET':'POST',headers:{Accept:'application/json','X-Office-Request-ID':requestId,...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});}
-  catch(error){reportClientError({kind:'network',path:safePath,request_id:requestId,status:0,message:diagnosticMessage(error)});const failure=new Error(`Office connection failed · request ${requestId}`);failure.cause=error;throw failure;}
+  const control=timeoutMs>0?new AbortController():null;const timer=control?setTimeout(()=>control.abort(),timeoutMs):null;
+  try{response=await fetch(path,{method:body===undefined?'GET':'POST',headers:{Accept:'application/json','X-Office-Request-ID':requestId,...(body===undefined?{}:{'Content-Type':'application/json'})},...(control?{signal:control.signal}:{}),...(body===undefined?{}:{body:JSON.stringify(body)})});}
+  catch(error){reportClientError({kind:'network',path:safePath,request_id:requestId,status:0,message:diagnosticMessage(error)});const failure=new Error(control&&error?.name==='AbortError'?`Office did not answer in ${Math.round(timeoutMs/1000)} s · request ${requestId}`:`Office connection failed · request ${requestId}`);failure.cause=error;throw failure;}
+  finally{if(timer)clearTimeout(timer);}
   let data;
   try{data=JSON.parse(await response.text());}
   catch(error){const receipt=response.headers.get('x-office-request-id')||requestId;reportClientError({kind:'invalid_json',path:safePath,request_id:receipt,status:response.status,message:diagnosticMessage(error)});const failure=new Error(`Office returned an invalid response · request ${receipt}`);failure.status=response.status;failure.cause=error;throw failure;}
