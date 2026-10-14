@@ -5,7 +5,7 @@ platform :ios do
   lane :device do
     build_app(project: 'OfficeMobile.xcodeproj', scheme: 'OfficeMobile', export_method: 'development',
               output_directory: 'build', output_name: 'Office.ipa',
-              xcargs: "-allowProvisioningUpdates OFFICE_URL=#{Shellwords.escape(ENV.fetch('OFFICE_BUILD_URL', 'https://arias-macbook-pro-2.tail4f309a.ts.net'))}", export_xcargs: '-allowProvisioningUpdates')
+              xcargs: "-allowProvisioningUpdates OFFICE_URL=#{Shellwords.escape(ENV.fetch('OFFICE_BUILD_URL', 'https://office.tail4f309a.ts.net'))}", export_xcargs: '-allowProvisioningUpdates')
   end
   desc 'Build the shared Office shell for Simulator'
   lane :simulator do

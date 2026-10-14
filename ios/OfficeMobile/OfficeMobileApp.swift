@@ -32,7 +32,7 @@ final class OfficeConnection: ObservableObject {
     @Published var error: String?
     @Published var address: String
     init() {
-        address = UserDefaults.standard.string(forKey: "office.address") ?? (Bundle.main.object(forInfoDictionaryKey: "OfficeURL") as? String) ?? "https://arias-macbook-pro-2.tail4f309a.ts.net"
+        address = UserDefaults.standard.string(forKey: "office.address") ?? (Bundle.main.object(forInfoDictionaryKey: "OfficeURL") as? String) ?? "https://office.tail4f309a.ts.net"
         if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "--office-url"), ProcessInfo.processInfo.arguments.indices.contains(index + 1) {
             address = ProcessInfo.processInfo.arguments[index + 1]
             if url != nil { UserDefaults.standard.set(address, forKey: "office.address") }
