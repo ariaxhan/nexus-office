@@ -4,6 +4,7 @@ Aria's ruling (2026-10-10): no big Ollama models on the MacBook at all — it do
 capacity; big models run on the Studio. The gate refuses before any Ollama request is made.
 """
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -77,6 +78,43 @@ class PromptClause(unittest.TestCase):
 
     def test_other_host_prompt_is_unchanged(self):
         self.assertEqual(executor.LOCAL_IMPLEMENTATION, executor.local_implementation(host=STUDIO))
+
+
+class FailClosedHostDetection(unittest.TestCase):
+    """Host detection must fail CLOSED (STANDUP-REPORT Phase 4 finding).
+
+    The pre-fix detection resolved `scutil` through PATH and fell back to
+    platform.node() ("Mac" on the MacBook): in a stripped-PATH context the
+    allowlist key missed and the gate silently allowed big models on the
+    one host that must never load them.
+    """
+
+    def test_unidentified_host_refuses_big_models(self):
+        with patch.object(mp, "local_host_name", return_value=None):
+            for model in BIG:
+                with self.assertRaises(mp.BigModelRefused, msg=model):
+                    mp.ensure_model_allowed(model)  # no host arg: the detection path
+            self.assertIn("unidentified", mp.model_refusal(BIG[0]))
+
+    def test_unidentified_host_still_allows_small_models(self):
+        # Restricted != bricked: the small allowlist is safe on every host.
+        with patch.object(mp, "local_host_name", return_value=None):
+            for model in mp.SMALL_MODEL_ALLOWLIST:
+                self.assertIsNone(mp.model_refusal(model))
+                mp.ensure_model_allowed(model)  # must not raise
+
+    def test_missing_scutil_fails_closed_under_stripped_path(self):
+        with patch.object(mp, "SCUTIL", "/nonexistent/scutil"):
+            with patch.dict(os.environ, {"PATH": "/nonexistent"}):
+                self.assertIsNone(mp.local_host_name())
+                with self.assertRaises(mp.BigModelRefused):
+                    mp.ensure_model_allowed(BIG[0])
+
+    def test_stripped_path_does_not_change_detected_host(self):
+        # Detection uses the absolute path, so PATH games change nothing.
+        real = mp.local_host_name()
+        with patch.dict(os.environ, {"PATH": "/nonexistent"}):
+            self.assertEqual(real, mp.local_host_name())
 
 
 if __name__ == "__main__":

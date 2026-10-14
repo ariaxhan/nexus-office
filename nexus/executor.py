@@ -106,15 +106,18 @@ SMALL_MODEL_CLAUSE = (
 
 
 def local_host_name():
+    # Mirror of scripts/micropatch.py: scutil by absolute path, no weaker fallback.
+    # None = host not confidently identified; the micropatch gate treats that as
+    # restricted (fail closed), and tests keep the two detections in agreement.
     if sys.platform == "darwin":
         try:
-            name = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True,
-                                  timeout=5).stdout.strip()
+            name = subprocess.run(["/usr/sbin/scutil", "--get", "LocalHostName"], capture_output=True,
+                                  text=True, timeout=5).stdout.strip()
             if name:
                 return name
         except (OSError, subprocess.SubprocessError):
             pass
-    return os.uname().nodename.split(".")[0]
+    return None
 
 
 def local_implementation(host=None):

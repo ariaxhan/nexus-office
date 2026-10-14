@@ -49,23 +49,41 @@ class BigModelRefused(RuntimeError):
     """A local-model load this host must not attempt."""
 
 
+SCUTIL = "/usr/sbin/scutil"  # absolute: a stripped PATH must not be able to defeat host detection
+
+
 def local_host_name():
+    """This machine's LocalHostName, or None when it cannot be determined confidently.
+
+    Detection keys on scutil only, resolved by absolute path. The old platform.node()
+    fallback returned e.g. "Mac" on the MacBook — a confident-looking miss that silently
+    disabled the gate in stripped-PATH contexts. None means UNKNOWN, and the gate treats
+    unknown as restricted: a safety gate fails closed.
+    """
     if sys.platform == "darwin":
         with contextlib.suppress(OSError, subprocess.SubprocessError):
-            name = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True,
+            name = subprocess.run([SCUTIL, "--get", "LocalHostName"], capture_output=True, text=True,
                                   timeout=5).stdout.strip()
             if name:
                 return name
-    return platform.node().split(".")[0]
+    return None
 
 
 def model_refusal(model, host=None):
-    """Why `model` may not load on this host, or None. Only the MacBook host is restricted."""
-    if (host if host is not None else local_host_name()) != SMALL_MODEL_HOST:
+    """Why `model` may not load on this host, or None.
+
+    The MacBook host is restricted to the small allowlist — and so is an UNIDENTIFIED
+    host (fail closed): a machine that might be the MacBook gets MacBook rules until
+    it proves otherwise. Confidently identified non-MacBook hosts are unrestricted.
+    """
+    if host is None:
+        host = local_host_name()
+    if host is not None and host != SMALL_MODEL_HOST:
         return None
     if model in SMALL_MODEL_ALLOWLIST:
         return None
-    return (f"refused: local model {model!r} may not run on {SMALL_MODEL_HOST}. Aria's ruling "
+    where = SMALL_MODEL_HOST if host is not None else "an unidentified host"
+    return (f"refused: local model {model!r} may not run on {where}. Aria's ruling "
             "(2026-10-10): no big Ollama models on the MacBook — it does not have the capacity; big "
             "models run on the Studio. Small models only here: "
             + ", ".join(SMALL_MODEL_ALLOWLIST) + ".")
