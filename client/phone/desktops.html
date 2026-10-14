@@ -18,18 +18,31 @@
     <p class="footnote">Free, powered by noVNC. The Mac must be awake with Screen Sharing enabled.</p>
   </main>
   <section id="session" hidden aria-label="Remote Mac desktop">
-    <div class="session-bar"><h2 id="machine-name"></h2><span id="status" role="status"></span><button id="disconnect">Disconnect</button></div>
-    <div class="controls" aria-label="Desktop controls">
-      <button id="keyboard">Keyboard</button>
-      <button id="fit" aria-pressed="true">Fit screen</button>
-      <button id="pan" aria-pressed="false">Pan</button>
-      <button id="command" aria-pressed="false">⌘ Command</button>
-      <button data-key="Tab">Tab</button><button data-key="Escape">Esc</button><button data-key="BackSpace">Delete</button><button data-key="Return">Enter</button>
-      <button data-key="Left" aria-label="Left arrow">←</button><button data-key="Down" aria-label="Down arrow">↓</button><button data-key="Up" aria-label="Up arrow">↑</button><button data-key="Right" aria-label="Right arrow">→</button>
-    </div>
-    <label id="typing-label" hidden>Type on your Mac <input id="typing" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="enter" placeholder="Type here to use the Mac keyboard"></label>
-    <p id="hint">Tap to click. Two fingers scroll; tap with two fingers to right-click. Turn off Fit screen and use Pan to move around a larger desktop.</p>
     <div id="screen" tabindex="0" aria-label="Remote desktop; tap to click or type with a physical keyboard"></div>
+    <div id="toast" role="status"><span class="dotlive"></span><span id="status">Connecting…</span></div>
+    <div id="keyspop" hidden>
+      <button data-key="Tab">Tab</button><button data-key="Escape">Esc</button><button data-key="BackSpace">Delete</button><button data-key="Return">Enter</button>
+      <button data-key="Left" aria-label="Left arrow">←</button><button data-key="Up" aria-label="Up arrow">↑</button><button data-key="Down" aria-label="Down arrow">↓</button><button data-key="Right" aria-label="Right arrow">→</button>
+      <button data-combo="c">⌘C</button><button data-combo="v">⌘V</button>
+    </div>
+    <div id="pillwrap">
+      <div id="stack" hidden>
+        <span id="who"></span>
+        <button class="act" id="kb-open"><span class="ic">⌨</span>Keyboard</button>
+        <button class="act" id="size-toggle"><span class="ic">⤢</span><span id="size-label">Actual size</span></button>
+        <button class="act" id="pan-toggle" aria-pressed="false"><span class="ic">✋</span>Pan</button>
+        <button class="act" id="keys-open"><span class="ic">⌘</span>Keys</button>
+        <button class="act danger" id="disconnect"><span class="ic">⏏</span>Disconnect</button>
+      </div>
+      <button id="fab" aria-label="Desktop controls">•••</button>
+    </div>
+    <div id="strip" hidden>
+      <button data-key="Tab">Tab</button><button data-key="Escape">Esc</button><button data-key="BackSpace">Del</button><button data-key="Return">Enter</button>
+      <button id="cmd-latch" aria-pressed="false">⌘</button>
+      <button data-key="Left" aria-label="Left arrow">←</button><button data-key="Up" aria-label="Up arrow">↑</button><button data-key="Down" aria-label="Down arrow">↓</button><button data-key="Right" aria-label="Right arrow">→</button>
+      <button id="kb-hide">Hide ⌄</button>
+    </div>
+    <input id="typing" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="enter" aria-label="Type on your Mac" tabindex="-1">
   </section>
   <dialog id="login" aria-labelledby="login-title">
     <form id="login-form">

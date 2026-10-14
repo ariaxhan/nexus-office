@@ -914,9 +914,9 @@ var Display = class {
             this.drawImage(frame, sx, sy, sw, sh, dx, dy, dw, dh);
             frame.close();
           } else {
-            let display = this;
+            let display2 = this;
             a2.frame.promise.then(() => {
-              display._scanRenderQ();
+              display2._scanRenderQ();
             });
             ready = false;
           }
@@ -10191,7 +10191,7 @@ var RawDecoder = class {
   constructor() {
     this._lines = 0;
   }
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     if (width === 0 || height === 0) {
       return true;
     }
@@ -10219,7 +10219,7 @@ var RawDecoder = class {
       for (let i = 0; i < width; i++) {
         data[i * 4 + 3] = 255;
       }
-      display.blitImage(x, curY, width, 1, data, 0);
+      display2.blitImage(x, curY, width, 1, data, 0);
       this._lines--;
     }
     return true;
@@ -10228,7 +10228,7 @@ var RawDecoder = class {
 
 // node_modules/@novnc/novnc/core/decoders/copyrect.js
 var CopyRectDecoder = class {
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     if (sock.rQwait("COPYRECT", 4)) {
       return false;
     }
@@ -10237,7 +10237,7 @@ var CopyRectDecoder = class {
     if (width === 0 || height === 0) {
       return true;
     }
-    display.copyImage(deltaX, deltaY, x, y, width, height);
+    display2.copyImage(deltaX, deltaY, x, y, width, height);
     return true;
   }
 };
@@ -10247,14 +10247,14 @@ var RREDecoder = class {
   constructor() {
     this._subrects = 0;
   }
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     if (this._subrects === 0) {
       if (sock.rQwait("RRE", 4 + 4)) {
         return false;
       }
       this._subrects = sock.rQshift32();
       let color = sock.rQshiftBytes(4);
-      display.fillRect(x, y, width, height, color);
+      display2.fillRect(x, y, width, height, color);
     }
     while (this._subrects > 0) {
       if (sock.rQwait("RRE", 4 + 8)) {
@@ -10265,7 +10265,7 @@ var RREDecoder = class {
       let sy = sock.rQshift16();
       let swidth = sock.rQshift16();
       let sheight = sock.rQshift16();
-      display.fillRect(x + sx, y + sy, swidth, sheight, color);
+      display2.fillRect(x + sx, y + sy, swidth, sheight, color);
       this._subrects--;
     }
     return true;
@@ -10279,7 +10279,7 @@ var HextileDecoder = class {
     this._lastsubencoding = 0;
     this._tileBuffer = new Uint8Array(16 * 16 * 4);
   }
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     if (this._tiles === 0) {
       this._tilesX = Math.ceil(width / 16);
       this._tilesY = Math.ceil(height / 16);
@@ -10332,7 +10332,7 @@ var HextileDecoder = class {
         if (this._lastsubencoding & 1) {
           Debug("     Ignoring blank after RAW");
         } else {
-          display.fillRect(tx, ty, tw, th, this._background);
+          display2.fillRect(tx, ty, tw, th, this._background);
         }
       } else if (subencoding & 1) {
         let pixels = tw * th;
@@ -10340,7 +10340,7 @@ var HextileDecoder = class {
         for (let i = 0; i < pixels; i++) {
           data[i * 4 + 3] = 255;
         }
-        display.blitImage(tx, ty, tw, th, data, 0);
+        display2.blitImage(tx, ty, tw, th, data, 0);
       } else {
         if (subencoding & 2) {
           this._background = new Uint8Array(sock.rQshiftBytes(4));
@@ -10367,7 +10367,7 @@ var HextileDecoder = class {
             this._subTile(sx, sy, sw, sh, color);
           }
         }
-        this._finishTile(display);
+        this._finishTile(display2);
       }
       this._lastsubencoding = subencoding;
       this._tiles--;
@@ -10411,8 +10411,8 @@ var HextileDecoder = class {
     }
   }
   // draw the current tile to the screen
-  _finishTile(display) {
-    display.blitImage(
+  _finishTile(display2) {
+    display2.blitImage(
       this._tileX,
       this._tileY,
       this._tileW,
@@ -10429,7 +10429,7 @@ var ZlibDecoder = class {
     this._zlib = new Inflate();
     this._length = 0;
   }
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     if (width === 0 || height === 0) {
       return true;
     }
@@ -10450,7 +10450,7 @@ var ZlibDecoder = class {
     for (let i = 0; i < width * height; i++) {
       data[i * 4 + 3] = 255;
     }
-    display.blitImage(x, y, width, height, data, 0);
+    display2.blitImage(x, y, width, height, data, 0);
     return true;
   }
 };
@@ -10468,7 +10468,7 @@ var TightDecoder = class {
       this._zlibs[i] = new Inflate();
     }
   }
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     if (this._ctl === null) {
       if (sock.rQwait("TIGHT compression-control", 1)) {
         return false;
@@ -10490,7 +10490,7 @@ var TightDecoder = class {
         width,
         height,
         sock,
-        display,
+        display2,
         depth
       );
     } else if (this._ctl === 9) {
@@ -10500,7 +10500,7 @@ var TightDecoder = class {
         width,
         height,
         sock,
-        display,
+        display2,
         depth
       );
     } else if (this._ctl === 10) {
@@ -10510,7 +10510,7 @@ var TightDecoder = class {
         width,
         height,
         sock,
-        display,
+        display2,
         depth
       );
     } else if ((this._ctl & 8) == 0) {
@@ -10521,7 +10521,7 @@ var TightDecoder = class {
         width,
         height,
         sock,
-        display,
+        display2,
         depth
       );
     } else {
@@ -10532,26 +10532,26 @@ var TightDecoder = class {
     }
     return ret;
   }
-  _fillRect(x, y, width, height, sock, display, depth) {
+  _fillRect(x, y, width, height, sock, display2, depth) {
     if (sock.rQwait("TIGHT", 3)) {
       return false;
     }
     let pixel = sock.rQshiftBytes(3);
-    display.fillRect(x, y, width, height, pixel, false);
+    display2.fillRect(x, y, width, height, pixel, false);
     return true;
   }
-  _jpegRect(x, y, width, height, sock, display, depth) {
+  _jpegRect(x, y, width, height, sock, display2, depth) {
     let data = this._readData(sock);
     if (data === null) {
       return false;
     }
-    display.imageRect(x, y, width, height, "image/jpeg", data);
+    display2.imageRect(x, y, width, height, "image/jpeg", data);
     return true;
   }
-  _pngRect(x, y, width, height, sock, display, depth) {
+  _pngRect(x, y, width, height, sock, display2, depth) {
     throw new Error("PNG received in standard Tight rect");
   }
-  _basicRect(ctl, x, y, width, height, sock, display, depth) {
+  _basicRect(ctl, x, y, width, height, sock, display2, depth) {
     if (this._filter === null) {
       if (ctl & 4) {
         if (sock.rQwait("TIGHT", 1)) {
@@ -10573,7 +10573,7 @@ var TightDecoder = class {
           width,
           height,
           sock,
-          display,
+          display2,
           depth
         );
         break;
@@ -10585,7 +10585,7 @@ var TightDecoder = class {
           width,
           height,
           sock,
-          display,
+          display2,
           depth
         );
         break;
@@ -10597,7 +10597,7 @@ var TightDecoder = class {
           width,
           height,
           sock,
-          display,
+          display2,
           depth
         );
         break;
@@ -10609,7 +10609,7 @@ var TightDecoder = class {
     }
     return ret;
   }
-  _copyFilter(streamId, x, y, width, height, sock, display, depth) {
+  _copyFilter(streamId, x, y, width, height, sock, display2, depth) {
     const uncompressedSize = width * height * 3;
     let data;
     if (uncompressedSize === 0) {
@@ -10636,10 +10636,10 @@ var TightDecoder = class {
       rgbx[i + 2] = data[j + 2];
       rgbx[i + 3] = 255;
     }
-    display.blitImage(x, y, width, height, rgbx, 0, false);
+    display2.blitImage(x, y, width, height, rgbx, 0, false);
     return true;
   }
-  _paletteFilter(streamId, x, y, width, height, sock, display, depth) {
+  _paletteFilter(streamId, x, y, width, height, sock, display2, depth) {
     if (this._numColors === 0) {
       if (sock.rQwait("TIGHT palette", 1)) {
         return false;
@@ -10675,14 +10675,14 @@ var TightDecoder = class {
       this._zlibs[streamId].setInput(null);
     }
     if (this._numColors == 2) {
-      this._monoRect(x, y, width, height, data, this._palette, display);
+      this._monoRect(x, y, width, height, data, this._palette, display2);
     } else {
-      this._paletteRect(x, y, width, height, data, this._palette, display);
+      this._paletteRect(x, y, width, height, data, this._palette, display2);
     }
     this._numColors = 0;
     return true;
   }
-  _monoRect(x, y, width, height, data, palette, display) {
+  _monoRect(x, y, width, height, data, palette, display2) {
     const dest = this._getScratchBuffer(width * height * 4);
     const w = Math.floor((width + 7) / 8);
     const w1 = Math.floor(width / 8);
@@ -10707,9 +10707,9 @@ var TightDecoder = class {
         dest[dp + 3] = 255;
       }
     }
-    display.blitImage(x, y, width, height, dest, 0, false);
+    display2.blitImage(x, y, width, height, dest, 0, false);
   }
-  _paletteRect(x, y, width, height, data, palette, display) {
+  _paletteRect(x, y, width, height, data, palette, display2) {
     const dest = this._getScratchBuffer(width * height * 4);
     const total = width * height * 4;
     for (let i = 0, j = 0; i < total; i += 4, j++) {
@@ -10719,9 +10719,9 @@ var TightDecoder = class {
       dest[i + 2] = palette[sp + 2];
       dest[i + 3] = 255;
     }
-    display.blitImage(x, y, width, height, dest, 0, false);
+    display2.blitImage(x, y, width, height, dest, 0, false);
   }
-  _gradientFilter(streamId, x, y, width, height, sock, display, depth) {
+  _gradientFilter(streamId, x, y, width, height, sock, display2, depth) {
     const uncompressedSize = width * height * 3;
     let data;
     if (uncompressedSize === 0) {
@@ -10776,7 +10776,7 @@ var TightDecoder = class {
         upperIndex++;
       }
     }
-    display.blitImage(x, y, width, height, rgbx, 0, false);
+    display2.blitImage(x, y, width, height, rgbx, 0, false);
     return true;
   }
   _readData(sock) {
@@ -10813,15 +10813,15 @@ var TightDecoder = class {
 
 // node_modules/@novnc/novnc/core/decoders/tightpng.js
 var TightPNGDecoder = class extends TightDecoder {
-  _pngRect(x, y, width, height, sock, display, depth) {
+  _pngRect(x, y, width, height, sock, display2, depth) {
     let data = this._readData(sock);
     if (data === null) {
       return false;
     }
-    display.imageRect(x, y, width, height, "image/png", data);
+    display2.imageRect(x, y, width, height, "image/png", data);
     return true;
   }
-  _basicRect(ctl, x, y, width, height, sock, display, depth) {
+  _basicRect(ctl, x, y, width, height, sock, display2, depth) {
     throw new Error("BasicCompression received in TightPNG rect");
   }
 };
@@ -10836,7 +10836,7 @@ var ZRLEDecoder = class {
     this._pixelBuffer = new Uint8Array(ZRLE_TILE_WIDTH * ZRLE_TILE_HEIGHT * 4);
     this._tileBuffer = new Uint8Array(ZRLE_TILE_WIDTH * ZRLE_TILE_HEIGHT * 4);
   }
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     if (this._length === 0) {
       if (sock.rQwait("ZLib data length", 4)) {
         return false;
@@ -10856,19 +10856,19 @@ var ZRLEDecoder = class {
         const subencoding = this._inflator.inflate(1)[0];
         if (subencoding === 0) {
           const data2 = this._readPixels(tileSize);
-          display.blitImage(tx, ty, tw, th, data2, 0, false);
+          display2.blitImage(tx, ty, tw, th, data2, 0, false);
         } else if (subencoding === 1) {
           const background = this._readPixels(1);
-          display.fillRect(tx, ty, tw, th, [background[0], background[1], background[2]]);
+          display2.fillRect(tx, ty, tw, th, [background[0], background[1], background[2]]);
         } else if (subencoding >= 2 && subencoding <= 16) {
           const data2 = this._decodePaletteTile(subencoding, tileSize, tw, th);
-          display.blitImage(tx, ty, tw, th, data2, 0, false);
+          display2.blitImage(tx, ty, tw, th, data2, 0, false);
         } else if (subencoding === 128) {
           const data2 = this._decodeRLETile(tileSize);
-          display.blitImage(tx, ty, tw, th, data2, 0, false);
+          display2.blitImage(tx, ty, tw, th, data2, 0, false);
         } else if (subencoding >= 130 && subencoding <= 255) {
           const data2 = this._decodeRLEPaletteTile(subencoding - 128, tileSize);
-          display.blitImage(tx, ty, tw, th, data2, 0, false);
+          display2.blitImage(tx, ty, tw, th, data2, 0, false);
         } else {
           throw new Error("Unknown subencoding: " + subencoding);
         }
@@ -10986,7 +10986,7 @@ var JPEGDecoder = class {
     this._cachedHuffmanTables = [];
     this._segments = [];
   }
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     while (true) {
       let segment = this._readSegment(sock);
       if (segment === null) {
@@ -11037,7 +11037,7 @@ var JPEGDecoder = class {
       data.set(segment, length);
       length += segment.length;
     }
-    display.imageRect(x, y, width, height, "image/jpeg", data);
+    display2.imageRect(x, y, width, height, "image/jpeg", data);
     if (huffmanTables.length !== 0) {
       this._cachedHuffmanTables = huffmanTables;
     }
@@ -11337,7 +11337,7 @@ var H264Decoder = class {
   _resetAllContexts() {
     this._contexts = {};
   }
-  decodeRect(x, y, width, height, sock, display, depth) {
+  decodeRect(x, y, width, height, sock, display2, depth) {
     const resetContextFlag = 1;
     const resetAllContextsFlag = 2;
     if (sock.rQwait("h264 header", 8)) {
@@ -11359,7 +11359,7 @@ var H264Decoder = class {
       let payload = sock.rQshiftBytes(length, false);
       let frame = context.decode(payload);
       if (frame !== null) {
-        display.videoFrame(x, y, width, height, frame);
+        display2.videoFrame(x, y, width, height, frame);
       }
     }
     return true;
@@ -14087,8 +14087,14 @@ var credentials = [];
 var stored = null;
 var authTry = null;
 var failedStored = false;
+var toastTimer = null;
+var idleTimer = null;
 function status(text) {
   $("status").textContent = text;
+  const toast = $("toast");
+  toast.classList.remove("gone");
+  clearTimeout(toastTimer);
+  if (text === "Connected") toastTimer = setTimeout(() => toast.classList.add("gone"), 2600);
 }
 function node(tag, text) {
   const element = document.createElement(tag);
@@ -14120,10 +14126,190 @@ async function refresh() {
     $("refresh").disabled = false;
   }
 }
+var view = { mode: "fit", fit: 0 };
+function display() {
+  return rfb ? rfb._display : null;
+}
+function screenPoint(event) {
+  const rect = $("screen").getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+function setFit() {
+  if (!rfb) return;
+  const d2 = display();
+  if (d2 && view.fit === 0) view.fit = d2.scale;
+  rfb.scaleViewport = true;
+  rfb.clipViewport = true;
+  view.mode = "fit";
+  $("size-label").textContent = "Fit screen";
+}
+function setZoom(scale, cx, cy) {
+  const d2 = display();
+  if (!d2) return;
+  if (view.fit === 0) view.fit = d2.scale;
+  const fit = view.fit || 1;
+  const target = Math.min(3, scale);
+  if (target <= fit * 1.02) {
+    setFit();
+    return;
+  }
+  let fbX, fbY;
+  if (view.mode === "fit") {
+    fbX = cx / fit;
+    fbY = cy / fit;
+  } else {
+    fbX = d2._viewportLoc.x + cx / d2.scale;
+    fbY = d2._viewportLoc.y + cy / d2.scale;
+  }
+  rfb.scaleViewport = false;
+  rfb.clipViewport = true;
+  d2.scale = target;
+  view.mode = "zoom";
+  const locX = fbX - cx / target, locY = fby(fbY, cy, target);
+  d2.viewportChangePos(locX - d2._viewportLoc.x, locY - d2._viewportLoc.y);
+  $("size-label").textContent = "Actual size";
+}
+function fby(fbY, cy, target) {
+  return fbY - cy / target;
+}
+function toggleSize(cx, cy) {
+  if (view.mode === "fit") setZoom(1, cx, cy);
+  else setFit();
+}
+var pointers = /* @__PURE__ */ new Map();
+var pinch = null;
+var panDrag = null;
+var lastTap = null;
+var tapStart = null;
+function panArmed() {
+  return $("pan-toggle").getAttribute("aria-pressed") === "true";
+}
+function closeChrome() {
+  $("stack").hidden = true;
+  $("keyspop").hidden = true;
+}
+function wake() {
+  document.body.classList.remove("idle");
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (selected) document.body.classList.add("idle");
+  }, 3600);
+}
+var screenEl = $("screen");
+screenEl.addEventListener("pointerdown", (event) => {
+  wake();
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
+  if (pointers.size === 2) {
+    const [a2, b2] = [...pointers.values()];
+    pinch = {
+      d: Math.hypot(a2.x - b2.x, a2.y - b2.y),
+      scale: display() ? display().scale : 1,
+      engaged: false,
+      cx: (a2.x + b2.x) / 2,
+      cy: (a2.y + b2.y) / 2
+    };
+    panDrag = null;
+  } else if (pointers.size === 1) {
+    closeChromeSoft(event);
+    tapStart = { x: event.clientX, y: event.clientY, t: Date.now() };
+    if (panArmed() && view.mode === "zoom" && rfb) {
+      panDrag = { x: event.clientX, y: event.clientY };
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+}, true);
+function closeChromeSoft(event) {
+  if (event.target === screenEl || event.target.tagName === "CANVAS") closeChrome();
+}
+screenEl.addEventListener("pointermove", (event) => {
+  if (!pointers.has(event.pointerId)) return;
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
+  if (pinch && pointers.size === 2) {
+    const [a2, b2] = [...pointers.values()];
+    const nd = Math.hypot(a2.x - b2.x, a2.y - b2.y);
+    if (!pinch.engaged && Math.abs(nd - pinch.d) > 12) pinch.engaged = true;
+    if (pinch.engaged && rfb) {
+      const at = screenPoint({ clientX: (a2.x + b2.x) / 2, clientY: (a2.y + b2.y) / 2 });
+      setZoom(pinch.scale * nd / pinch.d, at.x, at.y);
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  } else if (panDrag && rfb) {
+    const d2 = display();
+    const s = d2.scale;
+    d2.viewportChangePos(-(event.clientX - panDrag.x) / s, -(event.clientY - panDrag.y) / s);
+    panDrag = { x: event.clientX, y: event.clientY };
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}, true);
+function endPointer(event) {
+  const wasPinch = !!pinch && pointers.has(event.pointerId);
+  const wasPan = !!panDrag;
+  pointers.delete(event.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size === 0) panDrag = null;
+  if (wasPinch) {
+    lastTap = null;
+    tapStart = null;
+    return;
+  }
+  if (wasPan) return;
+  if (event.type !== "pointerup") return;
+  if (!tapStart || Date.now() - tapStart.t > 300 || Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y) > 10) {
+    tapStart = null;
+    return;
+  }
+  tapStart = null;
+  const now = Date.now();
+  if (lastTap && now - lastTap.t < 450 && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < 44) {
+    const at = screenPoint(event);
+    if (view.mode === "fit" || view.mode === "zoom") toggleSize(at.x, at.y);
+    lastTap = null;
+  } else {
+    lastTap = { t: now, x: event.clientX, y: event.clientY };
+  }
+}
+screenEl.addEventListener("pointerup", endPointer, true);
+screenEl.addEventListener("pointercancel", endPointer, true);
+function kbHeight() {
+  const vv = window.visualViewport;
+  if (!vv) return 0;
+  return Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+}
+function applyKbHeight() {
+  $("session").style.setProperty("--kb", kbHeight() + "px");
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", applyKbHeight);
+  window.visualViewport.addEventListener("scroll", applyKbHeight);
+}
+function kbOpen() {
+  $("typing").focus();
+}
+function kbClose() {
+  $("typing").blur();
+}
+$("typing").addEventListener("focus", () => {
+  $("strip").hidden = false;
+  applyKbHeight();
+  $("kb-open").classList.add("active");
+});
+$("typing").addEventListener("blur", () => {
+  setTimeout(() => {
+    if (document.activeElement !== $("typing")) {
+      $("strip").hidden = true;
+      $("session").style.setProperty("--kb", "0px");
+      $("kb-open").classList.remove("active");
+    }
+  }, 60);
+});
+for (const el of [$("strip"), $("keyspop")]) el.addEventListener("pointerdown", (event) => event.preventDefault());
 function releaseCommand() {
   if (command) rfb?.sendKey(keysym_default.XK_Meta_L, "MetaLeft", false);
   command = false;
-  $("command").setAttribute("aria-pressed", "false");
+  $("cmd-latch").setAttribute("aria-pressed", "false");
 }
 function stop() {
   releaseCommand();
@@ -14135,9 +14321,22 @@ function stop() {
   stored = null;
   authTry = null;
   failedStored = false;
+  pointers.clear();
+  pinch = null;
+  panDrag = null;
+  lastTap = null;
+  view.mode = "fit";
+  view.fit = 0;
+  closeChrome();
+  $("strip").hidden = true;
   $("typing").value = "";
-  $("typing-label").hidden = true;
   $("screen").replaceChildren();
+  document.body.classList.remove("idle");
+  clearTimeout(idleTimer);
+  clearTimeout(toastTimer);
+  $("toast").classList.remove("gone");
+  const retry = $("reconnect");
+  if (retry) retry.remove();
 }
 function leave() {
   stop();
@@ -14174,9 +14373,10 @@ async function open(machine, afterFailure = false) {
   selected = machine;
   $("chooser").hidden = true;
   $("session").hidden = false;
-  $("machine-name").textContent = machine.name;
+  $("who").textContent = machine.name;
   status("Connecting\u2026");
   history.replaceState(null, "", `#${machine.id}`);
+  wake();
   stored = afterFailure ? null : await loadStored(machine);
   const socket = new URL(`/api/desktop/${encodeURIComponent(machine.id)}/socket`, location.href);
   socket.protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -14187,10 +14387,14 @@ async function open(machine, afterFailure = false) {
   current.resizeSession = false;
   current.qualityLevel = 6;
   current.compressionLevel = 2;
-  $("fit").setAttribute("aria-pressed", "true");
-  $("pan").setAttribute("aria-pressed", "false");
+  $("pan-toggle").setAttribute("aria-pressed", "false");
+  $("size-label").textContent = "Fit screen";
+  view.mode = "fit";
+  view.fit = 0;
   current.addEventListener("connect", () => {
     if (rfb !== current) return;
+    const d2 = display();
+    if (d2) view.fit = d2.scale;
     status("Connected");
     $("screen").focus();
     if (authTry && authTry.source === "typed") {
@@ -14238,12 +14442,49 @@ async function open(machine, afterFailure = false) {
     const prior = $("status").textContent;
     if (!prior.includes("refused")) status(event.detail.clean ? "Disconnected" : "Connection ended. Check that the Mac is awake and Screen Sharing is on.");
     const retry = node("button", "Reconnect");
+    retry.id = "reconnect";
+    retry.className = "act";
     retry.addEventListener("click", () => open(machine));
-    $("screen").replaceChildren(retry);
+    $("pillwrap").prepend(retry);
   });
 }
-$("refresh").addEventListener("click", refresh);
+$("fab").addEventListener("click", () => {
+  const stack = $("stack");
+  const willOpen = stack.hidden;
+  stack.hidden = !willOpen;
+  if (!willOpen) $("keyspop").hidden = true;
+  wake();
+});
 $("disconnect").addEventListener("click", leave);
+$("kb-open").addEventListener("click", () => {
+  closeChrome();
+  if ($("strip").hidden) kbOpen();
+  else kbClose();
+});
+$("size-toggle").addEventListener("click", () => {
+  closeChrome();
+  if (!rfb) return;
+  const rect = $("screen").getBoundingClientRect();
+  toggleSize(rect.width / 2, rect.height / 2);
+});
+$("pan-toggle").addEventListener("click", () => {
+  const next = $("pan-toggle").getAttribute("aria-pressed") !== "true";
+  $("pan-toggle").setAttribute("aria-pressed", String(next));
+  closeChrome();
+});
+$("keys-open").addEventListener("click", () => {
+  $("keyspop").hidden = !$("keyspop").hidden;
+  $("stack").hidden = true;
+  wake();
+});
+$("kb-hide").addEventListener("click", kbClose);
+$("cmd-latch").addEventListener("click", () => {
+  if (!rfb) return;
+  command = !command;
+  rfb.sendKey(keysym_default.XK_Meta_L, "MetaLeft", command);
+  $("cmd-latch").setAttribute("aria-pressed", String(command));
+});
+$("refresh").addEventListener("click", refresh);
 $("cancel-login").addEventListener("click", leave);
 $("login").addEventListener("cancel", (event) => {
   event.preventDefault();
@@ -14259,32 +14500,20 @@ $("login-form").addEventListener("submit", (event) => {
   $("login").close();
   status("Signing in\u2026");
 });
-$("keyboard").addEventListener("click", () => {
-  $("typing-label").hidden = !$("typing-label").hidden;
-  if (!$("typing-label").hidden) $("typing").focus();
-  else $("screen").focus();
-});
-$("fit").addEventListener("click", () => {
-  if (!rfb) return;
-  rfb.scaleViewport = !rfb.scaleViewport;
-  $("fit").setAttribute("aria-pressed", String(rfb.scaleViewport));
-});
-$("pan").addEventListener("click", () => {
-  if (!rfb) return;
-  rfb.dragViewport = !rfb.dragViewport;
-  $("pan").setAttribute("aria-pressed", String(rfb.dragViewport));
-});
-$("command").addEventListener("click", () => {
-  if (!rfb) return;
-  command = !command;
-  rfb.sendKey(keysym_default.XK_Meta_L, "MetaLeft", command);
-  $("command").setAttribute("aria-pressed", String(command));
-});
 function sendKey(name) {
   rfb?.sendKey(keysym_default[`XK_${name}`]);
   releaseCommand();
 }
+function sendCombo(letter) {
+  if (!rfb) return;
+  const sym = keysymdef_default.lookup(letter.codePointAt(0));
+  rfb.sendKey(keysym_default.XK_Meta_L, "MetaLeft", true);
+  rfb.sendKey(sym);
+  rfb.sendKey(keysym_default.XK_Meta_L, "MetaLeft", false);
+  releaseCommand();
+}
 for (const button of document.querySelectorAll("[data-key]")) button.addEventListener("click", () => sendKey(button.dataset.key));
+for (const button of document.querySelectorAll("[data-combo]")) button.addEventListener("click", () => sendCombo(button.dataset.combo));
 function typeText() {
   if (composing) return;
   const text = $("typing").value;
@@ -14312,5 +14541,6 @@ $("typing").addEventListener("keydown", (event) => {
     sendKey("BackSpace");
   }
 });
+document.addEventListener("pointerdown", wake, true);
 window.addEventListener("pagehide", stop);
 refresh();
