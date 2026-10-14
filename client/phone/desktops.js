@@ -193,12 +193,19 @@ function leave(){stop();$('session').hidden=true;$('chooser').hidden=false;selec
 // appears when there is no saved login, or when the saved one was
 // refused - and then it says why.
 async function loadStored(machine){
-  try{
-    const response=await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials`,{cache:'no-store'});
-    if(!response.ok)return null;
-    const data=await response.json();
-    return data.stored?{username:data.username||'',password:data.password||''}:null;
-  }catch{return null;}
+  // One retry: a request issued in the same burst as a desktop
+  // websocket closing can be eaten by a recycled keep-alive connection
+  // (the door answers 501 to the garbled remnant); an idempotent GET
+  // is safe to ask twice.
+  for(let attempt=0;attempt<2;attempt++){
+    try{
+      const response=await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials`,{cache:'no-store'});
+      if(!response.ok)throw Error('not ok');
+      const data=await response.json();
+      return data.stored?{username:data.username||'',password:data.password||''}:null;
+    }catch{if(attempt===0)await new Promise(done=>setTimeout(done,400));}
+  }
+  return null;
 }
 async function saveStored(machine,creds){
   try{await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(creds)});}catch{}

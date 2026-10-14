@@ -14347,14 +14347,17 @@ function leave() {
   refresh();
 }
 async function loadStored(machine) {
-  try {
-    const response = await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials`, { cache: "no-store" });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.stored ? { username: data.username || "", password: data.password || "" } : null;
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials`, { cache: "no-store" });
+      if (!response.ok) throw Error("not ok");
+      const data = await response.json();
+      return data.stored ? { username: data.username || "", password: data.password || "" } : null;
+    } catch {
+      if (attempt === 0) await new Promise((done) => setTimeout(done, 400));
+    }
   }
+  return null;
 }
 async function saveStored(machine, creds) {
   try {
