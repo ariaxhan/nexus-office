@@ -17,7 +17,7 @@ CACHE=(0,[])
 def seats():
     home=Path.home()
     tbs=objects.vault()/'CodingVault/thinking-brain-school'
-    return {('codex','personal'):home/'.codex-cli', ('codex','tbs'):tbs/'.codex-tbs-account',
+    return {('codex','personal'):home/'.codex', ('codex','tbs'):tbs/'.codex-tbs-account',
             ('claude','personal'):None, ('claude','tbs'):tbs/'.claude-tbs-account'}
 
 
