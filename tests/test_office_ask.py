@@ -155,6 +155,45 @@ class AskQueueTest(unittest.TestCase):
             self.assertEqual([model for _, model in calls], [primary, alternate])
             self.assertIn("do not repeat a completed send", calls[1][0])
 
+    def test_provider_fallback_is_announced_and_requested_model_preserved(self):
+        available = {"items": [{"id": "gpt-6-sol"}, {"id": "claude:sonnet"}], "default": "gpt-6-sol"}
+        for primary, alternate, note in (
+                ("gpt-6-sol", "claude:sonnet", "Codex failed (auth) — answered by Claude"),
+                ("claude:sonnet", "gpt-6-sol", "Claude failed (auth) — answered by Codex")):
+            def provider(text, model, reply_id):
+                if model == primary:
+                    raise RuntimeError("workspace routing discovery unauthorized (401)")
+                return "fallback answer"
+            with patch.object(ask, "models", return_value=available), patch.object(
+                    ask, "_answer_turn", side_effect=provider):
+                receipt = ask.send({"request_id": f"fallback-note-{primary.replace(':', '-')}-001",
+                                    "text": "Answer with the fallback", "model": primary})
+                self._start_drain()
+                self._wait_for(lambda: not ask.read()["busy"])
+            rows = {row["id"]: row for row in ask.read()["messages"]}
+            reply, user = rows[receipt["reply_id"]], rows[receipt["user_id"]]
+            self.assertEqual(reply["status"], "completed")
+            self.assertEqual(reply["text"], "fallback answer")
+            self.assertEqual(reply["model"], alternate)
+            self.assertEqual(reply["fallback_note"], note)
+            self.assertEqual(user["model"], primary)
+            with ask.connect() as db:
+                stored = db.execute("SELECT model,requested_model FROM messages WHERE id=?",
+                                    (receipt["user_id"],)).fetchone()
+            self.assertEqual(stored["model"], primary)
+            self.assertEqual(stored["requested_model"], primary)
+
+    def test_plain_answer_carries_no_fallback_note(self):
+        with patch.object(ask, "_answer_turn", return_value="direct answer"):
+            receipt = ask.send({"request_id": "no-fallback-note-00001",
+                                "text": "Answer directly", "model": "model-a"})
+            self._start_drain()
+            self._wait_for(lambda: not ask.read()["busy"])
+        reply = next(row for row in ask.read()["messages"] if row["id"] == receipt["reply_id"])
+        self.assertEqual(reply["status"], "completed")
+        self.assertEqual(reply["text"], "direct answer")
+        self.assertFalse(reply["fallback_note"])
+
     def test_both_provider_failures_remain_queued_for_automatic_retry(self):
         available = {"items": [{"id": "gpt-6-sol"}, {"id": "claude:sonnet"}], "default": "gpt-6-sol"}
         with patch.object(ask, "models", return_value=available), patch.object(

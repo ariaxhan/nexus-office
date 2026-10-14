@@ -648,6 +648,7 @@ async function ask(parent){
      heading.append(el('span','ask-name',row.role==='user'?(row.kind==='steer'?'You · sent now':'You'):'Office'+(row.model?' · '+row.model:'')));
      const statusText={queued:'waiting in line',working:'working…',sending:'sending…',not_delivered:'not delivered',failed:'failed'}[row.status]||'';
      if(statusText)heading.append(el('span','ask-status is-'+row.status,statusText));
+     if(row.fallback_note)heading.append(el('span','ask-status is-fallback',row.fallback_note));
      if(row.created_at)heading.append(el('time','ask-time',new Date(row.created_at*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})));
      if(row.role==='office'&&row.status==='completed'&&row.text){const speakBtn=button(playingId===row.id?'Stop':readySpeakId===row.id?'Play':speakBusyId===row.id?'Preparing…':'Listen',()=>{const fresh=(current?.messages||[]).find(item=>item.id===row.id)||row;void speakAnswer(fresh,speakBtn);},'ask-speak'+(readySpeakId===row.id?' is-ready':''));speakBtn.dataset.speakFor=row.id;speakBtn.setAttribute('aria-label','Listen to this answer');if(speakBusyId===row.id)speakBtn.disabled=true;heading.append(speakBtn);}
      bubble.append(heading);}

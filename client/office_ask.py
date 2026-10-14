@@ -111,7 +111,7 @@ def connect():
                              ('failure_count', 'INTEGER NOT NULL DEFAULT 0'),
                              ('claimed_at', 'REAL'),
                              ('kind', "TEXT NOT NULL DEFAULT 'queue'"),
-                             ('target_turn_id', 'TEXT'), ('delivery_error', 'TEXT'),
+                             ('target_turn_id', 'TEXT'), ('delivery_error', 'TEXT'), ('fallback_note', 'TEXT'),
                              ('message_revision', 'INTEGER NOT NULL DEFAULT 0')):
         if name not in columns:
             db.execute(f'ALTER TABLE messages ADD COLUMN {name} {definition}')
@@ -153,7 +153,7 @@ def _next_revision(db):
 
 def _update_message(db, identifier, **values):
     allowed = {'text', 'model', 'status', 'completed_at', 'recovering', 'next_attempt_at',
-               'failure_count', 'claimed_at', 'provider_turn_id', 'delivery_error'}
+               'failure_count', 'claimed_at', 'provider_turn_id', 'delivery_error', 'fallback_note'}
     if not values or not set(values) <= allowed:
         raise ValueError('Unsupported Ask message update')
     values['message_revision'] = _next_revision(db)
@@ -183,7 +183,7 @@ def read(since_revision=None):
         except (TypeError, ValueError):
             raise ValueError('Invalid Ask revision')
         columns = '''id,role,text,model,status,created_at,completed_at,request_id,parent_id,
-                     kind,target_turn_id,delivery_error,message_revision'''
+                     kind,target_turn_id,delivery_error,fallback_note,message_revision'''
         delta = since is not None and 0 <= since < revision
         if since == revision:
             messages = []
@@ -522,6 +522,32 @@ def _retry(turn, error):
                         status='queued', completed_at=None)
 
 
+def _provider_label(model):
+    if model.startswith('gpt-'):
+        return 'Codex'
+    if model.startswith('claude:'):
+        return 'Claude'
+    return model
+
+
+def _failure_class(exc):
+    text = f'{type(exc).__name__}: {exc}'.lower()
+    if any(marker in text for marker in ('401', 'unauthorized', 'unauthorised',
+                                         'invalid_grant', 'authentication')):
+        return 'auth'
+    if isinstance(exc, TimeoutError) or 'timed out' in text or 'timeout' in text:
+        return 'timeout'
+    if any(marker in text for marker in ('unavailable', 'not installed',
+                                         'unreachable', 'connection')):
+        return 'unavailable'
+    return 'error'
+
+
+def _fallback_note(failed_model, answering_model, exc):
+    return (f'{_provider_label(failed_model)} failed ({_failure_class(exc)})'
+            f' — answered by {_provider_label(answering_model)}')
+
+
 def _drain():
     while True:
         turn = _claim()
@@ -544,8 +570,8 @@ def _drain():
                             f'Original request:\n{turn["text"]}')
                         answer = _answer_turn(continuation, alternate, turn['reply_id'])
                         with connect() as db:
-                            _update_message(db, turn['user_id'], model=alternate)
-                            _update_message(db, turn['reply_id'], model=alternate)
+                            _update_message(db, turn['reply_id'], model=alternate,
+                                            fallback_note=_fallback_note(turn['model'], alternate, exc))
                         _finish(turn, answer, 'completed')
                         continue
                     except Exception as fallback_exc:

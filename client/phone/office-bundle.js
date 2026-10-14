@@ -3382,6 +3382,7 @@ async function ask(parent) {
           heading.append(el("span", "ask-name", row.role === "user" ? row.kind === "steer" ? "You \xB7 sent now" : "You" : "Office" + (row.model ? " \xB7 " + row.model : "")));
           const statusText = { queued: "waiting in line", working: "working\u2026", sending: "sending\u2026", not_delivered: "not delivered", failed: "failed" }[row.status] || "";
           if (statusText) heading.append(el("span", "ask-status is-" + row.status, statusText));
+          if (row.fallback_note) heading.append(el("span", "ask-status is-fallback", row.fallback_note));
           if (row.created_at) heading.append(el("time", "ask-time", new Date(row.created_at * 1e3).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })));
           if (row.role === "office" && row.status === "completed" && row.text) {
             const speakBtn = button(playingId === row.id ? "Stop" : readySpeakId === row.id ? "Play" : speakBusyId === row.id ? "Preparing\u2026" : "Listen", () => {
