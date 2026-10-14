@@ -26,6 +26,7 @@ import office_ask as ask
 import office_bot_history as bot_history
 import office_github_actions as github_actions
 import office_direct
+import issue_loop
 import office_github_bump as github_bump
 import office_github_inventory as inventory
 import coordinator_chat
@@ -85,6 +86,7 @@ def get(handler, path, query):
         '/api/tasks': lambda: tasks.active_listing() if q.get('active')=='1' else tasks.listing(q.get('cursor',0),q.get('project','')),
         '/api/tasks/detail': lambda: tasks.detail(q['id']),
         '/api/tasks/issue': lambda: office_direct.status(q.get('repo',''),q.get('number','')),
+        '/api/issues/alerts': lambda: issue_loop.alerts(q.get('repo',''),q.get('number','')),
         '/api/tasks/history': lambda: tasks.history(q['id'],q.get('cursor',0)),
         '/api/system/jobs': jobs.clock.read,
         '/api/system/job-log': lambda: jobs.logs(q['id'],q.get('offset',0),q.get('version','')),
@@ -198,6 +200,10 @@ def post(handler, path):
         return True
     if path == '/api/tasks/issue/release':
         handler._json(office_direct.release(handler._read_json(limit=4096), handler.world))
+        return True
+    if path == '/api/issues/comment':
+        known={root['name'] for root in tasks.projects()}|{row['repo'] for row in (handler.world.snapshot or {}).get('stations',[])}|inventory.repositories()
+        handler._json(issue_loop.send(handler.world, known, handler._read_json(limit=128 * 1024), handler.github_sync))
         return True
     routes = {'/api/user-state': user_state.save, '/api/uploads': uploads.upload, '/api/objects/diff': objects.diff, '/api/system/command': system.command, '/api/objects/save': objects.save, '/api/objects/active': objects.activate, '/api/preferences': preferences.save,
               '/api/feed/react': feed.react, '/api/feed/reply': feed.reply,

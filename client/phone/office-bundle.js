@@ -2432,10 +2432,21 @@ async function githubDetail(repo, item, kind) {
     const comments = section(body, "Discussion");
     for (const comment of data.comments || []) comments.append(commentView(comment));
     if (data.comments_next_cursor) comments.append(button("More comments", () => githubComments(comments, repo, item.number, data.comments_next_cursor)));
+    if (kind === "issues") {
+      const alertsBox = section(body, "Coordinator alert");
+      issueAlerts(alertsBox, repo, item.number);
+    }
     const reply = field(body, "Reply", el("textarea"));
     const clearReply = restoreDraft(reply, ["github", repo, item.number]);
-    body.append(button("Post reply", async () => {
-      await githubAction({ action: "comment", repo, number: item.number, body: reply.value }, (committed) => clearReply(committed.body));
+    body.append(button(kind === "issues" ? "Send" : "Post reply", async () => {
+      const text = reply.value;
+      if (kind === "issues") {
+        await issueComment(repo, item.number, text);
+        clearReply(text);
+        await githubDetail(repo, item, kind);
+      } else {
+        await githubAction({ action: "comment", repo, number: item.number, body: text }, (committed) => clearReply(committed.body));
+      }
     }));
     if (kind === "issues") body.append(button(data.state === "closed" ? "Reopen issue" : "Close issue", async () => {
       await githubAction({ action: data.state === "closed" ? "reopen" : "close", repo, number: item.number });
@@ -4037,6 +4048,34 @@ async function githubAction(payload, onConfirmed = () => {
   onConfirmed(pending2);
   notice(`Confirmed by GitHub as ${receipt.acting_identity}`);
   return receipt.result;
+}
+async function issueComment(repo, number, text) {
+  const key = "office-issue-alert:" + JSON.stringify([repo, number]);
+  let pending2 = null;
+  try {
+    pending2 = JSON.parse(localStorage.getItem(key) || "null");
+  } catch (error) {
+    pending2 = null;
+  }
+  if (!pending2 || pending2.text !== text) pending2 = { issue: { repo, number }, text, request_id: crypto.randomUUID() };
+  localStorage.setItem(key, JSON.stringify(pending2));
+  const result = await api("/api/issues/comment", pending2);
+  localStorage.removeItem(key);
+  notice(result.state === "alert_only" ? `GitHub refused the comment; the ${result.owner} coordinator got it in their inbox instead` : `Sent \xB7 the ${result.owner} coordinator has been alerted`);
+  return result;
+}
+async function issueAlerts(parent, repo, number) {
+  try {
+    const data = await api(`/api/issues/alerts?repo=${encodeURIComponent(repo)}&number=${number}`);
+    if (!data.alerts || !data.alerts.length) {
+      parent.append(el("p", "muted", "Send a reply here and the owning coordinator is alerted \u2014 no relay, no hoping it is seen."));
+      return;
+    }
+    const words = { sent: "sent to GitHub", delivered: "delivered to the coordinator", picked_up: "picked up by the coordinator" };
+    for (const a of data.alerts) parent.append(el("p", "", `${new Date(a.at).toLocaleString()} \xB7 ${a.owner} \xB7 ${words[a.state] || a.state}`));
+  } catch (error) {
+    parent.append(el("p", "muted", "Alert state unavailable right now."));
+  }
 }
 function createIssue(repo) {
   const body = sheet("New issue \xB7 " + repo);
