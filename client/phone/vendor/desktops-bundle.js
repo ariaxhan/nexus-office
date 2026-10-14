@@ -14165,7 +14165,7 @@ async function saveStored(machine, creds) {
 }
 async function forgetStored(machine) {
   try {
-    await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials/forget`, { method: "POST" });
+    await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials/forget`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   } catch {
   }
 }

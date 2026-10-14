@@ -54,7 +54,7 @@ async function saveStored(machine,creds){
   try{await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(creds)});}catch{}
 }
 async function forgetStored(machine){
-  try{await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials/forget`,{method:'POST'});}catch{}
+  try{await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials/forget`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});}catch{}
 }
 
 async function open(machine,afterFailure=false){
