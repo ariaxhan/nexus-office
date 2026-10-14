@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import contextlib
 import difflib
+import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import signal
@@ -34,6 +36,45 @@ MAX_SRC = 40         # a micro-patch: at most this many changed source lines his
 TEST_S = 180
 PYTHON = os.environ.get("OFFICE_TEST_PYTHON", "python3.12")
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+# ---- local-model gate --------------------------------------------------------------------------------
+# Aria's ruling (2026-10-10 23:40): no big Ollama models on the MacBook at all — it does not have the
+# capacity; big models run on the Studio. F-001..F-003: the #235 flow loaded qwen3.8:27b and
+# qwen3-coder:30b on this host three times and thrashed the machine. Refuse before any Ollama request.
+SMALL_MODEL_HOST = "arias-MacBook-Pro-2"  # scutil LocalHostName; `hostname` says Mac.lan, not the key
+SMALL_MODEL_ALLOWLIST = ("lfm2.5:8b", "qwen2.5:3b", "nomic-embed-text-v2-moe")
+
+
+class BigModelRefused(RuntimeError):
+    """A local-model load this host must not attempt."""
+
+
+def local_host_name():
+    if sys.platform == "darwin":
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            name = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True,
+                                  timeout=5).stdout.strip()
+            if name:
+                return name
+    return platform.node().split(".")[0]
+
+
+def model_refusal(model, host=None):
+    """Why `model` may not load on this host, or None. Only the MacBook host is restricted."""
+    if (host if host is not None else local_host_name()) != SMALL_MODEL_HOST:
+        return None
+    if model in SMALL_MODEL_ALLOWLIST:
+        return None
+    return (f"refused: local model {model!r} may not run on {SMALL_MODEL_HOST}. Aria's ruling "
+            "(2026-10-10): no big Ollama models on the MacBook — it does not have the capacity; big "
+            "models run on the Studio. Small models only here: "
+            + ", ".join(SMALL_MODEL_ALLOWLIST) + ".")
+
+
+def ensure_model_allowed(model, host=None):
+    refusal = model_refusal(model, host)
+    if refusal:
+        raise BigModelRefused(refusal)
 
 
 def git(*args, input=None):
@@ -97,6 +138,20 @@ def disk_bytes(path):
 
 def leaked():
     return sorted(p for p in os.listdir(tempfile.gettempdir()) if p.startswith(PREFIX))
+
+
+def digests(tree):
+    """Every file in the snapshot, so a file created anywhere counts as a change."""
+    return {str(p.relative_to(tree)): hashlib.sha1(p.read_bytes()).hexdigest()
+            for p in Path(tree).rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+
+
+def out_of_scope(before, after, written, allowed, tree):
+    """List every changed path outside the contract, including newly created files."""
+    changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
+    reported = {str(Path(f)) for f in written
+                if Path(tree, f).resolve() != Path(tree, allowed).resolve()}
+    return sorted((changed - {allowed}) | reported)
 
 
 def run_tests(tree, tests):

@@ -12,6 +12,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 
 from . import flights, landing, lanes, lease, risk
 
@@ -95,6 +96,33 @@ LOCAL_IMPLEMENTATION = (
     "test passes and the edit is on disk; review the diff. Exit 1: nothing changed; do it yourself. Keep for "
     "yourself: lifecycle, state-machine, concurrency and multi-file integration changes.")
 
+MACBOOK_HOST = "arias-MacBook-Pro-2"  # scutil LocalHostName; `hostname` is not the key jobctl pins on
+SMALL_MODEL_CLAUSE = (
+    " On this host (the MacBook) the local worker's model is restricted by Aria's ruling (2026-10-10): "
+    "pass `--model lfm2.5:8b` explicitly — the tradition CLI's own default is a big model, and no big "
+    "Ollama model may run on the MacBook at all (it does not have the capacity; a big load thrashes the "
+    "machine). Big models run on the Studio only. Small models only here: lfm2.5:8b, qwen2.5:3b, "
+    "nomic-embed-text-v2-moe.")
+
+
+def local_host_name():
+    if sys.platform == "darwin":
+        try:
+            name = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True,
+                                  timeout=5).stdout.strip()
+            if name:
+                return name
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return os.uname().nodename.split(".")[0]
+
+
+def local_implementation(host=None):
+    """LOCAL_IMPLEMENTATION, plus the MacBook small-model restriction when this host is the MacBook."""
+    if (host if host is not None else local_host_name()) == MACBOOK_HOST:
+        return LOCAL_IMPLEMENTATION + SMALL_MODEL_CLAUSE
+    return LOCAL_IMPLEMENTATION
+
 
 def issue_prompt(entry, issue):
     return (f"Resolve {entry['repo']} issue #{issue['number']}: {issue.get('title', '')}\n\n"
@@ -102,7 +130,7 @@ def issue_prompt(entry, issue):
             f"{entry.get('default_branch', 'main')}. "
             "If Tower retained work on an aria/held branch, inspect and reuse it before editing. "
             "Do not commit, push, branch, clone, stash or "
-            f"open PRs; Nexus lands the change. Run the project's own checks.\n{LOCAL_IMPLEMENTATION}\n"
+            f"open PRs; Nexus lands the change. Run the project's own checks.\n{local_implementation()}\n"
             f"Product guidance: {entry.get('product_guidance', '')}{issue.get('nexus_evidence', '')}")
 
 
