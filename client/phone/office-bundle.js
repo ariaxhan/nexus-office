@@ -3141,16 +3141,17 @@ async function ask(parent) {
   const chat = el("section", "ask-page");
   parent.append(chat);
   const header = el("div", "ask-header");
+  header.append(el("h1", "ask-title", "Ask Office"));
+  const modelWrap = el("label", "ask-model-wrap");
+  modelWrap.append(el("span", "ask-model-label", "Model"));
+  const picker = el("select", "ask-model");
+  picker.setAttribute("aria-label", "Office model");
+  modelWrap.append(picker);
+  header.append(modelWrap);
   const refresh = button("\u21BB", () => refreshOffice().catch((error) => notice(error.message)), "ask-refresh office-refresh");
   refresh.setAttribute("aria-label", "Refresh Office");
   refresh.title = "Refresh Office";
   header.append(refresh);
-  const advanced = el("details", "ask-advanced");
-  advanced.append(el("summary", "", "Advanced \xB7 model choice"));
-  const picker = el("select", "ask-model");
-  picker.setAttribute("aria-label", "Office model");
-  advanced.append(picker);
-  header.append(advanced);
   const freshness = el("p", "view-freshness ask-freshness");
   header.append(freshness);
   chat.append(header);
@@ -3166,19 +3167,30 @@ async function ask(parent) {
   chat.append(scrollRegion);
   const form = el("form", "ask-compose");
   const input = el("textarea");
-  input.placeholder = "Ask what happened, why work is waiting, or what to fix\u2026";
+  input.placeholder = "Message Office\u2026";
   input.setAttribute("aria-label", "Ask Office");
-  input.rows = 2;
+  input.rows = 1;
   const queueStatus = el("p", "ask-queue-status");
   queueStatus.setAttribute("aria-live", "polite");
   const steerHint = el("p", "ask-steer-hint");
   steerHint.setAttribute("aria-live", "polite");
-  const submit = el("button", "primary", "Queue");
+  const submit = el("button", "primary ask-send", "Send");
   submit.type = "submit";
-  const steerSubmit = button("Send now / Steer", () => sendSteer(), "ask-steer");
+  submit.setAttribute("aria-label", "Send message");
+  const steerSubmit = button("Send now", () => sendSteer(), "ask-steer");
   steerSubmit.hidden = true;
   form.append(input, submit, steerSubmit);
   chat.append(queueStatus, steerHint, form);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, Math.round(innerHeight * 0.35)) + "px";
+  });
   let current2 = null, rendered = false, steerVerified = false;
   const scrollKey = "office-scroll:ask";
   let restoredScroll = false;
@@ -3219,10 +3231,10 @@ async function ask(parent) {
     picker.append(initial);
     const updateControls = (state) => {
       const queued = state.queue?.queued || 0, working = state.queue?.working || 0;
-      queueStatus.textContent = [working ? `${working} working` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(" \xB7 ");
+      queueStatus.textContent = [working ? "Office is working on a reply" : "", queued ? `${queued} waiting in line` : ""].filter(Boolean).join(" \xB7 ");
       queueStatus.hidden = !working && !queued;
       steerSubmit.hidden = !steerVerified || !state.steer?.available;
-      steerHint.textContent = working && !steerVerified ? "Checking Send now availability\u2026" : working && !state.steer?.available ? state.steer?.reason || "Send now is unavailable; Queue remains available." : "";
+      steerHint.textContent = working && !steerVerified ? "Checking Send now\u2026" : working && !state.steer?.available ? state.steer?.reason || "Send now is not available for this reply. Send still works \u2014 your message waits in line." : "";
       steerHint.hidden = !steerHint.textContent;
     };
     const draw2 = (state, toBottom = false) => {
@@ -3241,13 +3253,17 @@ async function ask(parent) {
       const lastAnswer = [...state.messages].reverse().find((row) => row.role === "office" && row.status === "completed");
       for (const row of state.messages) {
         const bubble = el("article", "ask-bubble " + row.role + (row.kind === "steer" ? " steer" : ""));
-        const label = row.role === "user" ? row.kind === "steer" ? "You \xB7 Send now" : "You" : row.role === "office" ? "Office \xB7 " + (row.model || "") : row.text;
-        const statusLabel = { sending: "sending", delivered: "delivered", not_delivered: "not delivered" }[row.status] || row.status;
-        const heading = el("small", "", label);
-        if (row.role !== "system") heading.append(el("span", "ask-status is-" + row.status, statusLabel));
-        bubble.append(heading);
+        if (row.role === "system") bubble.append(el("small", "", row.text));
+        else {
+          const heading = el("small", "ask-meta");
+          heading.append(el("span", "ask-name", row.role === "user" ? row.kind === "steer" ? "You \xB7 sent now" : "You" : "Office" + (row.model ? " \xB7 " + row.model : "")));
+          const statusText = { queued: "waiting in line", working: "working\u2026", sending: "sending\u2026", not_delivered: "not delivered", failed: "failed" }[row.status] || "";
+          if (statusText) heading.append(el("span", "ask-status is-" + row.status, statusText));
+          if (row.created_at) heading.append(el("time", "ask-time", new Date(row.created_at * 1e3).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })));
+          bubble.append(heading);
+        }
         if (row.role !== "system") {
-          const waiting = row.delivery_error || (row.status === "queued" ? "Queued behind earlier messages\u2026" : row.status === "working" ? "Working\u2026" : row.status === "sending" ? "Sending to the active turn\u2026" : "");
+          const waiting = row.delivery_error || (row.status === "queued" ? "Waiting in line\u2026" : row.status === "working" ? "Working\u2026" : row.status === "sending" ? "Sending\u2026" : "");
           const copy = markdownView(row.text || waiting, { text: officeLinkText });
           copy.classList.add("ask-copy");
           copy.addEventListener("click", (event) => {
@@ -3264,7 +3280,7 @@ async function ask(parent) {
           if (row.id === lastAnswer?.id) {
             const rating = el("div", "ask-rating");
             rating.append(el("span", "muted", "Useful?"));
-            for (const [kind, label2] of [["helpful", "Yes"], ["missed", "Missed it"]]) rating.append(button(label2, async () => {
+            for (const [kind, label] of [["helpful", "Yes"], ["missed", "Missed it"]]) rating.append(button(label, async () => {
               await api("/api/ask/rate", { reply_id: row.id, kind });
               await refreshAsk();
             }, "ask-rate" + (row.rating === kind ? " active" : "")));
@@ -3345,6 +3361,7 @@ async function ask(parent) {
           pending2 = null;
         }
         clearDraft(payload.text);
+        input.style.height = "auto";
         await refreshAsk(true);
       } catch (error) {
         if ([400, 403, 404, 409, 413, 422].includes(error.status)) {
@@ -3365,6 +3382,7 @@ async function ask(parent) {
           steerPending = null;
         }
         clearDraft(payload.text);
+        input.style.height = "auto";
         await refreshAsk(true);
       } catch (error) {
         if ([400, 403, 404, 409, 413, 422].includes(error.status)) {
@@ -3381,7 +3399,7 @@ async function ask(parent) {
       const text = input.value.trim();
       if (!text) return;
       if (!current2?.steer?.available) {
-        notice(current2?.steer?.reason || "No active Codex turn can be steered. Use Queue instead.");
+        notice(current2?.steer?.reason || "Nothing is running to send now to. Send works as usual \u2014 your message will wait in line.");
         return;
       }
       input.value = text;

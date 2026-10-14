@@ -539,20 +539,23 @@ async function feed(parent){
 async function feedMore(parent,cursor){const data=await api(`/api/feed?category=${encodeURIComponent(feedCategory)}&cursor=${cursor}`);for(const post of data.items)renderFeedPost(parent,post);if(data.next_cursor!==null){const more=button('More posts',async()=>{more.disabled=true;try{await feedMore(parent,data.next_cursor);more.remove();}catch(error){more.disabled=false;notice(error.message);}});parent.append(more);}}
 async function ask(parent){
   const chat=el('section','ask-page');parent.append(chat);
-  const header=el('div','ask-header');const refresh=button('↻',()=>refreshOffice().catch(error=>notice(error.message)),'ask-refresh office-refresh');
+  const header=el('div','ask-header');header.append(el('h1','ask-title','Ask Office'));
+  const modelWrap=el('label','ask-model-wrap');modelWrap.append(el('span','ask-model-label','Model'));
+  const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');modelWrap.append(picker);header.append(modelWrap);
+  const refresh=button('↻',()=>refreshOffice().catch(error=>notice(error.message)),'ask-refresh office-refresh');
   refresh.setAttribute('aria-label','Refresh Office');refresh.title='Refresh Office';header.append(refresh);
-  const advanced=el('details','ask-advanced');advanced.append(el('summary','','Advanced · model choice'));
-  const picker=el('select','ask-model');picker.setAttribute('aria-label','Office model');advanced.append(picker);header.append(advanced);
   const freshness=el('p','view-freshness ask-freshness');header.append(freshness);chat.append(header);
  const scrollRegion=el('div','ask-scroll-region');const thread=el('div','ask-thread');
  const jump=button('↓',()=>{thread.scrollTop=thread.scrollHeight;updateJump();},'ask-jump');jump.setAttribute('aria-label','Jump to latest message');jump.hidden=true;
  scrollRegion.append(thread,jump);chat.append(scrollRegion);
-  const form=el('form','ask-compose');const input=el('textarea');input.placeholder='Ask what happened, why work is waiting, or what to fix…';input.setAttribute('aria-label','Ask Office');input.rows=2;
+  const form=el('form','ask-compose');const input=el('textarea');input.placeholder='Message Office…';input.setAttribute('aria-label','Ask Office');input.rows=1;
  const queueStatus=el('p','ask-queue-status');queueStatus.setAttribute('aria-live','polite');
  const steerHint=el('p','ask-steer-hint');steerHint.setAttribute('aria-live','polite');
- const submit=el('button','primary','Queue');submit.type='submit';
- const steerSubmit=button('Send now / Steer',()=>sendSteer(),'ask-steer');steerSubmit.hidden=true;
+ const submit=el('button','primary ask-send','Send');submit.type='submit';submit.setAttribute('aria-label','Send message');
+ const steerSubmit=button('Send now',()=>sendSteer(),'ask-steer');steerSubmit.hidden=true;
  form.append(input,submit,steerSubmit);chat.append(queueStatus,steerHint,form);
+ input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229){event.preventDefault();form.requestSubmit();}});
+ input.addEventListener('input',()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,Math.round(innerHeight*.35))+'px';});
  let current=null,rendered=false,steerVerified=false;
  const scrollKey='office-scroll:ask';let restoredScroll=false;
  const distanceFromBottom=()=>thread.scrollHeight-thread.scrollTop-thread.clientHeight;
@@ -570,10 +573,10 @@ async function ask(parent){
    const initial=el('option','',data.selection||data.model);initial.value=data.selection||data.model;picker.append(initial);
    const updateControls=state=>{
     const queued=state.queue?.queued||0,working=state.queue?.working||0;
-    queueStatus.textContent=[working?`${working} working`:'',queued?`${queued} queued`:''].filter(Boolean).join(' · ');
+    queueStatus.textContent=[working?'Office is working on a reply':'',queued?`${queued} waiting in line`:''].filter(Boolean).join(' · ');
     queueStatus.hidden=!working&&!queued;
     steerSubmit.hidden=!steerVerified||!state.steer?.available;
-    steerHint.textContent=working&&!steerVerified?'Checking Send now availability…':working&&!state.steer?.available?(state.steer?.reason||'Send now is unavailable; Queue remains available.'):'';
+    steerHint.textContent=working&&!steerVerified?'Checking Send now…':working&&!state.steer?.available?(state.steer?.reason||'Send now is not available for this reply. Send still works — your message waits in line.'):'';
     steerHint.hidden=!steerHint.textContent;
    };
    const draw=(state,toBottom=false)=>{
@@ -585,11 +588,15 @@ async function ask(parent){
    }
     const lastAnswer=[...state.messages].reverse().find(row=>row.role==='office'&&row.status==='completed');
     for(const row of state.messages){const bubble=el('article','ask-bubble '+row.role+(row.kind==='steer'?' steer':''));
-    const label=row.role==='user'?(row.kind==='steer'?'You · Send now':'You'):row.role==='office'?'Office · '+(row.model||''):row.text;
-    const statusLabel={sending:'sending',delivered:'delivered',not_delivered:'not delivered'}[row.status]||row.status;
-    const heading=el('small','',label);if(row.role!=='system')heading.append(el('span','ask-status is-'+row.status,statusLabel));bubble.append(heading);
+    if(row.role==='system')bubble.append(el('small','',row.text));
+    else{const heading=el('small','ask-meta');
+     heading.append(el('span','ask-name',row.role==='user'?(row.kind==='steer'?'You · sent now':'You'):'Office'+(row.model?' · '+row.model:'')));
+     const statusText={queued:'waiting in line',working:'working…',sending:'sending…',not_delivered:'not delivered',failed:'failed'}[row.status]||'';
+     if(statusText)heading.append(el('span','ask-status is-'+row.status,statusText));
+     if(row.created_at)heading.append(el('time','ask-time',new Date(row.created_at*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})));
+     bubble.append(heading);}
     if(row.role!=='system'){
-     const waiting=row.delivery_error||(row.status==='queued'?'Queued behind earlier messages…':row.status==='working'?'Working…':row.status==='sending'?'Sending to the active turn…':'');
+     const waiting=row.delivery_error||(row.status==='queued'?'Waiting in line…':row.status==='working'?'Working…':row.status==='sending'?'Sending…':'');
      const copy=markdownView(row.text||waiting,{text:officeLinkText});copy.classList.add('ask-copy');
      copy.addEventListener('click',event=>{const anchor=event.target.closest('a');if(!anchor)return;
       const match=anchor.href.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)/);
@@ -626,19 +633,19 @@ async function ask(parent){
    try{await refreshAsk();}catch(error){if(!idle)notice(error.message);}},1000);
   async function sendPending(payload){
    submit.disabled=true;
-   try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);await refreshAsk(true);}
+   try{await api('/api/ask/send',payload);if(JSON.parse(localStorage.getItem(pendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(pendingKey);pending=null;}clearDraft(payload.text);input.style.height='auto';await refreshAsk(true);}
    catch(error){if([400,403,404,409,413,422].includes(error.status)){localStorage.removeItem(pendingKey);pending=null;}notice(error.message);}
    finally{submit.disabled=false;}
   }
   async function sendSteerPending(payload){
    steerSubmit.disabled=true;
-   try{await api('/api/ask/steer',payload);if(JSON.parse(localStorage.getItem(steerPendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(steerPendingKey);steerPending=null;}clearDraft(payload.text);await refreshAsk(true);}
+   try{await api('/api/ask/steer',payload);if(JSON.parse(localStorage.getItem(steerPendingKey)||'null')?.request_id===payload.request_id){localStorage.removeItem(steerPendingKey);steerPending=null;}clearDraft(payload.text);input.style.height='auto';await refreshAsk(true);}
    catch(error){if([400,403,404,409,413,422].includes(error.status)){localStorage.removeItem(steerPendingKey);steerPending=null;}notice(error.message);}
    finally{steerSubmit.disabled=false;}
   }
   function sendSteer(){
    if(steerPending)return sendSteerPending(steerPending);const text=input.value.trim();if(!text)return;
-   if(!current?.steer?.available){notice(current?.steer?.reason||'No active Codex turn can be steered. Use Queue instead.');return;}
+   if(!current?.steer?.available){notice(current?.steer?.reason||'Nothing is running to send now to. Send works as usual — your message will wait in line.');return;}
    input.value=text;input.dispatchEvent(new Event('input'));steerPending={request_id:crypto.randomUUID(),text,expected_turn_id:current.steer.expected_turn_id};localStorage.setItem(steerPendingKey,JSON.stringify(steerPending));return sendSteerPending(steerPending);
   }
   form.addEventListener('submit',event=>{event.preventDefault();if(pending){void sendPending(pending);return;}const text=input.value.trim();if(!text)return;
