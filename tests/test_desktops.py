@@ -2,6 +2,7 @@
 import base64
 import http.client
 import json
+import os
 import socket
 import struct
 import sys
@@ -199,3 +200,106 @@ class DesktopTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+STUB_SECURITY = """#!/usr/bin/env python3
+import json, os, sys
+store_path = os.environ["STUB_KEYCHAIN"]
+try:
+    store = json.load(open(store_path))
+except (OSError, ValueError):
+    store = {}
+args = sys.argv[1:]
+def opt(flag):
+    return args[args.index(flag) + 1] if flag in args else None
+key = opt("-s") + "|" + str(opt("-a"))
+if args[0] == "find-generic-password":
+    if key in store:
+        print(store[key])
+    else:
+        sys.exit(44)
+elif args[0] == "add-generic-password":
+    store[key] = args[-1]
+    json.dump(store, open(store_path, "w"))
+elif args[0] == "delete-generic-password":
+    store.pop(key, None)
+    json.dump(store, open(store_path, "w"))
+"""
+
+
+class CredentialsTest(unittest.TestCase):
+    """Saved Mac logins: stored once in the keychain, served back to the
+    desktops page, forgotten on request - never on disk in the repo."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        stub = root / "security"
+        stub.write_text(STUB_SECURITY)
+        stub.chmod(0o755)
+        cls.store = root / "keychain.json"
+        cls.old_env = {k: os.environ.get(k) for k in
+                       ("OFFICE_SECURITY_BIN", "STUB_KEYCHAIN")}
+        os.environ["OFFICE_SECURITY_BIN"] = str(stub)
+        os.environ["STUB_KEYCHAIN"] = str(cls.store)
+        cls.server = serve.make_server(serve.World(), 0)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown(); cls.server.server_close()
+        for key, value in cls.old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        self.logs = patch.object(serve, "log", lambda _: None); self.logs.start()
+        if self.store.exists():
+            self.store.unlink()
+
+    def tearDown(self):
+        self.logs.stop()
+
+    def call(self, method, path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        host = f"127.0.0.1:{self.port}"
+        headers = {"Host": host, "Origin": f"http://{host}",
+                   "Content-Type": "application/json"}
+        connection.request(method, path,
+                           body=json.dumps(body) if body is not None else None,
+                           headers=headers)
+        response = connection.getresponse()
+        result = response.status, json.loads(response.read() or b"{}")
+        connection.close(); return result
+
+    def test_round_trip_and_forget(self):
+        status, body = self.call("GET", "/api/desktop/local/credentials")
+        self.assertEqual((status, body), (200, {"stored": False}))
+        status, body = self.call("POST", "/api/desktop/local/credentials",
+                                 {"username": "aria", "password": "s3cret"})
+        self.assertEqual((status, body), (200, {"stored": True}))
+        status, body = self.call("GET", "/api/desktop/local/credentials")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"stored": True, "username": "aria",
+                                "password": "s3cret"})
+        status, body = self.call("POST", "/api/desktop/local/credentials/forget")
+        self.assertEqual((status, body), (200, {"stored": False}))
+        status, body = self.call("GET", "/api/desktop/local/credentials")
+        self.assertEqual((status, body), (200, {"stored": False}))
+
+    def test_empty_password_refused(self):
+        status, _ = self.call("POST", "/api/desktop/local/credentials",
+                              {"username": "aria", "password": ""})
+        self.assertEqual(status, 400)
+
+    def test_unknown_mac_refused(self):
+        status, _ = self.call("POST", "/api/desktop/mac-999999/credentials",
+                              {"username": "aria", "password": "s3cret"})
+        self.assertEqual(status, 404)
+        status, body = self.call("GET", "/api/desktop/mac-999999/credentials")
+        self.assertEqual((status, body), (200, {"stored": False}))

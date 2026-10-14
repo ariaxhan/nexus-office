@@ -315,6 +315,30 @@ def _scheduled_card(data: dict, now: float | None = None) -> dict:
     return _card.build(TITLE, headline, alarm, as_of, facts)
 
 
+# The snapshot this section feeds is downloaded whole by every client on
+# every poll. read_status returns the Tower's ENTIRE work history, and it
+# grows forever: on 2026-10-14 item_attempts alone was 20 MB of a 26.7 MB
+# /api/world payload, a phone's connection broke mid-transfer, and the
+# reply never parsed ("Office returned an invalid response" on the Find
+# tab). The card below reads only tasks + repositories, so those stay
+# whole; each history list is capped at its most recent entries and the
+# true totals ride beside them. The full history stays one call away
+# (nexus.work.read_status, the work CLI) - it just does not ride the
+# snapshot.
+HISTORY_CAP = 100
+
+
+def _bound_work(outcomes: dict) -> dict:
+    totals = {}
+    for key in ("attempts", "item_attempts", "gaps"):
+        rows = outcomes.get(key) or []
+        totals[key] = len(rows)
+        if len(rows) > HISTORY_CAP:
+            outcomes[key] = rows[-HISTORY_CAP:]
+    outcomes["history_totals"] = totals
+    return outcomes
+
+
 def read(now: float | None = None) -> dict:
     data = _read_scheduled(now)
     registry_path = os.environ.get("OFFICE_WORK_REGISTRY")
@@ -326,7 +350,7 @@ def read(now: float | None = None) -> dict:
                                     work.registry(registry_path))
     except (OSError, ValueError, KeyError, ImportError, sqlite3.Error) as exc:
         return {"state": "unreadable", "detail": str(exc)}
-    data["work"] = outcomes
+    data["work"] = _bound_work(outcomes)
     return data
 
 

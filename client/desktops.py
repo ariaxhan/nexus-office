@@ -5,6 +5,7 @@ import base64
 import binascii
 import ipaddress
 import json
+import os
 import re
 import select
 import shutil
@@ -241,12 +242,91 @@ def connect(handler, identifier):
         SESSIONS.release()
 
 
+# ── Saved Mac logins ────────────────────────────────────────────────
+# Entered once, kept in this Mac's login keychain (the estate's custody
+# pattern: /usr/bin/security, one item per desktop, service below), and
+# supplied by the desktops page at connect time so Aria is not asked on
+# every visit. The door itself never sees the RFB handshake - it relays
+# bytes - so the page fetches the saved login over the same guarded
+# origin and hands it to noVNC. A refused login forgets the item; the
+# page then asks once, saying why. OFFICE_SECURITY_BIN exists so tests
+# can stand in a stub keychain.
+KEYCHAIN_SERVICE = "nexus-office-desktops"
+_DESKTOP_ID = r"(local|mac-\d+)"
+
+
+def _security(*args):
+    return subprocess.run(
+        [os.environ.get("OFFICE_SECURITY_BIN", "/usr/bin/security"), *args],
+        capture_output=True, text=True, timeout=5)
+
+
+def _credentials_get(identifier):
+    try:
+        out = _security("find-generic-password", "-s", KEYCHAIN_SERVICE,
+                        "-a", identifier, "-w")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        blob = json.loads(out.stdout.strip())
+        return str(blob["username"]), str(blob["password"])
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _credentials_set(identifier, username, password):
+    blob = json.dumps({"username": username, "password": password})
+    _security("add-generic-password", "-U", "-s", KEYCHAIN_SERVICE,
+              "-a", identifier, "-w", blob)
+
+
+def _credentials_delete(identifier):
+    _security("delete-generic-password", "-s", KEYCHAIN_SERVICE,
+              "-a", identifier)
+
+
 def get(handler, path):
     if path == '/api/desktops':
         handler._json(listing())
         return True
+    match = re.fullmatch(r'/api/desktop/' + _DESKTOP_ID + r'/credentials', path)
+    if match:
+        found = _credentials_get(match[1]) \
+            if match[1] in targets() else None
+        if found is None:
+            handler._json({'stored': False})
+        else:
+            handler._json({'stored': True, 'username': found[0],
+                           'password': found[1]})
+        return True
     match = re.fullmatch(r'/api/desktop/(local|mac-\d+)/socket', path)
     if match:
         connect(handler, match[1])
+        return True
+    return False
+
+
+def post(handler, path):
+    match = re.fullmatch(r'/api/desktop/' + _DESKTOP_ID + r'/credentials', path)
+    if match:
+        if match[1] not in targets():
+            handler._json({'error': 'Unknown Mac'}, 404)
+            return True
+        body = handler._read_json()
+        username = str(body.get('username') or '')
+        password = str(body.get('password') or '')
+        if not password:
+            handler._json({'error': 'a password is required'}, 400)
+            return True
+        _credentials_set(match[1], username, password)
+        handler._json({'stored': True})
+        return True
+    match = re.fullmatch(r'/api/desktop/' + _DESKTOP_ID
+                         + r'/credentials/forget', path)
+    if match:
+        _credentials_delete(match[1])
+        handler._json({'stored': False})
         return True
     return False

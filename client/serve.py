@@ -858,6 +858,8 @@ class Handler(BaseHTTPRequestHandler):
         if why:
             return self._json({"error": why}, 403)
         try:
+            if desktops.post(self, path):
+                return
             if office_api.post(self, path):
                 return
             return self._post_route(path)

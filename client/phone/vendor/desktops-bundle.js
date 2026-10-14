@@ -14084,6 +14084,9 @@ var selected = null;
 var command = false;
 var composing = false;
 var credentials = [];
+var stored = null;
+var authTry = null;
+var failedStored = false;
 function status(text) {
   $("status").textContent = text;
 }
@@ -14129,6 +14132,9 @@ function stop() {
   previous?.disconnect();
   $("password").value = "";
   if ($("login").open) $("login").close();
+  stored = null;
+  authTry = null;
+  failedStored = false;
   $("typing").value = "";
   $("typing-label").hidden = true;
   $("screen").replaceChildren();
@@ -14141,7 +14147,29 @@ function leave() {
   history.replaceState(null, "", "/desktops");
   refresh();
 }
-function open(machine) {
+async function loadStored(machine) {
+  try {
+    const response = await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.stored ? { username: data.username || "", password: data.password || "" } : null;
+  } catch {
+    return null;
+  }
+}
+async function saveStored(machine, creds) {
+  try {
+    await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(creds) });
+  } catch {
+  }
+}
+async function forgetStored(machine) {
+  try {
+    await fetch(`/api/desktop/${encodeURIComponent(machine.id)}/credentials/forget`, { method: "POST" });
+  } catch {
+  }
+}
+async function open(machine, afterFailure = false) {
   stop();
   selected = machine;
   $("chooser").hidden = true;
@@ -14149,6 +14177,7 @@ function open(machine) {
   $("machine-name").textContent = machine.name;
   status("Connecting\u2026");
   history.replaceState(null, "", `#${machine.id}`);
+  stored = afterFailure ? null : await loadStored(machine);
   const socket = new URL(`/api/desktop/${encodeURIComponent(machine.id)}/socket`, location.href);
   socket.protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const current = new RFB($("screen"), socket.href);
@@ -14161,23 +14190,40 @@ function open(machine) {
   $("fit").setAttribute("aria-pressed", "true");
   $("pan").setAttribute("aria-pressed", "false");
   current.addEventListener("connect", () => {
-    if (rfb === current) {
-      status("Connected");
-      $("screen").focus();
+    if (rfb !== current) return;
+    status("Connected");
+    $("screen").focus();
+    if (authTry && authTry.source === "typed") {
+      const creds = { username: authTry.username, password: authTry.password };
+      authTry = { source: "saved" };
+      void saveStored(machine, creds);
     }
   });
   current.addEventListener("credentialsrequired", (event) => {
     if (rfb !== current) return;
     credentials = event.detail.types;
+    if (!authTry && stored) {
+      authTry = { source: "stored" };
+      current.sendCredentials({ username: credentials.includes("username") ? stored.username : "", password: stored.password });
+      status("Signing in\u2026");
+      return;
+    }
     $("username-label").hidden = !credentials.includes("username");
     $("username").required = credentials.includes("username");
     $("login-title").textContent = `Sign in to ${machine.name}`;
+    $("login-message").textContent = afterFailure ? "The saved password didn't work \u2014 enter the current account name and password for this Mac." : "Use the account name and password you use on this Mac.";
     status("Waiting for your Mac login");
     $("login").showModal();
     (credentials.includes("username") ? $("username") : $("password")).focus();
   });
   current.addEventListener("securityfailure", () => {
-    if (rfb === current) status("Mac login was refused. Check the account name, password and Screen Sharing access.");
+    if (rfb !== current) return;
+    if (authTry && authTry.source === "stored") {
+      failedStored = true;
+      stored = null;
+      void forgetStored(machine);
+    }
+    status("Mac login was refused. Check the account name, password and Screen Sharing access.");
   });
   current.addEventListener("disconnect", (event) => {
     if (rfb !== current) return;
@@ -14185,6 +14231,10 @@ function open(machine) {
     releaseCommand();
     $("password").value = "";
     if ($("login").open) $("login").close();
+    if (failedStored) {
+      void open(machine, true);
+      return;
+    }
     const prior = $("status").textContent;
     if (!prior.includes("refused")) status(event.detail.clean ? "Disconnected" : "Connection ended. Check that the Mac is awake and Screen Sharing is on.");
     const retry = node("button", "Reconnect");
@@ -14202,7 +14252,9 @@ $("login").addEventListener("cancel", (event) => {
 $("login-form").addEventListener("submit", (event) => {
   event.preventDefault();
   if (!rfb) return;
-  rfb.sendCredentials({ username: credentials.includes("username") ? $("username").value : "", password: $("password").value });
+  const creds = { username: credentials.includes("username") ? $("username").value : "", password: $("password").value };
+  authTry = { source: "typed", username: creds.username, password: creds.password };
+  rfb.sendCredentials(creds);
   $("password").value = "";
   $("login").close();
   status("Signing in\u2026");
