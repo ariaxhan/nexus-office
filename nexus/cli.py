@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 from . import flights as fl
+from . import receipt
 from . import tower
 from . import work
 from .ledger import TERMINAL, Ledger, loads
@@ -314,6 +315,40 @@ def cmd_work(args):
         return 1
 
 
+def cmd_receipt_emit(args):
+    try:
+        print(receipt.emit(args.outcome, args.artifact or [], args.verification, args.evidence or [], args.next))
+    except (receipt.Rejected, ValueError) as exc:
+        print(f"receipt would be rejected: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_receipt_check(args):
+    """Consume one completion comment: RECEIPT advances; prose goes back to CLAIMED, said on the issue."""
+    argv = ["gh", "api", f"repos/{args.repo}/issues/comments/{args.comment}"] if args.comment else \
+        ["gh", "api", "--paginate", "--slurp", f"repos/{args.repo}/issues/{args.issue}/comments?per_page=100"]
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    if proc.returncode:
+        print(proc.stderr.strip() or "gh api failed", file=sys.stderr)
+        return 1
+    data = json.loads(proc.stdout)
+    pages = [] if args.comment else [c for page in data for c in page]
+    item = data if args.comment else (pages[-1] if pages else None)
+    if not item:
+        print("no comment to consume", file=sys.stderr)
+        return 1
+    verdict = dict(receipt.consume(item.get("body")), comment=item.get("html_url"))
+    if verdict["transition"] == "CLAIMED" and args.post:
+        body = receipt.rejection(verdict["reasons"], item.get("html_url"))
+        posted = subprocess.run(["gh", "issue", "comment", str(args.issue), "-R", args.repo, "--body", body],
+                                capture_output=True, text=True, timeout=60)
+        verdict["rejection_url"] = posted.stdout.strip() or None
+        verdict["rejection_error"] = posted.stderr.strip() if posted.returncode else None
+    print(json.dumps(verdict, sort_keys=True))
+    return 0 if verdict["transition"] == "RECEIPT" else 2
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="nexus", description="one ledger, one tower")
     parser.add_argument("--ledger", default=None, help="ledger path (default: NEXUS_LEDGER)")
@@ -438,6 +473,22 @@ def build_parser():
     sandbox_run = sandbox_subs.add_parser("run", help=argparse.SUPPRESS)
     sandbox_run.add_argument("--timeout", type=float, default=600.0)
     sandbox_run.set_defaults(func=cmd_sandbox_run)
+
+    receipt_p = subs.add_parser("receipt", help="lane completion receipts (#291)")
+    receipt_subs = receipt_p.add_subparsers(dest="receipt_command", required=True)
+    emit_p = receipt_subs.add_parser("emit", help="print a receipt block for an issue comment")
+    emit_p.add_argument("--outcome", required=True, choices=receipt.OUTCOMES)
+    emit_p.add_argument("--artifact", action="append", help="a durable pointer: commit, file, receipt")
+    emit_p.add_argument("--verification", required=True, help="the surface where the outcome is proven")
+    emit_p.add_argument("--evidence", action="append", help="a bounded fact from that surface")
+    emit_p.add_argument("--next", default="none", help="none | <owner>: <what>")
+    emit_p.set_defaults(func=cmd_receipt_emit)
+    check_p = receipt_subs.add_parser("check", help="consume a completion comment; exit 0 RECEIPT, 2 CLAIMED")
+    check_p.add_argument("--repo", required=True)
+    check_p.add_argument("--issue", type=int, required=True)
+    check_p.add_argument("--comment", help="comment id (default: the issue's newest comment)")
+    check_p.add_argument("--post", action="store_true", help="post the rejection on the issue")
+    check_p.set_defaults(func=cmd_receipt_check)
 
     install = subs.add_parser("install", help="write and load the launchd plist")
     install.add_argument("--interval", type=float, default=5.0)

@@ -17,6 +17,7 @@ import threading
 import time
 
 from . import flights
+from . import receipt
 from . import terminal
 from .ledger import Ledger, LedgerError, TERMINAL, default_path, loads, new_id
 
@@ -1047,6 +1048,9 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                                  verification_id=verification_id, result="passed",
                                  exact_head=result["sha"], proof_ref=proof_ref,
                                  evidence_ref=proof_ref)
+    post_receipt(led, fid, repo, number, receipt.emit(
+        "done", [f"commit {result['sha']}"] + ([f"pr {result['pr_url']}"] if result.get("pr_url") else []),
+        f"tower receipt for flight {fid}", [(why or "no reason given").splitlines()[0]] + ([proof_ref] if proof_ref else [])))
     if close_then_done(led, fid, {"repo": repo, "task": task["id"], "issue": issue},
                        "tower receipt: " + why, [proof_ref] if proof_ref else []) != "done":
         return "pending"
@@ -1056,6 +1060,15 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                                  result_kind="tower receipt", evidence_ref=proof_ref)
     cleanup_held(led, entry, task)
     return "done"
+
+
+def post_receipt(led, fid, repo, number, body):
+    """A Tower lane's completion on its issue, in the #291 grammar. A failed post never blocks the item."""
+    proc = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body", body],
+                          capture_output=True, text=True, timeout=notify_timeout(60))
+    url = proc.stdout.strip()
+    led.event("work.receipt_posted", fid, {"url": url or None, "error": proc.stderr.strip()[:300] or None}, "work")
+    return url
 
 
 def transient_hold(led, fid, reason, result=None):
@@ -1069,10 +1082,11 @@ def transient_hold(led, fid, reason, result=None):
 
 def _not_done(led, fid, repo, number, why):
     from . import contract
-    url = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body",
-                          f"Nexus flight {fid}: not done. {why.splitlines()[0]}. Left open for the next attempt."],
-                         capture_output=True, text=True, timeout=notify_timeout(60)).stdout.strip()
     held = why.startswith(contract.UNVERIFIED)
+    url = post_receipt(led, fid, repo, number, f"Nexus flight {fid}: not done. Left open for the next attempt.\n\n"
+                       + receipt.emit("blocked" if held else "failed", [f"flight {fid}"],
+                                      f"tower receipt check for flight {fid}", [(why or "no reason given").splitlines()[0]],
+                                      "aria: look at the hold" if held else "tower: next attempt"))
     if held:  # the commit is on origin; another flight would only find no change
         subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
                         "--add-label", "hold"], capture_output=True, text=True, timeout=notify_timeout(60))
