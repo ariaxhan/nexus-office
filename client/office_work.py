@@ -162,7 +162,10 @@ def _build(world):
     # A desk repo missing from the current snapshot (a fetch error upstream) must
     # still resolve: the desk list is itself the registration for its repos.
     known = {row['repo'] for row in snapshot.get('stations') or []}
-    known.update(root.get('name') for root in objects.roots().values())
+    try:
+        known.update(root.get('name') for root in objects.roots().values())
+    except Exception:  # noqa: BLE001 - an aid to identity resolution, never a blocker
+        pass
     for desk in DESKS:
         known.update(desk['repos'])
     known.discard(None)
