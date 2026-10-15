@@ -370,14 +370,33 @@ def summary(db, now):
     """The outcome numbers, raw. `card` turns them into the sentence a person reads."""
     landings = _landings(db, now)
     newest = db.execute("SELECT ts FROM events ORDER BY id DESC LIMIT 1").fetchone()
-    quarantined = db.execute("SELECT name,quarantined_at FROM plans WHERE quarantined_at IS NOT NULL "
-                             "ORDER BY quarantined_at").fetchall()
+    # Issue #273: a stopped plan is one of two facts, never a bare fault.
+    # With a live repair task it is REPAIRING (the system's own work, in
+    # progress); only a stopped plan whose repair is exhausted -- or a
+    # ledger from before the mechanism, where no repair can exist -- is
+    # held for a person.
+    columns = {row[1] for row in db.execute("PRAGMA table_info(plans)")}
+    if "repair_task_id" in columns:
+        rows = db.execute(
+            "SELECT p.name, p.quarantined_at, t.state FROM plans p "
+            "LEFT JOIN tasks t ON t.id = p.repair_task_id "
+            "WHERE p.quarantined_at IS NOT NULL ORDER BY p.quarantined_at").fetchall()
+        live = ('candidate', 'ranked', 'accepted', 'running')
+        repairing = [{'plan': name, 'since': since}
+                     for name, since, state in rows if state in live]
+        held = [{'plan': name, 'since': since}
+                for name, since, state in rows if state not in live]
+    else:
+        rows = db.execute("SELECT name,quarantined_at FROM plans WHERE quarantined_at IS NOT NULL "
+                          "ORDER BY quarantined_at").fetchall()
+        repairing = []
+        held = [{'plan': name, 'since': since} for name, since in rows]
     return dict(_day(db, now), now=now, as_of=newest[0] if newest else None,
                 last_landed=_last_landed(db, landings),
                 landed_24h=sum(row['at'] >= now - DAY_S for row in landings),
                 landed_7d=sum(row['at'] >= now - WEEK_S for row in landings),
                 executed_7d=_executed(db, now - WEEK_S),
-                quarantined=[{'plan': name, 'since': since} for name, since in quarantined],
+                quarantined=held, repairing=repairing,
                 running=_in_air(db, now))
 
 
@@ -397,7 +416,7 @@ def _problems(s, tower):
         age = s['now'] - last['at']
         out.append('No change landed in ' + (f'{int(age // DAY_S)} days' if age >= 2 * DAY_S else _card.human(age)))
     overdue = sum(r['overdue'] for r in s['running'])
-    for n, one, many in ((len(s['quarantined']), 'plan quarantined', 'plans quarantined'),
+    for n, one, many in ((len(s['quarantined']), 'plan needs a person', 'plans need a person'),
                          (len(s['loops']), 'issue in a retry loop', 'issues in retry loops'),
                          (overdue, 'flight past its timeout', 'flights past their timeout')):
         if n:
@@ -434,11 +453,16 @@ def _count_facts(s):
 
 
 def _stuck_facts(s):
-    held = ', '.join(f"{q['plan']} ({_card.human(s['now'] - q['since'])})" for q in s['quarantined'])
+    held = [f"{q['plan']} ({_card.human(s['now'] - q['since'])}) needs a person"
+            for q in s['quarantined']]
+    fixing = [f"{q['plan']} ({_card.human(s['now'] - q['since'])}) repairing"
+              for q in s['repairing']]
+    stopped = ', '.join(held + fixing)
     loops = s['loops']
     worst = f"{_named(loops[0])}: {loops[0]['flights']} flights, none landed" if loops else 'none'
     more = f' (+{len(loops) - 1} more)' if len(loops) > 1 else ''
-    return [_card.fact('quarantined plans', held or 'none', 'bad' if held else 'ok'),
+    return [_card.fact('stopped plans', stopped or 'none',
+                       'bad' if held else 'warn' if fixing else 'ok'),
             _card.fact('retry loops, 24 h', worst + more, 'bad' if loops else 'ok')]
 
 

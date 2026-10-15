@@ -65,6 +65,31 @@ def cmd_tower_run(args):
     return 0
 
 
+def cmd_repair_drain(args):
+    from . import selfrepair as sr
+    led = _ledger(args)
+    report = sr.drain(led, only_task_id=args.task)
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+def cmd_repair_file(args):
+    """jobrun's intake (issue #273): a launch refused on a dead path files
+    its repair task with the Tower in the same motion. Reads nothing on the
+    vault -- the drain re-reads the registry itself when it works the task."""
+    from . import selfrepair as sr
+    led = _ledger(args)
+    registry = args.registry or os.path.expanduser(
+        "~/Developer/Vaults/_meta/services/jobs/registry.jsonl")
+    packet = {"kind": "job", "job_id": args.job,
+              "signature": sr.SIGNATURE_DEAD_POINTER, "dead": [args.dead],
+              "registry": registry, "jobctl": args.jobctl,
+              "reason": f"jobrun preflight refused {args.job}: dead path {args.dead}",
+              "host": os.uname().nodename, "opened_at": time.time()}
+    print(sr.open_repair(led, packet))
+    return 0
+
+
 def cmd_status(args):
     print(tower.status(_ledger(args)))
     return 0
@@ -379,6 +404,21 @@ def build_parser():
             sub.add_argument("--reason", help="why; shown by plans list")
         sub.set_defaults(func=cmd_plans_set)
 
+
+    repair_drain_p = subs.add_parser(
+        "repair-drain", help="work the open repair tasks (the repair plan's flight command)")
+    repair_drain_p.add_argument("--task", default=None,
+                                help="only this repair task (default: the flight's own)")
+    repair_drain_p.set_defaults(func=cmd_repair_drain)
+
+    repair_file_p = subs.add_parser(
+        "repair-file", help="file a repair from a jobrun preflight refusal")
+    repair_file_p.add_argument("--job", required=True)
+    repair_file_p.add_argument("--dead", required=True,
+                               help="the dead path that refused the launch")
+    repair_file_p.add_argument("--jobctl", required=True)
+    repair_file_p.add_argument("--registry", default=None)
+    repair_file_p.set_defaults(func=cmd_repair_file)
 
     run_p = subs.add_parser("flight-run", help=argparse.SUPPRESS)
     run_p.add_argument("--workspace", required=True)

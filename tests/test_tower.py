@@ -19,6 +19,7 @@ os.environ.setdefault("OFFICE_HUMAN_ASKS_DB",
                       os.path.join(tempfile.mkdtemp(prefix="nexus-asks-"), "human-asks.sqlite"))
 
 from nexus import flights as fl  # noqa: E402
+from nexus import selfrepair as sr  # noqa: E402
 from nexus import tower  # noqa: E402
 from nexus import terminal  # noqa: E402
 from nexus.ledger import Ledger  # noqa: E402
@@ -179,7 +180,8 @@ class Acceptance(TowerCase):
 
     def test_a_quarantined_plan_accepts_nothing(self):
         plan = self.plan()
-        self.led.quarantine_plan(plan, "test")
+        repair = self.led.add_task("repair", origin="self-repair")
+        self.led.quarantine_plan(plan, "test", repair_task_id=repair)
         task = self.led.add_task("a", origin="plan", plan_id=plan)
         tower.accept_tasks(self.led)
         self.assertEqual("rejected_policy", self.led.task(task)["state"])
@@ -430,29 +432,63 @@ class StartFailures(TowerCase):
         self.led.set_state(flight, "running", expect="queued", now=now)
         self.led.fail(flight, code, "synthetic", expect="running", now=now)
 
-    def fly_to_failure(self, now):
-        self.assertEqual(1, self.tick(now=now)["launched"])
-        flight = self.led.flights(states=("running",))[0]
-        self.assertTrue(wait_for(lambda: os.path.exists(fl.result_path(flight["workspace"]))))
-        self.assertEqual(1, self.tick(now=now)["failed"])
+    def own_flights(self, plan):
+        """The plan's scheduled flights, excluding the repair loop's proof
+        flights (issue #273: a failing plan now also flies repairs)."""
+        proof = {t["id"] for t in self.led.tasks()
+                 if (t["dedupe_key"] or "").startswith("repair-proof:")}
+        return [f for f in self.led.flights(plan_id=plan)
+                if f["task_id"] not in proof]
+
+    def fly_to_failure(self, plan, now, failed_so_far):
+        # tick until one more of the plan's own flights has failed; the
+        # scheduler may create the next flight inside the same tick, and
+        # two failures can land in one tick -- the count is the contract
+        for _ in range(100):
+            self.tick(now=now)
+            failed = [f for f in self.own_flights(plan) if f["state"] == "failed"]
+            if len(failed) > failed_so_far:
+                return len(failed)
+            for flight in self.own_flights(plan):
+                if flight["state"] == "running" and flight["workspace"]:
+                    wait_for(lambda f=flight: os.path.exists(
+                        fl.result_path(f["workspace"])), timeout=2)
+        raise AssertionError("the plan's flight did not fail")
 
     def test_five_start_failures_back_off_under_their_own_code_and_do_not_quarantine(self):
-        plan = self.plan(cmd="/nonexistent/.venv/bin/python job.py", outputs=[], budget={"max_retries": 0})
+        # The program exists; its interpreter does not (a shebang pointing
+        # at a moved venv -- the shell answers 126 and nothing ever runs).
+        # A program path that does not exist at all is a different class
+        # since issue #273: launch refuses it into repair before any
+        # flight can burn on it, so it can no longer stand in here.
+        stub = os.path.join(self.dir, "python-stub")
+        with open(stub, "w") as handle:
+            handle.write("#!/nonexistent/.venv/bin/python\n")
+        os.chmod(stub, 0o755)
+        plan = self.plan(cmd=f"{stub} job.py", outputs=[], budget={"max_retries": 0})
         now = 1_000_000.0
+        done = 0
         for streak in range(1, 7):
-            self.fly_to_failure(now)
+            done = self.fly_to_failure(plan, now, done)
             wait = min(60 * 2 ** (streak - 1), 3600)
-            self.assertEqual(0, self.tick(now=now + wait - 1)["launched"], f"no backoff after {streak}")
+            before = len(self.own_flights(plan))
+            self.tick(now=now + wait - 1)
+            self.assertEqual(before, len(self.own_flights(plan)),
+                             f"no backoff after {streak}")
             now += wait
-        failed = self.led.flights(states=("failed",))
+        failed = [f for f in self.own_flights(plan) if f["state"] == "failed"]
         self.assertEqual(6, len(failed))
         for flight in failed:
             self.assertIn('"code": "start_failed"', flight["result"])
-            self.assertIn('"exit_code": 127', flight["result"])
+            self.assertIn('"exit_code": 126', flight["result"])
             self.assertEqual(1, flight["attempt"], "a flight that never started spent a retry")
         self.assertIsNone(self.led.plan(plan)["quarantined_at"])
         self.assertEqual("running", self.led.tasks()[0]["state"])
-        self.assertEqual(1, len(self.led.flights(states=("queued",))))
+        # the next try is queued, or already flying if the tick that
+        # reaped the last failure also launched it -- either way the plan
+        # is left with exactly one next try, not abandoned, not doubled
+        self.assertEqual(1, len([f for f in self.own_flights(plan)
+                                 if f["state"] in ("queued", "running")]))
 
     def test_a_command_that_never_starts_still_ends_quarantined(self):
         plan = self.plan(schedule={})
@@ -476,55 +512,78 @@ class StartFailures(TowerCase):
                       self.led.events(kind="plan.quarantined", subject=plan)[-1]["payload"])
 
 
-class QuarantineReachesAPerson(TowerCase):
-    def asks(self, plan):
-        return [a for a in tower._human_asks().listing()["items"] if a["source_ref"] == f"nexus-plan:{plan}"]
+class QuarantineRepairsItself(TowerCase):
+    """Issue #273: a quarantine carries its repair; a person hears about it
+    only when the repair itself has failed -- tier 3, with the history."""
+
+    def asks(self):
+        return tower._human_asks().listing()["items"]
 
     def quarantined(self, name="podcast"):
         plan = self.plan(name=name, schedule={})
         flight = self.led.create_flight(plan)
         self.led.set_state(flight, "running", expect="queued")
         self.led.fail(flight, "exit_nonzero", "exit 3", expect="running")
-        self.led.quarantine_plan(plan, "5 consecutive failures")
+        sr.attach_quarantine(self.led, self.led.plan(plan),
+                             "5 consecutive failures")
         return plan
 
-    def test_a_quarantine_makes_exactly_one_ask_however_many_ticks_follow(self):
-        plan = self.quarantined()
-        tower.run(self.led, interval=0, iterations=4, root=self.root)
-        [ask] = self.asks(plan)
-        for part in ("`podcast`", "5 consecutive failures", "exit_nonzero: exit 3",
-                     "nexus plans release podcast", "leave it stopped"):
-            self.assertIn(part, ask["action"])
-        self.assertEqual(1, len(self.led.events(kind="plan.quarantine_raised", subject=plan)))
-        self.assertEqual(1, tower.settle_quarantine_asks(self.led.plan(plan), "released"))
-        self.assertEqual([], self.asks(plan))
+    def test_a_quarantine_with_a_live_repair_asks_nobody(self):
+        plan = self.quarantined(name="podcast-live")
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            tower.run(self.led, interval=0, iterations=2, root=self.root)
+            if self.led.task(self.led.plan(plan)["repair_task_id"])["state"] == "done":
+                break
+        task = self.led.task(self.led.plan(plan)["repair_task_id"])
+        self.assertEqual("done", task["state"])
+        self.assertEqual("self-repair", task["origin"])
+        mine = [a for a in self.asks() if "podcast-live" in a["action"]]
+        self.assertEqual([], mine)
+        self.assertEqual([], self.led.events(kind="plan.quarantine_raised",
+                                             subject=plan))
 
-    def test_a_second_quarantine_of_the_same_plan_asks_again(self):
-        plan = self.quarantined()
-        tower._raise_quarantines(self.led)
-        self.led.unquarantine_plan(plan)
-        tower.settle_quarantine_asks(self.led.plan(plan), "released")
-        self.led.quarantine_plan(plan, "5 consecutive failures", now=time.time() + 5)
+    def test_an_abandoned_repair_reaches_a_person_once(self):
+        plan = self.quarantined(name="podcast-abandoned")
+        task = self.led.plan(plan)["repair_task_id"]
+        self.led.set_task_state(task, "abandoned", decided_by="test",
+                                expect="candidate")
         self.assertEqual(1, tower._raise_quarantines(self.led))
-        self.assertEqual(1, len(self.asks(plan)))
+        self.assertEqual(0, tower._raise_quarantines(self.led))
+        [ask] = [a for a in self.asks()
+                 if a["source_ref"] == "nexus-self-repair"
+                 and "podcast-abandoned" in a["action"]]
+        self.assertIn("self-repair mechanism is stopped", ask["action"])
+        self.assertIn("podcast-abandoned", ask["action"])
 
-    def test_an_error_the_gate_refuses_still_asks_without_it(self):
-        plan = self.plan(name="deployer", schedule={})
-        flight = self.led.create_flight(plan)
-        self.led.set_state(flight, "running", expect="queued")
-        self.led.fail(flight, "exit_nonzero", "please confirm the deploy", expect="running")
-        self.led.quarantine_plan(plan, "5 consecutive failures")
-        self.assertEqual(1, tower._raise_quarantines(self.led))
-        self.assertNotIn("confirm", self.asks(plan)[0]["action"])
+    def test_three_failed_attempts_escalate_with_the_full_history(self):
+        plan = self.quarantined(name="podcast-tiers")
+        task = self.led.plan(plan)["repair_task_id"]
+        self.led.set_task_state(task, "running", decided_by="test",
+                                expect="candidate")
+        for i in range(3):
+            self.led.event("repair.attempt_failed", task,
+                           {"attempt": i + 1, "why": f"cause {i}"},
+                           "self-repair")
+        out = sr.verify(self.led)
+        self.assertEqual(1, out["escalated"])
+        self.assertEqual("abandoned", self.led.task(task)["state"])
+        [event] = self.led.events(kind="repair.escalated", subject=task)
+        self.assertIn("human", event["payload"])
 
-    def test_a_dead_ask_path_never_touches_the_tick_and_is_tried_once(self):
-        plan = self.quarantined()
+    def test_a_dead_ask_path_never_touches_the_tick(self):
+        plan = self.quarantined(name="podcast-muted")
         self.plan(name="healthy")
-        with mock.patch.object(tower, "_human_asks", side_effect=RuntimeError("asks are down")):
+        task = self.led.plan(plan)["repair_task_id"]
+        self.led.set_task_state(task, "abandoned", decided_by="test",
+                                expect="candidate")
+        with mock.patch.object(sr, "_human_asks",
+                               side_effect=RuntimeError("asks are down")):
             tower.run(self.led, interval=0, iterations=3, root=self.root)
         self.assertEqual([], self.led.events(kind="tower.tick_error"))
-        self.assertTrue(self.led.flights(plan_id=self.led.plan_by_name("healthy")["id"]))
-        [raised] = self.led.events(kind="plan.quarantine_raised", subject=plan)
+        self.assertTrue(self.led.flights(
+            plan_id=self.led.plan_by_name("healthy")["id"]))
+        [raised] = self.led.events(kind="repair.escalated", subject=plan)
         self.assertIn("asks are down", raised["payload"])
 
 
@@ -547,7 +606,9 @@ class StatusLeadsWithQuarantine(TowerCase):
         self.plan(name="healthy")
         self.assertTrue(tower.status(self.led).startswith("ledger "))
         stopped = self.plan(name="code-work")
-        self.led.quarantine_plan(stopped, "5 consecutive failures", now=time.time())
+        repair = sr.attach_quarantine(self.led, self.led.plan(stopped),
+                                      "5 consecutive failures")
         first = tower.status(self.led).splitlines()[0]
-        self.assertTrue(first.startswith("QUARANTINED  code-work since "), first)
+        self.assertTrue(first.startswith("REPAIRING  code-work since "), first)
+        self.assertIn(repair, first)
         self.assertNotIn("healthy", first)

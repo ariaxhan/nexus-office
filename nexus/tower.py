@@ -29,6 +29,7 @@ import time
 
 from . import flights as fl
 from . import landing as ld
+from . import selfrepair as sr
 from . import terminal
 from .ledger import Ledger, loads
 
@@ -111,6 +112,9 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report["reconciled_landings"] = _reconcile_landings(ledger, now, landing_probe)
     report["landed"] = _land(ledger, now)
     report["quarantined"] = _quarantine(ledger, now)
+    report["repair_adopted"] = sr.adopt(ledger, now)
+    report["repair_triggered"] = sr.triggers(ledger, now)
+    report["repair"] = sr.verify(ledger, now)
 
     if is_paused(ledger):
         report["paused"] = True
@@ -734,11 +738,20 @@ def _start_failed(flight):
 
 
 def _history(ledger, plan):
-    """This plan's flights since its last release, newest first."""
+    """This plan's flights since its last release, newest first.
+
+    The self-repair loop's proof flights are excluded (issue #273): they
+    are the mechanism re-running the worker, accounted by the repair
+    lifecycle -- counting them here would let the repair's own re-runs
+    extend the failure streaks they are meant to clear."""
     released = ledger.events(kind="plan.unquarantined", subject=plan["id"])
     since = released[-1]["ts"] if released else 0
     # a release means "count from here", or it would re-fire on the same failures
-    return [f for f in ledger.flights(plan_id=plan["id"], limit=HISTORY) if f["created_at"] > since]
+    proof = {t["id"] for t in ledger.tasks()
+             if t["plan_id"] == plan["id"]
+             and (t["dedupe_key"] or "").startswith("repair-proof:")}
+    return [f for f in ledger.flights(plan_id=plan["id"], limit=HISTORY)
+            if f["created_at"] > since and f["task_id"] not in proof]
 
 
 def _start_streak(history):
@@ -782,7 +795,9 @@ def _quarantine(ledger, now):
             reason = f"{limit} consecutive failures"
         else:
             continue
-        ledger.quarantine_plan(plan["id"], reason, now=now)
+        signature = ("start-failed" if starts >= START_QUARANTINE_AFTER
+                     else "consecutive-failures")
+        sr.attach_quarantine(ledger, plan, reason, signature=signature, now=now)
         count += 1
     return count
 
@@ -800,50 +815,39 @@ def _ask_ref(plan):
     return f"nexus-plan:{plan['id']}"
 
 
-def _ask_release(plan, reason, last):
-    """One request per quarantine: its id carries when the plan stopped, so asking twice is one ask."""
-    asks = _human_asks()
-    name = plan["name"]
-    with contextlib.closing(asks.connect()) as db:
-        for error in (f" Last error: {last}.", ""):  # the gate judges the wording; the error text is not ours
-            try:
-                return asks.request_human_input(
-                    db, identifier=f"{_ask_ref(plan)}:{int(plan['quarantined_at'])}",
-                    execution_ref=_ask_ref(plan), gate_type="new_judgment",
-                    action=(f"Tower stopped plan `{name}`: {reason}.{error} Choose: let it fly again "
-                            f"(`nexus plans release {name}`) or leave it stopped."),
-                    why_agent_cannot_do_it="A quarantine is Tower refusing to keep failing; Tower never lifts its own.",
-                    authorization_gap="Tower may stop a plan; only a person may put a stopped plan back in the air.",
-                    resume_after_answer=f"`nexus plans release {name}` schedules it on the next tick; "
-                                        "left alone it stays stopped.")
-            except ValueError:
-                if not error:
-                    raise
-
-
 def _raise_quarantines(ledger, now=None):
-    """Tell a person about each quarantine, once (three plans sat stopped nine hours unseen).
-
-    The attempt is recorded whatever its outcome and is not repeated: one ask per quarantine,
-    never one per tick. Called beside the tick, not in it; nothing here can fail a tick."""
+    """Tier-3 safety net (issue #273): a quarantine no longer raises an ask
+    on entry -- each carries its repair from the same transition that
+    stopped the plan, and the repair loop works it. This pass watches the
+    two states that must never be silent: the repair plan itself stopped,
+    and a quarantine whose repair ended without its human escalation.
+    Called beside the tick, not in it; nothing here can fail a tick."""
+    now = now if now is not None else time.time()
     raised = 0
+    repair = sr.repair_plan(ledger)
     for plan in ledger.plans():
-        at = plan["quarantined_at"]
-        told = ledger.events(kind="plan.quarantine_raised", subject=plan["id"]) if at is not None else None
-        if at is None or (told and loads(told[-1]["payload"], {}).get("quarantined_at") == at):
+        if plan["quarantined_at"] is None:
             continue
-        stopped = ledger.events(kind="plan.quarantined", subject=plan["id"])
-        reason = loads(stopped[-1]["payload"], {}).get("reason", "quarantined") if stopped else "quarantined"
-        failed = ledger.flights(states=("failed",), plan_id=plan["id"], limit=1)
-        error = ((loads(failed[0]["result"], {}) or {}).get("error") or {}) if failed else {}
-        last = f"{error.get('code', 'unknown')}: {str(error.get('detail', ''))[:200]}"
-        outcome = {"quarantined_at": at, "reason": reason, "last_error": last}
-        try:
-            outcome["ask"] = _ask_release(plan, reason, last)
-            raised += 1
-        except Exception as exc:  # noqa: BLE001 - a failed notification is recorded, never raised
-            outcome["error"] = repr(exc)[:200]
-        ledger.event("plan.quarantine_raised", plan["id"], outcome, "tower", now)
+        told = [e for e in ledger.events(kind="repair.escalated", subject=plan["id"])
+                if (loads(e["payload"], {}) or {}).get("tier") == "human"]
+        if repair is not None and plan["id"] == repair["id"]:
+            if not told:
+                sr.escalate_mechanism(
+                    ledger, plan, "the repair plan itself is quarantined", now)
+                raised += 1
+            continue
+        task = ledger.task(plan["repair_task_id"]) if plan["repair_task_id"] else None
+        if task is None:
+            continue  # the tick's adopt pass attaches the repair first
+        if task["state"] == "abandoned":
+            escalated = [e for e in ledger.events(kind="repair.escalated",
+                                                  subject=task["id"])
+                         if (loads(e["payload"], {}) or {}).get("tier") == "human"]
+            if not escalated and not told:
+                sr.escalate_mechanism(
+                    ledger, plan,
+                    f"repair {task['id']} was abandoned without escalation", now)
+                raised += 1
     return raised
 
 
@@ -982,10 +986,33 @@ def _launch(ledger, now, root):
     for row in ledger.flights(states=("running",)):
         running[row["plan_id"]] = running.get(row["plan_id"], 0) + 1
     queued = sorted(ledger.flights(states=("queued",)), key=lambda r: r["created_at"])
+    refused, refusal_handled = {}, set()
     for flight in queued:
         if ledger.plan(flight["plan_id"])["kind"] == "work":
             continue
         plan = ledger.plan(flight["plan_id"])
+        if plan["kind"] == "script" and plan["quarantined_at"] is None:
+            # Shape 3 (issue #273): the launch path verifies the pointers the
+            # command names BEFORE it runs. A dead pointer refuses loudly
+            # into repair -- it never burns start-failure backoff quietly.
+            if plan["id"] not in refused:
+                cmd = (loads(plan["inputs"], {}) or {}).get("cmd")
+                refused[plan["id"]] = sr.dead_pointers(cmd) if cmd else []
+            if refused[plan["id"]]:
+                dead = refused[plan["id"]]
+                ledger.fail(flight["id"], "dead_pointer",
+                            f"launch refused: {dead[0]} does not exist on this host",
+                            expect="queued", now=now)
+                _finish_failed(ledger, ledger.flight(flight["id"]), now)
+                if plan["id"] not in refusal_handled:
+                    refusal_handled.add(plan["id"])
+                    sr.attach_quarantine(ledger, plan,
+                                         f"launch refused: dead path {dead[0]}",
+                                         signature=sr.SIGNATURE_DEAD_POINTER,
+                                         now=now)
+                    ledger.event("plan.launch_refused", plan["id"],
+                                 {"dead": dead}, "tower", now)
+                continue
         timeout_s, _, concurrency = _budget(plan)
         if running.get(plan["id"], 0) >= concurrency:
             continue  # this plan is at its cap; another plan's flight may still go
@@ -1132,10 +1159,17 @@ def _tick_error(ledger, exc, now=None):
 def status(ledger, limit=15):
     """What the Office draws, as text: one read of the ledger, no other source."""
     lines = []
-    stopped = [f"{plan['name']} since {time.strftime('%m-%d %H:%M', time.localtime(plan['quarantined_at']))}"
-               for plan in ledger.plans() if plan["quarantined_at"]]
-    if stopped:  # first, alone: in the table below a stopped plan is one word among healthy rows
-        lines += [f"QUARANTINED  {'; '.join(stopped)}  (nexus plans release <plan>)", ""]
+    stopped = []
+    for plan in ledger.plans():
+        if not plan["quarantined_at"]:
+            continue
+        since = time.strftime('%m-%d %H:%M', time.localtime(plan["quarantined_at"]))
+        repair_id = plan["repair_task_id"] or "pending"
+        attempt = sr.attempts(ledger, plan["repair_task_id"]) + 1 \
+            if plan["repair_task_id"] else 1
+        stopped.append(f"{plan['name']} since {since} -- repair {repair_id}, attempt {attempt}")
+    if stopped:  # first, alone: a stopped plan is named WITH its repair, never as a bare fault
+        lines += [f"REPAIRING  {'; '.join(stopped)}  (issue #273)", ""]
     lines.append(f"ledger  {ledger.path}  v{ledger.user_version()}"
                  f"{'  PAUSED' if is_paused(ledger) else ''}")
     problems = ledger.integrity_check()
@@ -1146,7 +1180,7 @@ def status(ledger, limit=15):
     lines.append("")
     lines.append(f"{'PLAN':24} {'KIND':8} {'SCHEDULE':16} STATE")
     for plan in ledger.plans():
-        state = "quarantined" if plan["quarantined_at"] else (
+        state = "repairing" if plan["quarantined_at"] else (
             "enabled" if plan["enabled"] else "disabled")
         lines.append(f"{plan['name'][:24]:24} {plan['kind'][:8]:8} "
                      f"{json.dumps(loads(plan['schedule'], {}))[:16]:16} {state}")

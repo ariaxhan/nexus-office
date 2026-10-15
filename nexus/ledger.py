@@ -23,7 +23,7 @@ import uuid
 
 from . import terminal
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 TERMINAL = ("landed", "failed", "cancelled")
 
@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS plans (
   autonomy TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   quarantined_at REAL,
+  repair_task_id TEXT,
   created_at REAL NOT NULL
 );
 
@@ -382,6 +383,23 @@ class Ledger:
             self._backfill_state_events(c)
             c.execute("PRAGMA user_version=3")
 
+    def _migrate_v4(self):
+        """Self-repair (issue #273): a quarantine must carry its repair task.
+
+        The column holds the plan's live repair-task reference; the trigger
+        makes a bare quarantine unrepresentable at the store level -- an
+        UPDATE that stops a plan without naming its repair aborts."""
+        with self.tx() as c:
+            columns = {r[1] for r in c.execute("PRAGMA table_info(plans)")}
+            if "repair_task_id" not in columns:
+                c.execute("ALTER TABLE plans ADD COLUMN repair_task_id TEXT")
+            c.execute(
+                "CREATE TRIGGER IF NOT EXISTS plans_quarantine_requires_repair "
+                "BEFORE UPDATE OF quarantined_at ON plans "
+                "WHEN NEW.quarantined_at IS NOT NULL AND NEW.repair_task_id IS NULL "
+                "BEGIN SELECT RAISE(ABORT, 'quarantine requires a live repair task'); END")
+            c.execute("PRAGMA user_version=4")
+
     def _backfill_state_events(self, c):
         """A v1 row whose state has no event gets one, from nothing: v2 reads
         state from events, so the file must have exactly one reading."""
@@ -486,19 +504,56 @@ class Ledger:
         return json.loads(row["payload"]).get("reason") if row else None
 
 
-    def quarantine_plan(self, plan_id, reason, now=None):
+    def quarantine_plan(self, plan_id, reason, repair_task_id=None, now=None):
+        """Stop a plan AND name the repair that owns it -- one transition.
+
+        Issue #273, shape 2: a quarantine without a live repair task is
+        unrepresentable. The store enforces it too (the v4 trigger); this
+        check exists so the refusal is a LedgerError carrying the reason,
+        not a bare constraint failure."""
+        if not repair_task_id:
+            raise LedgerError(
+                "quarantine requires a live repair task (issue #273)")
+        task = self.task(repair_task_id)
+        if task is None or task["state"] not in TASK_LIVE:
+            raise LedgerError(
+                f"quarantine repair task {repair_task_id} is not live (issue #273)")
         now = now if now is not None else time.time()
         with self.tx():
             self.conn.execute(
-                "UPDATE plans SET quarantined_at=? WHERE id=? AND quarantined_at IS NULL",
-                (now, plan_id))
-            self._event("plan.quarantined", plan_id, {"reason": reason}, "tower", now)
+                "UPDATE plans SET quarantined_at=?, repair_task_id=? "
+                "WHERE id=? AND quarantined_at IS NULL",
+                (now, repair_task_id, plan_id))
+            self._event("plan.quarantined", plan_id,
+                        {"reason": reason, "repair_task_id": repair_task_id},
+                        "tower", now)
 
     def unquarantine_plan(self, plan_id, now=None):
         now = now if now is not None else time.time()
         with self.tx():
             self.conn.execute("UPDATE plans SET quarantined_at=NULL WHERE id=?", (plan_id,))
             self._event("plan.unquarantined", plan_id, {}, "tower", now)
+
+    def attach_repair(self, plan_id, repair_task_id, now=None):
+        """Name the repair that owns an already-stopped plan (adoption of
+        quarantines recorded before issue #273; the tick's adopt pass)."""
+        now = now if now is not None else time.time()
+        with self.tx():
+            self.conn.execute("UPDATE plans SET repair_task_id=? WHERE id=?",
+                              (repair_task_id, plan_id))
+            self._event("plan.repair_attached", plan_id,
+                        {"repair_task_id": repair_task_id}, "tower", now)
+
+    def set_plan_inputs(self, plan_id, inputs, now=None):
+        """A verified config correction (the self-repair envelope). The
+        correction lands as an event beside the write; nothing is silently
+        rewritten."""
+        now = now if now is not None else time.time()
+        with self.tx():
+            self.conn.execute("UPDATE plans SET inputs=? WHERE id=?",
+                              (_j(inputs), plan_id))
+            self._event("plan.inputs_corrected", plan_id, {"inputs": inputs},
+                        "self-repair", now)
 
     # ---- tasks -----------------------------------------------------------
 

@@ -8,6 +8,7 @@ import hashlib
 import os
 import re
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -136,6 +137,37 @@ def _source(value):
     return {'title': title.strip(), 'url': url, 'published_at': value.get('published_at')}
 
 
+_SURFACE_GUARD = 'unset'
+
+
+def _surface_guard_check(title, body, repair_ref):
+    """Issue #273, shape 1: a work post asserting a broken state may only
+    be published behind a live repair (open issue + a repair task verified
+    running at send time). The check lives here, in the publish path --
+    no composer can opt out, and a blocked post is never stored."""
+    global _SURFACE_GUARD
+    if _SURFACE_GUARD == 'unset':
+        try:
+            _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if _root not in sys.path:
+                sys.path.insert(0, _root)
+            from nexus import surface_guard as _guard
+            _SURFACE_GUARD = _guard
+        except Exception:
+            _SURFACE_GUARD = None
+    if _SURFACE_GUARD is None:
+        raise ValueError('surface guard unavailable: the broken-state check '
+                         'cannot run (issue #273)')
+    _ledger_path = os.environ.get('NEXUS_LEDGER') or os.path.expanduser(
+        '~/Library/Application Support/nexus/ledger.sqlite')
+    try:
+        _SURFACE_GUARD.assert_sendable(f'{title}\n{body}',
+                                       repair_ref=repair_ref,
+                                       ledger_path=_ledger_path)
+    except _SURFACE_GUARD.SurfaceBlocked as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def publish(item, replace=False):
     """Accept only locally authored posts with traceable source records."""
     if not isinstance(item, dict):
@@ -170,6 +202,8 @@ def publish(item, replace=False):
         _source({'title': asset['alt'], 'url': asset['source_url']})
         if asset.get('kind') == 'audio' and not asset.get('url', '').startswith('/api/media/content?id='):
             raise ValueError('Audio must use the Office podcast catalog')
+    if category == 'work':
+        _surface_guard_check(title, body, item.get('repair_ref'))
     now = time.time()
     payload = dict(item, sources=sources, media=media)
     payload['published_at'] = now

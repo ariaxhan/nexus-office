@@ -9,6 +9,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'client'))
 import tower_board
+from nexus import selfrepair as sr
 from nexus import terminal, tower, work
 from nexus.ledger import Ledger
 from tests import test_work
@@ -249,12 +250,23 @@ class TowerOutcomeCard(unittest.TestCase):
                          (facts['issue flights, 7 d']['value'], facts['issue flights, 7 d']['tone']))
         self.assertEqual('none', facts['failed flights, 24 h']['value'])  # that failure is two days old
 
-    def test_quarantined_plan_needs_a_person_and_is_not_idle(self):
+    def test_quarantined_plan_with_a_live_repair_is_repairing(self):
         self.land(self.issue(7, 'Ship the thing'), 3600)
-        self.led.quarantine_plan(self.ticker, '5 consecutive failures', now=self.now - 7200)
+        sr.attach_quarantine(self.led, self.led.plan(self.ticker),
+                             '5 consecutive failures', now=self.now - 7200)
         board, card, facts = self.card()
-        self.assertEqual((1, '1 plan quarantined'), (card['needs'], card['headline']))
-        self.assertEqual(('ticker (2h)', 'bad'), (facts['quarantined plans']['value'], facts['quarantined plans']['tone']))
+        self.assertEqual(0, card['needs'])
+        self.assertEqual(('ticker (2h) repairing', 'warn'), (facts['stopped plans']['value'], facts['stopped plans']['tone']))
+
+    def test_quarantined_plan_with_an_exhausted_repair_needs_a_person(self):
+        self.land(self.issue(7, 'Ship the thing'), 3600)
+        tid = sr.attach_quarantine(self.led, self.led.plan(self.ticker),
+                                   '5 consecutive failures', now=self.now - 7200)
+        self.led.set_task_state(tid, 'abandoned', decided_by='test',
+                                expect='candidate')
+        board, card, facts = self.card()
+        self.assertEqual((1, '1 plan needs a person'), (card['needs'], card['headline']))
+        self.assertEqual(('ticker (2h) needs a person', 'bad'), (facts['stopped plans']['value'], facts['stopped plans']['tone']))
         self.assertEqual('failed', board['activity'])
 
     def test_retry_loop_names_the_worst_issue(self):
