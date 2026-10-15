@@ -840,6 +840,25 @@ else:
         self.assertEqual(4, len(timeouts))  # comment and hold label, twice
         self.assertTrue(all(t >= work.NOTIFY_FLOOR_S for t in timeouts), timeouts)
 
+    def test_not_done_is_posted_as_a_parseable_receipt(self):
+        from nexus import contract, receipt
+        work.discover(self.led, self.entry)
+        fid = work.claim(self.led, self.entry['repo'], 1, os.getpid(), runner=True)
+        bodies = []
+
+        def fake(argv, **kwargs):
+            if 'comment' in argv:
+                bodies.append(argv[argv.index('--body') + 1])
+            return subprocess.CompletedProcess(argv, 0, 'https://comment/1', '')
+
+        patch('nexus.work.subprocess.run', side_effect=fake).start()
+        work._not_done(self.led, fid, self.entry['repo'], 1, contract.UNVERIFIED + ' landed abc')
+        verdict = receipt.consume(bodies[0])
+        self.assertEqual('RECEIPT', verdict['transition'], verdict)
+        self.assertEqual('blocked', verdict['receipt']['outcome'])
+        self.assertEqual('https://comment/1', work.latest(self.led, 'work.pending',
+                                                          self.led.flight(fid)['task_id'])['evidence'][0])
+
     def test_wave_child_gets_less_budget_than_the_parent_waits_and_term_before_kill(self):
         now, signals, spawned = [1000.0], [], []
 
