@@ -114,6 +114,13 @@ class PageTest(unittest.TestCase):
         self.assertRegex(bundle,r'steerAction\s*=\s*sendSteer\d*;')
         self.assertIn("nexus-office-shell-v23",worker)
 
+    def test_watch_page_revalidates_on_data_change_and_on_return(self):
+        app=(ROOT/'client/phone/office.js').read_text()
+        self.assertIn('const previousRevision=cached?.revision',app)
+        self.assertIn("cached.revision!==previousRevision",app)
+        self.assertIn("document.body.dataset.page==='watch')await route();",app)
+        self.assertIn("document.addEventListener('visibilitychange'",app)
+
     def test_request_diagnostics_retain_context_and_original_exception(self):
         logs=[]
         with patch.object(self.serve,'log',logs.append), \
