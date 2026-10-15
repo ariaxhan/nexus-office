@@ -25,10 +25,15 @@ import datetime as dt
 import re
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
+
+from nexus import intake
+from nexus.ledger import Ledger
 
 import office_github as github
 import office_objects as objects
+import run_board
 
 WINDOW = 24 * 3600
 DONE_DAYS = 7
@@ -157,6 +162,15 @@ def _doc_text():
         return ''
 
 
+def _intake():
+    """{(repo, number): intake walk} -- the shared lifecycle (nexus/intake.py), read-only."""
+    try:
+        with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
+            return intake.states(ledger)
+    except Exception:  # noqa: BLE001 - intake is evidence on the row, never a blocker
+        return {}
+
+
 def _issues(access, known, repo, state):
     who, token = github.identity(access, repo, known)
     rows, page = [], 1
@@ -188,6 +202,7 @@ def _build(world):
     tower = tower_activity(snapshot)
     claims = doc_claims(_doc_text())
     words = _station_words(snapshot)
+    walks = _intake()
     desks = []
     for desk in DESKS:
         result = {'id': desk['id'], 'name': desk['name'], 'repos': desk['repos'],
@@ -212,6 +227,7 @@ def _build(world):
                     'repo': repo, 'number': row['number'], 'title': row.get('title') or '',
                     'url': row.get('html_url') or '', 'activity_at': iso(activity),
                     'guidance': bool(claims.get(key, {}).get('guidance')),
+                    'intake': walks.get((repo.lower(), row['number'])),
                     'updated_at': row.get('updated_at'), 'created_at': row.get('created_at')})
                 result['counts'][bucket] += 1
                 result['counts']['open'] += 1
