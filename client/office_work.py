@@ -158,7 +158,14 @@ def _issues(access, known, repo, state):
 def _build(world):
     now = time.time()
     snapshot = world.snapshot or {}
+    # Registered = on a station, a project root, or one of this view's own desks.
+    # A desk repo missing from the current snapshot (a fetch error upstream) must
+    # still resolve: the desk list is itself the registration for its repos.
     known = {row['repo'] for row in snapshot.get('stations') or []}
+    known.update(root.get('name') for root in objects.roots().values())
+    for desk in DESKS:
+        known.update(desk['repos'])
+    known.discard(None)
     access = world.access()
     tower = tower_activity(snapshot)
     claims = doc_claims(_doc_text())
