@@ -143,13 +143,21 @@ class CrashTowerV0(unittest.TestCase):
 
         produced = led.flights(states=("produced",))
         with_artifact = [f for f in produced if led.artifacts(f["id"])]
+        # A produced flight artifact is not always out.txt: self-repair
+        # flights produce repair-report.json instead (every recorded ref
+        # existed while this count failed 7-to-4 on 2026-10-15, #291). The
+        # invariant is the bijection: recorded produced artifacts == their
+        # files on disk, each exactly once.
+        recorded = sorted({artifact["ref"] for flight in with_artifact
+                           for artifact in led.artifacts(flight["id"])})
         on_disk = []
         for dirpath, _, filenames in os.walk(self.root):
-            if "out.txt" in filenames:
-                on_disk.append(os.path.join(dirpath, "out.txt"))
-        self.assertEqual(len(with_artifact), len(on_disk),
-                         f"{len(with_artifact)} produced flights with an artifact but "
-                         f"{len(on_disk)} out.txt files")
+            for name in ("out.txt", "repair-report.json"):
+                if name in filenames:
+                    on_disk.append(os.path.join(dirpath, name))
+        self.assertEqual(recorded, sorted(on_disk),
+                         f"recorded produced artifacts != artifact files on disk: "
+                         f"{recorded} vs {sorted(on_disk)}")
 
         for flight in with_artifact:
             for artifact in led.artifacts(flight["id"]):
