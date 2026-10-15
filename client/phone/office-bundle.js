@@ -3190,7 +3190,8 @@ async function ask(parent) {
   const submit = el("button", "primary ask-send", "Send");
   submit.type = "submit";
   submit.setAttribute("aria-label", "Send message");
-  const steerSubmit = button("Send now", () => sendSteer(), "ask-steer");
+  let steerAction = () => notice("Checking Send now\u2026");
+  const steerSubmit = button("Send now", () => steerAction(), "ask-steer");
   steerSubmit.hidden = true;
   form.append(input, submit, steerSubmit);
   chat.append(queueStatus, steerHint, form);
@@ -3343,6 +3344,7 @@ async function ask(parent) {
       localStorage.removeItem(steerPendingKey);
     }
     if (!steerPending?.request_id || !steerPending?.text || !steerPending?.expected_turn_id) steerPending = null;
+    steerAction = sendSteer;
     const initial = el("option", "", data.selection || data.model);
     initial.value = data.selection || data.model;
     picker.append(initial);
@@ -3538,7 +3540,7 @@ async function ask(parent) {
         steerSubmit.disabled = false;
       }
     }
-    function sendSteer2() {
+    function sendSteer() {
       if (steerPending) return sendSteerPending(steerPending);
       const text = input.value.trim();
       if (!text) return;

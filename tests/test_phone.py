@@ -102,6 +102,18 @@ class PageTest(unittest.TestCase):
         self.assertIn('?since_revision=${current.revision}', app)
         self.assertIn('if(next.not_modified){current=merged;updateControls(merged);return;}', app)
 
+    def test_ask_steer_button_calls_the_bound_action_not_the_nested_function(self):
+        app=(ROOT/'client/phone/office.js').read_text()
+        bundle=(ROOT/'client/phone/office-bundle.js').read_text()
+        worker=(ROOT/'client/phone/office-sw.js').read_text()
+        self.assertIn("let steerAction=()=>notice('Checking Send now…');",app)
+        self.assertIn("button('Send now',()=>steerAction(),'ask-steer')",app)
+        self.assertIn('steerAction=sendSteer;',app)
+        self.assertNotIn("()=>sendSteer()",app)
+        self.assertNotIn('() => sendSteer()',bundle)
+        self.assertRegex(bundle,r'steerAction\s*=\s*sendSteer\d*;')
+        self.assertIn("nexus-office-shell-v23",worker)
+
     def test_request_diagnostics_retain_context_and_original_exception(self):
         logs=[]
         with patch.object(self.serve,'log',logs.append), \

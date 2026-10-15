@@ -553,7 +553,8 @@ async function ask(parent){
  const queueStatus=el('p','ask-queue-status');queueStatus.setAttribute('aria-live','polite');
  const steerHint=el('p','ask-steer-hint');steerHint.setAttribute('aria-live','polite');
  const submit=el('button','primary ask-send','Send');submit.type='submit';submit.setAttribute('aria-label','Send message');
- const steerSubmit=button('Send now',()=>sendSteer(),'ask-steer');steerSubmit.hidden=true;
+ let steerAction=()=>notice('Checking Send now…');
+ const steerSubmit=button('Send now',()=>steerAction(),'ask-steer');steerSubmit.hidden=true;
  form.append(input,submit,steerSubmit);chat.append(queueStatus,steerHint,form);
  input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229){event.preventDefault();form.requestSubmit();}});
  input.addEventListener('input',()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,Math.round(innerHeight*.35))+'px';});
@@ -619,6 +620,7 @@ async function ask(parent){
    if(!pending?.request_id||!pending?.text||!pending?.model)pending=null;
    let steerPending;try{steerPending=JSON.parse(localStorage.getItem(steerPendingKey)||'null');}catch{localStorage.removeItem(steerPendingKey);}
    if(!steerPending?.request_id||!steerPending?.text||!steerPending?.expected_turn_id)steerPending=null;
+   steerAction=sendSteer;
    const initial=el('option','',data.selection||data.model);initial.value=data.selection||data.model;picker.append(initial);
    const updateControls=state=>{
     const queued=state.queue?.queued||0,working=state.queue?.working||0;
