@@ -903,7 +903,7 @@ async function githubCollection(repo,kind,cursor=1,parent=null){const body=paren
 async function githubReviews(repo,number,cursor=1,parent=null,inline=false){const body=parent||sheet(repo+' reviews');const data=await api(`/api/github/reviews?repo=${encodeURIComponent(repo)}&number=${number}&cursor=${cursor}&inline=${inline}`);for(const item of data.items){body.append(commentView(item));if(item.diff_hunk)body.append(el('p','muted',`${item.path} · ${item.commit_id}`),el('pre','',item.diff_hunk));}if(data.next_cursor)body.append(button('More reviews',()=>githubReviews(repo,number,data.next_cursor,body,inline)));if(!parent)body.append(button('Inline comments',()=>githubReviews(repo,number,1,body,true)));}
 
 async function refreshAttention(){
-  let cached=cachedView('watch');const query=cached?.revision?`?since=${encodeURIComponent(cached.revision)}`:'';
+  let cached=cachedView('watch');const previousRevision=cached?.revision||'';const query=cached?.revision?`?since=${encodeURIComponent(cached.revision)}`:'';
   try{const request=++attentionRequest,result=await api('/api/watch'+query);if(request!==attentionRequest)return;if(result.data)cached=saveView('watch',result.revision,result.data,result.checked_at*1000);else if(cached)cached=saveView('watch',cached.revision,cached.data,result.checked_at*1000);}
   catch(error){if(!cached)attention={items:[],errors:[error.message],failures:[]};}
   if(cached?.data)attention=cached.data.attention;
@@ -912,6 +912,13 @@ async function refreshAttention(){
   const badge=$('#detail-attention');badge.title=needsYou?`${needsYou} items need you`:'Nothing needs you right now';badge.setAttribute('aria-label',`${needsYou?`${needsYou} items need you`:'Nothing needs you right now'}${errors.length?'; a decision source is unavailable':''}`);
   const label=$('.tabs a[href="#watch"]');label.setAttribute('aria-label',needsYou?`Watch, ${needsYou} items need you`:'Watch, nothing needs you right now');
  const node=$('#needs-list');if(node)drawAttention(node);
+ // The Watch page is the main page: this loop already fetches its data every
+ // 10 s, but the rendered page used to keep the first payload until the next
+ // navigation — returning to a resident app showed hours-old systems and
+ // recent changes under a live badge. When the data actually changed and
+ // Watch is on screen, re-render it through the normal route (watch()
+ // preserves the scroll position on re-render).
+ if(previousRevision&&cached?.revision&&cached.revision!==previousRevision&&document.body.dataset.page==='watch')await route();
 }
 function drawAttention(parent){
  const existing=new Map([...parent.querySelectorAll('[data-attention-key]')].map(node=>[node.dataset.attentionKey,node]));
@@ -963,6 +970,7 @@ function humanAskCard(ask){
 }
 async function attentionList(parent){await refreshAttention();drawAttention(parent);}
 setInterval(refreshAttention,10000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshAttention();connection();}});
 
 function meaningfulFailureLine(text){
  const lines=String(text||'').split('\n').map(line=>line.trim()).filter(line=>line&&!line.startsWith('#')&&!line.startsWith('|')&&!line.startsWith('- ')&&!/^Read[: `]/i.test(line));

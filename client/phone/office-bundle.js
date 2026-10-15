@@ -3971,6 +3971,7 @@ async function githubReviews(repo, number, cursor = 1, parent = null, inline2 = 
 }
 async function refreshAttention() {
   let cached = cachedView("watch");
+  const previousRevision = cached?.revision || "";
   const query = cached?.revision ? `?since=${encodeURIComponent(cached.revision)}` : "";
   try {
     const request = ++attentionRequest, result = await api("/api/watch" + query);
@@ -3990,6 +3991,7 @@ async function refreshAttention() {
   label.setAttribute("aria-label", needsYou ? `Watch, ${needsYou} items need you` : "Watch, nothing needs you right now");
   const node2 = $("#needs-list");
   if (node2) drawAttention(node2);
+  if (previousRevision && cached?.revision && cached.revision !== previousRevision && document.body.dataset.page === "watch") await route();
 }
 function drawAttention(parent) {
   const existing = new Map([...parent.querySelectorAll("[data-attention-key]")].map((node2) => [node2.dataset.attentionKey, node2]));
@@ -4065,6 +4067,12 @@ async function attentionList(parent) {
   drawAttention(parent);
 }
 setInterval(refreshAttention, 1e4);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    refreshAttention();
+    connection();
+  }
+});
 function meaningfulFailureLine(text) {
   const lines = String(text || "").split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#") && !line.startsWith("|") && !line.startsWith("- ") && !/^Read[: `]/i.test(line));
   return (lines.find((line) => /\b(stopping|stopped|root cause|concrete cause|no code change|implemented|commit|does not exist|not implemented)\b/i.test(line)) || lines.find((line) => line.length > 35) || lines[0] || "").replace(/^[*\d.\s]+|[*\s]+$/g, "");
