@@ -34,7 +34,7 @@ def conversation(ledger, repo, number):
 
 def status(repo, number):
     identity({'issue': {'repo': repo, 'number': int(number)}})
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
+    with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
         return {'conversation': conversation(ledger, repo, int(number))}
 
 

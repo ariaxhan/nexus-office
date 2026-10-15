@@ -13,7 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nexus.ledger import Ledger, LedgerError, TRANSITIONS  # noqa: E402
+from nexus.ledger import Ledger, LedgerError, SCHEMA_VERSION, TRANSITIONS  # noqa: E402
 from nexus import terminal  # noqa: E402
 from tests.ledger_fixture import build  # noqa: E402
 
@@ -36,7 +36,7 @@ class Schema(LedgerCase):
     def test_wal_and_version(self):
         mode = self.led.conn.execute("PRAGMA journal_mode").fetchone()[0]
         self.assertEqual(mode.lower(), "wal")
-        self.assertEqual(self.led.user_version(), 3)
+        self.assertEqual(self.led.user_version(), SCHEMA_VERSION)
 
     def test_schema_v1_tables_all_present(self):
         names = {r[0] for r in self.led.conn.execute(
@@ -53,9 +53,28 @@ class Schema(LedgerCase):
         led = Ledger(self.path)
         self.addCleanup(led.close)
         self.assertTrue(os.path.exists(self.path + ".bak-0"))
-        self.assertEqual(3, led.user_version())
+        self.assertEqual(SCHEMA_VERSION, led.user_version())
         # the copy is the old file, not a fresh one
         self.assertGreater(os.path.getsize(self.path + ".bak-0"), 0)
+
+    def test_a_newer_ledger_still_serves_a_read_only_reader(self):
+        # The rule (2026-10-14, issue #273 follow-up): a schema bump must
+        # not kill readers. A process that loaded this module before the
+        # bump reads on; only writers are refused (the test below).
+        self.led.close()
+        raw = sqlite3.connect(self.path)
+        raw.execute("PRAGMA user_version=99")
+        raw.commit()
+        raw.close()
+        reader = Ledger(self.path, read_only=True)
+        try:
+            self.assertEqual(reader.user_version(), 99)
+            self.assertEqual(reader.plan(self.plan)["name"], "nightly")
+            with self.assertRaises(LedgerError):
+                with reader.tx():
+                    pass
+        finally:
+            reader.close()
 
     def test_a_newer_ledger_is_refused_not_downgraded(self):
         self.led.conn.execute("PRAGMA user_version=99")
@@ -245,7 +264,7 @@ class Parity(unittest.TestCase):
         led = Ledger(old)
         self.addCleanup(led.close)
 
-        self.assertEqual(3, led.user_version())
+        self.assertEqual(SCHEMA_VERSION, led.user_version())
         self.assertEqual(self.schema(fresh), self.schema(old))
         self.assertEqual([], led.integrity_check())
 
@@ -329,7 +348,7 @@ class Parity(unittest.TestCase):
         led = Ledger(old)
         self.addCleanup(led.close)
 
-        self.assertEqual(3, led.user_version())
+        self.assertEqual(SCHEMA_VERSION, led.user_version())
         self.assertEqual(self.schema(fresh), self.schema(old))
         self.assertEqual([], led.integrity_check())
         self.assertEqual(1, led.conn.execute(

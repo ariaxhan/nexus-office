@@ -51,7 +51,7 @@ def start(body):
     intent={'engine':engine,'profile':profile,'project':{'id':body.get('project')},'prompt':message,'context':body.get('context'),'uploads':body.get('uploads') or [],'source_ref':body.get('source_ref','HEAD')}
     if body.get('issue'):
         intent.update(issue=body['issue'],interactive_issue=body.get('interactive_issue') is True)
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
+    with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
         prior=tasks.existing(ledger,key,tasks.digest(intent))
         if prior:
             return {k:v for k,v in prior.items() if k!='payload_hash'}
@@ -70,7 +70,7 @@ def start(body):
 
 
 def detail(identifier):
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
+    with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
         spec=tasks.specification(ledger,identifier)
         task=dict(ledger.task(identifier))
         flights=[dict(row) for row in ledger.flights(task_id=identifier)]
@@ -88,7 +88,7 @@ def say(body):
 
 
 def history(identifier,cursor=0):
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
+    with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
         tasks.specification(ledger,identifier)
         value=int(cursor)
         if value<0:
@@ -142,14 +142,14 @@ def answer_human_input(body):
 
 
 def listing(cursor=0,project=""):
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
+    with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
         rows=ledger.conn.execute("SELECT t.id,t.title,t.state,t.created_at,e.payload specification FROM tasks t JOIN events e ON e.subject=t.id AND e.kind='office.task' WHERE (?='' OR json_extract(e.payload,'$.project.id')=?) ORDER BY t.created_at DESC LIMIT 40 OFFSET ?",(project,project,max(0,int(cursor)))).fetchall()
         items=[task_row(ledger,row) for row in rows]
     return {'items':items,'next_cursor':int(cursor)+40 if len(items)==40 else None}
 
 
 def active_listing():
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
+    with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
         rows=ledger.conn.execute("""SELECT t.id,t.title,t.state,t.created_at,e.payload specification
             FROM tasks t JOIN events e ON e.subject=t.id AND e.kind='office.task'
             WHERE COALESCE((SELECT state FROM flights WHERE task_id=t.id ORDER BY created_at DESC LIMIT 1),'queued') IN ('running','queued')

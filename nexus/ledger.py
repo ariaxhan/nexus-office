@@ -246,8 +246,22 @@ def loads(value, default=None):
 
 
 class Ledger:
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None, read_only: bool = False):
         self.path = path or default_path()
+        self.read_only = read_only
+        if read_only:
+            # A reader never migrates and never writes. It must not die on a
+            # file newer than its own code: a long-lived process that loaded
+            # this module before a schema bump is exactly that reader (the
+            # /api/tasks 500s of 2026-10-14 — "ledger is version 4, this
+            # nexus knows 3" — issue #273 follow-up). SQLite's mode=ro is
+            # the enforcement: the store itself refuses any write.
+            self.conn = sqlite3.connect(
+                f"file:{self.path}?mode=ro", uri=True, timeout=30,
+                isolation_level=None)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA busy_timeout=30000")
+            return
         os.makedirs(os.path.dirname(os.path.abspath(self.path)) or ".", exist_ok=True)
         self.conn = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
@@ -415,6 +429,8 @@ class Ledger:
     @contextlib.contextmanager
     def tx(self):
         """One writer, one transaction, no partial anything."""
+        if self.read_only:
+            raise LedgerError("ledger opened read-only; writes need a writer open")
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             yield self.conn

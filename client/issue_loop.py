@@ -206,7 +206,7 @@ def alerts(repo, number):
         number = int(number)
     except (TypeError, ValueError):
         raise ValueError('Choose a valid issue number') from None
-    with closing(Ledger(str(run_board.LEDGER))) as ledger:
+    with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
         rows = ledger.conn.execute(
             'SELECT subject,payload FROM events WHERE kind=? '
             "AND json_extract(payload,'$.repo')=? "
