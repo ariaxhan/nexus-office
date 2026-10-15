@@ -70,26 +70,36 @@ def _stamp_epoch(month, day, hour, minute, now):
 
 
 def doc_claims(text, now=None):
-    """{(repo, number): {'activity': epoch, 'running': bool}} from office-doc text.
+    """{(repo, number): {'activity': epoch, 'running': bool, 'guidance': bool}}.
 
     The TBS coordinator's published receipts: one Coordinator line per item,
     stamped MM-DD HH:MM UTC. Mirrors bin/office_doc.py's own reading of them.
+    'guidance' marks items Aria herself has written on — her tracked items.
     """
     now = now or dt.datetime.now(dt.timezone.utc)
-    claims, current = {}, None
+    claims, current, in_note = {}, None, False
     for line in text.split('\n'):
         heading = _HEADING.match(line)
         if heading:
             current = (heading.group(1), int(heading.group(2)))
+            claims.setdefault(current, {'activity': None, 'running': False, 'guidance': False})
+            in_note = False
             continue
         if line.startswith('#'):
-            current = None
+            current, in_note = None, False
             continue
+        if current is None:
+            continue
+        if line.strip() == '**Aria:**':
+            in_note = True
+            continue
+        if in_note and line.strip():
+            claims[current]['guidance'] = True
         coord = _COORD.match(line)
-        if coord and current:
+        if coord:
             epoch = _stamp_epoch(*(int(g) for g in coord.groups()), now)
             if epoch is not None:
-                claims[current] = {'activity': epoch, 'running': 'Worker running' in line}
+                claims[current].update({'activity': epoch, 'running': 'Worker running' in line})
     return claims
 
 
@@ -196,6 +206,7 @@ def _build(world):
                 result[bucket].append({
                     'repo': repo, 'number': row['number'], 'title': row.get('title') or '',
                     'url': row.get('html_url') or '', 'activity_at': iso(activity),
+                    'guidance': bool(claims.get(key, {}).get('guidance')),
                     'updated_at': row.get('updated_at'), 'created_at': row.get('created_at')})
                 result['counts'][bucket] += 1
                 result['counts']['open'] += 1
@@ -206,10 +217,11 @@ def _build(world):
                         'repo': repo, 'number': row['number'], 'title': row.get('title') or '',
                         'url': row.get('html_url') or '', 'closed_at': row.get('closed_at')})
         result['worked_on'].sort(key=lambda r: r['activity_at'] or '', reverse=True)
-        # Stalled is a triage list: longest without activity first. An item with
-        # no recorded activity has been untouched since it was opened, so its
+        # Stalled is a triage list: Aria's own tracked items (she has guidance on
+        # them) lead; then longest without activity first. An item with no
+        # recorded activity has been untouched since it was opened, so its
         # effective last activity is its creation — the oldest debt leads.
-        result['stalled'].sort(key=lambda r: r['activity_at'] or r['created_at'] or '')
+        result['stalled'].sort(key=lambda r: (not r['guidance'], r['activity_at'] or r['created_at'] or ''))
         result['up_next'].sort(key=lambda r: r['updated_at'] or '', reverse=True)
         result['done'].sort(key=lambda r: r['closed_at'] or '', reverse=True)
         for bucket, cap in CAPS.items():
