@@ -10,6 +10,12 @@ time. Everything else open is UP NEXT. No receipt inside the window, no claim
 of work: the word 'running' is never produced from a stale line again (the
 tbs#278 zombie, frozen 2026-10-07, presented as running for a week).
 
+Every classified item ships: the buckets are never truncated, so the tab
+can always be reconciled against GitHub. A classified item the payload
+dropped would be a silent disagreement (nexus-office#278: tbs#620/#636
+classified Stalled server-side but sat past the shipped position cap in a
+136-item bucket, and nexus-office#268 past the up_next cap).
+
 Built stale-while-revalidate: a request never blocks on GitHub. The first
 call returns an empty view marked refreshing and builds in a thread; later
 calls serve the last build until it is older than MEMO_S, then refresh in
@@ -27,7 +33,6 @@ import office_objects as objects
 WINDOW = 24 * 3600
 DONE_DAYS = 7
 MEMO_S = 120
-CAPS = {'worked_on': 15, 'stalled': 10, 'up_next': 10, 'done': 12}
 
 DESKS = [
     {'id': 'nexus', 'name': 'Nexus Office', 'repos': ['ariaxhan/nexus-office']},
@@ -224,8 +229,9 @@ def _build(world):
         result['stalled'].sort(key=lambda r: (not r['guidance'], r['activity_at'] or r['created_at'] or ''))
         result['up_next'].sort(key=lambda r: r['updated_at'] or '', reverse=True)
         result['done'].sort(key=lambda r: r['closed_at'] or '', reverse=True)
-        for bucket, cap in CAPS.items():
-            result[bucket] = result[bucket][:cap]
+        # Buckets ship COMPLETE (see module docstring): counts above are
+        # incremented per classified row, so for every counted bucket the
+        # count equals the shipped length. Never truncate here.
         desks.append(result)
     return {'built_at': iso(now), 'window_hours': 24, 'done_days': DONE_DAYS, 'desks': desks}
 

@@ -77,5 +77,77 @@ class TowerActivityTests(unittest.TestCase):
         self.assertFalse(out[('ariaxhan/nexus-office', 99)]['claim'])
 
 
+import time
+from unittest import mock
+
+
+class ShipCompleteTests(unittest.TestCase):
+    """Regression (#278): a classified item must always ship.
+
+    The buckets used to be truncated to CAPS after counting, so the server
+    classified items the app never received: tbs#620/#636 sat past position
+    10 in a 136-item stalled bucket and nexus-office#268 past the up_next
+    cap, while the counts reported the full totals. Counts and shipped
+    lengths disagreed, silently.
+    """
+
+    def _row(self, number, **kw):
+        row = {'number': number, 'title': f'issue {number}',
+               'html_url': f'https://example.invalid/i/{number}'}
+        row.update(kw)
+        return row
+
+    def test_buckets_ship_complete_past_the_old_caps(self):
+        now = time.time()
+        iso = office_work.iso
+        stalled = [self._row(1000 + i, created_at=iso(now - 30 * 86400),
+                             updated_at=iso(now - 30 * 86400)) for i in range(30)]
+        up_next = [self._row(2000 + i, created_at=iso(now - 1800),
+                             updated_at=iso(now - 1800)) for i in range(25)]
+        done = [self._row(3000 + i, created_at=iso(now - 2 * 86400),
+                          updated_at=iso(now - 86400),
+                          closed_at=iso(now - 3600)) for i in range(20)]
+        worked = [self._row(4000 + i, created_at=iso(now - 86400),
+                            updated_at=iso(now - 300)) for i in range(18)]
+        open_rows = stalled + up_next + worked
+        snapshot = {'automation': {'tower': {'issues': [
+            {'repo': 'ariaxhan/nexus-office', 'number': r['number'],
+             'state': 'working', 'since': now - 7200, 'progress_at': now - 300}
+            for r in worked]}}}
+
+        def fake_issues(access, known, repo, state):
+            return list(open_rows) if state == 'open' else list(done)
+
+        class _World:
+            snapshot = None
+
+            def access(self):
+                return None
+
+        world = _World()
+        world.snapshot = snapshot
+        desks = [{'id': 'nexus', 'name': 'Nexus Office',
+                  'repos': ['ariaxhan/nexus-office']}]
+        with mock.patch.object(office_work, 'DESKS', desks), \
+                mock.patch.object(office_work, '_issues', fake_issues), \
+                mock.patch.object(office_work, '_doc_text', lambda: ''), \
+                mock.patch.object(office_work.objects, 'roots', lambda: {}):
+            view = office_work._build(world)
+        desk = view['desks'][0]
+        self.assertEqual({r['number'] for r in desk['stalled']},
+                         {r['number'] for r in stalled})
+        self.assertEqual({r['number'] for r in desk['up_next']},
+                         {r['number'] for r in up_next})
+        self.assertEqual({r['number'] for r in desk['worked_on']},
+                         {r['number'] for r in worked})
+        self.assertEqual({r['number'] for r in desk['done']},
+                         {r['number'] for r in done})
+        for bucket in ('worked_on', 'stalled', 'up_next'):
+            self.assertEqual(desk['counts'][bucket], len(desk[bucket]),
+                             f'{bucket}: count disagrees with shipped length')
+        self.assertEqual(desk['counts']['open'],
+                         len(stalled) + len(up_next) + len(worked))
+
+
 if __name__ == '__main__':
     unittest.main()
