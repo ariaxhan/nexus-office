@@ -874,12 +874,11 @@ else:
     def test_wave_lane_turns_sigterm_into_a_recorded_error_and_restores_the_handler(self):
         before = work.signal.getsignal(work.signal.SIGTERM)
 
-        def discover(led, entry):
+        def select(led, entry):
             self.assertIs(work._terminated, work.signal.getsignal(work.signal.SIGTERM))
-            os.kill(os.getpid(), work.signal.SIGTERM)
-            work.time.sleep(0.05)  # the handler runs between bytecodes
+            raise work.WorkError("terminated: the wave parent's wait ended")
 
-        with patch('nexus.work.discover', side_effect=discover):
+        with patch('nexus.work.selection_queue', side_effect=select):
             report = work.run(self.led, [self.entry], issue=1)
         self.assertEqual('failed', report[0]['state'])
         self.assertIn('terminated', report[0]['error'])
@@ -1164,6 +1163,7 @@ class TowerFlow(unittest.TestCase):
     def test_closing_a_proven_issue_sweeps_its_held_branches(self):
         fid = work.claim(self.led, self.entry["repo"], 7, os.getpid(), runner=True)
         work.pending(self.led, fid, {"reason": "exit_124"})
+        self.led.event("flight.terminal", fid, {"branch": "aria/held/" + fid}, "work")
         receipt = {"receipt": "landed abc; check passed"}
         with patch("nexus.lanes.sweep_held", return_value=[{"flight": fid, "branch": "aria/held/" + fid, "sha": "s"}]) as sweep:
             self.assertEqual("done", work.close_received(self.led, self.entry, self.task, self.issues[0], receipt))

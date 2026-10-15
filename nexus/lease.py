@@ -65,12 +65,49 @@ def holder_alive(record):
     return not (was and now and now != was)
 
 
+OS_METADATA = frozenset({".Spotlight-V100", ".fseventsd", ".Trashes",
+                         ".TemporaryItems", ".DocumentRevisions-V100"})
+
+
+def _os_metadata(rel):
+    return rel.split("/", 1)[0] in OS_METADATA
+
+
+def _gitlink_state(repo):
+    """Fingerprint a nested Git checkout without reading its generated/untracked estate."""
+    head = landing._git(repo, "rev-parse", "HEAD").stdout.strip()
+    status = landing._git(repo, "status", "--porcelain", "-z", "--untracked-files=no").stdout
+    staged = landing._git(repo, "diff", "--cached", "--raw", "HEAD", "--").stdout
+    files = []
+    items, i = status.split("\0"), 0
+    while i < len(items):
+        item = items[i]
+        if item:
+            rel = item[3:]
+            if not _os_metadata(rel):
+                path = os.path.join(repo, rel)
+                try:
+                    st = os.lstat(path)
+                    files.append((rel, st.st_mode, st.st_size, st.st_mtime_ns))
+                except FileNotFoundError:
+                    files.append((rel, None))
+            if item[0] in "RC":
+                i += 1
+        i += 1
+    return hashlib.sha1(json.dumps([head, staged, files], sort_keys=True).encode()).hexdigest()
+
+
 def digest(repo, rel):
     full = os.path.join(repo, rel)
     if not os.path.lexists(full):
         return None
     if os.path.islink(full):
         return "link:" + os.readlink(full)
+    if os.path.isdir(full):
+        staged = landing._git(repo, "ls-files", "--stage", "--", rel).stdout
+        if not staged.startswith("160000 "):
+            raise IsADirectoryError(full)
+        return "gitlink:" + _gitlink_state(full)
     with open(full, "rb") as f:
         return hashlib.sha1(f.read()).hexdigest()
 
@@ -82,10 +119,17 @@ def dirty(repo):
     while i < len(items):
         item = items[i]
         if item:
-            paths.append(item[3:])
+            rel = item[3:]
+            # A restored volume can expose macOS index stores as tracked or
+            # untracked files. They are OS data, not requested source, and some
+            # cannot be opened even by the repository owner. Other paths still
+            # fail loudly on read, including staged and untracked source files.
+            if not _os_metadata(rel):
+                paths.append(rel)
             if item[0] in "RC":
                 i += 1
-                paths.append(items[i])
+                if not _os_metadata(items[i]):
+                    paths.append(items[i])
         i += 1
     return {p: digest(repo, p) for p in paths}
 
