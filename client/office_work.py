@@ -25,10 +25,16 @@ import datetime as dt
 import re
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
+
+from nexus import intake
+from nexus.coordinator import doc_claims  # noqa: F401 - the Watch reads the same receipts intake does
+from nexus.ledger import Ledger
 
 import office_github as github
 import office_objects as objects
+import run_board
 
 WINDOW = 24 * 3600
 DONE_DAYS = 7
@@ -45,9 +51,6 @@ DESKS = [
 ]
 TBS_DOC_REPO = 'ariaxhan/thinking-brain-school'
 
-_HEADING = re.compile(r'^### \[[^\]]*\]\(https://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)\)')
-_COORD = re.compile(r'^- \*\*Coordinator:\*\* (\d{2})-(\d{2}) (\d{2}):(\d{2}) UTC\.')
-
 
 def parse_iso(value):
     if not value:
@@ -62,50 +65,6 @@ def iso(epoch):
     if epoch is None:
         return None
     return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-
-def _stamp_epoch(month, day, hour, minute, now):
-    try:
-        stamp = dt.datetime(now.year, month, day, hour, minute, tzinfo=dt.timezone.utc)
-    except ValueError:
-        return None
-    if stamp > now + dt.timedelta(hours=1):
-        stamp = stamp.replace(year=now.year - 1)
-    return stamp.timestamp()
-
-
-def doc_claims(text, now=None):
-    """{(repo, number): {'activity': epoch, 'running': bool, 'guidance': bool}}.
-
-    The TBS coordinator's published receipts: one Coordinator line per item,
-    stamped MM-DD HH:MM UTC. Mirrors bin/office_doc.py's own reading of them.
-    'guidance' marks items Aria herself has written on — her tracked items.
-    """
-    now = now or dt.datetime.now(dt.timezone.utc)
-    claims, current, in_note = {}, None, False
-    for line in text.split('\n'):
-        heading = _HEADING.match(line)
-        if heading:
-            current = (heading.group(1), int(heading.group(2)))
-            claims.setdefault(current, {'activity': None, 'running': False, 'guidance': False})
-            in_note = False
-            continue
-        if line.startswith('#'):
-            current, in_note = None, False
-            continue
-        if current is None:
-            continue
-        if line.strip() == '**Aria:**':
-            in_note = True
-            continue
-        if in_note and line.strip():
-            claims[current]['guidance'] = True
-        coord = _COORD.match(line)
-        if coord:
-            epoch = _stamp_epoch(*(int(g) for g in coord.groups()), now)
-            if epoch is not None:
-                claims[current].update({'activity': epoch, 'running': 'Worker running' in line})
-    return claims
 
 
 def tower_activity(snapshot):
@@ -157,6 +116,15 @@ def _doc_text():
         return ''
 
 
+def _intake():
+    """{(repo, number): intake walk} -- the shared lifecycle (nexus/intake.py), read-only."""
+    try:
+        with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
+            return intake.states(ledger)
+    except Exception:  # noqa: BLE001 - intake is evidence on the row, never a blocker
+        return {}
+
+
 def _issues(access, known, repo, state):
     who, token = github.identity(access, repo, known)
     rows, page = [], 1
@@ -188,6 +156,7 @@ def _build(world):
     tower = tower_activity(snapshot)
     claims = doc_claims(_doc_text())
     words = _station_words(snapshot)
+    walks = _intake()
     desks = []
     for desk in DESKS:
         result = {'id': desk['id'], 'name': desk['name'], 'repos': desk['repos'],
@@ -212,6 +181,7 @@ def _build(world):
                     'repo': repo, 'number': row['number'], 'title': row.get('title') or '',
                     'url': row.get('html_url') or '', 'activity_at': iso(activity),
                     'guidance': bool(claims.get(key, {}).get('guidance')),
+                    'intake': walks.get((repo.lower(), row['number'])),
                     'updated_at': row.get('updated_at'), 'created_at': row.get('created_at')})
                 result['counts'][bucket] += 1
                 result['counts']['open'] += 1

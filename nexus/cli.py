@@ -14,8 +14,10 @@ import pathlib
 import plistlib
 import subprocess
 import sys
+import time
 
 from . import flights as fl
+from . import intake
 from . import tower
 from . import work
 from .ledger import TERMINAL, Ledger, loads
@@ -87,6 +89,16 @@ def cmd_repair_file(args):
               "reason": f"jobrun preflight refused {args.job}: dead path {args.dead}",
               "host": os.uname().nodename, "opened_at": time.time()}
     print(sr.open_repair(led, packet))
+    return 0
+
+
+def cmd_intake(args):
+    led = _ledger(args)
+    if args.dry:
+        rows = [dict(w, overruns=intake.overruns(w, time.time())) for w in intake.walks(led, claims=intake.coordinator_claims())]
+        print(json.dumps(rows, sort_keys=True, default=str))
+    else:
+        print(json.dumps(intake.sweep(led, force=True), sort_keys=True))
     return 0
 
 
@@ -352,6 +364,10 @@ def build_parser():
     loop.add_argument("--interval", type=float, default=5.0)
     loop.add_argument("--iterations", type=int, default=None)
     loop.set_defaults(func=cmd_tower_run)
+
+    intake_p = subs.add_parser("intake", help="the intake state machine: record transitions, fault overruns")
+    intake_p.add_argument("--dry", action="store_true", help="print every walk; write and file nothing")
+    intake_p.set_defaults(func=cmd_intake)
 
     for name, func, help_text in (
         ("status", cmd_status, "what nexus knows, as a table"),
