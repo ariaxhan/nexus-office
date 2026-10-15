@@ -114,7 +114,11 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     report["quarantined"] = _quarantine(ledger, now)
     report["repair_adopted"] = sr.adopt(ledger, now)
     report["repair_triggered"] = sr.triggers(ledger, now)
-    report["repair"] = sr.verify(ledger, now)
+    try:
+        report["repair"] = sr.verify(ledger, now)
+    except Exception as exc:  # noqa: BLE001 - verify is repair bookkeeping; it must never block the fleet's launches
+        _tick_error(ledger, exc, now)
+        report["repair"] = {"error": repr(exc)}
 
     if is_paused(ledger):
         report["paused"] = True

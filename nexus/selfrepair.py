@@ -46,6 +46,7 @@ import sys
 import time
 
 from . import surface_guard
+from . import terminal
 from .ledger import loads
 
 REPAIR_PLAN_NAME = "nexus-self-repair"
@@ -384,8 +385,7 @@ def _drain_plan(ledger, task, packet, now):
     plan = ledger.plan(packet.get("plan_id") or "")
     if plan is None:
         return _fail(ledger, task, "target plan no longer exists", now)
-    released = ledger.events(kind="plan.unquarantined", subject=plan["id"])
-    if released and max(e["ts"] for e in released) > (task["created_at"] or 0):
+    if _person_released(ledger, plan["id"], task):
         return "skipped", "plan released after this repair opened; standing down"
     awaiting = ledger.events(kind="repair.awaiting_proof", subject=task["id"])
     if awaiting:
@@ -541,6 +541,28 @@ def drain(ledger, now=None, only_task_id=None):
 
 # ---- verification + escalation: the tick-side lifecycle owner --------------
 
+def _person_released(ledger, plan_id, task):
+    """The release ts that stands a repair down, or 0.
+
+    The release that outranks the loop is a PERSON's (`nexus plans
+    release`). The mechanism's own unquarantine-for-proof (in
+    _schedule_proof, so the worker can re-run) is not one: when that
+    proof fails, the plan is re-quarantined in the same motion, so on
+    the plan's own timeline the release is superseded. A release counts
+    only when the newest plan.unquarantined postdates both this
+    repair's opening and the newest plan.quarantined."""
+    released = ledger.events(kind="plan.unquarantined", subject=plan_id)
+    if not released:
+        return 0
+    release_ts = max(e["ts"] for e in released)
+    if release_ts <= (task["created_at"] or 0):
+        return 0
+    quarantined = ledger.events(kind="plan.quarantined", subject=plan_id)
+    if quarantined and max(e["ts"] for e in quarantined) >= release_ts:
+        return 0
+    return release_ts
+
+
 def verify(ledger, now=None):
     """Resolve proofs, count attempts, escalate, and re-fly failed repairs.
 
@@ -563,47 +585,63 @@ def verify(ledger, now=None):
                 continue  # the proof has not flown yet
             latest = proof_flights[0]
             if latest["state"] in ("produced", "landed"):
-                ledger.set_task_state(
-                    tid, "done", decided_by="self-repair", expect="running",
-                    reason="proof run completed", now=now,
-                    evidence={"kind": "outputs",
-                              "result": loads(latest["result"], {}) or {}})
-                ledger.event("repair.completed", tid,
-                             {"receipt_flight": latest["id"], "issue": ISSUE_REF},
-                             "self-repair", now)
-                out["completed"] += 1
-                continue
-            elif latest["state"] in ("failed", "cancelled"):
-                handled = any(e["kind"] == "repair.attempt_failed"
-                              and e["ts"] >= (latest["ended_at"] or 0)
-                              for e in events)
-                if handled:
-                    pass  # already counted: fall to the retry logic below
+                result = loads(latest["result"], {}) or {}
+                evidence = {"kind": "outputs", "result": result}
+                try:
+                    terminal.require("task", "done", evidence)
+                except terminal.IllegalTransition as exc:
+                    # The proof flight settled, but its result is not a
+                    # proof: the terminal guard refuses it as completion
+                    # evidence (no declared outputs, an unproven outcome).
+                    # That is a FAILED proof, never a completion -- it
+                    # takes the failed-proof path below, and the guard's
+                    # refusal never escapes verify(). (First live case,
+                    # 2026-10-15: the tbs-finish repair's proof produced
+                    # {"ok": true, "artifacts": []}; the refusal escaped
+                    # and wedged every tick before discover/launch.)
+                    proof_error = f"proof run produced no proof: {exc}"
                 else:
-                    result = loads(latest["result"], {}) or {}
-                    _fail(ledger, ledger.task(tid),
-                          f"proof run failed: {result.get('error')}", now)
-                    packet = loads(task["reason"], {}) or {}
-                    plan = ledger.plan(packet.get("plan_id") or "")
-                    if plan is not None and plan["quarantined_at"] is None \
-                            and not str(packet.get("signature") or "").startswith("repeat:"):
-                        # a quarantine-born repair re-quarantines on a failed
-                        # proof; a repeat-signature repair (the plan never
-                        # stopped) must not stop it unilaterally -- the
-                        # threshold in the tick owns that decision
-                        ledger.quarantine_plan(plan["id"],
-                                               "proof run failed after repair",
-                                               repair_task_id=tid, now=now)
-                    out["proofs_failed"] += 1
+                    ledger.set_task_state(
+                        tid, "done", decided_by="self-repair", expect="running",
+                        reason="proof run completed", now=now,
+                        evidence=evidence)
+                    ledger.event("repair.completed", tid,
+                                 {"receipt_flight": latest["id"], "issue": ISSUE_REF},
+                                 "self-repair", now)
+                    out["completed"] += 1
                     continue
+            elif latest["state"] in ("failed", "cancelled"):
+                result = loads(latest["result"], {}) or {}
+                proof_error = f"proof run failed: {result.get('error')}"
             else:
                 continue
+            # A settled proof that did not prove the repair: count the
+            # attempt with the failure named, re-quarantine a
+            # quarantine-born repair's plan, and let the ladder below
+            # re-fly the repair on the next pass.
+            handled = any(e["kind"] == "repair.attempt_failed"
+                          and e["ts"] >= (latest["ended_at"] or 0)
+                          for e in events)
+            if not handled:
+                _fail(ledger, ledger.task(tid), proof_error, now)
+                packet = loads(task["reason"], {}) or {}
+                plan = ledger.plan(packet.get("plan_id") or "")
+                if plan is not None and plan["quarantined_at"] is None \
+                        and not str(packet.get("signature") or "").startswith("repeat:"):
+                    # a quarantine-born repair re-quarantines on a failed
+                    # proof; a repeat-signature repair (the plan never
+                    # stopped) must not stop it unilaterally -- the
+                    # threshold in the tick owns that decision
+                    ledger.quarantine_plan(plan["id"],
+                                           "proof run failed after repair",
+                                           repair_task_id=tid, now=now)
+                out["proofs_failed"] += 1
+                continue
+            # already counted: fall to the retry logic below
         packet = loads(task["reason"], {}) or {}
         if packet.get("plan_id"):
-            released = ledger.events(kind="plan.unquarantined",
-                                     subject=packet["plan_id"])
-            release_ts = max((e["ts"] for e in released), default=0)
-            if release_ts > (task["created_at"] or 0):
+            release_ts = _person_released(ledger, packet["plan_id"], task)
+            if release_ts:
                 # a person released the plan after this repair opened:
                 # their decision outranks the loop, and the repair closes
                 # as stood down -- never as a failure, never silently

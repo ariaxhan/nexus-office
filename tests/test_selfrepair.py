@@ -142,6 +142,84 @@ class SelfRepairCase(unittest.TestCase):
         self.assertEqual(1, len(self.led.events(kind="repair.completed",
                                                 subject=tid)))
 
+    def test_proof_without_declared_outputs_is_a_failed_proof(self):
+        pid = self.plan(f"/nonexistent/python3.99 {self.script}")
+        tid = sr.attach_quarantine(self.led, self.led.plan(pid), "dead path",
+                                   signature=sr.SIGNATURE_DEAD_POINTER)
+        self.led.set_task_state(tid, "accepted", decided_by="test",
+                                expect="candidate")
+        report = sr.drain(self.led)
+        self.assertEqual(1, len(report["fixed"]), report)
+        from nexus.ledger import loads
+        awaiting = self.led.events(kind="repair.awaiting_proof", subject=tid)
+        proof_task = loads(awaiting[-1]["payload"], {})["proof_task_id"]
+        flight = self.led.create_flight(pid, task_id=proof_task)
+        self.led.set_state(flight, "running", expect="queued")
+        # the proof ran and exited fine but produced nothing it declared:
+        # the live 2026-10-15 case, {"ok": true, "artifacts": []}
+        self.led.set_state(flight, "produced", expect="running",
+                           result={"ok": True, "artifacts": []})
+        self.led.set_task_state(tid, "running", decided_by="test",
+                                expect="accepted")
+        out = sr.verify(self.led)  # the guard's refusal must not escape
+        self.assertEqual(1, out["proofs_failed"], out)
+        self.assertEqual(0, out["completed"], out)
+        self.assertEqual("running", self.led.task(tid)["state"])
+        self.assertEqual(1, sr.attempts(self.led, tid))
+        failed = self.led.events(kind="repair.attempt_failed", subject=tid)
+        self.assertIn("no declared output",
+                      loads(failed[-1]["payload"], {})["why"])
+        # the quarantine-born plan is stopped again, still owned by the repair
+        plan = self.led.plan(pid)
+        self.assertIsNotNone(plan["quarantined_at"])
+        self.assertEqual(tid, plan["repair_task_id"])
+        # the ladder moves: the next pass re-flies the repair -- and the
+        # mechanism's own unquarantine-for-proof is NOT a person's release,
+        # so nothing stands the repair down
+        out = sr.verify(self.led)
+        self.assertEqual(1, out["retried"], out)
+        self.assertEqual([], self.led.events(kind="repair.stood_down",
+                                             subject=tid))
+        self.assertEqual("running", self.led.task(tid)["state"])
+
+    def test_a_persons_release_still_stands_a_repair_down(self):
+        pid = self.plan(f"{sys.executable} {self.script}")
+        tid = sr.attach_quarantine(self.led, self.led.plan(pid), "test stop",
+                                   signature="dead-pointer")
+        self.led.set_task_state(tid, "accepted", decided_by="test",
+                                expect="candidate")
+        self.led.set_task_state(tid, "running", decided_by="test",
+                                expect="accepted")
+        self.led.unquarantine_plan(pid)  # `nexus plans release`
+        out = sr.verify(self.led)
+        self.assertEqual(1, out.get("stood_down"), out)
+        self.assertEqual("done", self.led.task(tid)["state"])
+        self.assertEqual(1, len(self.led.events(kind="repair.stood_down",
+                                                subject=tid)))
+
+    def test_a_verify_exception_never_blocks_the_tick(self):
+        pid = self.plan(f"{sys.executable} {self.script}")
+        plan = self.led.plan(pid)
+        task = self.led.add_scheduled_task(plan, "tick-test:1", time.time())
+        flight = self.led.create_flight(pid, task_id=task)
+        real_verify = sr.verify
+
+        def boom(ledger, now=None):
+            raise RuntimeError("injected verify failure")
+
+        sr.verify = boom
+        try:
+            report = tower.tick(self.led, now=time.time(), root=self.root)
+        finally:
+            sr.verify = real_verify
+        # the tick reached launch, and the failure is loud in the ledger
+        self.assertGreaterEqual(report["launched"], 1, report)
+        self.assertIn("injected verify failure", str(report["repair"]))
+        self.assertEqual("running", self.led.flight(flight)["state"])
+        errors = self.led.events(kind="tower.tick_error")
+        self.assertTrue(any("injected verify failure" in str(e["payload"])
+                            for e in errors), errors)
+
     def test_drain_without_a_replacement_records_the_attempt(self):
         pid = self.plan(f"/nonexistent/zzq-tool-9 {self.script}", name="odd")
         tid = sr.attach_quarantine(self.led, self.led.plan(pid), "dead tool",
