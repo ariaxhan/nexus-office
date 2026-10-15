@@ -34,6 +34,7 @@ import coordinator_chat
 import office_buzz
 import human_asks
 import office_timing
+import office_work
 
 
 def arguments(query):
@@ -158,7 +159,11 @@ def watch_snapshot(world, since=''):
     coordinators = []
     for row in coordinator_chat.overview().get('coordinators', [])[:20]:
         coordinators.append({**row, 'commits': row.get('commits', [])[:10]})
-    data = {'attention': attention, 'coordinators': coordinators,
+    try:
+        work = office_work.build(world)
+    except Exception as exc:  # noqa: BLE001 - the work view must never blank the tab
+        work = {'built_at': None, 'desks': [], 'error': f'{type(exc).__name__}: {exc}'[:200]}
+    data = {'attention': attention, 'coordinators': coordinators, 'work': work,
             'tower': snapshot.get('automation', {}).get('tower') or
                      {'state': 'unavailable', 'detail': 'Tower state is unavailable'}}
     encoded = json.dumps(data, sort_keys=True, separators=(',', ':')).encode()

@@ -2876,6 +2876,7 @@ function renderWatch(parent, data, cached, state = "current") {
     overview.append(el("p", exceptions.length ? "watch-summary-attention" : "watch-summary-normal", summary.join(" \xB7 ")));
   }
   parent.append(overview);
+  workSection(parent, data.work);
   parent.append(officeDocument());
   if (failures.length) {
     const stalled = section(parent, "Automation needs repair");
@@ -2932,6 +2933,44 @@ function renderWatch(parent, data, cached, state = "current") {
     failure(parent, error);
   }
   if (state === "refreshing") requestAnimationFrame(() => scrollTo(0, Number(localStorage.getItem("office-scroll:watch")) || 0));
+}
+function workSection(parent, work2) {
+  if (!work2) return;
+  const sec = el("section", "watch-work");
+  sec.append(el("h2", "watch-section-title", "Work"));
+  if (work2.error) sec.append(el("p", "muted", `Work view unavailable: ${work2.error}`));
+  if (work2.refreshing && !(work2.desks || []).length) sec.append(el("p", "muted", "Checking GitHub\u2026"));
+  const ago = (stamp) => stamp ? formatAge(Date.now() - new Date(stamp).getTime()) : null;
+  const day = (stamp) => stamp ? new Date(stamp).toLocaleDateString([], { month: "short", day: "numeric" }) : "";
+  const groups = [
+    ["worked_on", "Being worked on", (item) => `last activity ${ago(item.activity_at) || "\u2014"}`],
+    ["stalled", "Stalled", (item) => item.activity_at ? `last activity ${day(item.activity_at)}` : "no activity recorded"],
+    ["up_next", "Up next", (item) => `updated ${ago(item.updated_at) || "\u2014"}`],
+    ["done", "Done", (item) => `closed ${day(item.closed_at)}`]
+  ];
+  for (const desk of work2.desks || []) {
+    const block = el("article", "watch-system");
+    block.append(el("h3", "", desk.name));
+    const counts = desk.counts || {};
+    block.append(el("p", "watch-system-outcome", `${counts.worked_on || 0} being worked on \xB7 ${counts.stalled || 0} stalled \xB7 ${counts.up_next || 0} up next \xB7 ${counts.open || 0} open`));
+    for (const error of desk.errors || []) block.append(el("p", "error", error));
+    for (const [key, label, meta] of groups) {
+      const rows = desk[key] || [];
+      if (!rows.length) continue;
+      block.append(el("h4", "watch-section-title", label));
+      for (const item of rows) {
+        const row = el("div", "watch-work-item");
+        row.append(el("strong", "", item.title || `${item.repo}#${item.number}`), el("span", "muted", ` ${item.repo}#${item.number} \xB7 ${meta(item)}`));
+        if (item.url) row.append(link("GitHub", item.url));
+        block.append(row);
+      }
+      const total = key === "done" ? 0 : counts[key] || 0;
+      if (total > rows.length) block.append(el("p", "muted", `\u2026and ${total - rows.length} more`));
+    }
+    sec.append(block);
+  }
+  if (work2.built_at) sec.append(el("p", "muted", `From GitHub + coordinator receipts \xB7 checked ${ago(work2.built_at)}`));
+  parent.append(sec);
 }
 function requiresYou(entry) {
   return entry.kind === "human-ask" || entry.kind === "coordinator-question";
