@@ -133,6 +133,30 @@ class DiscoveryPassTests(unittest.TestCase):
         self.assertEqual(["sample/beta", "sample/alpha"], self.asked)
         self.assertFalse(work.requested_since(self.led, "sample/beta", "work.serviced"), "consumed by the pass")
 
+    def test_tower_run_uses_captured_issues_without_relisting_every_repo(self):
+        work.discovery_pass(self.led, self.entries, limit=2)
+        self.asked.clear()
+        with patch("nexus.work.run_task", return_value="held") as run_task:
+            report = work.run(self.led, self.entries, lane=work.TOWER_LABEL,
+                              budget_s=10, max_items=1)
+        self.assertEqual([], self.asked)
+        self.assertEqual(2, run_task.call_count)
+        self.assertEqual(["held", "held"], [row["state"] for row in report])
+
+    def test_closed_issue_sweeps_only_recorded_unswept_held_branches(self):
+        work.discover(self.led, self.entries[0])
+        task = self.tasks("sample/alpha")[0]
+        script = self.led.add_plan("test-script")
+        held = self.led.create_flight(script, task_id=task["id"])
+        other = self.led.create_flight(script, task_id=task["id"])
+        self.led.event("flight.terminal", held, {"branch": f"aria/held/{held}"}, "work")
+        self.led.event("flight.terminal", other, {"branch": "aria/issue-1"}, "work")
+        with patch("nexus.lanes.sweep_held", return_value=[{"flight": held}]) as sweep:
+            work.cleanup_held(self.led, self.entries[0], task)
+            work.cleanup_held(self.led, self.entries[0], task)
+        self.assertEqual([held], sweep.call_args_list[0].args[1])
+        self.assertEqual([], sweep.call_args_list[1].args[1])
+
     def test_tower_tick_runs_the_discovery_pass(self):
         registry = self.root / "registry.json"
         registry.write_text(json.dumps({"repositories": self.entries}))

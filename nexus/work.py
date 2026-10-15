@@ -1344,7 +1344,11 @@ def _run(led, entries, repo=None, *, budget_s=300, max_items=20, issue=None):
         token = _deadline.set(min(deadline, flights.clock() + (deadline - flights.clock()) / share))
         try:
             name = entry["repo"]
-            discover(led, entry)
+            # Tower's bounded discovery_pass captures repositories independently on
+            # controller ticks. Repeating every GitHub list here consumed entire
+            # 1700-second code-work flights before any issue could run.
+            if _lane.get() != TOWER_LABEL:
+                discover(led, entry)
             queue, dispositions = selection_queue(led, entry)
             report.extend(dispositions)
             if issue is not None:  # one lane of a dispatched wave
@@ -1542,7 +1546,14 @@ def closed_step(led, entry, task, issue):
 def cleanup_held(led, entry, task):
     """Called only after a live source close; sweep only this task's recorded held flights."""
     from . import lanes
-    fids = [f["id"] for f in led.flights(task_id=task["id"])]
+    swept = {row["flight"] for event in led.events(kind="work.held_swept", subject=task["id"])
+             for row in loads(event["payload"], {}).get("deleted", [])}
+    fids = []
+    for flight in led.flights(task_id=task["id"]):
+        fid = flight["id"]
+        terminal = latest(led, "flight.terminal", fid)
+        if terminal.get("branch") == f"aria/held/{fid}" and fid not in swept:
+            fids.append(fid)
     deleted = lanes.sweep_held(entry.get("canonical_path") or entry["path"], fids)
     if deleted:
         led.event("work.held_swept", task["id"], {"deleted": deleted}, "work")
