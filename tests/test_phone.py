@@ -78,7 +78,9 @@ class PageTest(unittest.TestCase):
         coordinators = {'coordinators': [{'id': 'tbs', 'health': 'ok'}], 'as_of': 'now'}
         asks = {'items': [], 'at': 'now'}
         with patch.object(self.serve.office_api.coordinator_chat, 'overview', return_value=coordinators), \
-             patch.object(self.serve.office_api.human_asks, 'listing', return_value=asks):
+             patch.object(self.serve.office_api.human_asks, 'listing', return_value=asks), \
+             patch.object(self.serve.office_api.office_work, 'build',
+                          return_value={'built_at': 'now', 'desks': [], 'errors': []}):
             code, _, raw = self.fetch('/api/watch')
             self.assertEqual(code, 200)
             body = json.loads(raw)
@@ -112,7 +114,7 @@ class PageTest(unittest.TestCase):
         self.assertNotIn("()=>sendSteer()",app)
         self.assertNotIn('() => sendSteer()',bundle)
         self.assertRegex(bundle,r'steerAction\s*=\s*sendSteer\d*;')
-        self.assertIn("nexus-office-shell-v23",worker)
+        self.assertIn("nexus-office-shell-v24",worker)
 
     def test_watch_page_revalidates_on_data_change_and_on_return(self):
         app=(ROOT/'client/phone/office.js').read_text()

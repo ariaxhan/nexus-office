@@ -20,6 +20,15 @@ def wait_for(predicate, timeout=5.0):
     return False
 
 
+# GNU timeout does not exist on macOS (the Studio has none on any PATH), and
+# the cancellation tests below need a group leader standing where timeout
+# stood: lead a new process group, run the command inside it, wait for it.
+GROUP_LEADER = (
+    "import os, subprocess, sys\n"
+    "os.setpgid(0, 0)\n"
+    "sys.exit(subprocess.Popen(sys.argv[1:]).wait())\n"
+)
+
 class RunnerCancellationTest(unittest.TestCase):
     def runner(self, workspace, cmd):
         return subprocess.Popen(
@@ -32,7 +41,10 @@ class RunnerCancellationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             timeout_file = os.path.join(tmp, "timeout")
             child_file = os.path.join(tmp, "child")
-            cmd = (f"timeout 900 /bin/sh -c 'echo $$ > {child_file}; sleep 900' & "
+            leader = os.path.join(tmp, "group_leader.py")
+            with open(leader, "w") as f:
+                f.write(GROUP_LEADER)
+            cmd = (f"{sys.executable} {leader} /bin/sh -c 'echo $$ > {child_file}; sleep 900' & "
                    f"echo $! > {timeout_file}; wait")
             runner = self.runner(tmp, cmd)
             self.addCleanup(lambda: runner.poll() is None and runner.kill())

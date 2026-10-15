@@ -25,6 +25,15 @@ from nexus import terminal  # noqa: E402
 from nexus.ledger import Ledger  # noqa: E402
 
 
+# GNU timeout does not exist on macOS (the Studio has none on any PATH), and
+# the cancellation tests below need a group leader standing where timeout
+# stood: lead a new process group, run the command inside it, wait for it.
+GROUP_LEADER = (
+    "import os, subprocess, sys\n"
+    "os.setpgid(0, 0)\n"
+    "sys.exit(subprocess.Popen(sys.argv[1:]).wait())\n"
+)
+
 def wait_for(predicate, timeout=15.0, interval=0.05):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -209,7 +218,10 @@ class Budgets(TowerCase):
     def test_budget_cancellation_kills_background_work_before_releasing_its_lease(self):
         timeout_file = os.path.join(self.dir, "timeout-pid")
         child_file = os.path.join(self.dir, "background-pid")
-        cmd = (f"timeout 900 /bin/sh -c 'echo $$ > {child_file}; sleep 900' & "
+        leader = os.path.join(self.dir, "group_leader.py")
+        with open(leader, "w") as f:
+            f.write(GROUP_LEADER)
+        cmd = (f"{sys.executable} {leader} /bin/sh -c 'echo $$ > {child_file}; sleep 900' & "
                f"echo $! > {timeout_file}; wait")
         self.plan(cmd=cmd, outputs=[],
                   resources=["shared-repo"], schedule={"every": 3600},
