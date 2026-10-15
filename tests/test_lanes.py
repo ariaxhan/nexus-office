@@ -29,6 +29,43 @@ class Fake:
         self.returncode, self.stdout, self.stderr = returncode, stdout, ""
 
 
+class DirtyMetadata(unittest.TestCase):
+    def test_untracked_os_index_is_not_read_but_source_failure_surfaces(self):
+        status = (" D .Spotlight-V100/Store-V2/old\0"
+                  " M .Spotlight-V100/Store-V2/permStore\0"
+                  "?? .Spotlight-V100/Store-V2/new\0"
+                  "M  src/requested.py\0")
+        with unittest.mock.patch.object(lease.landing, "_git", return_value=Fake(stdout=status)), \
+                unittest.mock.patch.object(lease, "digest", side_effect=PermissionError("requested source")) as digest:
+            with self.assertRaisesRegex(PermissionError, "requested source"):
+                lease.dirty("/repo")
+        digest.assert_called_once_with("/repo", "src/requested.py")
+
+    def test_gitlink_fingerprint_uses_tracked_status_without_descending(self):
+        with tempfile.TemporaryDirectory() as root:
+            nested = Path(root) / "nested"
+            nested.mkdir()
+            source = nested / "source.py"
+            source.write_text("first")
+            def git(cwd, *args):
+                if args[0] == "ls-files":
+                    return Fake(stdout="160000 abc 0\tnested\n")
+                if args[0] == "rev-parse":
+                    return Fake(stdout="abc\n")
+                if args[0] == "status":
+                    self.assertEqual("--untracked-files=no", args[-1])
+                    return Fake(stdout=" M source.py\0")
+                if args[0] == "diff":
+                    return Fake(stdout="")
+                self.fail(args)
+            with unittest.mock.patch.object(lease.landing, "_git", side_effect=git), \
+                    unittest.mock.patch.object(lease, "dirty", side_effect=AssertionError("recursive scan")):
+                first = lease.digest(root, "nested")
+                source.write_text("second version")
+                second = lease.digest(root, "nested")
+            self.assertNotEqual(first, second)
+
+
 class Lanes(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="nexus-lanes-")
