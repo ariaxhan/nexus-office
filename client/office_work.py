@@ -206,7 +206,9 @@ def _build(world):
                         'repo': repo, 'number': row['number'], 'title': row.get('title') or '',
                         'url': row.get('html_url') or '', 'closed_at': row.get('closed_at')})
         result['worked_on'].sort(key=lambda r: r['activity_at'] or '', reverse=True)
-        result['stalled'].sort(key=lambda r: r['activity_at'] or '', reverse=True)
+        # Stalled is a triage list: longest without activity first; no recorded
+        # activity at all ('' sorts first) is the most stalled of all.
+        result['stalled'].sort(key=lambda r: r['activity_at'] or '')
         result['up_next'].sort(key=lambda r: r['updated_at'] or '', reverse=True)
         result['done'].sort(key=lambda r: r['closed_at'] or '', reverse=True)
         for bucket, cap in CAPS.items():
