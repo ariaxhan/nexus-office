@@ -305,3 +305,37 @@ scores exactly):
 .venv/bin/llm-bench run gpt-6.1-sol -p codex-cli --full --max-tokens 4096 -o results/codex-v3.json
 .venv/bin/llm-bench compare results/local-v3.json results/codex-v3.json
 ```
+
+## Status, 2026-10-14: acceptance closed
+
+Reused from held `aria/held/flt_764b2d8a3e48` (superset of `flt_33fe01721f58`, `flt_2aa566693f13`): verifier-interpreter, scope and reclaim tests, `scripts/test.sh` uv fallback, two more `lfm2.5:8b` rows. Its `check_failed` (exit 65) was the gate host lacking full Xcode, not this work.
+
+| acceptance | evidence |
+|---|---|
+| 1 benchmark | 69 real cases, frozen 23-case sample, receipts above |
+| 2 safe region | `qwen3.8:27b` + frontier contract: 10/12 non-lifecycle (local_logic 4/5, wiring 3/4, mechanical, test_change, known_bugfix 1/1). Lifecycle 4/11: not delegated |
+| 3 real task | Phase 2 below: `scripts/micropatch_report.py` built from 4 contracts, all by local workers |
+| 4 tests decide | every row's `result` is the acceptance test's exit; the report counts `result`, never `executor_ok` |
+| 5 repair → escalation | contract 4 below |
+| 6 scope | `allowed_paths` + `out_of_scope` over every file incl. new ones (`tests/test_micropatch_scope.py`) |
+| 7, 8 reclaim | SIGTERM removes the live snapshot; `kill -9` reclaimed by next run; leaks 0 (`tests/test_micropatch_reclaim.py`) |
+| 9 numbers | below |
+
+### Phase 2 dogfood (Mac Studio, `tradition implement`, in place, no worktree)
+
+Frontier (this session) wrote the failing tests, a stub per function and four contracts; local workers wrote every function body. Receipts: `dogfood.235-report.jsonl`; summarize with `python3.12 scripts/micropatch_report.py docs/micropatch/dogfood.235-report.jsonl`.
+
+| contract | worker | result | wall s | steps | local tokens |
+|---|---|---|---|---|---|
+| 1 `summarize` | qwen3.8:27b | verified | 34.7 | 7 | 16,736 |
+| 2 `load` | lfm2.5:8b | verified | 22.8 | 5 | 14,726 |
+| 3 `by_class` | lfm2.5:8b | verified | 14.9 | 6 | 16,722 |
+| 4 `main` (argparse) | lfm2.5:8b | escalated, no edit | 15.4 | 3 | 16,009 |
+| 4 repair (test output fed back once) | lfm2.5:8b | escalated, file byte-identical | 29.7 | 5 | 19,641 |
+| 4 escalated subtask only | qwen3.8:27b | verified | 26.5 | 5 | 13,772 |
+
+- Local: 4/4 contracts verified; first-tier success 4/6 attempts, escalation 2/6; 143.9 s total local wall; 97,606 local tokens.
+- Review of local output caught one contract gap: `load` silently skipped corrupt JSON lines. Frontier fixed it (a corrupt receipt now raises) and added the test; the contract had not specified it.
+- Disk: in-place edits; 0 temp workspaces created, 0 `nexus-mp-*` remaining.
+- Frontier, **estimated** (no per-turn meter in this session): contracts + tests + stubs about 6k output tokens and 1 integration edit, vs an estimated 50-150k tokens and 4 implement/test turns to write and test the four functions itself.
+- Routing result: tiny pure functions and single-loop parsing are safe on `lfm2.5:8b`; argparse wiring across three helpers was not, and escalated one tier without touching the parent.
