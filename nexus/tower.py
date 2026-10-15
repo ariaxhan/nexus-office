@@ -447,6 +447,63 @@ def _recover_work_checkout(ledger, flight, repo, now):
     return held
 
 
+def _unrunnable_error(ledger, repo):
+    """The error `repo` is currently classified unrunnable with, or None.
+
+    The classification lives in the ledger (work.repo_unrunnable /
+    work.repo_runnable), so it survives restarts and anything that can read
+    the ledger can see the standing state."""
+    rows = ledger.events(kind="work.repo_unrunnable", subject=repo)
+    if not rows:
+        return None
+    cleared = ledger.events(kind="work.repo_runnable", subject=repo)
+    if cleared and cleared[-1]["id"] > rows[-1]["id"]:
+        return None
+    return loads(rows[-1]["payload"]).get("error")
+
+
+def _classify_unrunnable(ledger, repo, error, now):
+    """Name a checkout orphan-lease reconcile cannot run for, once per error.
+
+    A checkout whose git metadata cannot be read at all (a staging tree
+    missing its gitdir store, a corrupt .git) fails identically on every
+    tick; an error row per tick is a flood, not a signal (2026-10-15:
+    ~45k work.orphan_lease_error rows in two hours for ~50 such repos).
+    The classification is the standing state: it is recorded once, and it
+    clears when a pass runs clean (_clear_unrunnable) or the error changes."""
+    if _unrunnable_error(ledger, repo) == error:
+        return
+    ledger.event("work.repo_unrunnable", repo,
+                 {"repo": repo, "error": error,
+                  "reason": "orphan-lease reconcile cannot run for this checkout"},
+                 "tower", now)
+
+
+def _clear_unrunnable(ledger, repo, now):
+    if _unrunnable_error(ledger, repo) is not None:
+        ledger.event("work.repo_runnable", repo, {"repo": repo}, "tower", now)
+
+
+def _release_orphan_lease(ledger, repo, now):
+    """One checkout's orphan pass: 1 when dead ownership was released, else 0.
+
+    Raises whatever the checkout raises; the caller classifies the failure."""
+    from . import lease
+
+    record = lease.read(repo)
+    if not record or not lease.stale(record, now) or lease.alive(record.get("pid")):
+        return 0
+    if ledger.flight(record["flight"]):
+        return 0  # a known flight needs outcome reconciliation before ownership changes
+    changed, _ = lease.flight_paths(repo, record)
+    moved = ld._git(repo, "rev-parse", "HEAD").stdout.strip() != record.get("head")
+    ledger.event("work.orphan_lease", record["flight"],
+                 {"repo": repo, "changed_paths": len(changed), "head_moved": moved,
+                  "outcome": "ownership_released_files_preserved"}, "tower", now)
+    lease.release(repo, record["flight"])
+    return 1
+
+
 def _reconcile_orphan_leases(ledger, now):
     """Release dead checkout ownership with no ledger flight; never move checkout bytes."""
     from . import lease, work
@@ -463,21 +520,11 @@ def _reconcile_orphan_leases(ledger, now):
         if not os.path.isdir(repo):
             continue
         try:
-            record = lease.read(repo)
-            if not record or not lease.stale(record, now) or lease.alive(record.get("pid")):
-                continue
-            if ledger.flight(record["flight"]):
-                continue  # a known flight needs outcome reconciliation before ownership changes
-            changed, _ = lease.flight_paths(repo, record)
-            moved = ld._git(repo, "rev-parse", "HEAD").stdout.strip() != record.get("head")
-            ledger.event("work.orphan_lease", record["flight"],
-                         {"repo": repo, "changed_paths": len(changed), "head_moved": moved,
-                          "outcome": "ownership_released_files_preserved"}, "tower", now)
-            lease.release(repo, record["flight"])
-            released += 1
+            released += _release_orphan_lease(ledger, repo, now)
         except (OSError, ValueError, KeyError, ld.LandingError) as exc:
-            ledger.event("work.orphan_lease_error", None,
-                         {"repo": repo, "error": str(exc)}, "tower", now)
+            _classify_unrunnable(ledger, repo, str(exc), now)
+            continue
+        _clear_unrunnable(ledger, repo, now)
     return released
 
 
