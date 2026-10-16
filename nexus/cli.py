@@ -18,6 +18,7 @@ import time
 
 from . import flights as fl
 from . import intake
+from . import receipt as rc
 from . import tower
 from . import work
 from .ledger import TERMINAL, Ledger, loads
@@ -326,6 +327,29 @@ def cmd_work(args):
         return 1
 
 
+def cmd_receipt(args):
+    """emit: print a receipt block. check: judge an issue comment and record the transition."""
+    try:
+        if args.receipt_command == "emit":
+            print(rc.emit(args.outcome, args.artifact, args.verification, args.evidence, args.next))
+            return 0
+        if args.body_file:
+            body, url = pathlib.Path(args.body_file).read_text(), args.comment_url
+        else:
+            row = rc.latest_comment(args.repo, args.issue)
+            body, url = row.get("body") or "", row.get("html_url")
+        led = _ledger(args)
+        try:
+            state, detail = rc.consume(led, args.repo, args.issue, body, url)
+        finally:
+            led.close()
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(json.dumps({"state": state, "detail": detail, "comment": url}, sort_keys=True))
+    return 0 if state != "CLAIMED" else 3
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="nexus", description="one ledger, one tower")
     parser.add_argument("--ledger", default=None, help="ledger path (default: NEXUS_LEDGER)")
@@ -454,6 +478,22 @@ def build_parser():
     sandbox_run = sandbox_subs.add_parser("run", help=argparse.SUPPRESS)
     sandbox_run.add_argument("--timeout", type=float, default=600.0)
     sandbox_run.set_defaults(func=cmd_sandbox_run)
+
+    receipt_p = subs.add_parser("receipt", help="lane receipt grammar: emit one, or judge a completion")
+    receipt_subs = receipt_p.add_subparsers(dest="receipt_command", required=True)
+    emit_p = receipt_subs.add_parser("emit")
+    emit_p.add_argument("--outcome", required=True, choices=rc.OUTCOMES)
+    emit_p.add_argument("--artifact", action="append", default=[])
+    emit_p.add_argument("--verification", required=True)
+    emit_p.add_argument("--evidence", action="append", default=[])
+    emit_p.add_argument("--next", default="none")
+    check_p = receipt_subs.add_parser("check", help="judge the issue's latest comment; reject prose on the issue")
+    check_p.add_argument("repo")
+    check_p.add_argument("issue", type=int)
+    check_p.add_argument("--body-file", help="judge this text instead of the latest comment")
+    check_p.add_argument("--comment-url")
+    for sub in (emit_p, check_p):
+        sub.set_defaults(func=cmd_receipt)
 
     install = subs.add_parser("install", help="write and load the launchd plist")
     install.add_argument("--interval", type=float, default=5.0)

@@ -42,6 +42,7 @@ class GithubReconcile(unittest.TestCase):
             return real(argv, **kw)
         patch("nexus.work.subprocess.run", side_effect=gh).start()
         patch("nexus.work._sensitive_hold", return_value=None).start()
+        patch("nexus.work.published", return_value=True).start()  # the receipt gate: tests/test_receipt.py
         patch("nexus.contract.reviewed_receipt",  # no real git here; the LEDGER's recorded PASS still decides
               side_effect=lambda sha, review, checkout, run=None:
                   (True, f"landed {sha}; fixture review PASS") if review and review.get("verdict") == "PASS"
