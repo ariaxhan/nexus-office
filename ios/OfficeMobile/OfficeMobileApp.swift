@@ -1,9 +1,12 @@
 import SwiftUI
+import WidgetKit
+import WatchConnectivity
 
 @main
 struct OfficeMobileApp: App {
     @StateObject private var connection = OfficeConnection()
     @StateObject private var player = OfficePlayer()
+    @StateObject private var watchBridge = OfficeWatchBridge()
     @Environment(\.scenePhase) private var phase
     var body: some Scene {
         WindowGroup {
@@ -22,7 +25,20 @@ struct OfficeMobileApp: App {
                             }
                         }
                 }
-            }.onChange(of: phase) { _, next in player.background = next != .active }
+            }.task {
+                watchBridge.refresh(address: connection.address)
+            }.onChange(of: phase) { _, next in
+                player.background = next != .active
+                if next == .active {
+                    WidgetCenter.shared.reloadAllTimelines()
+                    watchBridge.refresh(address: connection.address)
+                }
+            }.onOpenURL { url in
+                guard url.scheme == "nexusoffice", url.host == "open",
+                      let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "path" })?.value,
+                      path.hasPrefix("/"), !path.hasPrefix("//") else { return }
+                connection.route = path
+            }
         }
     }
 }
@@ -31,12 +47,14 @@ final class OfficeConnection: ObservableObject {
     @Published var configure = false
     @Published var error: String?
     @Published var address: String
+    @Published var route = "/"
     init() {
         address = UserDefaults.standard.string(forKey: "office.address") ?? (Bundle.main.object(forInfoDictionaryKey: "OfficeURL") as? String) ?? "https://office.tail4f309a.ts.net"
         if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "--office-url"), ProcessInfo.processInfo.arguments.indices.contains(index + 1) {
             address = ProcessInfo.processInfo.arguments[index + 1]
             if url != nil { UserDefaults.standard.set(address, forKey: "office.address") }
         }
+        if url != nil { UserDefaults(suiteName: "group.app.nexusoffice.shared")?.set(address, forKey: "office.address") }
     }
     var url: URL? {
         guard let value = URL(string: address), value.scheme == "https", value.host != nil,
@@ -46,6 +64,8 @@ final class OfficeConnection: ObservableObject {
     func connect() {
         guard url != nil else { error = "Enter your Mac’s HTTPS Office address."; return }
         UserDefaults.standard.set(address, forKey: "office.address")
+        UserDefaults(suiteName: "group.app.nexusoffice.shared")?.set(address, forKey: "office.address")
+        WidgetCenter.shared.reloadAllTimelines()
         error = nil; configure = false
     }
 }
