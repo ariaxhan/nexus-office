@@ -2413,9 +2413,28 @@ async function githubDetail(repo, item, kind) {
   const body = sheet(`${repo} #${item.number}`);
   await guarded(body, async () => {
     const query = `repo=${encodeURIComponent(repo)}&number=${item.number}&kind=${kind}`;
+    const statusRead = kind === "issues" ? api(`/api/tasks/issue?repo=${encodeURIComponent(repo)}&number=${item.number}`).catch(() => null) : null;
     const data = await api(`/api/github/detail?${query}`);
     if (kind !== "prs" && data.pull_request) return githubDetail(repo, item, "prs");
     body.append(el("h2", "", data.title), el("p", "muted", `${data.state} \xB7 ${data.acting_identity} \xB7 observed ${new Date(data.observed_at * 1e3).toLocaleString()}`), markdownView(data.body || ""), link("Open on GitHub", data.html_url));
+    if (kind === "issues") {
+      const status = section(body, "Work status");
+      const local = await statusRead;
+      if (!local) status.append(el("p", "muted", "Work status unavailable. GitHub issue details are still available."));
+      else if (!local.intake) status.append(el("p", "muted", "No Office intake record for this issue. GitHub remains the source of the issue."));
+      else {
+        const intake = local.intake;
+        status.append(el("p", "", `${intake.state} \xB7 ${intake.owner || "owner unknown"}`));
+        if (intake.since) status.append(el("p", "muted", `Recorded ${new Date(intake.since * 1e3).toLocaleString()}${intake.last_poll_at ? ` \xB7 checked ${new Date(intake.last_poll_at * 1e3).toLocaleString()}` : ""}`));
+        if (intake.proof) {
+          status.append(el("p", "", `GitHub commit verified \xB7 ${intake.proof.sha?.slice(0, 7) || "commit unknown"}${intake.proof.branch ? ` on ${intake.proof.branch}` : ""}`));
+          const issueUrl = `https://github.com/${repo}/issues/${item.number}`;
+          if (intake.proof.comment?.startsWith(issueUrl + "#issuecomment-")) status.append(link("Open receipt proof", intake.proof.comment));
+        }
+        if (intake.rejection?.why) status.append(el("p", "muted", `Earlier receipt refused: ${intake.rejection.why}`));
+        if (intake.attention?.act_needed) status.append(el("p", "", `Next act: ${intake.attention.act_needed}`));
+      }
+    }
     if (kind === "prs") {
       body.append(el("p", "muted", `Head ${data.head.sha}`));
       const checks = section(body, "Checks");

@@ -1,11 +1,13 @@
 """One Office conversation owns a GitHub issue until Aria returns it."""
 import hashlib
+import json
 import os
 import re
 from contextlib import closing
 from pathlib import Path
 
 from nexus.ledger import Ledger
+from nexus.ledger import loads
 from nexus import office_tasks as task_ledger
 import office_github_actions as github
 import office_profiles as profiles
@@ -35,7 +37,58 @@ def conversation(ledger, repo, number):
 def status(repo, number):
     identity({'issue': {'repo': repo, 'number': int(number)}})
     with closing(Ledger(str(run_board.LEDGER), read_only=True)) as ledger:
-        return {'conversation': conversation(ledger, repo, int(number))}
+        return {'conversation': conversation(ledger, repo, int(number)),
+                'intake': intake_status(ledger, repo, int(number))}
+
+
+def intake_status(ledger, repo, number):
+    """A bounded, read-only issue proof card from ledger events, including closed issues."""
+    if repo.lower() == 'jessstrom/matra':
+        return None  # this Office/Tower panel has no Matra ownership
+    key = f'github:{repo.lower()}#{number}'
+    subject = f'{repo.lower()}#{number}'
+
+    def event(row):
+        if not row:
+            return None
+        payload = loads(row['payload'], {})
+        return {**(payload if isinstance(payload, dict) else {}), 'at': row['ts']}
+
+    def latest(kind, ref):
+        row = ledger.conn.execute('SELECT ts,payload FROM events WHERE kind=? AND subject=?'
+                                  ' ORDER BY id DESC LIMIT 1', (kind, ref)).fetchone()
+        return event(row)
+
+    claim = latest('intake.claim', key)
+    state = latest('intake.state', key)
+    receipt = latest('receipt.state', subject)
+    poll = latest('receipt.poll', key)
+    rejected = ledger.conn.execute("SELECT ts,payload FROM events WHERE kind='receipt.state' AND subject=?"
+                                   " AND json_extract(payload,'$.state')='CLAIMED' ORDER BY id DESC LIMIT 1",
+                                   (subject,)).fetchone()
+    rejection = event(rejected)
+    attention_row = ledger.conn.execute("SELECT ts,payload FROM events WHERE subject=? AND kind IN"
+                                        " ('receipt.verification_due','receipt.abandoned')"
+                                        " ORDER BY id DESC LIMIT 1", (key,)).fetchone()
+    attention = event(attention_row)
+    if claim:
+        state = state if state and state['at'] >= claim['at'] else None
+        receipt = receipt if receipt and receipt['at'] >= claim['at'] else None
+        poll = poll if poll and poll['at'] >= claim['at'] else None
+        rejection = rejection if rejection and rejection['at'] >= claim['at'] else None
+        attention = attention if attention and attention.get('claimed_at') == claim['at'] else None
+    if not any((claim, state, receipt, poll, rejection, attention)):
+        return None
+    proof = receipt.get('proof') if receipt and receipt.get('state') == 'RECEIPT' else None
+    return {'owner': (state or {}).get('task'), 'state': (state or {}).get('state') or
+            ('CLAIMED' if claim else 'UNKNOWN'), 'since': (state or {}).get('at') or
+            (claim or {}).get('at'), 'last_poll_at': (poll or {}).get('at'),
+            'proof': {'comment': receipt.get('comment'), 'sha': proof.get('sha'),
+                      'branch': proof.get('branch')} if proof else None,
+            'rejection': {'at': rejection['at'], 'why': rejection.get('why'),
+                          'comment': rejection.get('comment')} if rejection else None,
+            'attention': {'at': attention['at'], 'act_needed': attention.get('act_needed')}
+            if attention else None}
 
 
 def _issue(repo, number, token):
