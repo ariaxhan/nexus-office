@@ -145,8 +145,26 @@ function projectWork(parent,desk){
 async function githubDetail(repo,item,kind){
  rememberDetail('github',JSON.stringify({repo,number:item.number,kind}));
  const body=sheet(`${repo} #${item.number}`);
- await guarded(body,async()=>{const query=`repo=${encodeURIComponent(repo)}&number=${item.number}&kind=${kind}`;const data=await api(`/api/github/detail?${query}`);if(kind!=='prs'&&data.pull_request)return githubDetail(repo,item,'prs');
+ await guarded(body,async()=>{const query=`repo=${encodeURIComponent(repo)}&number=${item.number}&kind=${kind}`;const statusRead=kind==='issues'?api(`/api/tasks/issue?repo=${encodeURIComponent(repo)}&number=${item.number}`).catch(()=>null):null;const data=await api(`/api/github/detail?${query}`);if(kind!=='prs'&&data.pull_request)return githubDetail(repo,item,'prs');
  body.append(el('h2','',data.title),el('p','muted',`${data.state} · ${data.acting_identity} · observed ${new Date(data.observed_at*1000).toLocaleString()}`),markdownView(data.body||''),link('Open on GitHub',data.html_url));
+ if(kind==='issues'){
+  const status=section(body,'Work status');
+  const local=await statusRead;
+  if(!local)status.append(el('p','muted','Work status unavailable. GitHub issue details are still available.'));
+  else if(!local.intake)status.append(el('p','muted','No Office intake record for this issue. GitHub remains the source of the issue.'));
+  else{
+   const intake=local.intake;
+   status.append(el('p','',`${intake.state} · ${intake.owner||'owner unknown'}`));
+   if(intake.since)status.append(el('p','muted',`Recorded ${new Date(intake.since*1000).toLocaleString()}${intake.last_poll_at?` · checked ${new Date(intake.last_poll_at*1000).toLocaleString()}`:''}`));
+   if(intake.proof){
+    status.append(el('p','',`GitHub commit verified · ${intake.proof.sha?.slice(0,7)||'commit unknown'}${intake.proof.branch?` on ${intake.proof.branch}`:''}`));
+    const issueUrl=`https://github.com/${repo}/issues/${item.number}`;
+    if(intake.proof.comment?.startsWith(issueUrl+'#issuecomment-'))status.append(link('Open receipt proof',intake.proof.comment));
+   }
+   if(intake.rejection?.why)status.append(el('p','muted',`Earlier receipt refused: ${intake.rejection.why}`));
+   if(intake.attention?.act_needed)status.append(el('p','',`Next act: ${intake.attention.act_needed}`));
+  }
+ }
  if(kind==='prs'){body.append(el('p','muted',`Head ${data.head.sha}`));const checks=section(body,'Checks');await githubChecks(checks,repo,data.head.sha);
  const changes=section(body,'Changed files');githubFiles(changes,repo,item.number,data.files,data.head.sha);if(data.files_next_cursor)changes.append(button('More changed files',()=>githubFilePage(changes,repo,item.number,data.files_next_cursor,data.head.sha)));
  body.append(button('Ask an agent about this change',()=>githubContext({kind:'change',repo,number:item.number,head:data.head.sha,base:data.base.sha})),button('Reviews & inline discussion',()=>githubReviews(repo,item.number)),button('Review this change',()=>reviewChange(repo,item.number,data.head.sha)),button('Merge checked pipeline change',()=>githubAction({action:'merge',repo,number:item.number,head:data.head.sha})));body.append(el('p','muted','Merge requires a pipeline branch, the current head, a passing verify check, and permission under GitHub’s merge rules.'));githubDiff(body,repo,item.number,data);}

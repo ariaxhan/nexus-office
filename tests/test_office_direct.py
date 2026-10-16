@@ -16,6 +16,52 @@ import office_direct
 
 
 class DirectIssueConversation(unittest.TestCase):
+    def test_issue_status_shows_durable_proof_and_rejection_after_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'ledger.sqlite'
+            key = 'github:ariaxhan/nexus-office#346'
+            subject = 'ariaxhan/nexus-office#346'
+            with closing(Ledger(str(path))) as ledger:
+                ledger.event('intake.claim', key, {}, 'test', 10)
+                ledger.event('receipt.poll', key, {}, 'test', 11)
+                ledger.event('receipt.state', subject, {'state': 'CLAIMED', 'why': 'no receipt block',
+                                                        'comment': 'https://github.com/ariaxhan/nexus-office/issues/346#issuecomment-1'}, 'test', 12)
+                ledger.event('receipt.state', subject, {'state': 'RECEIPT', 'proof': {'sha': 'a' * 40,
+                                                        'branch': 'main'},
+                                                        'comment': 'https://github.com/ariaxhan/nexus-office/issues/346#issuecomment-2'}, 'test', 13)
+                ledger.event('intake.state', key, {'state': 'RECEIPT', 'task': 'coordinator'}, 'test', 14)
+            with patch.object(office_direct.run_board, 'LEDGER', path):
+                result = office_direct.status('ariaxhan/nexus-office', 346)
+                self.assertIsNone(result['conversation'])
+                self.assertEqual('RECEIPT', result['intake']['state'])
+                self.assertEqual('coordinator', result['intake']['owner'])
+                self.assertEqual('a' * 40, result['intake']['proof']['sha'])
+                self.assertEqual('no receipt block', result['intake']['rejection']['why'])
+                self.assertEqual(11, result['intake']['last_poll_at'])
+                self.assertIsNone(office_direct.status('jessstrom/matra', 346)['intake'])
+            with closing(Ledger(str(path))) as ledger:
+                ledger.event('receipt.verification_due', key,
+                             {'claimed_at': 10, 'act_needed': 'old verifier'}, 'test', 15)
+                ledger.event('intake.claim', key, {}, 'test', 20)
+                ledger.event('receipt.abandoned', key,
+                             {'claimed_at': 10, 'act_needed': 'old reclaim'}, 'test', 21)
+                ledger.event('receipt.poll', key, [], 'test', 22)
+            with patch.object(office_direct.run_board, 'LEDGER', path):
+                current = office_direct.status('ariaxhan/nexus-office', 346)['intake']
+                self.assertEqual('CLAIMED', current['state'])
+                self.assertIsNone(current['proof'])
+                self.assertIsNone(current['rejection'])
+                self.assertIsNone(current['attention'])
+                self.assertEqual(22, current['last_poll_at'])
+            with closing(Ledger(str(path))) as ledger:
+                ledger.event('receipt.verification_due', key,
+                             {'claimed_at': 20, 'act_needed': 'verify current'}, 'test', 23)
+                ledger.event('receipt.abandoned', key,
+                             {'claimed_at': 20, 'act_needed': 'reclaim current'}, 'test', 24)
+            with patch.object(office_direct.run_board, 'LEDGER', path):
+                self.assertEqual('reclaim current', office_direct.status('ariaxhan/nexus-office', 346)
+                                 ['intake']['attention']['act_needed'])
+
     def test_reservation_start_replay_and_followup(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
