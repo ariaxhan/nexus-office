@@ -229,6 +229,23 @@ def _coordinator_walk(ledger, key, number, now):
                        "VERIFIED": None, "CLOSED": None}}
 
 
+def _coordinator_owns(ledger, key):
+    """A held Tower capture is discovery, not ownership, until a flight starts."""
+    tasks = ledger.conn.execute("SELECT id FROM tasks WHERE dedupe_key=? ORDER BY created_at DESC, rowid DESC",
+                                (key,)).fetchall()
+    if not tasks:
+        return True
+    if ledger.conn.execute("SELECT 1 FROM flights f JOIN tasks t ON t.id=f.task_id"
+                           " WHERE t.dedupe_key=? LIMIT 1", (key,)).fetchone():
+        return False
+    if ledger.conn.execute("SELECT 1 FROM events e JOIN tasks t ON t.id=e.subject"
+                           " WHERE t.dedupe_key=? AND e.kind='work.receipt' LIMIT 1", (key,)).fetchone():
+        return False
+    labels = _issue(ledger, tasks[0][0]).get('labels') or []
+    return any(str(label.get('name', '') if isinstance(label, dict) else label).lower() == 'hold'
+               for label in labels)
+
+
 def walks(ledger, now=None, claims=None):
     """Every judged generation: the newest per dedupe key, recognized since activation, still seen.
 
@@ -242,6 +259,8 @@ def walks(ledger, now=None, claims=None):
         " ORDER BY created_at DESC, rowid DESC LIMIT 1)", (SINCE,)).fetchall()
     out = []
     for task in rows:
+        if _coordinator_owns(ledger, task['dedupe_key']) and _first(ledger, 'intake.claim', task['dedupe_key']):
+            continue
         repo = str(task["dedupe_key"]).removeprefix("github:").split("#", 1)[0]
         if work.tower_excluded_repo(repo):
             continue
@@ -253,7 +272,7 @@ def walks(ledger, now=None, claims=None):
             continue
         out.append(walk)
     keys = {walk["key"] for walk in out} | {row[0] for row in ledger.conn.execute(
-        "SELECT DISTINCT dedupe_key FROM tasks WHERE origin='github-work'")}
+        "SELECT DISTINCT dedupe_key FROM tasks WHERE origin='github-work'") if not _coordinator_owns(ledger, row[0])}
     for (repo, number), claim in (claims or {}).items():
         if work.tower_excluded_repo(repo):
             continue
@@ -289,7 +308,7 @@ def poll_coordinator_receipts(ledger, now=None, run=None):
         repo = key.removeprefix('github:').rpartition('#')[0]
         if work.tower_excluded_repo(repo):
             continue
-        if ledger.conn.execute("SELECT 1 FROM tasks WHERE dedupe_key=? LIMIT 1", (key,)).fetchone():
+        if not _coordinator_owns(ledger, key):
             continue
         subject = key.removeprefix('github:')
         accepted = ledger.conn.execute("SELECT ts, payload FROM events WHERE kind='receipt.state' AND subject=?"
@@ -314,7 +333,7 @@ def poll_coordinator_receipts(ledger, now=None, run=None):
         repo, sep, number = repo_ref.rpartition('#')
         if not sep or not number.isdigit() or work.tower_excluded_repo(repo):
             continue
-        if ledger.conn.execute("SELECT 1 FROM tasks WHERE dedupe_key=? LIMIT 1", (key,)).fetchone():
+        if not _coordinator_owns(ledger, key):
             continue  # Tower already owns this item's receipt path
         accepted = ledger.conn.execute("SELECT ts, payload FROM events WHERE kind='receipt.state' AND subject=?"
                                        " ORDER BY id DESC LIMIT 1", (repo_ref,)).fetchone()

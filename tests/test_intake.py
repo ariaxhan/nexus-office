@@ -318,6 +318,22 @@ class CoordinatorReceipt(unittest.TestCase):
         self.assertEqual(1, self.posts)
         self.assertEqual(0, intake.poll_coordinator_receipts(self.led, T0 + 602, run=self.gh)['checked'])
 
+    def test_held_capture_without_flight_keeps_coordinator_receipt_owner(self):
+        with mock.patch('time.time', return_value=T0 + 1):
+            tid = work.capture(self.led, 'o/r', issue(77, labels=('hold',)))
+        self.assertEqual('coordinator', intake.walks(self.led, T0 + 2)[0]['task'])
+        self.comments.append({'body': receipt.emit('done', [f'commit {self.SHA}'], 'GitHub commit',
+                                                   ['PR merged']), 'html_url': 'structured',
+                              'author_association': 'MEMBER', 'created_at': intake._iso(T0 + 2)})
+        result = intake.poll_coordinator_receipts(self.led, T0 + 2, run=self.gh)
+        self.assertEqual(1, result['accepted'])
+        self.assertEqual('RECEIPT', intake.walks(self.led, T0 + 2)[0]['state'])
+        pid = work.plan(self.led)
+        self.led.conn.execute('INSERT INTO flights(id,task_id,plan_id,state,created_at) VALUES (?,?,?,?,?)',
+                              (new_id('flt'), tid, pid, 'running', T0 + 3))
+        self.assertNotEqual('coordinator', intake.walks(self.led, T0 + 3)[0]['task'])
+        self.assertEqual(0, intake.poll_coordinator_receipts(self.led, T0 + 302, run=self.gh)['checked'])
+
     def test_unavailable_commit_proof_never_advances(self):
         self.comments.append({'body': receipt.emit('done', [f'commit {self.SHA}'], 'GitHub commit',
                                                    ['PR merged']), 'html_url': 'structured',
