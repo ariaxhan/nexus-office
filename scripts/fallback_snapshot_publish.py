@@ -110,7 +110,10 @@ def publish(signing_key: Path, verifier: Path) -> str:
                                       "--allowed-signers", REMOTE + "/allowed_signers",
                                       "--destination", REMOTE + "/verified-world.json"],
                                 check=True, capture_output=True, text=True, timeout=30)
-    return result.stdout.strip()
+    remote_stamp = result.stdout.strip()
+    if remote_stamp != stamp:
+        raise ValueError("MacBook verification receipt mismatch")
+    return stamp
 
 
 def _issue_comment(body: str) -> bool:
@@ -132,7 +135,10 @@ def record_result(state_path: Path, *, stamp: str = "", error: str = "") -> None
             state = {}
     except (FileNotFoundError, ValueError, OSError):
         state = {}
-    failures = int(state.get("consecutive_failures", 0))
+    try:
+        failures = max(0, int(state.get("consecutive_failures", 0)))
+    except (TypeError, ValueError):
+        failures = 0
     alert_open = bool(state.get("alert_open", False))
     if error:
         failures += 1

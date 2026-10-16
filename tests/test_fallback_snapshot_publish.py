@@ -42,6 +42,19 @@ class ProjectionTest(unittest.TestCase):
                 self.assertEqual(json.loads(state.read_text())["consecutive_failures"], 0)
                 self.assertFalse(json.loads(state.read_text())["alert_open"])
 
+    def test_failed_alert_retries_and_corrupt_counter_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "publisher-state.json"
+            state.write_text(json.dumps({"consecutive_failures": None}))
+            with patch.object(module, "_issue_comment", side_effect=[False, True]) as comment:
+                module.record_result(state, error="ValueError")
+                self.assertEqual(json.loads(state.read_text())["consecutive_failures"], 1)
+                module.record_result(state, error="ValueError")
+                self.assertFalse(json.loads(state.read_text())["alert_open"])
+                module.record_result(state, error="ValueError")
+                self.assertTrue(json.loads(state.read_text())["alert_open"])
+                self.assertEqual(comment.call_count, 2)
+
     def test_large_world_projects_only_bounded_cards(self):
         world = {"generated": "2026-10-16T23:00:00Z", "stations": [],
                  "sections": {"tower": {"state": "ok", "secret": "x" * 3000000,
