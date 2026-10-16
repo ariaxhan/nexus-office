@@ -2868,12 +2868,17 @@ async function watch(parent) {
     parent.replaceChildren(...next.childNodes);
     requestAnimationFrame(() => scrollTo(0, y));
   } catch (error) {
-    const state = parent.querySelector(".view-freshness");
-    if (state && cached) cacheState(state, cached, "offline");
-    else failure(parent, error);
+    if (cached) {
+      const next = el("div");
+      renderWatch(next, cached.data, cached, "offline");
+      const y = scrollY;
+      parent.replaceChildren(...next.childNodes);
+      requestAnimationFrame(() => scrollTo(0, y));
+    } else failure(parent, error);
   }
 }
 function renderWatch(parent, data, cached, state = "current") {
+  const offline = state === "offline";
   attention = data.attention || { items: [], errors: [], failures: [] };
   const failures = attention.failures;
   const coordinatorRows = data.coordinators || [];
@@ -2887,7 +2892,8 @@ function renderWatch(parent, data, cached, state = "current") {
   cacheState(freshness, cached, state);
   overview.append(freshness);
   overview.append(el("h1", "", "Watch"));
-  if (coordinatorError) overview.append(el("p", "watch-summary-muted", "I can\u2019t confirm system status right now."));
+  if (offline) overview.append(el("p", "watch-summary-muted", "Studio unavailable. The saved activity below may have changed."));
+  else if (coordinatorError) overview.append(el("p", "watch-summary-muted", "I can\u2019t confirm system status right now."));
   else {
     const summary = [];
     if (healthy) summary.push(`${healthy} ${healthy === 1 ? "system" : "systems"} healthy`);
@@ -2931,7 +2937,7 @@ function renderWatch(parent, data, cached, state = "current") {
     const towerIssue = tower.state !== "ok" || ["down", "erroring", "failed"].includes(tower.activity);
     const towerItem = el("article", "watch-system" + (towerIssue ? " is-attention" : ""));
     const towerHead = el("div", "watch-system-head");
-    towerHead.append(el("h3", "", "Nexus Tower"), el("span", towerIssue ? "watch-system-status is-attention" : "watch-system-status", tower.state === "ok" ? tower.activity || "unknown" : "Unavailable"));
+    towerHead.append(el("h3", "", "Nexus Tower"), el("span", towerIssue ? "watch-system-status is-attention" : "watch-system-status", offline ? "Last reported" : tower.state === "ok" ? tower.activity || "unknown" : "Unavailable"));
     towerItem.append(towerHead, el("p", "watch-system-outcome", tower.state === "ok" ? `${tower.working || 0} working \xB7 ${tower.held || 0} held \xB7 ${tower.retrying || 0} retrying` : "Status unavailable"));
     towerItem.append(button("See activity", () => {
       location.hash = "system";
@@ -2942,7 +2948,7 @@ function renderWatch(parent, data, cached, state = "current") {
       const names = { tbs: "Thinking Brain School", matra: "Matra" };
       const item = el("article", "watch-system" + (issue ? " is-attention" : ""));
       const head = el("div", "watch-system-head");
-      head.append(el("h3", "", names[row.id] || row.name), el("span", issue ? "watch-system-status is-attention" : "watch-system-status", issue ? "Needs attention" : "Working normally"));
+      head.append(el("h3", "", names[row.id] || row.name), el("span", issue ? "watch-system-status is-attention" : "watch-system-status", offline ? "Last reported" : issue ? "Needs attention" : "Working normally"));
       item.append(head);
       item.append(button("See activity", () => {
         localStorage.setItem("office-coordinator-pick", row.id);
