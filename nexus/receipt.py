@@ -30,7 +30,7 @@ MAX_ITEM = 300
 MAX_ITEMS = 20
 # Words a lane uses when it means "I am finished". A comment saying one of them without a
 # receipt is a prose completion; a comment saying none of them is just talk and is left alone.
-CLAIM = re.compile(r"\b(outcome\s*:|done|fixed|complete[d]?|shipped|resolved|landed|merged)\b", re.I)
+CLAIM = re.compile(r"\boutcome\W*(?:done|partial|failed|blocked)\b|\boutcome\s*:|\b(done|fixed|complete[d]?|shipped|resolved|landed|merged)\b", re.I)
 BLOCK = re.compile(r"```" + FENCE + r"[ \t]*\n(.*?)\n```", re.S)
 
 
@@ -154,30 +154,70 @@ def rejection(why, comment_url=None):
             "next: none | <owner>: <what>\n```")
 
 
+def state(led, repo, number):
+    """The item's receipt state as the consumer last recorded it: {} (never judged), CLAIMED or RECEIPT."""
+    rows = led.events(kind="receipt.state", subject=f"{repo}#{number}")
+    return json.loads(rows[-1]["payload"]) if rows else {}
+
+
 def consume(led, repo, number, body, comment_url=None, run=None):
-    """The consumer side: record the transition; a prose completion is rejected on the issue."""
+    """The one writer of the item's receipt state, from a comment as it stands on the issue.
+
+    RECEIPT for a parseable receipt; CLAIMED for a prose completion, with the rejection posted on
+    the issue once per comment. Talk changes nothing."""
     subject = f"{repo}#{number}"
-    state, detail = judge(body)
-    if state is None:
+    verdict, detail = judge(body)
+    if verdict is None:
         return None, None
-    if state == "RECEIPT":
-        led.event("receipt.accepted", subject, {"comment": comment_url, "receipt": detail}, "receipt")
-        return state, detail
-    proc = (run or subprocess.run)(["gh", "issue", "comment", str(number), "-R", repo, "--body", rejection(detail, comment_url)],
-               capture_output=True, text=True, timeout=60)
-    posted = proc.stdout.strip() if proc.returncode == 0 else None
-    led.event("receipt.rejected", subject, {"comment": comment_url, "why": detail, "rejection": posted,
-                                            "rejection_error": None if posted else (proc.stderr or "")[-300:]},
-              "receipt")
-    return state, {"why": detail, "rejection": posted}
+    if verdict == "RECEIPT":
+        led.event("receipt.state", subject, {"state": "RECEIPT", "comment": comment_url, "receipt": detail}, "receipt")
+        return verdict, detail
+    prior = state(led, repo, number)
+    posted = prior.get("rejection") if prior.get("comment") == comment_url and comment_url else None
+    error = None
+    if not posted:
+        proc = (run or subprocess.run)(["gh", "issue", "comment", str(number), "-R", repo,
+                                        "--body", rejection(detail, comment_url)],
+                                       capture_output=True, text=True, timeout=60)
+        posted = proc.stdout.strip() if proc.returncode == 0 else None
+        error = None if posted else (proc.stderr or "")[-300:]
+    led.event("receipt.state", subject, {"state": "CLAIMED", "comment": comment_url, "why": detail,
+                                         "rejection": posted, "rejection_error": error}, "receipt")
+    return verdict, {"why": detail, "rejection": posted}
 
 
-def latest_comment(repo, number, run=None):
-    proc = (run or subprocess.run)(["gh", "api", f"repos/{repo}/issues/{number}/comments?per_page=100"],
-               capture_output=True, text=True, timeout=30)
+def check(led, repo, number, run=None, timeout=60):
+    """Judge the issue's newest comment, read from GitHub, never from the caller's copy."""
+    row = latest_comment(repo, number, run=run, timeout=timeout)
+    return consume(led, repo, number, row.get("body") or "", row.get("html_url"), run=run)
+
+
+def publish(led, repo, number, body, run=None, timeout=60):
+    """Post a receipt, then let the consumer read it back off the issue.
+
+    The accepted receipt, or None: a failed post, or an issue whose newest comment is not this
+    receipt, leaves the state where it was. Nothing local stands in for the issue."""
+    proc = (run or subprocess.run)(["gh", "issue", "comment", str(number), "-R", repo, "--body", body],
+                                   capture_output=True, text=True, timeout=timeout)
+    if proc.returncode or not proc.stdout.strip():
+        led.event("receipt.unposted", f"{repo}#{number}", {"error": (proc.stderr or "")[-300:]}, "receipt")
+        return None
+    try:
+        verdict, got = check(led, repo, number, run=run, timeout=timeout)
+    except (ReceiptError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        led.event("receipt.unread", f"{repo}#{number}", {"error": str(exc)[-300:]}, "receipt")
+        return None
+    return got if verdict == "RECEIPT" and got == parse(body) else None
+
+
+def latest_comment(repo, number, run=None, timeout=60):
+    """The newest non-rejection comment, across every page."""
+    proc = (run or subprocess.run)(["gh", "api", "--paginate", "--slurp",
+                                    f"repos/{repo}/issues/{number}/comments?per_page=100"],
+                                   capture_output=True, text=True, timeout=timeout)
     if proc.returncode:
         raise ReceiptError(f"cannot read comments: {proc.stderr.strip()[-200:]}")
-    rows = [c for c in json.loads(proc.stdout) if REJECTION_MARK not in (c.get("body") or "")]
+    rows = [c for page in json.loads(proc.stdout) for c in page if REJECTION_MARK not in (c.get("body") or "")]
     if not rows:
         raise ReceiptError("no comments to judge")
     return rows[-1]
