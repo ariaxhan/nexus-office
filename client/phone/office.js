@@ -438,6 +438,19 @@ function renderWatch(parent,data,cached,state='current'){
    stalled.append(list);
   }
 
+  const repairFaults=data.faults||{count:0,items:[]};
+  if(repairFaults.count){
+   const repair=el('details','watch-state');
+   repair.append(el('summary','',`Tower repair records · ${repairFaults.count}`));
+   for(const fault of repairFaults.items||[]){
+    const item=el('div','watch-compact-row');
+    item.append(el('strong','',fault.signature||'Repair needs a decision'));
+    item.append(el('p','muted',fault.escalation?.act_needed||'Inspect the repair record'));
+    repair.append(item);
+   }
+   parent.append(repair);
+  }
+
   if(coordinatorRows.length||tower){
    const systems=el('section','watch-systems');
    systems.append(el('h2','watch-section-title','Systems'));

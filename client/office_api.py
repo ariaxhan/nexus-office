@@ -32,6 +32,7 @@ import office_github_bump as github_bump
 import office_github_inventory as inventory
 import coordinator_chat
 import office_buzz
+import office_faults
 import human_asks
 import office_timing
 import office_work
@@ -164,6 +165,7 @@ def watch_snapshot(world, since=''):
     except Exception as exc:  # noqa: BLE001 - the work view must never blank the tab
         work = {'built_at': None, 'desks': [], 'error': f'{type(exc).__name__}: {exc}'[:200]}
     data = {'attention': attention, 'coordinators': coordinators, 'work': work,
+            'faults': office_faults.snapshot(),
             'tower': snapshot.get('automation', {}).get('tower') or
                      {'state': 'unavailable', 'detail': 'Tower state is unavailable'}}
     encoded = json.dumps(data, sort_keys=True, separators=(',', ':')).encode()

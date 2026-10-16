@@ -92,6 +92,14 @@ def cmd_repair_file(args):
     return 0
 
 
+def cmd_faults(args):
+    """Read fault records as structured data (issue #300)."""
+    from . import faults
+    led = _ledger(args)
+    print(faults.dumps(faults.records(led, state=args.state)))
+    return 0
+
+
 def cmd_intake(args):
     led = _ledger(args)
     if args.dry:
@@ -427,6 +435,12 @@ def build_parser():
                                 help="only this repair task (default: the flight's own)")
     repair_drain_p.set_defaults(func=cmd_repair_drain)
 
+    faults_p = subs.add_parser("faults", help="read structured fault records")
+    faults_subs = faults_p.add_subparsers(dest="faults_cmd", required=True)
+    faults_list_p = faults_subs.add_parser("list", help="the records, as JSON")
+    faults_list_p.add_argument("--state", choices=("detected", "repairing",
+                                                   "verified_fixed", "escalated"))
+    faults_list_p.set_defaults(func=cmd_faults)
     repair_file_p = subs.add_parser(
         "repair-file", help="file a repair from a jobrun preflight refusal")
     repair_file_p.add_argument("--job", required=True)

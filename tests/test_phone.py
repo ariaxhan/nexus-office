@@ -79,12 +79,19 @@ class PageTest(unittest.TestCase):
         asks = {'items': [], 'at': 'now'}
         with patch.object(self.serve.office_api.coordinator_chat, 'overview', return_value=coordinators), \
              patch.object(self.serve.office_api.human_asks, 'listing', return_value=asks), \
+             patch.object(self.serve.office_api.office_faults, 'snapshot',
+                          return_value={'count': 1, 'items': [{'fault_id': 'fault_demo',
+                          'signature': 'broken-path', 'state': 'escalated',
+                          'escalation': {'kind': 'technical',
+                          'act_needed': 'repair the worker path'}}], 'error': None}), \
              patch.object(self.serve.office_api.office_work, 'build',
                           return_value={'built_at': 'now', 'desks': [], 'errors': []}):
             code, _, raw = self.fetch('/api/watch')
             self.assertEqual(code, 200)
             body = json.loads(raw)
             self.assertNotIn('large_unused', raw)
+            self.assertEqual(1, body['data']['faults']['count'])
+            self.assertEqual([], body['data']['attention']['items'])
             self.assertLess(len(raw), 10000)
             code, _, raw = self.fetch('/api/watch?since='+body['revision'])
             self.assertEqual(code, 200)
@@ -114,7 +121,7 @@ class PageTest(unittest.TestCase):
         self.assertNotIn("()=>sendSteer()",app)
         self.assertNotIn('() => sendSteer()',bundle)
         self.assertRegex(bundle,r'steerAction\s*=\s*sendSteer\d*;')
-        self.assertIn("nexus-office-shell-v26",worker)
+        self.assertIn("nexus-office-shell-v28",worker)
 
     def test_ask_uses_the_night_palette_before_and_after_settings_load(self):
         css=(ROOT/'client/phone/office-v2.css').read_text()
