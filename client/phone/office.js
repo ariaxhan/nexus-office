@@ -439,6 +439,15 @@ function renderWatch(parent,data,cached,state='current'){
   }
 
   const repairFaults=data.faults||{count:0,items:[]};
+  if(repairFaults.door_shadow){
+   const door=repairFaults.door_shadow;
+   const shadow=el('details','watch-state');
+   shadow.append(el('summary','',`Door shadow · ${door.stale?'stale':door.classification==='healthy'?'healthy':'check failed'}`));
+   const row=el('div','watch-compact-row');
+   row.append(el('strong','',door.occurrence_id||'Latest door check'));
+   row.append(el('p','muted',`Studio observation: ${door.classification||'unknown'} · ${new Date(door.observed_at*1000).toLocaleString()}${door.late?' · late receipt':''}${door.fault?' · fault '+door.fault.state:''}. Muse still owns repair.`));
+   shadow.append(row);parent.append(shadow);
+  }
   if(repairFaults.count){
    const repair=el('details','watch-state');
    repair.append(el('summary','',`Tower repair records · ${repairFaults.count}`));
