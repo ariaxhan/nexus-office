@@ -7,7 +7,8 @@ pair (issues = truth for work, the ledger = truth for what happened):
               recorded `work.issue` revisions, so a label change never rewrites history
     CLAIMED   the first claim on either surface the Watch classifier reads: a Tower flight
               (tower_activity) or a coordinator receipt (nexus/coordinator.py, `intake.claim`)
-    RECEIPT   `work.receipt` -- the receipt the verifier accepted, never the lane's word
+    RECEIPT   `work.receipt` for Tower; for coordinator-only items, a fixed-field issue comment
+              plus independent GitHub commit readback. A receipt never substitutes for outcome verification.
     VERIFIED  the verifier's read: a passed `lifecycle.verification_finished`, else `lifecycle.verified`
     CLOSED    `work.closed`, or GitHub reporting the issue closed
 
@@ -31,7 +32,7 @@ import re
 import subprocess
 import time
 
-from . import coordinator, flights, work
+from . import coordinator, flights, receipt, work
 from .ledger import loads
 
 STATES = ("FILED", "CLAIMED", "RECEIPT", "VERIFIED", "CLOSED")
@@ -45,6 +46,9 @@ SINCE = datetime.datetime(2026, 10, 15, 19, 0, tzinfo=datetime.timezone.utc).tim
 OBSERVED_WITHIN_S = 6 * 3600
 SWEEP_EVERY_S = 60
 MAX_FILINGS = 3  # per sweep: a backlog becomes faults over minutes, never a burst
+MAX_RECEIPT_POLLS = 3  # bounded GitHub reads per sweep, oldest checked claim first
+RECEIPT_POLL_S = 300
+COORDINATOR_WINDOW_S = 48 * 3600  # an abandoned mutable-doc claim cannot poll or fault forever
 FILING_LEASE_S = 300  # one caller owns a fault identity while it files; a dead or late owner frees it
 FAULT_PREFIX = "[intake-fault]"
 _BOUND = re.compile(r"(?im)^\W*lane bound\W*:?\W*(\d+(?:\.\d+)?)\s*(m|min|h|hours?|d|days?)\b")
@@ -204,14 +208,21 @@ def overruns(walk, now):
 
 def _coordinator_walk(ledger, key, number, now):
     """An item only the coordinator holds (no Tower capture): CLAIMED from its first recorded receipt."""
-    since = ledger.conn.execute("SELECT MIN(ts) FROM events WHERE kind='intake.claim' AND subject=?",
+    since = ledger.conn.execute("SELECT MAX(ts) FROM events WHERE kind='intake.claim' AND subject=?",
                                 (key,)).fetchone()[0]
-    if since is None or since < SINCE:
+    if since is None or since < SINCE or now - since > COORDINATOR_WINDOW_S:
         return None
     entered = dict.fromkeys(STATES)
     entered["CLAIMED"] = since
+    row = ledger.conn.execute("SELECT ts, payload FROM events WHERE kind='receipt.state' AND subject=?"
+                              " ORDER BY id DESC LIMIT 1", (key.removeprefix('github:'),)).fetchone()
+    if row:
+        received = loads(row[1], {})
+        if row[0] >= since and received.get('state') == 'RECEIPT' and received.get('proof'):
+            entered['RECEIPT'] = max(since, row[0])
+    state = 'RECEIPT' if entered['RECEIPT'] is not None else 'CLAIMED'
     return {"key": key, "task": "coordinator", "number": number, "title": f"coordinator claim {key}",
-            "state": "CLAIMED", "entered": entered, "queue_since": None, "queued_s": 0.0,
+            "state": state, "entered": entered, "queue_since": None, "queued_s": 0.0,
             "bounds": {"FILED": None, "CLAIMED": LANE_BOUND_S, "RECEIPT": RECEIPT_BOUND_S,
                        "VERIFIED": None, "CLOSED": None}}
 
@@ -245,11 +256,92 @@ def walks(ledger, now=None, claims=None):
         if work.tower_excluded_repo(repo):
             continue
         key = f"github:{repo.lower()}#{int(number)}"
-        if claim.get("running") and key not in keys:
+        if claim.get("activity") and key not in keys:
             walk = _coordinator_walk(ledger, key, int(number), now)
             if walk:
                 out.append(walk)
+    # A coordinator may remove a finished item from its mutable doc before a sweep sees its
+    # comment. The ledger claim remains the durable input; retain it until verification.
+    for (key,) in ledger.conn.execute("SELECT DISTINCT subject FROM events WHERE kind='intake.claim' AND ts>=?",
+                                      (SINCE,)):
+        if key in keys or any(w['key'] == key for w in out):
+            continue
+        repo_ref = key.removeprefix('github:')
+        repo, sep, number = repo_ref.rpartition('#')
+        if not sep or not number.isdigit() or work.tower_excluded_repo(repo):
+            continue
+        walk = _coordinator_walk(ledger, key, int(number), now)
+        if walk:
+            out.append(walk)
     return out
+
+
+def poll_coordinator_receipts(ledger, now=None, run=None):
+    """Bounded, durable poll of claimed coordinator issues; GitHub proof advances the state."""
+    now = time.time() if now is None else now
+    candidates = []
+    abandoned = 0
+    expired = ledger.conn.execute("SELECT subject, MAX(ts) FROM events WHERE kind='intake.claim' AND ts>=?"
+                                  " GROUP BY subject HAVING MAX(ts)<?", (SINCE, now - COORDINATOR_WINDOW_S))
+    for key, claimed_at in expired:
+        repo = key.removeprefix('github:').rpartition('#')[0]
+        if work.tower_excluded_repo(repo):
+            continue
+        subject = key.removeprefix('github:')
+        accepted = ledger.conn.execute("SELECT ts, payload FROM events WHERE kind='receipt.state' AND subject=?"
+                                       " ORDER BY id DESC LIMIT 1", (subject,)).fetchone()
+        if accepted and accepted[0] >= claimed_at and loads(accepted[1], {}).get('proof'):
+            continue
+        if ledger.conn.execute("SELECT 1 FROM events WHERE kind='receipt.abandoned' AND subject=?"
+                               " AND json_extract(payload,'$.claimed_at')=?", (key, claimed_at)).fetchone():
+            continue
+        ledger.event('receipt.abandoned', key, {'claimed_at': claimed_at,
+                                               'act_needed': 'reclaim or close the coordinator issue'}, 'intake')
+        abandoned += 1
+    keys = ledger.conn.execute("SELECT subject, MAX(ts) FROM events WHERE kind='intake.claim' AND ts>=?"
+                               " GROUP BY subject", (max(SINCE, now - COORDINATOR_WINDOW_S),)).fetchall()
+    for key, claimed_at in keys:
+        repo_ref = key.removeprefix('github:')
+        repo, sep, number = repo_ref.rpartition('#')
+        if not sep or not number.isdigit() or work.tower_excluded_repo(repo):
+            continue
+        if ledger.conn.execute("SELECT 1 FROM tasks WHERE dedupe_key=? LIMIT 1", (key,)).fetchone():
+            continue  # Tower already owns this item's receipt path
+        accepted = ledger.conn.execute("SELECT ts, payload FROM events WHERE kind='receipt.state' AND subject=?"
+                                       " ORDER BY id DESC LIMIT 1", (repo_ref,)).fetchone()
+        accepted_payload = loads(accepted[1], {}) if accepted else {}
+        if accepted and accepted[0] >= claimed_at and accepted_payload.get('state') == 'RECEIPT' \
+                and accepted_payload.get('proof'):
+            continue
+        last = ledger.conn.execute("SELECT MAX(ts) FROM events WHERE kind='receipt.poll' AND subject=?",
+                                   (key,)).fetchone()[0]
+        if last is None or now - last >= RECEIPT_POLL_S:
+            candidates.append((last or 0, key, repo, int(number), claimed_at))
+    result = {"checked": 0, "accepted": 0, "rejected": 0, "abandoned": abandoned, "errors": []}
+    for _, key, repo, number, claimed_at in sorted(candidates)[:MAX_RECEIPT_POLLS]:
+        # This transaction is the admission fence across concurrent sweeps. A crashed reader
+        # becomes eligible again after RECEIPT_POLL_S; it cannot strand the claim.
+        with ledger.tx():
+            last = ledger.conn.execute("SELECT MAX(ts) FROM events WHERE kind='receipt.poll' AND subject=?",
+                                       (key,)).fetchone()[0]
+            if last is not None and now - last < RECEIPT_POLL_S:
+                continue
+            ledger._event('receipt.poll', key, {"repo": repo, "number": number}, 'intake', now)
+        result['checked'] += 1
+        try:
+            comment = receipt.latest_claim(repo, number, claimed_at, run=run)
+            if comment is None:
+                continue
+            verifier = lambda r, n, c: receipt.verify_github_commit(r, n, c, claimed_at, run=run)
+            verdict, _ = receipt.consume(ledger, repo, number, comment['body'], comment.get('html_url'),
+                                         run=run, verifier=verifier)
+            if verdict == 'RECEIPT':
+                result['accepted'] += 1
+            elif verdict == 'CLAIMED':
+                result['rejected'] += 1
+        except Exception as exc:  # malformed remote input cannot stop the rest of intake
+            result['errors'].append(f"{key}: {exc}"[:200])
+    return result
 
 
 def _span(seconds):
@@ -408,7 +500,7 @@ def coordinator_claims(now=None):
 _last_sweep = [0.0]
 
 
-def sweep(ledger, now=None, gh=_gh, force=False, claims=None):
+def sweep(ledger, now=None, gh=_gh, force=False, claims=None, receipt_run=None):
     """Sync coordinator claims, record transitions, fault overruns. Throttled unless forced."""
     now = now if now is not None else time.time()
     if not force and now - _last_sweep[0] < SWEEP_EVERY_S:
@@ -416,6 +508,7 @@ def sweep(ledger, now=None, gh=_gh, force=False, claims=None):
     _last_sweep[0] = now
     claims = coordinator_claims() if claims is None else claims
     report = {"items": 0, "transitions": 0, "faults": [], "errors": [], "claims": sync_claims(ledger, claims)}
+    report['receipts'] = poll_coordinator_receipts(ledger, now, run=receipt_run)
     for walk in walks(ledger, now, claims):
         report["items"] += 1
         report["transitions"] += record_transitions(ledger, walk)

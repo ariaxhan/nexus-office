@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nexus import intake, work  # noqa: E402
+from nexus import intake, receipt, work  # noqa: E402
 from nexus.ledger import Ledger, new_id  # noqa: E402
 
 H = 3600
@@ -57,7 +58,9 @@ class IntakeCase(unittest.TestCase):
         if observe:  # discovery still sees every open item
             for task in self.led.tasks():
                 self.at("work.observed", task["id"], now)
-        return intake.sweep(self.led, now, gh=self.gh, force=True, claims=claims or {})
+        empty_comments = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, '[]', '')
+        return intake.sweep(self.led, now, gh=self.gh, force=True, claims=claims or {},
+                            receipt_run=empty_comments)
 
     def recorded(self):
         return [json.loads(e["payload"])["state"] for e in self.led.events(kind="intake.state")]
@@ -256,6 +259,116 @@ class IntakeCase(unittest.TestCase):
         self.assertEqual(intake.lane_bound("**Lane bound:** 36h"), 36 * H)
         self.assertEqual(intake.lane_bound("lane bound: 2 days"), 2 * 86400)
         self.assertEqual(intake.lane_bound("lane bound: 90 min"), 90 * 60)
+
+
+class CoordinatorReceipt(unittest.TestCase):
+    SHA = 'a' * 40
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.led = Ledger(os.path.join(self.dir.name, 'ledger.sqlite'))
+        self.key = 'github:o/r#77'
+        self.led.event('intake.claim', self.key, {'source': 'coordinator'}, 'test', T0)
+        self.comments = []
+        self.posts = 0
+        self.commit_seen = False
+
+    def tearDown(self):
+        self.led.close()
+        self.dir.cleanup()
+
+    def gh(self, argv, **_):
+        if argv[1:3] == ['issue', 'comment']:
+            self.posts += 1
+            self.comments.append({'body': argv[-1], 'html_url': f'comment-{self.posts}'})
+            return subprocess.CompletedProcess(argv, 0, f'comment-{self.posts}', '')
+        if 'commits/' in ' '.join(argv):
+            self.commit_seen = True
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'sha': self.SHA, 'commit': {
+                'committer': {'date': intake._iso(T0 + 60)}}}), '')
+        if argv[-1] == '.default_branch':
+            return subprocess.CompletedProcess(argv, 0, 'main', '')
+        if argv[-1] == '.status':
+            return subprocess.CompletedProcess(argv, 0, 'ahead', '')
+        return subprocess.CompletedProcess(argv, 0, json.dumps([self.comments]), '')
+
+    def test_prose_is_rejected_then_commit_readback_advances_coordinator_walk(self):
+        self.comments.append({'body': 'Outcome: done. Shipped.', 'html_url': 'prose',
+                              'author_association': 'MEMBER', 'created_at': intake._iso(T0 + 1)})
+        first = intake.poll_coordinator_receipts(self.led, T0 + 1, run=self.gh)
+        self.assertEqual((1, 0, 1), (first['checked'], first['accepted'], first['rejected']))
+        self.assertEqual('CLAIMED', receipt.state(self.led, 'o/r', 77)['state'])
+        self.assertEqual('CLAIMED', intake.walks(self.led, T0 + 1)[0]['state'])
+        self.assertEqual(1, self.posts)
+        # A later ordinary comment cannot hide the completion claim.
+        self.comments.append({'body': receipt.emit('done', [f'commit {self.SHA}'], 'GitHub commit',
+                                                   ['PR merged']), 'html_url': 'structured',
+                              'author_association': 'MEMBER', 'created_at': intake._iso(T0 + 300)})
+        self.comments.append({'body': 'Outcome: done. Final note.', 'html_url': 'later-prose',
+                              'author_association': 'MEMBER', 'created_at': intake._iso(T0 + 301)})
+        self.comments.append({'body': 'Thanks.', 'html_url': 'talk'})
+        second = intake.poll_coordinator_receipts(self.led, T0 + 301, run=self.gh)
+        self.assertEqual((1, 1, 0), (second['checked'], second['accepted'], second['rejected']))
+        self.assertTrue(self.commit_seen)
+        self.assertEqual(self.SHA, receipt.state(self.led, 'o/r', 77)['proof']['sha'])
+        self.assertEqual('RECEIPT', intake.walks(self.led, T0 + 301)[0]['state'])
+        sweep = intake.sweep(self.led, T0 + 301, gh=lambda args: None, force=True, claims={},
+                             receipt_run=self.gh)
+        self.assertEqual(2, sweep['transitions'])  # CLAIMED then RECEIPT; no unchecked VERIFIED
+        self.assertEqual(1, self.posts)
+        self.assertEqual(0, intake.poll_coordinator_receipts(self.led, T0 + 602, run=self.gh)['checked'])
+
+    def test_unavailable_commit_proof_never_advances(self):
+        self.comments.append({'body': receipt.emit('done', [f'commit {self.SHA}'], 'GitHub commit',
+                                                   ['PR merged']), 'html_url': 'structured',
+                              'author_association': 'MEMBER', 'created_at': intake._iso(T0 + 1)})
+
+        def failed(argv, **kw):
+            if 'commits/' in ' '.join(argv):
+                return subprocess.CompletedProcess(argv, 1, '', 'temporary GitHub outage')
+            return self.gh(argv, **kw)
+
+        result = intake.poll_coordinator_receipts(self.led, T0 + 1, run=failed)
+        self.assertEqual((0, 1), (result['accepted'], len(result['errors'])))
+        self.assertEqual({}, receipt.state(self.led, 'o/r', 77))
+        self.assertEqual('CLAIMED', intake.walks(self.led, T0 + 1)[0]['state'])
+        self.assertEqual(1, intake.poll_coordinator_receipts(self.led, T0 + 301, run=self.gh)['accepted'])
+
+    def test_unmerged_commit_is_rejected_without_receipt_transition(self):
+        self.comments.append({'body': receipt.emit('done', [f'commit {self.SHA}'], 'GitHub commit',
+                                                   ['PR merged']), 'html_url': 'structured',
+                              'author_association': 'MEMBER', 'created_at': intake._iso(T0 + 1)})
+
+        def unmerged(argv, **kw):
+            if argv[-1] == '.status':
+                return subprocess.CompletedProcess(argv, 0, 'diverged', '')
+            return self.gh(argv, **kw)
+
+        result = intake.poll_coordinator_receipts(self.led, T0 + 1, run=unmerged)
+        self.assertEqual((0, 1), (result['accepted'], result['rejected']))
+        self.assertEqual('CLAIMED', receipt.state(self.led, 'o/r', 77)['state'])
+
+    def test_untrusted_or_stale_comment_cannot_advance_new_claim(self):
+        body = receipt.emit('done', [f'commit {self.SHA}'], 'GitHub commit', ['PR merged'])
+        self.led.event('receipt.state', 'o/r#77', {'state': 'RECEIPT', 'proof': {'sha': self.SHA}},
+                       'test', T0 - 60)
+        self.comments.extend([
+            {'body': body, 'html_url': 'old', 'author_association': 'MEMBER',
+             'created_at': intake._iso(T0 - 60)},
+            {'body': body, 'html_url': 'outsider', 'author_association': 'NONE',
+             'created_at': intake._iso(T0 + 1)},
+        ])
+        result = intake.poll_coordinator_receipts(self.led, T0 + 2, run=self.gh)
+        self.assertEqual((1, 0), (result['checked'], result['accepted']))
+        self.assertEqual('CLAIMED', intake.walks(self.led, T0 + 2)[0]['state'])
+        self.assertFalse(self.commit_seen)
+
+    def test_abandoned_claim_stops_polling_after_window(self):
+        first = intake.poll_coordinator_receipts(self.led, T0 + intake.COORDINATOR_WINDOW_S + 1, run=self.gh)
+        self.assertEqual((0, 1), (first['checked'], first['abandoned']))
+        self.assertEqual(0, intake.poll_coordinator_receipts(
+            self.led, T0 + intake.COORDINATOR_WINDOW_S + 2, run=self.gh)['abandoned'])
+        self.assertEqual([], intake.walks(self.led, T0 + intake.COORDINATOR_WINDOW_S + 1))
 
 
 if __name__ == "__main__":
