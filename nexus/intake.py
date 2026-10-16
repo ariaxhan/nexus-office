@@ -374,6 +374,8 @@ def sync_claims(ledger, published):
     """
     count = 0
     for (repo, number), claim in published.items():
+        if work.tower_excluded_repo(repo):
+            continue
         if not claim.get("activity"):
             continue
         key = f"github:{repo.lower()}#{int(number)}"

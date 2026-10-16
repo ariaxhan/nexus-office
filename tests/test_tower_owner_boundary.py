@@ -67,6 +67,14 @@ class TowerOwnerBoundary(unittest.TestCase):
             self.assertEqual({}, intake.coordinator_claims())
         published.assert_called_once_with("/tmp/other")
 
+    def test_explicit_tbs_claim_cannot_enter_tower_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Ledger(str(Path(directory) / "ledger.sqlite"))
+            self.addCleanup(ledger.close)
+            claims = {("thinking-brain-school/tbs-www", 2): {"activity": time.time(), "running": True}}
+            self.assertEqual(0, intake.sync_claims(ledger, claims))
+            self.assertEqual([], ledger.events(kind="intake.claim"))
+
 
 if __name__ == "__main__":
     unittest.main()
