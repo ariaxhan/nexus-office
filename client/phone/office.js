@@ -823,7 +823,7 @@ $('#search-go').addEventListener('click',()=>search());$('#global-search').addEv
 window.addEventListener('scroll',()=>{if((location.hash||'#watch').startsWith('#watch'))localStorage.setItem('office-scroll:watch',String(scrollY));},{passive:true});
 $('#settings').disabled=false;$('#new-task').disabled=false;$('#refresh-office').disabled=false;
 async function connection(){try{const data=await api('/api/health');const node=$('#connection');if(!data.ok){node.textContent='Mac needs attention';return;}const age=Date.parse(data.server_time)-Date.parse(data.snapshot_at);if(!data.snapshot_at||!Number.isFinite(age))node.textContent='Mac connected · no update yet';else if(age>20*60*1000)node.textContent=`Mac connected · update ${formatAge(age)}`;else node.textContent='Mac connected';}catch{$('#connection').textContent='Mac unreachable';}}
-const stateSync=userState.synchronize(),settingsSync=loadSettings().catch(error=>notice(error.message));void connection();await route();void Promise.allSettled([stateSync,settingsSync]);if(new URL(location.href).searchParams.has('detail')&&!$('#detail').open)await restoreFromURL();setInterval(connection,30000);
+const stateSync=userState.synchronize(),settingsSync=loadSettings().catch(error=>notice(error.message));if(!localStorage.getItem('office-preferences-cache'))await settingsSync;void connection();await route();void Promise.allSettled([stateSync,settingsSync]);if(new URL(location.href).searchParams.has('detail')&&!$('#detail').open)await restoreFromURL();setInterval(connection,30000);
 
 async function archives(parent,cursor=0){
  const data=await api(`/api/archives?cursor=${cursor}`);
