@@ -341,6 +341,33 @@ def cmd_work(args):
         return 1
 
 
+def cmd_dispatch(args):
+    """#301 dispatch records: the worker's receipt, one poll pass, a commitment, a broker filing."""
+    from . import dispatch, receipt as receipts
+    led = _ledger(args)
+    try:
+        if args.dispatch_command == "receipt":
+            result = dispatch.submit_receipt(led, args.record_id, {
+                "outcome": args.outcome, "artifacts": args.artifact, "verification": args.verification,
+                "evidence": args.evidence, "next": args.next})
+        elif args.dispatch_command == "poll":
+            result = dispatch.poll(led, workers=dispatch.load_workers())
+        elif args.dispatch_command == "commit":
+            print(dispatch.file_commitment(led, args.key, args.owner, args.act, args.source, args.surface,
+                                           json.loads(args.verify), args.stall_s))
+            return 0
+        else:
+            result = {"record_id": dispatch.file_control_request(
+                led, args.queue, args.requester, args.act, args.shell_check, args.surface, json.loads(args.verify))}
+        print(json.dumps(result, sort_keys=True, default=str))
+        return 0
+    except (dispatch.DispatchError, receipts.ReceiptError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        led.close()
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="nexus", description="one ledger, one tower")
     parser.add_argument("--ledger", default=None, help="ledger path (default: NEXUS_LEDGER)")
@@ -479,6 +506,25 @@ def build_parser():
     sandbox_run = sandbox_subs.add_parser("run", help=argparse.SUPPRESS)
     sandbox_run.add_argument("--timeout", type=float, default=600.0)
     sandbox_run.set_defaults(func=cmd_sandbox_run)
+
+    disp = subs.add_parser("dispatch", help="dispatch records (#301)")
+    disp_subs = disp.add_subparsers(dest="dispatch_command", required=True)
+    rec = disp_subs.add_parser("receipt", help="the worker's one write")
+    rec.add_argument("record_id")
+    rec.add_argument("--outcome", required=True)
+    rec.add_argument("--artifact", action="append", default=[])
+    rec.add_argument("--verification", required=True)
+    rec.add_argument("--evidence", action="append", default=[])
+    rec.add_argument("--next", default="none")
+    disp_subs.add_parser("poll", help="one dispatch pass")
+    filing = disp_subs.add_parser("file", help="file a broker control request")
+    for flag in ("--queue", "--requester", "--act", "--shell-check", "--surface", "--verify"):
+        filing.add_argument(flag, required=True)
+    commit = disp_subs.add_parser("commit", help="file one extracted commitment (idempotent on --key)")
+    for flag in ("--key", "--owner", "--act", "--source", "--surface", "--verify"):
+        commit.add_argument(flag, required=True)
+    commit.add_argument("--stall-s", type=float, required=True)
+    disp.set_defaults(func=cmd_dispatch)
 
     install = subs.add_parser("install", help="write and load the launchd plist")
     install.add_argument("--interval", type=float, default=5.0)
