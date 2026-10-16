@@ -890,8 +890,10 @@ def _raise_quarantines(ledger, now=None):
     for plan in ledger.plans():
         if plan["quarantined_at"] is None:
             continue
-        told = [e for e in ledger.events(kind="repair.escalated", subject=plan["id"])
-                if (loads(e["payload"], {}) or {}).get("tier") in ("human", "office")]
+        told = [e for subject in (plan["id"], sr.mechanism_fault_id(plan))
+                for e in ledger.events(kind="repair.escalated", subject=subject)
+                if e["ts"] >= plan["quarantined_at"]
+                and (loads(e["payload"], {}) or {}).get("tier") in ("human", "office")]
         if repair is not None and plan["id"] == repair["id"]:
             if not told:
                 sr.escalate_mechanism(

@@ -5,7 +5,7 @@ always always always always — number one rule."
 
 A fault, a repeated failure, or a quarantine triggers the system's own
 repair in the same motion. Quarantine is a repair trigger, never an end
-state. A failed repair escalates with evidence, never goes quiet. None of
+state. A failed repair remains a structured Tower fault record, visible in Office. None of
 this is prose: each rule below is a refusal in code, demonstrated on the
 issue.
 
@@ -15,13 +15,11 @@ issue.
    `client/office_feed.py:publish` (work-category posts). Text asserting a
    broken/unrepaired state is BLOCKED at send time unless it carries a
    repair reference whose repair task is verified LIVE in the ledger at
-   that moment — or the tier-3 escalation reference (≥3 attempts, the
-   single act only she can do). Her surfaces carry completions and
-   receipts; broken states live on the issue where the repair works them.
+   that moment — or a structured escalation after the retry limit. Her surfaces carry
+   completions and receipts; technical faults live in the Tower ledger.
    `tower.status()` and the board card (`client/tower_board.py`) follow
    the same contract: a stopped plan reads REPAIRING with its repair task
-   and attempt count while its repair is live, and counts as "needs a
-   person" only when the repair is exhausted.
+   and attempt count while its repair is live, and keeps exhausted technical repairs in the Office repair queue.
 2. **Deletion of the parked state** — ledger schema v4. A plan's
    quarantine record REQUIRES `repair_task_id` naming a live repair task:
    the column, a BEFORE UPDATE trigger, and `quarantine_plan`'s own check
@@ -59,13 +57,23 @@ issue.
   that receipt flight linked. Proof flights never count in the plan's
   own failure history — the mechanism's re-runs are accounted by
   attempts, not by the streaks they are clearing.
-- **Escalation**: a failed attempt re-opens with its evidence (attempt
-  history on the task + the issue). Second failure → the owning
-  coordinator (comment on #273). Third → Aria, in the only shape allowed
-  to reach her: what broke, what was tried, the single thing only she
-  can do. The tower's safety-net pass watches the two states that must
-  never be silent: the repair plan itself stopped, and a repair abandoned
-  without its escalation.
+- **Fault records (#300)**: `nexus/faults.py` projects the append-only repair
+  events into `{fault_id, signature, detected_at, source, state, repair,
+  verification, escalation}`. Tower acceptance owns dispatch and honors plan
+  quarantine/policy; a separate stale sweep cannot bypass it. A proof flight
+  with declared outputs, or a jobrun rc=0 receipt, is required to close a
+  repair. Three failed attempts produce one structured escalation. Office
+  Watch reads escalations as compact technical repair records, separate
+  from Needs You. `nexus faults list` is read-only JSON. The repair
+  mechanism's own quarantine creates one record per occurrence.
+- **Cutover boundary**: the four Muse watchdogs still route by their existing
+  path. Tower's existing GitHub escalation also stays live by default while
+  the Office reader runs in shadow. Set `NEXUS_FAULT_RECORDS_ONLY=1` only
+  after Office readback and fault-injection proof, then verify one owner and
+  no issue/comment/human_ask writes. The four watchdog replacement checks
+  and source-level record producers belong to #304. Do not retire their old
+  route until shadow comparisons and destination proof show one healthy
+  owner. The general dispatch store and poller remain #301.
 - **Standing down**: a person releasing a plan outranks the loop. A
   repair whose plan was released after it opened closes as stood down
   (delivered evidence: the release) — never as a failure, never
@@ -88,7 +96,6 @@ second cannot.
   no longer representable. If your coordinator needs a plan stopped,
   stop it through the ledger like everything else — the repair opens
   with it, and "repaired" is proven by the plan's own receipt.
-- If a repair of your plan reaches its second failed attempt, the
-  escalation lands on #273 naming the plan; the third reaches Aria with
-  the full history. Silence from the mechanism is a defect in the
-  mechanism — file it on #273.
+- Failed repair attempts stay in the ledger. An exhausted technical repair
+  appears in Office's repair queue with one action; it is not automatically
+  classified as an action Aria must take.

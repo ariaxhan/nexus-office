@@ -5,8 +5,10 @@ repeated failure, or a quarantine triggers the system's own repair in the
 same motion. Quarantine is a repair-pending state, never an end state: the
 ledger will not record one without a live repair task attached (shape 2),
 the launch path refuses a dead pointer into repair instead of burning
-retries on it (shape 3), and no broken-state word reaches Aria except
-behind a live repair or in Office's technical repair queue (shape 1).
+retries on it (shape 3), and no broken-state word reaches Aria at all
+(shape 1, hardened by #300): a fault is a structured repair record
+(nexus/faults.py), and the only thing ever surfaced is a record whose
+state is escalated, with one line naming the act a person must do.
 
 THE PRE-AUTHORIZED ENVELOPE (standing grant, Aria 2026-10-14 17:11 PT):
 inside the envelope, repair is pre-authorized ALWAYS -- no ask at any tier,
@@ -20,10 +22,10 @@ is an escalation, never an improvisation.
 
 Proof: after a fix, the worker is re-run; "repaired" means the worker's
 own completion receipt (a produced/landed flight, a jobrun proof rc=0).
-Nothing else counts. A failed attempt re-opens with its evidence; the
-second failure escalates to the owning coordinator. The third records the
-full history in Office's technical repair queue; routine repair remains
-Office-owned.
+Nothing else counts. A failed attempt re-opens with its evidence and
+re-flies, silently. The third failure moves the record to state=escalated;
+nothing is posted, filed, or asked. Tower acceptance and launch remain the
+only path from a detected repair to a flight.
 
 Every repair closes only with the recurrence guard for its fault class
 installed. For the path-rot class the guard is the launch preflight in
@@ -44,12 +46,11 @@ import subprocess
 import sys
 import time
 
-from . import terminal
+from . import faults, terminal
 from .ledger import loads
 
 REPAIR_PLAN_NAME = "nexus-self-repair"
 ISSUE_REF = "ariaxhan/nexus-office#300"
-ISSUE_NUMBER = "300"
 MAX_ATTEMPTS = 3
 SIGNATURE_DEAD_POINTER = "dead-pointer"
 
@@ -262,9 +263,9 @@ def open_repair(ledger, packet, now=None):
     if tid is None:  # a racing writer won; its task is the repair
         live = ledger.live_task_with_key(key)
         return live["id"] if live is not None else None
-    ledger.event("repair.opened", subject,
-                 {"task_id": tid, "signature": packet["signature"],
-                  "issue": ISSUE_REF}, "self-repair", now)
+    ledger.event("repair.opened", tid,
+                 {"subject": subject, "signature": packet["signature"],
+                  "source": "self-repair", "issue": ISSUE_REF}, "self-repair", now)
     return tid
 
 
@@ -666,9 +667,10 @@ def verify(ledger, now=None):
                                   expect="running",
                                   reason="repair attempts exhausted", now=now)
             continue
-        if n >= 2 and not any(e["kind"] == "repair.escalated"
-                              and (loads(e["payload"], {}) or {}).get("tier") == "coordinator"
-                              for e in events):
+        if n >= 2 and not records_only() and not any(
+                e["kind"] == "repair.escalated"
+                and (loads(e["payload"], {}) or {}).get("tier") == "coordinator"
+                for e in events):
             escalate_coordinator(ledger, ledger.task(tid), now)
             out["escalated"] += 1
         retry_due = any(e["kind"] == "repair.retry_due" for e in events)
@@ -689,10 +691,15 @@ def verify(ledger, now=None):
     return out
 
 
+def records_only():
+    """Cutover switch; default keeps the prior GitHub repair route live."""
+    return os.environ.get("NEXUS_FAULT_RECORDS_ONLY") == "1"
+
+
 def _gh_comment(body):
     gh = shutil.which("gh") or "/opt/homebrew/bin/gh"
     try:
-        proc = subprocess.run([gh, "issue", "comment", ISSUE_NUMBER,
+        proc = subprocess.run([gh, "issue", "comment", "300",
                                "--repo", "ariaxhan/nexus-office", "--body", body],
                               capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -701,49 +708,53 @@ def _gh_comment(body):
 
 
 def escalate_coordinator(ledger, task, now):
-    """Tier 2: the owning coordinator gets the failure, on the issue where
-    repair work is tracked. Recorded either way; silence is the defect."""
+    """Legacy route while the structured Office reader runs in shadow."""
     packet = loads(task["reason"], {}) or {}
     body = (f"Self-repair escalation (tier 2): repair task {task['id']} for "
             f"`{packet.get('plan_name') or packet.get('job_id')}` has failed "
-            f"{attempts(ledger, task['id'])} attempts inside the envelope. "
-            f"Packet: {task['reason']}")
+            f"{attempts(ledger, task['id'])} attempts. Packet: {task['reason']}")
     outcome = _gh_comment(body)
     ledger.event("repair.escalated", task["id"],
                  {"tier": "coordinator", "issue": ISSUE_REF, "gh": outcome},
                  "self-repair", now)
 
 
-def _tried(ledger, task_id):
-    rows = ledger.events(kind="repair.attempt_failed", subject=task_id)
-    return "; ".join(f"attempt {i + 1}: {(loads(e['payload'], {}) or {}).get('why', '?')}"
-                     for i, e in enumerate(rows)) or "no attempts recorded"
-
-
 def escalate_office(ledger, task, now):
-    """Exhausted technical repair stays Office-owned and is filed for repair."""
+    """Exhausted repair becomes state=escalated on its record (issue #300):
+    one line naming the act a person must do. No comment, no ask, no prose;
+    the attempt history is already the record's own event log."""
     packet = loads(task["reason"], {}) or {}
     name = packet.get("plan_name") or packet.get("job_id") or "a worker"
     dead = packet.get("dead") or []
-    single_act = (f"restore or repoint the dead path {dead[0]}" if dead else
-                  "diagnose the worker command or retire the broken plan")
-    text = (f"{name} is stopped and its repair has failed {MAX_ATTEMPTS} times. "
-            f"What broke: {packet.get('reason')}. "
-            f"What was tried: {_tried(ledger, task['id'])}. "
-            f"Office repair task: {single_act}.")
-    outcome = _gh_comment(f"Self-repair exhausted (Office-owned): task {task['id']}. {text}")
-    ledger.event("repair.escalated", task["id"],
-                 {"tier": "office", "issue": ISSUE_REF, "gh": outcome},
-                 "self-repair", now)
+    if dead:
+        act, kind = f"restore or repoint the dead path {dead[0]} for {name}", "technical"
+    else:
+        act, kind = f"fix the worker command of {name} or retire it", "technical"
+    faults.escalate(ledger, task["id"], act, kind=kind, now=now)
+    if not records_only():
+        outcome = _gh_comment(f"Self-repair exhausted (Office-owned): task {task['id']}. {act}")
+        ledger.event("repair.legacy_comment", task["id"],
+                     {"tier": "office", "issue": ISSUE_REF, "gh": outcome},
+                     "self-repair", now)
 
 
 def escalate_mechanism(ledger, plan, why, now):
-    """Route a stopped repair mechanism to Office's repair work queue."""
-    text = (f"The self-repair mechanism is stopped. What broke: {why}. "
-            f"What was tried: automatic repair is the thing that is down. "
-            f"Office repair task: inspect why plan {plan['name']} is quarantined; "
-            f"release it only after the cause is corrected, or retire it.")
-    outcome = _gh_comment(f"Self-repair mechanism stopped (Office-owned): {text}")
-    ledger.event("repair.escalated", plan["id"],
-                 {"tier": "office", "mechanism": True, "issue": ISSUE_REF, "gh": outcome},
-                 "self-repair", now)
+    """A stopped repair mechanism is a fault of its own: a record keyed on
+    the plan, escalated in the same motion (nothing can repair the
+    repairer). `why` becomes the signature, never a sentence to a person."""
+    fault_id = mechanism_fault_id(plan)
+    faults.detect(ledger, f"mechanism-stopped:{why}", "self-repair",
+                  fault_id=fault_id, now=now)
+    faults.escalate(ledger, fault_id,
+                    f"find why plan {plan['name']} is quarantined, fix it, then release it",
+                    kind="technical", now=now)
+    if not records_only():
+        outcome = _gh_comment(f"Self-repair mechanism stopped: {plan['name']}. {why}")
+        ledger.event("repair.legacy_comment", fault_id,
+                     {"tier": "office", "issue": ISSUE_REF, "gh": outcome},
+                     "self-repair", now)
+
+
+def mechanism_fault_id(plan):
+    """One fault per quarantine occurrence, including after a release."""
+    return f"mechanism:{plan['id']}:{plan['quarantined_at']}"
