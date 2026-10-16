@@ -21,6 +21,7 @@ import json
 import datetime
 import re
 import subprocess
+from urllib.parse import quote
 
 OUTCOMES = ("done", "partial", "failed", "blocked")
 FIELDS = ("outcome", "artifacts", "verification", "evidence", "next")
@@ -294,7 +295,7 @@ def verify_github_commit(repo, _number, completion, claimed_at, run=None, timeou
     branch = root.stdout.strip()
     if not re.fullmatch(r'[\w./-]{1,100}', branch) or '..' in branch:
         raise ReceiptError('GitHub returned an invalid default branch')
-    compare = (run or subprocess.run)(["gh", "api", f"repos/{repo}/compare/{sha}...{branch}",
+    compare = (run or subprocess.run)(["gh", "api", f"repos/{repo}/compare/{sha}...{quote(branch, safe='')}",
                                        "--jq", ".status"], capture_output=True, text=True, timeout=timeout)
     if compare.returncode:
         raise OSError(f"commit reachability unavailable: {(compare.stderr or '')[-200:]}")

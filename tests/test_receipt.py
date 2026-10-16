@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,25 @@ class Grammar(unittest.TestCase):
                      done() + "\n" + done()):
             with self.subTest(text), self.assertRaises(rc.ReceiptError):
                 rc.parse(text)
+
+    def test_commit_verifier_encodes_slash_in_default_branch(self):
+        sha = 'a' * 40
+        seen = []
+
+        def run(argv, **_):
+            seen.append(argv)
+            if '/commits/' in argv[2]:
+                return subprocess.CompletedProcess(argv, 0, json.dumps({
+                    'sha': sha, 'commit': {'committer': {'date': '2026-10-16T20:10:00Z'}}}), '')
+            if argv[-1] == '.default_branch':
+                return subprocess.CompletedProcess(argv, 0, 'release/next', '')
+            return subprocess.CompletedProcess(argv, 0, 'ahead', '')
+
+        completion = rc.validate({'outcome': 'done', 'artifacts': [f'commit {sha}'],
+                                  'verification': 'GitHub commit', 'evidence': ['merged'], 'next': 'none'})
+        proof = rc.verify_github_commit('o/r', 1, completion, 1792181000, run=run)
+        self.assertEqual('release/next', proof['branch'])
+        self.assertIn(f'/compare/{sha}...release%2Fnext', seen[-1][2])
 
 
 class Consumer(unittest.TestCase):
