@@ -166,3 +166,4 @@ body[data-theme=dark] .ask-bubble.user{border:1px solid color-mix(in srgb,var(--
 
 /* Aria prefers no drawn focus rings or underlines on Office controls. */
 :focus,:focus-visible{outline:none!important;box-shadow:none!important}
+button,button:hover{border-color:transparent!important}
