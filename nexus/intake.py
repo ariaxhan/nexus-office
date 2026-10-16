@@ -107,22 +107,42 @@ def _claimed(ledger, task):
     return min((t for t in (flight, receipt) if t is not None), default=None)
 
 
+def _queue_ready(revision):
+    """Was this revision eligible as a `ready` queue item -- judged as its owning lane?
+
+    `work.eligibility` is lane-relative by design: a tower-v2 item reads 'owned' to
+    every lane but the tower lane. The judge is not a lane; it measures the owning
+    lane's queue, so it asks with the owner's lane context set. Judged from any
+    other chair (the Tower tick sets no lane), every tower-v2 item accrues zero
+    queue time and its FILED bound can never fire.
+    """
+    from . import work
+
+    token = None
+    try:
+        labels = {label["name"].lower() for label in revision.get("labels", [])}
+        lane = work.TOWER_LABEL if work.TOWER_LABEL in labels else work._lane.get()
+        token = work._lane.set(lane)
+        return work.eligibility(revision) == "ready"
+    except (KeyError, TypeError, AttributeError):
+        return False
+    finally:
+        if token is not None:
+            work._lane.reset(token)
+
+
 def _queued(ledger, task, until):
     """(first entry, seconds) this generation spent eligible as a `ready` queue item before `until`.
 
     Read off every recorded `work.issue` revision in order, so an interval that ended stays
     counted after its labels change, and labels added late start the clock late.
     """
-    from .work import eligibility
     first, total, start = None, 0.0, None
     rows = ledger.conn.execute("SELECT ts, payload FROM events WHERE kind='work.issue' AND subject=?"
                                " ORDER BY id", (task["id"],)).fetchall()
     for ts, payload in rows:
         ts = min(max(ts, task["created_at"]), until)
-        try:
-            ready = eligibility(loads(payload, {})) == "ready"
-        except (KeyError, TypeError, AttributeError):
-            ready = False
+        ready = _queue_ready(loads(payload, {}))
         if ready and start is None:
             start = ts
             first = ts if first is None else first

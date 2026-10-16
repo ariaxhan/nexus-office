@@ -169,6 +169,16 @@ class IntakeCase(unittest.TestCase):
         self.sweep(T0 + 5 * H)  # dedupe by item and state
         self.assertEqual(len(self.filed), 1)
 
+    def test_tower_v2_queue_item_is_judged_as_its_owning_lane(self):
+        # eligibility is lane-relative: from any chair but the tower lane's, a
+        # tower-v2 item reads 'owned' and accrues no queue time -- its FILED
+        # bound must still fire, judged as the owning lane reads it.
+        self.capture(19, labels=("ready", "tower-v2"))
+        self.assertEqual(self.sweep(T0 + 1.9 * H)["faults"], [])
+        report = self.sweep(T0 + 2.5 * H)
+        self.assertEqual(len(report["faults"]), 1)
+        self.assertIn("sat in FILED", self.filed[0][5])
+
     def test_late_claim_still_faults_the_overrun(self):
         tid = self.capture(4)
         self.claim(tid, T0 + 3 * H)

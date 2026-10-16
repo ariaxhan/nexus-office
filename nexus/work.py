@@ -1047,6 +1047,9 @@ def _settle(led, fid, entry, task, issue, result, contract_=None):
                                  verification_id=verification_id, result="passed",
                                  exact_head=result["sha"], proof_ref=proof_ref,
                                  evidence_ref=proof_ref)
+    if not published(led, repo, number, task):  # completion waits for the receipt to be on the issue
+        return pending(led, fid, {"reason": "receipt not published", "transient": True,
+                                  "retry_at": time.time() + 300, "evidence": [proof_ref]})
     if close_then_done(led, fid, {"repo": repo, "task": task["id"], "issue": issue},
                        "tower receipt: " + why, [proof_ref] if proof_ref else []) != "done":
         return "pending"
@@ -1067,12 +1070,36 @@ def transient_hold(led, fid, reason, result=None):
                                  evidence=[(result or {}).get("pr_url") or (result or {}).get("comment_url")]))
 
 
+RECEIPT_SURFACE = "Nexus Tower done receipt: contract check at the landed sha"
+
+
+def published(led, repo, number, task):
+    """The one gate to done: the consumer has read a done receipt for the proven sha off the issue.
+
+    Every completion path (settle, retry, reproof) passes here, so a proof recorded in the ledger
+    never stands in for a receipt the issue does not show. Already on the issue: nothing is posted."""
+    from . import receipt
+    proof = latest(led, "work.receipt", task["id"])
+    if not proof.get("sha"):
+        return False
+    commit = f"commit {proof['sha']}"
+    current = receipt.state(led, repo, number)
+    if current.get("state") == "RECEIPT" and current["receipt"]["outcome"] == "done" \
+            and commit in current["receipt"]["artifacts"]:
+        return True
+    pr_url = latest(led, "flight.terminal", proof.get("flight")).get("pr_url") if proof.get("flight") else None
+    body = receipt.emit("done", [commit, *([pr_url] if pr_url else [])], RECEIPT_SURFACE,
+                        [str(proof.get("receipt") or "receipt").splitlines()[0][:300], f"flight {proof.get('flight')}"])
+    return receipt.publish(led, repo, number, body, timeout=notify_timeout(60)) is not None
+
+
 def _not_done(led, fid, repo, number, why):
-    from . import contract
-    url = subprocess.run(["gh", "issue", "comment", str(number), "-R", repo, "--body",
-                          f"Nexus flight {fid}: not done. {why.splitlines()[0]}. Left open for the next attempt."],
-                         capture_output=True, text=True, timeout=notify_timeout(60)).stdout.strip()
+    from . import contract, receipt
     held = why.startswith(contract.UNVERIFIED)
+    body = receipt.emit("blocked" if held else "failed", [], RECEIPT_SURFACE, [why.splitlines()[0][:300], f"flight {fid}"],
+                        "aria: decide the held commit" if held else "tower: next attempt")
+    lead = f"Nexus flight {fid}: not done. Left open for the next attempt."
+    url = receipt.state(led, repo, number).get("comment") if receipt.publish(led, repo, number, f"{lead}\n\n{body}", timeout=notify_timeout(60)) else None
     if held:  # the commit is on origin; another flight would only find no change
         subprocess.run(["gh", "issue", "edit", str(number), "-R", repo, "--remove-label", "ready",
                         "--add-label", "hold"], capture_output=True, text=True, timeout=notify_timeout(60))
@@ -1588,6 +1615,10 @@ def reprove(led, entry, task, issue):
 
 
 def close_received(led, entry, task, issue, receipt):
+    if not published(led, entry["repo"], issue["number"], task):
+        led.event("work.pending", task["id"], {"reason": "receipt not published",
+                                               "next_retry": time.time() + 300}, "work")
+        return "pending"
     try:
         source = close_issue(led, {"repo": entry["repo"], "task": task["id"], "issue": issue})
     except WorkError as exc:

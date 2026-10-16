@@ -58,6 +58,7 @@ else:
         self.issues = [dict(number=1, title="First", state="open", labels=[{"name": "ready"}])]
         self.prs = []
         self.closed = []
+        self.issue_comments = []
         self.outage = False
         self.real_run = subprocess.run
         self.addCleanup(patch.stopall)
@@ -73,6 +74,11 @@ else:
             return self.real_run(argv, **kwargs)
         if self.outage:
             return subprocess.CompletedProcess(argv, 1, "", "API unavailable")
+        if argv[:3] == ["gh", "issue", "comment"]:  # the issue keeps what is posted: the receipt gate reads it back
+            self.issue_comments.append(dict(body=argv[argv.index("--body") + 1], html_url=f"https://c/{len(self.issue_comments) + 1}"))
+            return subprocess.CompletedProcess(argv, 0, self.issue_comments[-1]["html_url"], "")
+        if "/comments?" in argv[-1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps([self.issue_comments]), "")
         if "PATCH" in argv:
             self.closed.append(argv)
             return subprocess.CompletedProcess(argv, 0, '{"state":"closed"}', "")
@@ -827,7 +833,7 @@ else:
 
         def fake(argv, **kwargs):
             timeouts.append(kwargs['timeout'])
-            return subprocess.CompletedProcess(argv, 0, 'https://comment/1' if 'comment' in argv else '{"state":"closed"}', '')
+            return self.github(argv, **kwargs)
 
         patch('nexus.work.subprocess.run', side_effect=fake).start()
         for left in (0.066, -5):  # the live failure, then a deadline already passed
@@ -837,7 +843,7 @@ else:
                                                            contract.UNVERIFIED + ' landed abc'))
             finally:
                 work._deadline.reset(token)
-        self.assertEqual(4, len(timeouts))  # comment and hold label, twice
+        self.assertEqual(6, len(timeouts))  # receipt comment, its read-back and hold label, twice
         self.assertTrue(all(t >= work.NOTIFY_FLOOR_S for t in timeouts), timeouts)
 
     def test_wave_child_gets_less_budget_than_the_parent_waits_and_term_before_kill(self):
@@ -950,7 +956,10 @@ class TowerFlow(unittest.TestCase):
             if argv[:3] == ["gh", "pr", "merge"]:
                 self.merges.append(argv)
                 return done()
-            if argv[:2] == ["gh", "pr"] or argv[:3] == ["gh", "issue", "comment"]:
+            if argv[:3] == ["gh", "issue", "comment"]:
+                self.comments.append(argv[-1])
+                return github(argv, **kw)
+            if argv[:2] == ["gh", "pr"]:
                 self.comments.append(argv[-1])
                 return done(out="https://c/1")
             if argv[:3] == ["gh", "issue", "edit"]:
@@ -1165,7 +1174,8 @@ class TowerFlow(unittest.TestCase):
         work.pending(self.led, fid, {"reason": "exit_124"})
         self.led.event("flight.terminal", fid, {"branch": "aria/held/" + fid}, "work")
         receipt = {"receipt": "landed abc; check passed"}
-        with patch("nexus.lanes.sweep_held", return_value=[{"flight": fid, "branch": "aria/held/" + fid, "sha": "s"}]) as sweep:
+        with patch("nexus.lanes.sweep_held", return_value=[{"flight": fid, "branch": "aria/held/" + fid, "sha": "s"}]) as sweep, \
+                patch("nexus.work.published", return_value=True):  # the receipt gate: tests/test_receipt.py
             self.assertEqual("done", work.close_received(self.led, self.entry, self.task, self.issues[0], receipt))
         self.assertEqual((self.entry["path"], [fid]), sweep.call_args[0])
         [swept] = self.led.events(kind="work.held_swept")
