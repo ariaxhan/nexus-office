@@ -67,6 +67,7 @@ import runtime as rt  # noqa: E402
 import search  # noqa: E402
 import sessions  # noqa: E402
 import webhook  # noqa: E402
+import tower_incident  # noqa: E402
 
 # The command is hyphenated because it is a command first and a module second.
 # Loading it by path is what the tests do too; renaming it would rename the thing
@@ -255,6 +256,7 @@ class World:
             self.snapshot = snap
             self.at = snap.get("generated") or now_iso()
             self.error = None
+        tower_incident.after_snapshot(snap)
         return True
 
     def fresh_build(self) -> bool:
