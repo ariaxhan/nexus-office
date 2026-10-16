@@ -125,11 +125,23 @@ class ServeTest(unittest.TestCase):
         self.assertTrue(body["server_time"])
 
     def test_health_says_when_the_picture_was_taken(self):
-        code, body = self.get("/api/health")
-        self.assertEqual(code, 200)
-        self.assertTrue(body["ok"])
-        self.assertEqual(body["snapshot_at"], SNAP["generated"])
-        self.assertRegex(body["revision"], r"^[0-9a-f]{40}$")
+        original = self.world.at
+        try:
+            self.world.at = self.serve.now_iso()
+            code, body = self.get("/api/health")
+            self.assertEqual(code, 200)
+            self.assertTrue(body["ok"])
+            self.assertTrue(body["snapshot_fresh"])
+            self.assertEqual(body["snapshot_at"], self.world.at)
+            self.assertRegex(body["revision"], r"^[0-9a-f]{40}$")
+            self.world.at = SNAP["generated"]
+            code, body = self.get("/api/health")
+            self.assertEqual(code, 503)
+            self.assertFalse(body["ok"])
+            self.assertFalse(body["snapshot_fresh"])
+            self.assertGreater(body["snapshot_age_s"], body["max_snapshot_age_s"])
+        finally:
+            self.world.at = original
 
     def test_gate_reports_its_own_state_rather_than_nothing(self):
         code, body = self.get("/api/gate")
@@ -705,12 +717,15 @@ class DoorTest(ServeTest):
 
     def test_a_tailnet_request_with_the_right_login_is_let_through(self):
         was_hosts, was_login = self._as_tailnet()
+        was_at = self.world.at
         try:
+            self.world.at = self.serve.now_iso()
             code, body = self.raw("GET", "/api/health", {
                 "host": self.TAILNET, "tailscale-user-login": "aria"})
             self.assertEqual(code, 200)
             self.assertTrue(body["ok"])
         finally:
+            self.world.at = was_at
             self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
 
     def test_a_tailnet_request_with_the_wrong_login_is_refused(self):
@@ -733,10 +748,15 @@ class DoorTest(ServeTest):
             self.serve.TRUSTED_HOSTS, self.serve.LOGIN = was_hosts, was_login
 
     def test_a_forged_login_header_on_loopback_is_ignored(self):
-        code, body = self.raw("GET", "/api/health",
-                              {"tailscale-user-login": "not-aria"})
-        self.assertEqual(code, 200)
-        self.assertTrue(body["ok"])
+        was_at = self.world.at
+        try:
+            self.world.at = self.serve.now_iso()
+            code, body = self.raw("GET", "/api/health",
+                                  {"tailscale-user-login": "not-aria"})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["ok"])
+        finally:
+            self.world.at = was_at
 
     def test_a_tailnet_write_without_a_login_is_refused(self):
         was_hosts, was_login = self._as_tailnet()
