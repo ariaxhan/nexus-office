@@ -163,3 +163,6 @@ main#content:focus-visible{outline:none}
 body[data-theme=dark]{--ask-working:#e8a77c;--ask-queued:#b1b4a5;--ask-done:#9cc59f;--ask-failed:#ef8f84;--ask-link:#efaa87;--accent-text:#efaa87;--ask-control-line:#5a6152}
 @media(prefers-color-scheme:dark){body:not([data-theme]){color-scheme:dark;--bg:#232722;--paper:#2c302a;--ink:#e9e6d9;--muted:#b1b4a5;--line:#42483d;--ask-working:#e8a77c;--ask-queued:#b1b4a5;--ask-done:#9cc59f;--ask-failed:#ef8f84;--ask-link:#efaa87;--accent-text:#efaa87;--ask-control-line:#5a6152}}
 body[data-theme=dark] .ask-bubble.user{border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line))}
+
+/* Aria prefers no drawn focus rings or underlines on Office controls. */
+:focus,:focus-visible{outline:none!important;box-shadow:none!important}
