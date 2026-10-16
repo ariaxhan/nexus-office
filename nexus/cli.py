@@ -100,6 +100,13 @@ def cmd_faults(args):
     return 0
 
 
+def cmd_watchdog_door_shadow(args):
+    from . import watchdog_shadow
+    led = _ledger(args)
+    print(json.dumps(watchdog_shadow.ingest_door(led, args.receipt), sort_keys=True))
+    return 0
+
+
 def cmd_intake(args):
     led = _ledger(args)
     if args.dry:
@@ -377,6 +384,10 @@ def build_parser():
     intake_p.add_argument("--dry", action="store_true", help="print every walk; write and file nothing")
     intake_p.set_defaults(func=cmd_intake)
 
+    watchdog_p = subs.add_parser("watchdog-door-shadow", help="ingest a local Studio door receipt as shadow fault state")
+    watchdog_p.add_argument("--receipt", required=True)
+    watchdog_p.set_defaults(func=cmd_watchdog_door_shadow)
+
     for name, func, help_text in (
         ("status", cmd_status, "what nexus knows, as a table"),
         ("pause", cmd_pause, "stop launching; keep reconciling"),
@@ -439,7 +450,7 @@ def build_parser():
     faults_subs = faults_p.add_subparsers(dest="faults_cmd", required=True)
     faults_list_p = faults_subs.add_parser("list", help="the records, as JSON")
     faults_list_p.add_argument("--state", choices=("detected", "repairing",
-                                                   "verified_fixed", "escalated"))
+                                                   "verified_fixed", "escalated", "recovered"))
     faults_list_p.set_defaults(func=cmd_faults)
     repair_file_p = subs.add_parser(
         "repair-file", help="file a repair from a jobrun preflight refusal")
