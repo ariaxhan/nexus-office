@@ -285,7 +285,8 @@ class TowerYield(unittest.TestCase):
     def test_a_merged_change_whose_receipt_could_not_run_is_proven_after_close(self):
         task = self.closed_after_merge()
         with patch("nexus.contract.done_receipt", return_value=(True, "landed s1; check passed")) as receipt, \
-                patch("nexus.work.close_issue", return_value="closed"):
+                patch("nexus.work.close_issue", return_value="closed"), \
+                patch("nexus.work.published", return_value=True):  # the receipt gate: tests/test_receipt.py
             self.assertEqual("done", work._run_task(self.led, self.entry, task))
         self.assertEqual("s1", receipt.call_args[0][0]["sha"])
         self.assertEqual("done", self.led.conn.execute("SELECT state FROM tasks WHERE id=?", (task["id"],)).fetchone()[0])

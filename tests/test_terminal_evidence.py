@@ -128,6 +128,7 @@ class CloseBeforeDone(TowerFixture):
         def landed(ledger, flight_id, repo, result):
             ledger.set_state(flight_id, "produced"), ledger.set_state(flight_id, "verified", evidence=terminal.landed(result, result["sha"]))
         patch("nexus.tower.land_write_flight", side_effect=landed).start()
+        patch("nexus.work.published", return_value=True).start()  # the receipt gate: tests/test_receipt.py
         self.led.event("work.review", fid, {"pr": "https://pr/1", "head": "h1", "verdict": "PASS"}, "work")
         self.issues[0]["labels"] = [{"name": "hold"}]  # a person parked it mid-flight
         state = work._settle(self.led, fid, self.entry, self.task, self.issues[0],
