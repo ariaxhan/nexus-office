@@ -18,6 +18,7 @@ so a lane learns the grammar from the rejection, not from a style guide.
 from __future__ import annotations
 
 import json
+import datetime
 import re
 import subprocess
 
@@ -28,10 +29,15 @@ FENCE = "receipt"
 REJECTION_MARK = "<!-- nexus:receipt-rejection -->"
 MAX_ITEM = 300
 MAX_ITEMS = 20
-# Words a lane uses when it means "I am finished". A comment saying one of them without a
-# receipt is a prose completion; a comment saying none of them is just talk and is left alone.
+# The existing Tower consumer recognizes informal completion words. The autonomous coordinator
+# poller below uses a narrower declaration so ordinary discussion does not get a rejection.
 CLAIM = re.compile(r"\boutcome\W*(?:done|partial|failed|blocked)\b|\boutcome\s*:|\b(done|fixed|complete[d]?|shipped|resolved|landed|merged)\b", re.I)
+EXPLICIT_CLAIM = re.compile(
+    r"(?im)^\s*(?:#{1,3}\s*)?(?:\*\*)?outcome\s*:|"
+    r"^\s*(?:#{1,3}\s*)?(?:done|fixed|completed?|shipped|resolved|landed|merged)\s*[.!]?\s*$")
+TRUSTED_AUTHORS = frozenset({'OWNER', 'MEMBER', 'COLLABORATOR'})
 BLOCK = re.compile(r"```" + FENCE + r"[ \t]*\n(.*?)\n```", re.S)
+COMMIT = re.compile(r"commit ([0-9a-f]{40})\Z")
 
 
 class ReceiptError(ValueError):
@@ -160,7 +166,7 @@ def state(led, repo, number):
     return json.loads(rows[-1]["payload"]) if rows else {}
 
 
-def consume(led, repo, number, body, comment_url=None, run=None):
+def consume(led, repo, number, body, comment_url=None, run=None, verifier=None):
     """The one writer of the item's receipt state, from a comment as it stands on the issue.
 
     RECEIPT for a parseable receipt; CLAIMED for a prose completion, with the rejection posted on
@@ -169,8 +175,15 @@ def consume(led, repo, number, body, comment_url=None, run=None):
     verdict, detail = judge(body)
     if verdict is None:
         return None, None
+    proof = None
+    if verdict == "RECEIPT" and verifier is not None:
+        try:
+            proof = verifier(repo, number, detail)
+        except ReceiptError as exc:
+            verdict, detail = "CLAIMED", str(exc)
     if verdict == "RECEIPT":
-        led.event("receipt.state", subject, {"state": "RECEIPT", "comment": comment_url, "receipt": detail}, "receipt")
+        led.event("receipt.state", subject, {"state": "RECEIPT", "comment": comment_url,
+                                             "receipt": detail, "proof": proof}, "receipt")
         return verdict, detail
     prior = state(led, repo, number)
     posted = prior.get("rejection") if prior.get("comment") == comment_url and comment_url else None
@@ -221,3 +234,71 @@ def latest_comment(repo, number, run=None, timeout=60):
     if not rows:
         raise ReceiptError("no comments to judge")
     return rows[-1]
+
+
+def latest_claim(repo, number, since, run=None, timeout=60):
+    """Newest trusted completion claim after this claim began, preferring a valid receipt."""
+    proc = (run or subprocess.run)(["gh", "api", "--paginate", "--slurp",
+                                    f"repos/{repo}/issues/{number}/comments?per_page=100"],
+                                   capture_output=True, text=True, timeout=timeout)
+    if proc.returncode:
+        raise OSError(f"cannot read comments: {(proc.stderr or '')[-200:]}")
+    rows = []
+    for page in json.loads(proc.stdout):
+        for comment in page:
+            if not isinstance(comment, dict) or comment.get('author_association') not in TRUSTED_AUTHORS:
+                continue
+            try:
+                at = datetime.datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00')).timestamp()
+            except (KeyError, AttributeError, ValueError):
+                continue
+            body = comment.get('body') or ''
+            if at >= since and REJECTION_MARK not in body and (BLOCK.search(body) or EXPLICIT_CLAIM.search(body)):
+                rows.append(comment)
+    for comment in reversed(rows):
+        try:
+            parse(comment['body'])
+            return comment
+        except ReceiptError:
+            continue
+    return rows[-1] if rows else None
+
+
+def verify_github_commit(repo, _number, completion, claimed_at, run=None, timeout=30):
+    """Coordinator receipt verifier: read its commit from GitHub, fail closed on any other surface."""
+    if completion["outcome"] != "done" or completion["verification"] != "GitHub commit":
+        raise ReceiptError("coordinator receipt requires outcome done and verification: GitHub commit")
+    commits = [match.group(1) for item in completion["artifacts"]
+               if (match := COMMIT.fullmatch(item))]
+    if len(commits) != 1:
+        raise ReceiptError("coordinator receipt requires exactly one artifact: commit <40-char sha>")
+    sha = commits[0]
+    proc = (run or subprocess.run)(["gh", "api", f"repos/{repo}/commits/{sha}"],
+                                   capture_output=True, text=True, timeout=timeout)
+    if proc.returncode:
+        raise OSError(f"commit verification unavailable: {(proc.stderr or '')[-200:]}")
+    commit = json.loads(proc.stdout)
+    if commit.get('sha') != sha:
+        raise ReceiptError("GitHub returned a different commit than the receipt artifact")
+    try:
+        stamped = datetime.datetime.fromisoformat(
+            commit['commit']['committer']['date'].replace('Z', '+00:00')).timestamp()
+    except (KeyError, AttributeError, ValueError) as exc:
+        raise ReceiptError('GitHub commit has no readable committer date') from exc
+    if stamped < claimed_at:
+        raise ReceiptError('commit predates the coordinator claim')
+    root = (run or subprocess.run)(["gh", "api", f"repos/{repo}", "--jq", ".default_branch"],
+                                   capture_output=True, text=True, timeout=timeout)
+    if root.returncode:
+        raise OSError(f"default branch unavailable: {(root.stderr or '')[-200:]}")
+    branch = root.stdout.strip()
+    if not re.fullmatch(r'[\w./-]{1,100}', branch) or '..' in branch:
+        raise ReceiptError('GitHub returned an invalid default branch')
+    compare = (run or subprocess.run)(["gh", "api", f"repos/{repo}/compare/{sha}...{branch}",
+                                       "--jq", ".status"], capture_output=True, text=True, timeout=timeout)
+    if compare.returncode:
+        raise OSError(f"commit reachability unavailable: {(compare.stderr or '')[-200:]}")
+    if compare.stdout.strip() not in {'ahead', 'identical'}:
+        raise ReceiptError('commit is not on the repository default branch')
+    return {"surface": "GitHub commit", "repo": repo, "sha": sha, "branch": branch,
+            "committer_at": stamped}
