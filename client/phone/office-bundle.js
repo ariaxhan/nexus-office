@@ -2866,23 +2866,44 @@ function renderWatch(parent, data, cached, state = "current") {
   const freshness = el("p", "view-freshness");
   cacheState(freshness, cached, state);
   overview.append(freshness);
-  overview.append(el("h1", "", "Open work"));
+  overview.append(el("h1", "", "Watch"));
   if (coordinatorError) overview.append(el("p", "watch-summary-muted", "I can\u2019t confirm system status right now."));
   else {
     const summary = [];
-    if (healthy) summary.push(`${healthy} ${healthy === 1 ? "system is" : "systems are"} working normally`);
+    if (healthy) summary.push(`${healthy} ${healthy === 1 ? "system" : "systems"} healthy`);
     if (exceptions.length) summary.push(`${exceptions.length} ${exceptions.length === 1 ? "needs" : "need"} attention`);
+    if (attention.items?.length) summary.unshift(`${attention.items.length} waiting on you`);
     if (!summary.length) summary.push("No systems are reporting a problem");
     overview.append(el("p", exceptions.length ? "watch-summary-attention" : "watch-summary-normal", summary.join(" \xB7 ")));
   }
   parent.append(overview);
+  const needs = attention.items.filter(requiresYou);
+  if (needs.length) {
+    const decisions = el("section", "watch-compact");
+    decisions.append(el("h2", "watch-section-title", `Needs you \xB7 ${needs.length}`));
+    const sources = /* @__PURE__ */ new Map();
+    for (const entry of needs) {
+      const item = entry.item || {}, key = item.source_ref || item.repo || entry.kind;
+      sources.set(key, (sources.get(key) || 0) + 1);
+    }
+    for (const [source2, count] of [...sources].slice(0, 2)) {
+      const label = source2.replace(/^nexus-/, "").replace(/[-_:]+/g, " ").trim();
+      decisions.append(button(`${label}${count > 1 ? ` \xB7 ${count} items` : ""}`, () => attentionList(sheet("Needs you")), "watch-compact-row"));
+    }
+    decisions.append(button(`Review ${needs.length} ${needs.length === 1 ? "item" : "items"} \u2192`, () => attentionList(sheet("Needs you")), "watch-more"));
+    parent.append(decisions);
+  }
   workSection(parent, data.work);
-  parent.append(officeDocument());
+  const notes = el("details", "watch-state watch-notes");
+  notes.append(el("summary", "", "Office notes"), officeDocument());
+  parent.append(notes);
   if (failures.length) {
     const stalled = section(parent, "Automation needs repair");
     stalled.append(el("p", "muted", `${failures.length} automated ${failures.length === 1 ? "pass needs" : "passes need"} diagnosis. Inspect the original work and blocker before retrying.`));
-    for (const entry of failures) stalled.append(automationFailureCard(entry));
-    stalled.append(link("Track the repair", "https://github.com/ariaxhan/nexus-office/issues/186"));
+    const list = el("details", "watch-state");
+    list.append(el("summary", "", `Inspect ${failures.length} failures`));
+    for (const entry of failures) list.append(automationFailureCard(entry));
+    stalled.append(list);
   }
   if (coordinatorRows.length || tower) {
     const systems = el("section", "watch-systems");
@@ -2891,8 +2912,7 @@ function renderWatch(parent, data, cached, state = "current") {
     const towerItem = el("article", "watch-system" + (towerIssue ? " is-attention" : ""));
     const towerHead = el("div", "watch-system-head");
     towerHead.append(el("h3", "", "Nexus Tower"), el("span", towerIssue ? "watch-system-status is-attention" : "watch-system-status", tower.state === "ok" ? tower.activity || "unknown" : "Unavailable"));
-    towerItem.append(towerHead, el("p", "watch-system-outcome", tower.state === "ok" ? `${tower.working || 0} working \xB7 ${tower.queued || 0} queued \xB7 ${tower.held || 0} held \xB7 ${tower.retrying || 0} retrying` : tower.detail || "Tower state is unavailable"));
-    if (tower.state === "ok") towerItem.append(el("p", "watch-system-action", tower.tick_age ? `Last tick ${tower.tick_age} ago` : "Last tick unavailable"));
+    towerItem.append(towerHead, el("p", "watch-system-outcome", tower.state === "ok" ? `${tower.working || 0} working \xB7 ${tower.held || 0} held \xB7 ${tower.retrying || 0} retrying` : "Status unavailable"));
     towerItem.append(button("See activity", () => {
       location.hash = "system";
     }, "watch-activity-link"));
@@ -2900,11 +2920,10 @@ function renderWatch(parent, data, cached, state = "current") {
     for (const row of coordinatorRows) {
       const issue = exceptions.includes(row);
       const names = { tbs: "Thinking Brain School", matra: "Matra" };
-      const outcomes = { tbs: "Keeping lessons healthy and ready for families.", matra: "Fixing app issues and delivering tested improvements." };
       const item = el("article", "watch-system" + (issue ? " is-attention" : ""));
       const head = el("div", "watch-system-head");
       head.append(el("h3", "", names[row.id] || row.name), el("span", issue ? "watch-system-status is-attention" : "watch-system-status", issue ? "Needs attention" : "Working normally"));
-      item.append(head, el("p", "watch-system-outcome", outcomes[row.id] || "Moving its assigned work forward."), el("p", "watch-system-action", issue ? "I\u2019m looking into it." : "Nothing needed from you."));
+      item.append(head);
       item.append(button("See activity", () => {
         localStorage.setItem("office-coordinator-pick", row.id);
         location.hash = "coordinator";
@@ -2936,40 +2955,37 @@ function renderWatch(parent, data, cached, state = "current") {
 }
 function workSection(parent, work2) {
   if (!work2) return;
-  const sec = el("section", "watch-work");
+  const sec = el("section", "watch-work watch-compact");
   sec.append(el("h2", "watch-section-title", "Work"));
-  if (work2.error) sec.append(el("p", "muted", `Work view unavailable: ${work2.error}`));
-  if (work2.refreshing && !(work2.desks || []).length) sec.append(el("p", "muted", "Checking GitHub\u2026"));
-  const ago = (stamp) => stamp ? formatAge(Date.now() - new Date(stamp).getTime()) : null;
-  const day = (stamp) => stamp ? new Date(stamp).toLocaleDateString([], { month: "short", day: "numeric" }) : "";
-  const groups = [
-    ["worked_on", "Being worked on", (item) => `last activity ${ago(item.activity_at) || "\u2014"}`],
-    ["stalled", "Stalled", (item) => item.activity_at ? `last activity ${day(item.activity_at)}` : "no activity recorded"],
-    ["up_next", "Up next", (item) => `updated ${ago(item.updated_at) || "\u2014"}`],
-    ["done", "Done", (item) => `closed ${day(item.closed_at)}`]
-  ];
-  for (const desk of work2.desks || []) {
-    const block = el("article", "watch-system");
-    block.append(el("h3", "", desk.name));
-    const counts = desk.counts || {};
-    block.append(el("p", "watch-system-outcome", `${counts.worked_on || 0} being worked on \xB7 ${counts.stalled || 0} stalled \xB7 ${counts.up_next || 0} up next \xB7 ${counts.open || 0} open`));
-    for (const error of desk.errors || []) block.append(el("p", "error", error));
-    for (const [key, label, meta] of groups) {
-      const rows = desk[key] || [];
-      if (!rows.length) continue;
-      block.append(el("h4", "watch-section-title", label));
-      for (const item of rows) {
-        const row = el("div", "watch-work-item");
-        row.append(el("strong", "", item.title || `${item.repo}#${item.number}`), el("span", "muted", ` ${item.repo}#${item.number} \xB7 ${meta(item)}`));
-        if (item.url) row.append(link("GitHub", item.url));
-        block.append(row);
-      }
-      const total = key === "done" ? 0 : counts[key] || 0;
-      if (total > rows.length) block.append(el("p", "muted", `\u2026and ${total - rows.length} more`));
+  if (work2.error) sec.append(el("p", "muted", "Work status is unavailable. Open a project for its last known state."));
+  const desks = work2.desks || [];
+  const total = (key) => desks.reduce((sum, desk) => sum + (Number(desk.counts?.[key]) || 0), 0);
+  sec.append(el("p", "watch-work-counts", `${total("worked_on")} active \xB7 ${total("stalled")} stalled \xB7 ${total("up_next")} up next`));
+  const visible = (key) => desks.flatMap((desk) => (desk[key] || []).map((item) => ({ ...item, desk: desk.name })));
+  for (const [key, label] of [["stalled", "Stalled"], ["worked_on", "Active"]]) {
+    const rows = visible(key);
+    if (!rows.length) continue;
+    sec.append(el("h3", "watch-subhead", label));
+    for (const item of rows.slice(0, 3)) {
+      const title = item.title || `${item.repo}#${item.number}`;
+      const row = button("", () => githubDetail(item.repo, { number: item.number }, "issues"), "watch-compact-row");
+      row.append(el("strong", "", title), el("small", "", item.desk));
+      sec.append(row);
     }
-    sec.append(block);
+    if (rows.length > 3) sec.append(el("p", "watch-more", `+ ${rows.length - 3} more in projects`));
   }
-  if (work2.built_at) sec.append(el("p", "muted", `From GitHub + coordinator receipts \xB7 checked ${ago(work2.built_at)}`));
+  const projects = el("details", "watch-state watch-projects");
+  projects.append(el("summary", "", `All projects \xB7 ${desks.length}`));
+  for (const desk of desks) {
+    const row = el("details", "watch-project");
+    row.append(el("summary", "", `${desk.name} \xB7 ${desk.counts?.worked_on || 0} active \xB7 ${desk.counts?.stalled || 0} stalled`));
+    for (const key of ["stalled", "worked_on", "up_next", "done"]) for (const item of desk[key] || []) {
+      row.append(button(item.title || `${item.repo}#${item.number}`, () => githubDetail(item.repo, { number: item.number }, "issues"), "watch-compact-row"));
+    }
+    for (const error of desk.errors || []) row.append(el("p", "error", error));
+    projects.append(row);
+  }
+  sec.append(projects);
   parent.append(sec);
 }
 function requiresYou(entry) {

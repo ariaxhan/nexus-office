@@ -114,7 +114,7 @@ class PageTest(unittest.TestCase):
         self.assertNotIn("()=>sendSteer()",app)
         self.assertNotIn('() => sendSteer()',bundle)
         self.assertRegex(bundle,r'steerAction\s*=\s*sendSteer\d*;')
-        self.assertIn("nexus-office-shell-v25",worker)
+        self.assertIn("nexus-office-shell-v26",worker)
 
     def test_ask_uses_the_night_palette_before_and_after_settings_load(self):
         css=(ROOT/'client/phone/office-v2.css').read_text()
