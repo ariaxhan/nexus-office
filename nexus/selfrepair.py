@@ -6,7 +6,7 @@ same motion. Quarantine is a repair-pending state, never an end state: the
 ledger will not record one without a live repair task attached (shape 2),
 the launch path refuses a dead pointer into repair instead of burning
 retries on it (shape 3), and no broken-state word reaches Aria except
-behind a live repair or as the tier-3 escalation (shape 1, surface_guard).
+behind a live repair or in Office's technical repair queue (shape 1).
 
 THE PRE-AUTHORIZED ENVELOPE (standing grant, Aria 2026-10-14 17:11 PT):
 inside the envelope, repair is pre-authorized ALWAYS -- no ask at any tier,
@@ -21,10 +21,9 @@ is an escalation, never an improvisation.
 Proof: after a fix, the worker is re-run; "repaired" means the worker's
 own completion receipt (a produced/landed flight, a jobrun proof rc=0).
 Nothing else counts. A failed attempt re-opens with its evidence; the
-second failure escalates to the owning coordinator (a comment on the
-mechanism's issue); the third surfaces to Aria with the full history, in
-the only shape allowed: what broke, what was tried, the single thing only
-she can do.
+second failure escalates to the owning coordinator. The third records the
+full history in Office's technical repair queue; routine repair remains
+Office-owned.
 
 Every repair closes only with the recurrence guard for its fault class
 installed. For the path-rot class the guard is the launch preflight in
@@ -45,13 +44,12 @@ import subprocess
 import sys
 import time
 
-from . import surface_guard
 from . import terminal
 from .ledger import loads
 
 REPAIR_PLAN_NAME = "nexus-self-repair"
-ISSUE_REF = "ariaxhan/nexus-office#273"
-ISSUE_NUMBER = "273"
+ISSUE_REF = "ariaxhan/nexus-office#300"
+ISSUE_NUMBER = "300"
 MAX_ATTEMPTS = 3
 SIGNATURE_DEAD_POINTER = "dead-pointer"
 
@@ -660,9 +658,9 @@ def verify(ledger, now=None):
         n = attempts(ledger, tid)
         if n >= MAX_ATTEMPTS:
             if not any(e["kind"] == "repair.escalated"
-                       and (loads(e["payload"], {}) or {}).get("tier") == "human"
+                       and (loads(e["payload"], {}) or {}).get("tier") in ("human", "office")
                        for e in events):
-                escalate_human(ledger, ledger.task(tid), now)
+                escalate_office(ledger, ledger.task(tid), now)
                 out["escalated"] += 1
             ledger.set_task_state(tid, "abandoned", decided_by="self-repair",
                                   expect="running",
@@ -716,81 +714,36 @@ def escalate_coordinator(ledger, task, now):
                  "self-repair", now)
 
 
-def _human_asks():
-    client = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "client")
-    if client not in sys.path:
-        sys.path.insert(0, client)
-    import human_asks
-    return human_asks
-
-
 def _tried(ledger, task_id):
     rows = ledger.events(kind="repair.attempt_failed", subject=task_id)
     return "; ".join(f"attempt {i + 1}: {(loads(e['payload'], {}) or {}).get('why', '?')}"
                      for i, e in enumerate(rows)) or "no attempts recorded"
 
 
-def escalate_human(ledger, task, now):
-    """Tier 3 -- the ONLY broken-state shape that may reach Aria: what
-    broke, what was tried, the single thing only she can do. Composed
-    through the surface guard, with the repair reference attached."""
+def escalate_office(ledger, task, now):
+    """Exhausted technical repair stays Office-owned and is filed for repair."""
     packet = loads(task["reason"], {}) or {}
     name = packet.get("plan_name") or packet.get("job_id") or "a worker"
     dead = packet.get("dead") or []
     single_act = (f"restore or repoint the dead path {dead[0]}" if dead else
-                  "correct the worker's command by hand, or retire it")
+                  "diagnose the worker command or retire the broken plan")
     text = (f"{name} is stopped and its repair has failed {MAX_ATTEMPTS} times. "
             f"What broke: {packet.get('reason')}. "
             f"What was tried: {_tried(ledger, task['id'])}. "
-            f"The single thing only you can do: {single_act}.")
-    ref = {"issue": ISSUE_REF, "task_id": task["id"], "escalated": True,
-           "attempts": MAX_ATTEMPTS, "single_act": single_act,
-           "ledger_path": ledger.path}
-    surface_guard.assert_sendable(text, repair_ref=ref, ledger_path=ledger.path)
-    outcome = {}
-    try:
-        asks = _human_asks()
-        with contextlib.closing(asks.connect()) as db:
-            outcome["ask"] = asks.request_human_input(
-                db, identifier=f"nexus-repair:{task['id']}",
-                execution_ref=f"nexus-repair:{task['id']}",
-                gate_type="new_judgment", action=text,
-                why_agent_cannot_do_it="The pre-authorized repair envelope was "
-                                       "exhausted: three verified attempts failed.",
-                authorization_gap="Only a person can restore a path the envelope "
-                                  "cannot correct, or retire the worker.",
-                resume_after_answer="The repair task record carries the full "
-                                    "history; release or retire the worker there.")
-    except Exception as exc:  # noqa: BLE001 - the escalation is recorded regardless
-        outcome["ask_error"] = repr(exc)[:200]
+            f"Office repair task: {single_act}.")
+    outcome = _gh_comment(f"Self-repair exhausted (Office-owned): task {task['id']}. {text}")
     ledger.event("repair.escalated", task["id"],
-                 {"tier": "human", "issue": ISSUE_REF, **outcome},
+                 {"tier": "office", "issue": ISSUE_REF, "gh": outcome},
                  "self-repair", now)
 
 
 def escalate_mechanism(ledger, plan, why, now):
-    """The mechanism itself is stopped (its plan quarantined, or a repair
-    abandoned unescalated). Same tier-3 shape, fired by the tower's
-    safety-net pass; recorded as an event whatever the ask's outcome."""
+    """Route a stopped repair mechanism to Office's repair work queue."""
     text = (f"The self-repair mechanism is stopped. What broke: {why}. "
             f"What was tried: automatic repair is the thing that is down. "
-            f"The single thing only you can do: release plan {plan['name']} "
-            f"(`nexus plans release {plan['name']}`) or retire it.")
-    outcome = {}
-    try:
-        asks = _human_asks()
-        with contextlib.closing(asks.connect()) as db:
-            outcome["ask"] = asks.request_human_input(
-                db, identifier=f"nexus-repair-mechanism:{plan['id']}:{int(plan['quarantined_at'] or 0)}",
-                execution_ref="nexus-self-repair",
-                gate_type="new_judgment", action=text,
-                why_agent_cannot_do_it="The repairer itself is stopped; nothing "
-                                       "below a person can restart it.",
-                authorization_gap="A stopped repair plan is only released by a person.",
-                resume_after_answer="Releasing the plan restarts the repair loop.")
-    except Exception as exc:  # noqa: BLE001
-        outcome["ask_error"] = repr(exc)[:200]
+            f"Office repair task: inspect why plan {plan['name']} is quarantined; "
+            f"release it only after the cause is corrected, or retire it.")
+    outcome = _gh_comment(f"Self-repair mechanism stopped (Office-owned): {text}")
     ledger.event("repair.escalated", plan["id"],
-                 {"tier": "human", "mechanism": True, "issue": ISSUE_REF, **outcome},
+                 {"tier": "office", "mechanism": True, "issue": ISSUE_REF, "gh": outcome},
                  "self-repair", now)

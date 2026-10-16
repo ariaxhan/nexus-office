@@ -5,6 +5,7 @@ flight that vanishes really vanished. The tick is a plain function, so the clock
 is a parameter and none of this waits on wall time it does not have to.
 """
 
+import json
 import os
 import shutil
 import sys
@@ -555,18 +556,18 @@ class QuarantineRepairsItself(TowerCase):
         self.assertEqual([], self.led.events(kind="plan.quarantine_raised",
                                              subject=plan))
 
-    def test_an_abandoned_repair_reaches_a_person_once(self):
+    def test_an_abandoned_repair_stays_office_owned_once(self):
         plan = self.quarantined(name="podcast-abandoned")
         task = self.led.plan(plan)["repair_task_id"]
         self.led.set_task_state(task, "abandoned", decided_by="test",
                                 expect="candidate")
-        self.assertEqual(1, tower._raise_quarantines(self.led))
-        self.assertEqual(0, tower._raise_quarantines(self.led))
-        [ask] = [a for a in self.asks()
-                 if a["source_ref"] == "nexus-self-repair"
-                 and "podcast-abandoned" in a["action"]]
-        self.assertIn("self-repair mechanism is stopped", ask["action"])
-        self.assertIn("podcast-abandoned", ask["action"])
+        with mock.patch.object(sr, "_gh_comment", return_value="posted") as comment:
+            self.assertEqual(1, tower._raise_quarantines(self.led))
+            self.assertEqual(0, tower._raise_quarantines(self.led))
+        self.assertIn("podcast-abandoned", comment.call_args.args[0])
+        [event] = self.led.events(kind="repair.escalated", subject=plan)
+        self.assertEqual("office", json.loads(event["payload"])["tier"])
+        self.assertEqual([], self.asks())
 
     def test_three_failed_attempts_escalate_with_the_full_history(self):
         plan = self.quarantined(name="podcast-tiers")
@@ -577,26 +578,28 @@ class QuarantineRepairsItself(TowerCase):
             self.led.event("repair.attempt_failed", task,
                            {"attempt": i + 1, "why": f"cause {i}"},
                            "self-repair")
-        out = sr.verify(self.led)
+        with mock.patch.object(sr, "_gh_comment", return_value="posted"):
+            out = sr.verify(self.led)
         self.assertEqual(1, out["escalated"])
         self.assertEqual("abandoned", self.led.task(task)["state"])
         [event] = self.led.events(kind="repair.escalated", subject=task)
-        self.assertIn("human", event["payload"])
+        self.assertEqual("office", json.loads(event["payload"])["tier"])
+        self.assertEqual([], self.asks())
 
-    def test_a_dead_ask_path_never_touches_the_tick(self):
+    def test_a_dead_issue_path_never_touches_the_tick(self):
         plan = self.quarantined(name="podcast-muted")
         self.plan(name="healthy")
         task = self.led.plan(plan)["repair_task_id"]
         self.led.set_task_state(task, "abandoned", decided_by="test",
                                 expect="candidate")
-        with mock.patch.object(sr, "_human_asks",
-                               side_effect=RuntimeError("asks are down")):
+        with mock.patch.object(sr, "_gh_comment", return_value="unavailable: issue API down"):
             tower.run(self.led, interval=0, iterations=3, root=self.root)
         self.assertEqual([], self.led.events(kind="tower.tick_error"))
         self.assertTrue(self.led.flights(
             plan_id=self.led.plan_by_name("healthy")["id"]))
         [raised] = self.led.events(kind="repair.escalated", subject=plan)
-        self.assertIn("asks are down", raised["payload"])
+        self.assertIn("issue API down", raised["payload"])
+        self.assertEqual([], self.asks())
 
 
 class TickErrors(TowerCase):
