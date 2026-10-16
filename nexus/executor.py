@@ -14,7 +14,7 @@ import signal
 import subprocess
 import sys
 
-from . import flights, landing, lanes, lease, risk
+from . import flights, landing, lanes, lease, remote_review, risk
 
 ROUTER = os.path.expanduser("~/Developer/Vaults/_meta/services/tbs/account-router.sh")
 
@@ -348,6 +348,13 @@ def review(entry, pr_url, flight, *, run=subprocess.run, timeout_s=900):
                           timeout=max(1, timeout_s - (flights.clock() - started) - 5), run=run)
             text = proc.stdout if not proc.returncode else ""
     verdict = re.findall(r"^VERDICT:\s*(PASS|FAIL)([^\n]*)$", text.strip(), re.M)
+    # A remote seat may inspect the immutable diff only. It never inherits a
+    # Studio write lease, checkout, or personal-account work.
+    if not verdict and entry.get("account") == "tbs":
+        left = timeout_s - (flights.clock() - started)
+        if left >= 15:
+            text = remote_review.review(entry["repo"], pr_url, prompt, timeout_s=left)
+            verdict = re.findall(r"^VERDICT:\s*(PASS|FAIL)([^\n]*)$", text.strip(), re.M)
     if not verdict:
         raise RoadError("review providers returned no verdict: " + text[-300:])
     return verdict[-1][0], text.strip()
