@@ -35,6 +35,16 @@ minute, and answers `"fresh": false` when it handed back the cache instead.
 """
 
 from __future__ import annotations
+from pathlib import Path as _FallbackPath
+import sys as _fallback_sys
+
+# The fallback exits before the normal Office imports, which can initialize
+# GitHub clients, pollers, webhooks, and write-capable routes.
+if __name__ == "__main__" and "--read-only-fallback" in _fallback_sys.argv:
+    _fallback_sys.path.insert(0, str(_FallbackPath(__file__).resolve().parent))
+    from fallback_serve import main as _fallback_main
+    _fallback_sys.exit(_fallback_main([arg for arg in _fallback_sys.argv[1:]
+                                      if arg != "--read-only-fallback"]))
 
 import argparse
 import importlib.util
