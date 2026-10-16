@@ -92,6 +92,26 @@ def cmd_repair_file(args):
     return 0
 
 
+def cmd_faults(args):
+    """Fault records as data (issue #300). `list` reads; `report` is the
+    watchdogs' only fault path -- no issue, no FIX-REQUIRED line."""
+    from . import faults
+    led = _ledger(args)
+    if args.faults_cmd == "report":
+        try:
+            rec = faults.report(led, args.signature, args.source, args.state,
+                                fault_id=args.fault_id, action=args.action,
+                                surface=args.surface, act_needed=args.act_needed,
+                                kind=args.kind)
+        except ValueError as exc:
+            print(f"faults: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(rec, sort_keys=True))
+        return 0
+    print(faults.dumps(faults.records(led, state=args.state)))
+    return 0
+
+
 def cmd_intake(args):
     led = _ledger(args)
     if args.dry:
@@ -426,6 +446,25 @@ def build_parser():
     repair_drain_p.add_argument("--task", default=None,
                                 help="only this repair task (default: the flight's own)")
     repair_drain_p.set_defaults(func=cmd_repair_drain)
+
+    faults_p = subs.add_parser("faults", help="fault repair records (structured, never prose)")
+    faults_subs = faults_p.add_subparsers(dest="faults_cmd", required=True)
+    faults_list_p = faults_subs.add_parser("list", help="the records, as JSON")
+    faults_list_p.add_argument("--state", choices=("detected", "repairing",
+                                                   "verified_fixed", "escalated"))
+    faults_list_p.set_defaults(func=cmd_faults)
+    faults_report_p = faults_subs.add_parser("report", help="emit or advance a record")
+    faults_report_p.add_argument("--signature", required=True)
+    faults_report_p.add_argument("--source", required=True)
+    faults_report_p.add_argument("--state", required=True,
+                                 choices=("detected", "repairing", "verified_fixed", "escalated"))
+    faults_report_p.add_argument("--fault-id", default=None)
+    faults_report_p.add_argument("--action", default=None)
+    faults_report_p.add_argument("--surface", default=None)
+    faults_report_p.add_argument("--act-needed", default=None)
+    faults_report_p.add_argument("--kind", default="hands",
+                                 choices=("hands", "decision", "money", "irreversible", "identity"))
+    faults_report_p.set_defaults(func=cmd_faults)
 
     repair_file_p = subs.add_parser(
         "repair-file", help="file a repair from a jobrun preflight refusal")

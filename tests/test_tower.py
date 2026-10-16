@@ -8,6 +8,7 @@ is a parameter and none of this waits on wall time it does not have to.
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -19,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("OFFICE_HUMAN_ASKS_DB",
                       os.path.join(tempfile.mkdtemp(prefix="nexus-asks-"), "human-asks.sqlite"))
 
+from nexus import faults  # noqa: E402
 from nexus import flights as fl  # noqa: E402
 from nexus import selfrepair as sr  # noqa: E402
 from nexus import tower  # noqa: E402
@@ -561,12 +563,13 @@ class QuarantineRepairsItself(TowerCase):
         task = self.led.plan(plan)["repair_task_id"]
         self.led.set_task_state(task, "abandoned", decided_by="test",
                                 expect="candidate")
-        with mock.patch.object(sr, "_gh_comment", return_value="posted") as comment:
-            self.assertEqual(1, tower._raise_quarantines(self.led))
-            self.assertEqual(0, tower._raise_quarantines(self.led))
-        self.assertIn("podcast-abandoned", comment.call_args.args[0])
+        self.assertEqual(1, tower._raise_quarantines(self.led))
+        self.assertEqual(0, tower._raise_quarantines(self.led))
         [event] = self.led.events(kind="repair.escalated", subject=plan)
         self.assertEqual("office", json.loads(event["payload"])["tier"])
+        [rec] = faults.escalated(self.led)
+        self.assertEqual(plan, rec["fault_id"])
+        self.assertIn("podcast-abandoned", rec["escalation"]["act_needed"])
         self.assertEqual([], self.asks())
 
     def test_three_failed_attempts_escalate_with_the_full_history(self):
@@ -578,27 +581,28 @@ class QuarantineRepairsItself(TowerCase):
             self.led.event("repair.attempt_failed", task,
                            {"attempt": i + 1, "why": f"cause {i}"},
                            "self-repair")
-        with mock.patch.object(sr, "_gh_comment", return_value="posted"):
-            out = sr.verify(self.led)
+        out = sr.verify(self.led)
         self.assertEqual(1, out["escalated"])
         self.assertEqual("abandoned", self.led.task(task)["state"])
         [event] = self.led.events(kind="repair.escalated", subject=task)
         self.assertEqual("office", json.loads(event["payload"])["tier"])
         self.assertEqual([], self.asks())
 
-    def test_a_dead_issue_path_never_touches_the_tick(self):
+    def test_an_escalation_is_a_record_state_and_never_a_message(self):
         plan = self.quarantined(name="podcast-muted")
         self.plan(name="healthy")
         task = self.led.plan(plan)["repair_task_id"]
         self.led.set_task_state(task, "abandoned", decided_by="test",
                                 expect="candidate")
-        with mock.patch.object(sr, "_gh_comment", return_value="unavailable: issue API down"):
-            tower.run(self.led, interval=0, iterations=3, root=self.root)
-        self.assertEqual([], self.led.events(kind="tower.tick_error"))
-        self.assertTrue(self.led.flights(
-            plan_id=self.led.plan_by_name("healthy")["id"]))
+        with mock.patch("subprocess.run", wraps=subprocess.run) as run:
+            tower._raise_quarantines(self.led)
+        self.assertFalse([c for c in run.call_args_list
+                          if "gh" in os.path.basename(str(c.args[0][0]))])
+        self.assertFalse(hasattr(sr, "_gh_comment"))
+        self.assertFalse(hasattr(sr, "escalate_coordinator"))
         [raised] = self.led.events(kind="repair.escalated", subject=plan)
-        self.assertIn("issue API down", raised["payload"])
+        self.assertNotIn("gh", json.loads(raised["payload"]))
+        self.assertEqual("escalated", faults.record(self.led, plan)["state"])
         self.assertEqual([], self.asks())
 
 

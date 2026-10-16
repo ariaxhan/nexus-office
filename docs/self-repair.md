@@ -5,7 +5,7 @@ always always always always — number one rule."
 
 A fault, a repeated failure, or a quarantine triggers the system's own
 repair in the same motion. Quarantine is a repair trigger, never an end
-state. A failed repair escalates with evidence, never goes quiet. None of
+state. A failed repair becomes an escalated record, never prose. None of
 this is prose: each rule below is a refusal in code, demonstrated on the
 issue.
 
@@ -59,13 +59,25 @@ issue.
   that receipt flight linked. Proof flights never count in the plan's
   own failure history — the mechanism's re-runs are accounted by
   attempts, not by the streaks they are clearing.
-- **Escalation**: a failed attempt re-opens with its evidence (attempt
-  history on the task + the issue). Second failure → the owning
-  coordinator (comment on #273). Third → Aria, in the only shape allowed
-  to reach her: what broke, what was tried, the single thing only she
-  can do. The tower's safety-net pass watches the two states that must
-  never be silent: the repair plan itself stopped, and a repair abandoned
+- **Faults are records, not text (issue #300)**: the only fault
+  artifact is the repair record in `nexus/faults.py`, a pure function of
+  the ledger's `repair.*` events: `{fault_id, signature, detected_at,
+  source, state, repair, verification, escalation}`, state `detected ->
+  repairing -> verified_fixed | escalated`. A failed attempt re-flies
+  silently. The third failure sets `state=escalated` with one line in
+  `escalation.act_needed` and a `kind` (hands, decision, money,
+  irreversible, identity). Nothing is posted to GitHub, filed as an
+  issue, or written to human_asks; silence is the success signal. A
+  repair task still unflown after `DETECT_WINDOW_S` is flown by
+  `verify()`. The tower's safety-net pass records two faults of its own
+  as escalated: the repair plan itself stopped, and a repair abandoned
   without its escalation.
+- **Reading and emitting records**: `nexus faults list [--state
+  escalated]` (JSON) is what main consumes. Watchdogs outside the
+  tower emit and advance records with `nexus faults report --signature
+  S --source watchdog:NAME --state detected|repairing|verified_fixed|escalated
+  [--fault-id ID] [--action A] [--surface S] [--act-needed LINE --kind K]`
+  instead of opening issues or printing FIX-REQUIRED lines.
 - **Standing down**: a person releasing a plan outranks the loop. A
   repair whose plan was released after it opened closes as stood down
   (delivered evidence: the release) — never as a failure, never
@@ -88,7 +100,6 @@ second cannot.
   no longer representable. If your coordinator needs a plan stopped,
   stop it through the ledger like everything else — the repair opens
   with it, and "repaired" is proven by the plan's own receipt.
-- If a repair of your plan reaches its second failed attempt, the
-  escalation lands on #273 naming the plan; the third reaches Aria with
-  the full history. Silence from the mechanism is a defect in the
-  mechanism — file it on #273.
+- A repair of your plan that fails is retried silently; the third failure
+  sets its record to escalated with the one act it needs
+  (`nexus faults list --state escalated`). Nothing else is surfaced.

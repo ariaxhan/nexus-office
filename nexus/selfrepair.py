@@ -5,8 +5,10 @@ repeated failure, or a quarantine triggers the system's own repair in the
 same motion. Quarantine is a repair-pending state, never an end state: the
 ledger will not record one without a live repair task attached (shape 2),
 the launch path refuses a dead pointer into repair instead of burning
-retries on it (shape 3), and no broken-state word reaches Aria except
-behind a live repair or in Office's technical repair queue (shape 1).
+retries on it (shape 3), and no broken-state word reaches Aria at all
+(shape 1, hardened by #300): a fault is a structured repair record
+(nexus/faults.py), and the only thing ever surfaced is a record whose
+state is escalated, with one line naming the act a person must do.
 
 THE PRE-AUTHORIZED ENVELOPE (standing grant, Aria 2026-10-14 17:11 PT):
 inside the envelope, repair is pre-authorized ALWAYS -- no ask at any tier,
@@ -20,10 +22,10 @@ is an escalation, never an improvisation.
 
 Proof: after a fix, the worker is re-run; "repaired" means the worker's
 own completion receipt (a produced/landed flight, a jobrun proof rc=0).
-Nothing else counts. A failed attempt re-opens with its evidence; the
-second failure escalates to the owning coordinator. The third records the
-full history in Office's technical repair queue; routine repair remains
-Office-owned.
+Nothing else counts. A failed attempt re-opens with its evidence and
+re-flies, silently. The third failure moves the record to state=escalated;
+nothing is posted, filed, or asked. A repair task still waiting to fly
+after DETECT_WINDOW_S is flown by verify() itself.
 
 Every repair closes only with the recurrence guard for its fault class
 installed. For the path-rot class the guard is the launch preflight in
@@ -44,13 +46,13 @@ import subprocess
 import sys
 import time
 
-from . import terminal
+from . import faults, terminal
 from .ledger import loads
 
 REPAIR_PLAN_NAME = "nexus-self-repair"
 ISSUE_REF = "ariaxhan/nexus-office#300"
-ISSUE_NUMBER = "300"
 MAX_ATTEMPTS = 3
+DETECT_WINDOW_S = 300  # a detected record with no repair transition by then is flown
 SIGNATURE_DEAD_POINTER = "dead-pointer"
 
 _LIVE_FLIGHT_STATES = ("queued", "running", "verifying", "verified", "landing", "resolving")
@@ -262,9 +264,9 @@ def open_repair(ledger, packet, now=None):
     if tid is None:  # a racing writer won; its task is the repair
         live = ledger.live_task_with_key(key)
         return live["id"] if live is not None else None
-    ledger.event("repair.opened", subject,
-                 {"task_id": tid, "signature": packet["signature"],
-                  "issue": ISSUE_REF}, "self-repair", now)
+    ledger.event("repair.opened", tid,
+                 {"subject": subject, "signature": packet["signature"],
+                  "source": "self-repair", "issue": ISSUE_REF}, "self-repair", now)
     return tid
 
 
@@ -561,6 +563,33 @@ def _person_released(ledger, plan_id, task):
     return release_ts
 
 
+def advance_stale(ledger, now):
+    """A record in `detected` with no repair transition inside its window is
+    advanced mechanically: its repair task is flown on the repair plan and
+    the record moves to repairing. Nobody has to read it for it to move."""
+    plan = repair_plan(ledger)
+    if plan is None:
+        return 0
+    moved = 0
+    for task in ledger.tasks(states=("candidate", "ranked", "accepted")):
+        if task["origin"] != "self-repair" \
+                or (task["created_at"] or 0) > now - DETECT_WINDOW_S \
+                or ledger.flights(task_id=task["id"]):
+            continue
+        made = ledger.create_flight(plan["id"], task_id=task["id"], now=now,
+                                    unique_for_task=True)
+        if not made:
+            continue
+        ledger.set_task_state(task["id"], "running", decided_by="self-repair",
+                              expect=task["state"], reason="detect window elapsed",
+                              now=now)
+        ledger.event("repair.dispatched", task["id"],
+                     {"action": "fly the repair drain", "by": "self-repair",
+                      "flight": made}, "self-repair", now)
+        moved += 1
+    return moved
+
+
 def verify(ledger, now=None):
     """Resolve proofs, count attempts, escalate, and re-fly failed repairs.
 
@@ -568,7 +597,8 @@ def verify(ledger, now=None):
     crashed drain flight visible: a repair task running with a dead latest
     flight and no recorded attempt gets the attempt recorded here."""
     now = now if now is not None else time.time()
-    out = {"completed": 0, "retried": 0, "escalated": 0, "proofs_failed": 0}
+    out = {"completed": 0, "retried": 0, "escalated": 0, "proofs_failed": 0,
+           "advanced": advance_stale(ledger, now)}
     for task in ledger.tasks(states=("running",)):
         if task["origin"] != "self-repair":
             continue
@@ -666,11 +696,6 @@ def verify(ledger, now=None):
                                   expect="running",
                                   reason="repair attempts exhausted", now=now)
             continue
-        if n >= 2 and not any(e["kind"] == "repair.escalated"
-                              and (loads(e["payload"], {}) or {}).get("tier") == "coordinator"
-                              for e in events):
-            escalate_coordinator(ledger, ledger.task(tid), now)
-            out["escalated"] += 1
         retry_due = any(e["kind"] == "repair.retry_due" for e in events)
         flights = ledger.flights(task_id=tid)
         if flights and flights[0]["state"] in ("failed", "cancelled") \
@@ -689,61 +714,26 @@ def verify(ledger, now=None):
     return out
 
 
-def _gh_comment(body):
-    gh = shutil.which("gh") or "/opt/homebrew/bin/gh"
-    try:
-        proc = subprocess.run([gh, "issue", "comment", ISSUE_NUMBER,
-                               "--repo", "ariaxhan/nexus-office", "--body", body],
-                              capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"unavailable: {exc!r}"[:120]
-    return "posted" if proc.returncode == 0 else f"rc={proc.returncode}"
-
-
-def escalate_coordinator(ledger, task, now):
-    """Tier 2: the owning coordinator gets the failure, on the issue where
-    repair work is tracked. Recorded either way; silence is the defect."""
-    packet = loads(task["reason"], {}) or {}
-    body = (f"Self-repair escalation (tier 2): repair task {task['id']} for "
-            f"`{packet.get('plan_name') or packet.get('job_id')}` has failed "
-            f"{attempts(ledger, task['id'])} attempts inside the envelope. "
-            f"Packet: {task['reason']}")
-    outcome = _gh_comment(body)
-    ledger.event("repair.escalated", task["id"],
-                 {"tier": "coordinator", "issue": ISSUE_REF, "gh": outcome},
-                 "self-repair", now)
-
-
-def _tried(ledger, task_id):
-    rows = ledger.events(kind="repair.attempt_failed", subject=task_id)
-    return "; ".join(f"attempt {i + 1}: {(loads(e['payload'], {}) or {}).get('why', '?')}"
-                     for i, e in enumerate(rows)) or "no attempts recorded"
-
-
 def escalate_office(ledger, task, now):
-    """Exhausted technical repair stays Office-owned and is filed for repair."""
+    """Exhausted repair becomes state=escalated on its record (issue #300):
+    one line naming the act a person must do. No comment, no ask, no prose;
+    the attempt history is already the record's own event log."""
     packet = loads(task["reason"], {}) or {}
     name = packet.get("plan_name") or packet.get("job_id") or "a worker"
     dead = packet.get("dead") or []
-    single_act = (f"restore or repoint the dead path {dead[0]}" if dead else
-                  "diagnose the worker command or retire the broken plan")
-    text = (f"{name} is stopped and its repair has failed {MAX_ATTEMPTS} times. "
-            f"What broke: {packet.get('reason')}. "
-            f"What was tried: {_tried(ledger, task['id'])}. "
-            f"Office repair task: {single_act}.")
-    outcome = _gh_comment(f"Self-repair exhausted (Office-owned): task {task['id']}. {text}")
-    ledger.event("repair.escalated", task["id"],
-                 {"tier": "office", "issue": ISSUE_REF, "gh": outcome},
-                 "self-repair", now)
+    if dead:
+        act, kind = f"restore or repoint the dead path {dead[0]} for {name}", "hands"
+    else:
+        act, kind = f"fix the worker command of {name} or retire it", "decision"
+    faults.escalate(ledger, task["id"], act, kind=kind, now=now)
 
 
 def escalate_mechanism(ledger, plan, why, now):
-    """Route a stopped repair mechanism to Office's repair work queue."""
-    text = (f"The self-repair mechanism is stopped. What broke: {why}. "
-            f"What was tried: automatic repair is the thing that is down. "
-            f"Office repair task: inspect why plan {plan['name']} is quarantined; "
-            f"release it only after the cause is corrected, or retire it.")
-    outcome = _gh_comment(f"Self-repair mechanism stopped (Office-owned): {text}")
-    ledger.event("repair.escalated", plan["id"],
-                 {"tier": "office", "mechanism": True, "issue": ISSUE_REF, "gh": outcome},
-                 "self-repair", now)
+    """A stopped repair mechanism is a fault of its own: a record keyed on
+    the plan, escalated in the same motion (nothing can repair the
+    repairer). `why` becomes the signature, never a sentence to a person."""
+    faults.detect(ledger, f"mechanism-stopped:{why}", "self-repair",
+                  fault_id=plan["id"], now=now)
+    faults.escalate(ledger, plan["id"],
+                    f"find why plan {plan['name']} is quarantined, fix it, then release it",
+                    kind="hands", now=now)
