@@ -24,6 +24,7 @@ INBOX = "_meta/state/coordinator-inbox.jsonl"
 RUNS = "_meta/ledgers/coordinator-runs.jsonl"
 HOLDS = "_meta/ledgers/coordinator-holds.jsonl"
 SUPERVISOR = "_meta/ledgers/coordinator-supervisor.jsonl"  # _meta/services/coordinators/supervise.py
+JOB_RECEIPTS = Path.home() / "Library/Application Support/nexus-jobs/state/receipts.jsonl"
 MAX_RUNS = 12
 MAX_LOG_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 8000
@@ -563,6 +564,18 @@ def _tail(path, limit):
         return ""
 
 
+def _latest_job_receipt(label):
+    """Read the bounded local jobrun tail; deterministic TBS ticks omit model-run rows."""
+    for line in reversed(_tail(JOB_RECEIPTS, 512 * 1024).splitlines()):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("job") == label and isinstance(row.get("started"), str):
+            return row
+    return None
+
+
 def _window_commits(root, start, end):
     """Commits in the coordinator's checkouts inside one run window.
 
@@ -618,9 +631,13 @@ def summary(row):
     # A successful run can legitimately ship nothing when work is blocked or already handled.
     # Lack of production changes alone does not establish a failure or need for Aria.
     health = "running" if live else "ok"
+    receipt = _latest_job_receipt(row["label"]) if row.get("id") == "tbs" and row.get("label") else None
     if not live and last_end and last_end.get("rc") not in (0, None):
         health = "failing"
     age = _age((last_end or {}).get("at") or last_start)
+    if receipt and not live:
+        age = _age(receipt["started"])
+        health = "ok" if receipt.get("rc") == 0 and receipt.get("proof_rc") == 0 else "failing"
     if not live and (age is None or age > row.get("stall_s", 6 * 3600)):
         health = "stalled"
     return {"id": row["id"], "name": row["name"], "live": live, "health": health,
@@ -629,6 +646,7 @@ def summary(row):
             "working_on": doing, "lanes": lanes, "commits": commits,
             "unread": len(unread(root)), "last_skip": last_skip_row,
             "supervisor": (_rows(root / SUPERVISOR) or [None])[-1],
+            "last_job_at": receipt["started"] if receipt else None,
             "prompt": row.get("prompt") or "docs/coordinator.md"}
 
 
