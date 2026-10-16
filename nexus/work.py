@@ -25,6 +25,19 @@ _deadline = ContextVar("work_deadline", default=None)
 # Tower v2: `code-work` runs with lane=TOWER_LABEL and takes every ready issue in tower rows;
 # any other run (nexus-work, disabled 2026-09-13) treats `tower-v2` issues as owned.
 TOWER_LABEL = "tower-v2"
+# Ownership boundary: these projects are worked by their own coordinator or by
+# direct commissions. A stale registry or a future bulk inventory must not put
+# them back into Tower's discovery and execution loop.
+TOWER_EXCLUDED_REPOS = frozenset({
+    "ariaxhan/modelmind", "ariaxhan/modelmind-site", "ariaxhan/our4cuts",
+    "ariaxhan/paper-rooms", "persist-os/heycontent-web",
+    "ariaxhan/thinking-brain-school",
+})
+
+
+def tower_excluded_repo(repo):
+    name = repo.lower()
+    return name in TOWER_EXCLUDED_REPOS or name.startswith("thinking-brain-school/")
 SENSITIVE_WINDOW = os.environ.get("NEXUS_TBS_SENSITIVE_WINDOW", os.path.expanduser(
     "~/Developer/Vaults/CodingVault/thinking-brain-school/bin/sensitive_window.py"))
 
@@ -82,6 +95,8 @@ def registry(path):
         row["path"] = str(Path(workspace).expanduser().resolve()) if workspace is not None else None
         if type(row["enabled"]) is not bool:
             raise WorkError("enabled must be boolean")
+        if tower_excluded_repo(name):
+            row["enabled"] = False
         for field in ("executor", "verify"):
             argv = row[field]
             if not isinstance(argv, list) or not argv or not all(isinstance(v, str) and v for v in argv):
@@ -647,13 +662,14 @@ def priority_rank(labels):
 def tower_row(entry):
     """Risk rules present, or a personal repo. Client repos without risk data never reach an auto-merge."""
     checkout = entry.get("canonical_path") or entry.get("path")
-    return bool(checkout and os.path.isdir(checkout)) and (
+    return not tower_excluded_repo(entry["repo"]) and bool(checkout and os.path.isdir(checkout)) and (
         bool(entry.get("risk")) or (entry.get("delivery") or {}).get("kind") == "product-proof")
 
 
 def eligible(led, entries, repo):
     """Enabled repositories, or none: `nexus plans disable github-work` stops every one at once."""
-    entries = [e for e in entries if e["enabled"] and (not repo or e["repo"] == repo.lower())]
+    entries = [e for e in entries if e["enabled"] and not tower_excluded_repo(e["repo"])
+               and (not repo or e["repo"] == repo.lower())]
     if _lane.get() == TOWER_LABEL:
         switch = led.plan_by_name("code-work")  # its own switch; github-work does not gate it
         if switch and switch["enabled"]:
