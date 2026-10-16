@@ -3752,6 +3752,7 @@ async function connection() {
 }
 var stateSync = synchronize();
 var settingsSync = loadSettings().catch((error) => notice(error.message));
+if (!localStorage.getItem("office-preferences-cache")) await settingsSync;
 void connection();
 await route();
 void Promise.allSettled([stateSync, settingsSync]);
