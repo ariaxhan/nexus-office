@@ -13,6 +13,35 @@ spec.loader.exec_module(module)
 
 
 class VerifyTest(unittest.TestCase):
+    def test_command_cleans_inbox_after_accept_and_reject(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            key = root / "key"
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+                            "-f", str(key)], check=True)
+            allowed = root / "allowed"
+            allowed.write_text("office-fallback " + (root / "key.pub").read_text())
+            destination = root / "verified.json"
+            for tamper in (False, True):
+                snapshot = root / "world.json"
+                from datetime import datetime, timezone
+                stamp = datetime.now(timezone.utc).isoformat()
+                snapshot.write_text(json.dumps({"generated": stamp, "stations": []}))
+                subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key),
+                                "-n", "office-fallback", str(snapshot)], check=True,
+                               capture_output=True)
+                signature = root / "world.json.sig"
+                if tamper:
+                    snapshot.write_text(snapshot.read_text().replace("[]", '[{"repo":"tampered"}]'))
+                result = subprocess.run(["python3", str(SCRIPT), "--snapshot", str(snapshot),
+                                         "--signature", str(signature), "--allowed-signers",
+                                         str(allowed), "--destination", str(destination)],
+                                        capture_output=True)
+                self.assertEqual(result.returncode == 0, not tamper)
+                self.assertFalse(snapshot.exists())
+                self.assertFalse(signature.exists())
+                self.assertTrue(destination.exists())
+
     def test_signature_freshness_and_tamper(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

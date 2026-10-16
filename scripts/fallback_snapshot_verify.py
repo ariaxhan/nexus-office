@@ -76,7 +76,12 @@ def main() -> int:
     parser.add_argument("--allowed-signers", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()
-    print(verify(args.snapshot, args.signature, args.allowed_signers, args.destination))
+    try:
+        print(verify(args.snapshot, args.signature, args.allowed_signers, args.destination))
+    finally:
+        # The inbox is transient. Keep only the atomically installed snapshot.
+        args.snapshot.unlink(missing_ok=True)
+        args.signature.unlink(missing_ok=True)
     return 0
 
 
