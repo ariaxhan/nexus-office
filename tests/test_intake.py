@@ -365,10 +365,23 @@ class CoordinatorReceipt(unittest.TestCase):
 
     def test_abandoned_claim_stops_polling_after_window(self):
         first = intake.poll_coordinator_receipts(self.led, T0 + intake.COORDINATOR_WINDOW_S + 1, run=self.gh)
-        self.assertEqual((0, 1), (first['checked'], first['abandoned']))
+        self.assertEqual((0, 1), (first['checked'], first['aged']))
         self.assertEqual(0, intake.poll_coordinator_receipts(
-            self.led, T0 + intake.COORDINATOR_WINDOW_S + 2, run=self.gh)['abandoned'])
+            self.led, T0 + intake.COORDINATOR_WINDOW_S + 2, run=self.gh)['aged'])
         self.assertEqual([], intake.walks(self.led, T0 + intake.COORDINATOR_WINDOW_S + 1))
+
+    def test_accepted_receipt_ages_into_verification_due_not_false_intake_fault(self):
+        self.led.event('receipt.state', 'o/r#77', {'state': 'RECEIPT', 'proof': {'sha': self.SHA}},
+                       'test', T0 + 1)
+        walk = intake.walks(self.led, T0 + 2)[0]
+        self.assertEqual('RECEIPT', walk['state'])
+        self.assertEqual([], intake.overruns(walk, T0 + 2 * H))
+        result = intake.poll_coordinator_receipts(self.led, T0 + intake.COORDINATOR_WINDOW_S + 1,
+                                                  run=self.gh)
+        self.assertEqual(1, result['aged'])
+        kinds = [row['kind'] for row in self.led.events(subject=self.key)]
+        self.assertIn('receipt.verification_due', kinds)
+        self.assertNotIn('receipt.abandoned', kinds)
 
 
 if __name__ == "__main__":

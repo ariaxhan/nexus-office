@@ -223,7 +223,9 @@ def _coordinator_walk(ledger, key, number, now):
     state = 'RECEIPT' if entered['RECEIPT'] is not None else 'CLAIMED'
     return {"key": key, "task": "coordinator", "number": number, "title": f"coordinator claim {key}",
             "state": state, "entered": entered, "queue_since": None, "queued_s": 0.0,
-            "bounds": {"FILED": None, "CLAIMED": LANE_BOUND_S, "RECEIPT": RECEIPT_BOUND_S,
+            # #301 owns the separate outcome verifier. A valid artifact receipt cannot be
+            # faulted every hour for lacking a verifier that has not yet been dispatched.
+            "bounds": {"FILED": None, "CLAIMED": LANE_BOUND_S, "RECEIPT": None,
                        "VERIFIED": None, "CLOSED": None}}
 
 
@@ -280,24 +282,31 @@ def poll_coordinator_receipts(ledger, now=None, run=None):
     """Bounded, durable poll of claimed coordinator issues; GitHub proof advances the state."""
     now = time.time() if now is None else now
     candidates = []
-    abandoned = 0
+    aged = 0
     expired = ledger.conn.execute("SELECT subject, MAX(ts) FROM events WHERE kind='intake.claim' AND ts>=?"
                                   " GROUP BY subject HAVING MAX(ts)<?", (SINCE, now - COORDINATOR_WINDOW_S))
     for key, claimed_at in expired:
         repo = key.removeprefix('github:').rpartition('#')[0]
         if work.tower_excluded_repo(repo):
             continue
+        if ledger.conn.execute("SELECT 1 FROM tasks WHERE dedupe_key=? LIMIT 1", (key,)).fetchone():
+            continue
         subject = key.removeprefix('github:')
         accepted = ledger.conn.execute("SELECT ts, payload FROM events WHERE kind='receipt.state' AND subject=?"
                                        " ORDER BY id DESC LIMIT 1", (subject,)).fetchone()
-        if accepted and accepted[0] >= claimed_at and loads(accepted[1], {}).get('proof'):
+        proved = (accepted and accepted[0] >= claimed_at
+                  and loads(accepted[1], {}).get('state') == 'RECEIPT'
+                  and loads(accepted[1], {}).get('proof'))
+        event_kind = 'receipt.verification_due' if proved else 'receipt.abandoned'
+        if ledger.conn.execute("SELECT 1 FROM events WHERE kind=? AND subject=?"
+                               " AND json_extract(payload,'$.claimed_at')=?",
+                               (event_kind, key, claimed_at)).fetchone():
             continue
-        if ledger.conn.execute("SELECT 1 FROM events WHERE kind='receipt.abandoned' AND subject=?"
-                               " AND json_extract(payload,'$.claimed_at')=?", (key, claimed_at)).fetchone():
-            continue
-        ledger.event('receipt.abandoned', key, {'claimed_at': claimed_at,
-                                               'act_needed': 'reclaim or close the coordinator issue'}, 'intake')
-        abandoned += 1
+        ledger.event(event_kind, key, {'claimed_at': claimed_at,
+                                      'act_needed': ('dispatch an outcome verifier'
+                                                     if proved else 'reclaim or close the coordinator issue')},
+                     'intake')
+        aged += 1
     keys = ledger.conn.execute("SELECT subject, MAX(ts) FROM events WHERE kind='intake.claim' AND ts>=?"
                                " GROUP BY subject", (max(SINCE, now - COORDINATOR_WINDOW_S),)).fetchall()
     for key, claimed_at in keys:
@@ -317,7 +326,7 @@ def poll_coordinator_receipts(ledger, now=None, run=None):
                                    (key,)).fetchone()[0]
         if last is None or now - last >= RECEIPT_POLL_S:
             candidates.append((last or 0, key, repo, int(number), claimed_at))
-    result = {"checked": 0, "accepted": 0, "rejected": 0, "abandoned": abandoned, "errors": []}
+    result = {"checked": 0, "accepted": 0, "rejected": 0, "aged": aged, "errors": []}
     for _, key, repo, number, claimed_at in sorted(candidates)[:MAX_RECEIPT_POLLS]:
         # This transaction is the admission fence across concurrent sweeps. A crashed reader
         # becomes eligible again after RECEIPT_POLL_S; it cannot strand the claim.
