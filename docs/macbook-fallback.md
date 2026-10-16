@@ -19,3 +19,20 @@ even if the proxy connects from localhost. Tailscale supplies TLS; port 9443
 here is loopback HTTP. Neither a route nor a snapshot copy is configured by
 this PR. A phone fallback label requires separate host identity, authenticated
 denial, and physical phone readback. The 8447 listener remains unchanged.
+
+## Signed snapshot delivery
+
+`scripts/fallback_snapshot_publish.py` reads the Studio's loopback `/api/world`,
+rejects data over 2 MiB or older than five minutes, and signs the serialized
+world with a Studio-only Ed25519 SSH key under the `office-fallback` namespace.
+It uploads a unique pair of files over host-key-checked SSH. On the MacBook,
+`scripts/fallback_snapshot_verify.py` checks the signature against an
+`allowed_signers` file, validates the world and ten-minute age limit, refuses
+timestamps older than or equal to the installed snapshot, and atomically
+replaces `verified-world.json`. The destination directory must be owner-only.
+The private key is never copied to the MacBook; provision its public key as
+`office-fallback <ssh-ed25519 public key>` in `allowed_signers`. The publisher
+requires the exact versioned remote verifier path on each invocation. The
+fallback server reads only `verified-world.json` and becomes unhealthy after
+15 minutes without a fresh delivery. A failed delivery never changes the last
+verified snapshot.
