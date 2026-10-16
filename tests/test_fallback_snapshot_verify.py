@@ -53,10 +53,12 @@ class VerifyTest(unittest.TestCase):
             snapshot = root / "world.json"
             snapshot.write_text(json.dumps({"generated": "2026-10-16T23:00:00Z",
                                             "stations": []}))
-            subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key),
-                            "-n", "office-fallback", str(snapshot)], check=True,
-                           capture_output=True)
             signature = root / "world.json.sig"
+            original_signature = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key),
+                                                 "-n", "office-fallback"],
+                                                input=snapshot.read_bytes(), check=True,
+                                                capture_output=True)
+            signature.write_bytes(original_signature.stdout)
             destination = root / "verified.json"
             stamp = module.verify(snapshot, signature, allowed, destination,
                                   now=1792191600)
@@ -87,13 +89,35 @@ class VerifyTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.verify(snapshot, signature, allowed, destination,
                               now=1792191600)
+            snapshot.write_bytes(destination.read_bytes())
+            self.assertEqual(module.verify(snapshot, signature, allowed, destination,
+                                           now=1792191600), "2026-10-16T23:00:00Z")
+            different = {"generated": "2026-10-16T23:00:00Z",
+                         "stations": [{"repo": "different"}]}
+            snapshot.write_text(json.dumps(different))
+            changed_signature = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key),
+                                                "-n", "office-fallback"],
+                                               input=snapshot.read_bytes(), check=True,
+                                               capture_output=True)
+            signature.write_bytes(changed_signature.stdout)
+            with self.assertRaises(ValueError):
+                module.verify(snapshot, signature, allowed, destination,
+                              now=1792191600)
             self.assertIn(b"stations", destination.read_bytes())
             snapshot.write_text(json.dumps({"generated": "2026-10-16T23:00:00Z",
                                             "stations": []}))
+            signature.write_bytes(original_signature.stdout)
             with self.assertRaises(ValueError):
                 module.verify(snapshot, signature, allowed, destination,
                               now=1792192300)
-            with self.assertRaises(ValueError):
+            snapshot.write_text(json.dumps({"generated": "2026-10-16T22:59:00Z",
+                                            "stations": []}))
+            older_signature = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key),
+                                              "-n", "office-fallback"],
+                                             input=snapshot.read_bytes(), check=True,
+                                             capture_output=True)
+            signature.write_bytes(older_signature.stdout)
+            with self.assertRaisesRegex(ValueError, "replay or rollback"):
                 module.verify(snapshot, signature, allowed, destination,
                               now=1792191600)
 

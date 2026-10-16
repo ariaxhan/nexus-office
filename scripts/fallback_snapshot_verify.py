@@ -53,6 +53,8 @@ def verify(snapshot: Path, signature: Path, allowed_signers: Path, destination: 
             if not isinstance(old_stamp, str):
                 raise ValueError("existing snapshot timestamp invalid")
             old = datetime.fromisoformat(old_stamp.replace("Z", "+00:00"))
+            if parsed == old and raw == destination.read_bytes():
+                return stamp
             if parsed <= old:
                 raise ValueError("snapshot replay or rollback")
         staged = destination.with_name(destination.name + ".incoming")
