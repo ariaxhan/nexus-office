@@ -14,17 +14,41 @@ import uuid
 from urllib.request import urlopen
 
 MAX_BYTES = 2 * 1024 * 1024
+MAX_SOURCE_BYTES = 8 * 1024 * 1024
 HOST = "slowember@100.87.127.43"
 REMOTE = "/Users/slowember/.local/share/nexus-office/fallback"
+
+
+def project_world(world: dict) -> dict:
+    """Carry bounded display cards, never the full credential-bearing Office world."""
+    sections = world.get("sections")
+    if not isinstance(sections, dict):
+        raise ValueError("Office sections unavailable")
+    cards = []
+    for name, section in list(sections.items())[:32]:
+        if not isinstance(section, dict):
+            continue
+        card = section.get("card")
+        if not isinstance(card, dict):
+            continue
+        title = card.get("title")
+        headline = card.get("headline")
+        if not isinstance(title, str) or not isinstance(headline, str):
+            continue
+        cards.append({"repo": title[:100], "summary": headline[:220],
+                      "state": str(section.get("state", ""))[:30]})
+    if not cards:
+        raise ValueError("Office display cards unavailable")
+    return {"generated": world["generated"], "stations": cards}
 
 
 def publish(signing_key: Path, verifier: Path) -> str:
     if signing_key.is_symlink() or not signing_key.is_file() or signing_key.stat().st_mode & 0o077:
         raise ValueError("private signing key must be a regular owner-only file")
     with urlopen("http://127.0.0.1:8790/api/world", timeout=20) as response:
-        raw = response.read(MAX_BYTES + 1)
-    if len(raw) > MAX_BYTES:
-        raise ValueError("snapshot exceeds 2 MiB")
+        raw = response.read(MAX_SOURCE_BYTES + 1)
+    if len(raw) > MAX_SOURCE_BYTES:
+        raise ValueError("Office source exceeds 8 MiB")
     envelope = json.loads(raw)
     if not isinstance(envelope, dict):
         raise ValueError("Office response shape invalid")
@@ -37,7 +61,8 @@ def publish(signing_key: Path, verifier: Path) -> str:
     parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     if parsed.tzinfo is None or not -60 <= time.time() - parsed.timestamp() <= 300:
         raise ValueError("Office world too old or in future")
-    data = json.dumps(world, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    data = json.dumps(project_world(world), separators=(",", ":"),
+                      ensure_ascii=False).encode("utf-8")
     if len(data) > MAX_BYTES:
         raise ValueError("serialized world exceeds 2 MiB")
     ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",

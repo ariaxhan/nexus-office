@@ -113,16 +113,18 @@ def make_server(port: int = 9443, snapshot: Path | None = None,
             status = ("Cached snapshot" if state["ok"] else
                       "Stale snapshot" if state["world"] is not None else
                       "Snapshot unavailable")
-            names = [escape(str(row.get("repo", ""))) for row in
+            cards = [(escape(str(row.get("repo", ""))),
+                      escape(str(row.get("summary", "")))) for row in
                      (state["world"] or {}).get("stations", [])[:20]
                      if isinstance(row, dict) and row.get("repo")]
-            items = "".join(f"<li>{name}</li>" for name in names)
+            items = "".join(f"<li><strong>{name}</strong><br>{summary}</li>"
+                            for name, summary in cards)
             page = ("<!doctype html><html lang='en'><meta charset='utf-8'>"
                     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
                     "<title>Nexus Office · MacBook fallback</title>"
                     "<style>body{font-family:Georgia,serif;background:#f7f5f0;color:#242424;"
                     "max-width:720px;margin:8vh auto;padding:20px}h1{font-weight:400}"
-                    "p,li{line-height:1.5}.note{border-top:1px solid #d5d1c9;padding-top:16px;"
+                    "p,li{line-height:1.5}li{margin:0 0 12px}.note{border-top:1px solid #d5d1c9;padding-top:16px;"
                     "color:#515151}</style><main><p>NEXUS OFFICE · MACBOOK</p>"
                     f"<h1>{status}</h1><p>Read only. Last source snapshot: "
                     f"{escape(state['snapshot_at'] or 'none')}. "
