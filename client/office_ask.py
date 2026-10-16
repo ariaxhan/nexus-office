@@ -364,11 +364,11 @@ def models(fresh=False):
 
 def send(body):
     message = body.get('text')
-    requested = body.get('model', DEFAULT_MODEL)
+    requested = body.get('model')
     request_id = body.get('request_id')
     if not isinstance(message, str) or not 1 <= len(message.strip()) <= 8000:
         raise ValueError('Ask needs a message of at most 8000 characters')
-    if not isinstance(requested, str):
+    if requested is not None and not isinstance(requested, str):
         raise ValueError('Ask needs a model')
     # Older cached Office clients send no request ID. Keep those sends working
     # while preserving strict validation and idempotency for current clients.
@@ -377,13 +377,16 @@ def send(body):
     if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
         raise ValueError('Ask request_id must be 16 to 80 letters, numbers, underscores, or hyphens')
     message = message.strip()
+    # The stored selection is the one writer (#255): a model-less send reads it inside the
+    # write transaction, never writes it, and a model-less retry matches its own first model.
+    explicit = requested is not None
     with LOCK, connect() as db:
         existing = db.execute("SELECT * FROM messages WHERE role='user' AND request_id=?",
                               (request_id,)).fetchone()
         if existing:
             return _retry_receipt(db, existing, message, requested)
     available = {row['id'] for row in models()['items']}
-    if requested not in available and requested != 'auto':
+    if explicit and requested not in available and requested != 'auto':
         raise ValueError('That model is not currently available in the selected personal account')
     with LOCK, connect() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -393,6 +396,11 @@ def send(body):
             receipt = _retry_receipt(db, existing, message, requested)
             db.commit()
             return receipt
+        if not explicit:
+            # The code default only seeds an empty store.
+            requested = _state(db, 'selection') or _state(db, 'model') or DEFAULT_MODEL
+            if requested not in available and requested != 'auto':
+                raise ValueError('That model is not currently available in the selected personal account')
         model = auto_model(db, available) if requested == 'auto' else requested
         previous = _state(db, 'model', DEFAULT_MODEL)
         if previous != model:
@@ -401,7 +409,8 @@ def send(body):
                        ('system', f'Model changed from {previous} to {model}', model, 'completed',
                         time.time(), _next_revision(db)))
         _set(db, 'model', model)
-        _set(db, 'selection', requested)
+        if explicit:
+            _set(db, 'selection', requested)
         revision = _next_revision(db)
         cursor = db.execute('''INSERT INTO messages(role,text,model,status,created_at,request_id,
                                                     requested_model,message_revision)
@@ -426,7 +435,7 @@ def _receipt(request_id, user_id, reply_id, model):
 
 def _retry_receipt(db, row, message, requested):
     if (row['kind'] != 'queue' or row['text'] != message or
-            (row['requested_model'] or row['model']) != requested):
+            (requested is not None and (row['requested_model'] or row['model']) != requested)):
         raise ValueError('That request_id was already used for a different Ask message')
     reply = db.execute("SELECT id FROM messages WHERE role='office' AND parent_id=?", (row['id'],)).fetchone()
     if not reply:

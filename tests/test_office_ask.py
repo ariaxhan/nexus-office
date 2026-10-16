@@ -57,6 +57,53 @@ class AskQueueTest(unittest.TestCase):
             threading.Event().wait(0.01)
         self.fail("timed out waiting for Ask queue")
 
+    def test_model_less_send_uses_stored_selection_not_code_default(self):
+        # #255: the stored selection is the one writer; DEFAULT_MODEL only seeds an empty store.
+        with patch.object(ask, "_answer_turn", return_value="ok"), patch.object(ask, "_drain"):
+            first = ask.send({"request_id": "select-request-0001", "text": "pick", "model": "model-b"})
+            self.assertEqual(first["model"], "model-b")
+            with patch.object(ask, "DEFAULT_MODEL", "model-c"):  # a door restart on other code
+                second = ask.send({"request_id": "select-request-0002", "text": "no model named"})
+        self.assertEqual(second["model"], "model-b")
+        with ask.connect() as db:
+            self.assertEqual(ask._state(db, "selection"), "model-b")
+            self.assertEqual(ask._state(db, "model"), "model-b")
+
+    def test_model_less_send_on_empty_store_seeds_code_default(self):
+        with patch.object(ask, "_answer_turn", return_value="ok"), patch.object(ask, "_drain"), \
+                patch.object(ask, "DEFAULT_MODEL", "model-a"):
+            receipt = ask.send({"request_id": "select-request-0003", "text": "first run"})
+        self.assertEqual(receipt["model"], "model-a")
+
+    def test_model_less_retry_keeps_its_original_model_after_a_new_pick(self):
+        with patch.object(ask, "_answer_turn", return_value="ok"), patch.object(ask, "_drain"):
+            ask.send({"request_id": "select-request-0010", "text": "seed", "model": "model-a"})
+            first = ask.send({"request_id": "select-request-0011", "text": "X"})
+            ask.send({"request_id": "select-request-0012", "text": "pick", "model": "model-b"})
+            retry = ask.send({"request_id": "select-request-0011", "text": "X"})
+            self.assertEqual(retry, first)
+            self.assertEqual(retry["model"], "model-a")
+            with self.assertRaises(ValueError):
+                ask.send({"request_id": "select-request-0011", "text": "X", "model": "model-b"})
+
+    def test_model_less_send_never_overwrites_a_concurrent_pick(self):
+        real_models = ask.models
+        raced = []
+
+        def models_with_race():
+            if not raced:
+                raced.append(True)
+                ask.send({"request_id": "select-request-0021", "text": "pick", "model": "model-b"})
+            return real_models()
+
+        with patch.object(ask, "_answer_turn", return_value="ok"), patch.object(ask, "_drain"):
+            ask.send({"request_id": "select-request-0020", "text": "seed", "model": "model-a"})
+            with patch.object(ask, "models", models_with_race):
+                receipt = ask.send({"request_id": "select-request-0022", "text": "no model named"})
+        self.assertEqual(receipt["model"], "model-b")
+        with ask.connect() as db:
+            self.assertEqual(ask._state(db, "selection"), "model-b")
+
     def test_fifo_preserves_each_model_and_runs_one_turn_at_a_time(self):
         releases = {text: threading.Event() for text in ("A", "B", "C")}
         started = {text: threading.Event() for text in releases}
