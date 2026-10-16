@@ -822,8 +822,19 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(search.run((q.get("q") or [""])[0]))
 
     def _get_health(self, query):
-        return self._json({"ok": True, "snapshot_at": self.world.at,
-                           "server_time": now_iso(), "revision": SERVER_REVISION})
+        try:
+            stamp = datetime.strptime(self.world.at, ISO).replace(tzinfo=timezone.utc)
+            age_s = max(0, (datetime.now(timezone.utc) - stamp).total_seconds())
+        except (TypeError, ValueError):
+            age_s = None
+        # One ordinary refresh may be late; two full poll intervals are stale.
+        fresh = age_s is not None and age_s <= 2 * POLL_S
+        return self._json({"ok": fresh, "snapshot_fresh": fresh,
+                           "snapshot_age_s": round(age_s) if age_s is not None else None,
+                           "max_snapshot_age_s": 2 * POLL_S,
+                           "snapshot_at": self.world.at,
+                           "server_time": now_iso(), "revision": SERVER_REVISION},
+                          200 if fresh else 503)
 
 
     do_HEAD = do_GET
