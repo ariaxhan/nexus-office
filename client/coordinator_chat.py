@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -24,6 +25,7 @@ INBOX = "_meta/state/coordinator-inbox.jsonl"
 RUNS = "_meta/ledgers/coordinator-runs.jsonl"
 HOLDS = "_meta/ledgers/coordinator-holds.jsonl"
 SUPERVISOR = "_meta/ledgers/coordinator-supervisor.jsonl"  # _meta/services/coordinators/supervise.py
+JOB_RECEIPTS = Path.home() / "Library/Application Support/nexus-jobs/state/receipts.jsonl"
 MAX_RUNS = 12
 MAX_LOG_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 8000
@@ -563,6 +565,18 @@ def _tail(path, limit):
         return ""
 
 
+def _latest_job_receipt(label):
+    """Read the bounded local jobrun tail; deterministic TBS ticks omit model-run rows."""
+    for line in reversed(_tail(JOB_RECEIPTS, 512 * 1024).splitlines()):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("job") == label and isinstance(row.get("started"), str):
+            return row
+    return None
+
+
 def _window_commits(root, start, end):
     """Commits in the coordinator's checkouts inside one run window.
 
@@ -581,7 +595,65 @@ def _window_commits(root, start, end):
     return out
 
 
+def _remote_summary(row):
+    """Read a host-pinned coordinator's live ledger without trusting the local mirror."""
+    base = {"id": row["id"], "name": row["name"], "live": False,
+            "health": "unknown", "last_start": None, "last_end": None,
+            "age_s": None, "shipped_recent": [], "thrashing": False,
+            "working_on": "", "lanes": [], "commits": [], "unread": 0,
+            "last_skip": None, "supervisor": None,
+            "prompt": row.get("prompt") or "docs/coordinator.md",
+            "host": row["remote_host"]}
+    ledger = str(Path(row["remote_root"]) / RUNS)
+    command = "tail -c 131072 " + shlex.quote(ledger)
+    try:
+        result = subprocess.run(
+            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+             "-o", "ConnectionAttempts=1", row["remote_host"], command],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return dict(base, error="Coordinator host unavailable")
+    if result.returncode or len(result.stdout) > 131072:
+        return dict(base, error="Coordinator host unavailable")
+    # An incomplete first line, if present, is ignored by JSON parsing.
+    lines = result.stdout.splitlines()
+    events = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and isinstance(event.get("at"), str):
+            events.append(event)
+    if not events:
+        return dict(base, error="Coordinator ledger unavailable")
+    starts = [event for event in events if event.get("event") == "start"]
+    ends = [event for event in events if event.get("event") == "end"]
+    skips = [event for event in events if event.get("event") == "skip"]
+    last_start = starts[-1] if starts else None
+    last_end = ends[-1] if ends else None
+    last_skip = skips[-1] if skips and (not last_start or skips[-1]["at"] > last_start["at"]) else None
+    start_age = _age(last_start["at"]) if last_start else None
+    live = bool(last_start and (not last_end or last_start["at"] > last_end["at"]) and
+                start_age is not None and 0 <= start_age < 12600)
+    age = _age((last_end or last_start or {}).get("at"))
+    health = "running" if live else "ok"
+    if not live and last_end and last_end.get("rc") not in (0, None):
+        health = "failing"
+    if not live and (age is None or age > row.get("stall_s", 6 * 3600)):
+        health = "stalled"
+    return dict(base, live=live, health=health,
+                last_start=last_start["at"] if last_start else None,
+                last_end=last_end, age_s=age, last_skip=last_skip,
+                shipped_recent=[event.get("prod_changes") or 0 for event in ends[-RECENT_RUNS:]],
+                provider=last_end.get("provider") if last_end else None,
+                fallback_from=last_end.get("fallback_from") if last_end else None)
+
+
 def summary(row):
+    if row.get("remote_host"):
+        return _remote_summary(row)
     root = row["path"]
     ledger = _rows(root / RUNS)
     starts = [r for r in ledger if r.get("event") == "start" and isinstance(r.get("at"), str)]
@@ -618,9 +690,13 @@ def summary(row):
     # A successful run can legitimately ship nothing when work is blocked or already handled.
     # Lack of production changes alone does not establish a failure or need for Aria.
     health = "running" if live else "ok"
+    receipt = _latest_job_receipt(row["label"]) if row.get("id") == "tbs" and row.get("label") else None
     if not live and last_end and last_end.get("rc") not in (0, None):
         health = "failing"
     age = _age((last_end or {}).get("at") or last_start)
+    if receipt and not live:
+        age = _age(receipt["started"])
+        health = "ok" if receipt.get("rc") == 0 and receipt.get("proof_rc") == 0 else "failing"
     if not live and (age is None or age > row.get("stall_s", 6 * 3600)):
         health = "stalled"
     return {"id": row["id"], "name": row["name"], "live": live, "health": health,
@@ -629,6 +705,7 @@ def summary(row):
             "working_on": doing, "lanes": lanes, "commits": commits,
             "unread": len(unread(root)), "last_skip": last_skip_row,
             "supervisor": (_rows(root / SUPERVISOR) or [None])[-1],
+            "last_job_at": receipt["started"] if receipt else None,
             "prompt": row.get("prompt") or "docs/coordinator.md"}
 
 
