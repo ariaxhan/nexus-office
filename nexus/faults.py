@@ -13,7 +13,9 @@ a watchdog's own fault id):
      verification: {surface, result, at} | null,
      escalation: {act_needed, kind} | null}
 
-States: detected -> repairing -> verified_fixed | escalated. Escalated is a
+States: detected -> repairing -> verified_fixed | escalated. A watchdog's
+detected-only fault may also become recovered on a later healthy observation.
+Escalated is a
 state, never a message: only a failed repair that needs a person's hands or
 a real decision gets one, with ONE plain line naming the act. Every other
 fault is silent; silence is the success signal.
@@ -30,7 +32,8 @@ import time
 
 from .ledger import loads
 
-STATES = ("detected", "repairing", "verified_fixed", "escalated")
+STATES = ("detected", "repairing", "verified_fixed", "escalated", "recovered")
+REPORT_STATES = STATES[:-1]
 ESCALATION_KINDS = ("technical", "hands", "decision", "money", "irreversible", "identity")
 SOURCE = "self-repair"
 
@@ -93,6 +96,10 @@ def record(ledger, fault_id):
                                    "result": "pass" if kind == "repair.completed" else "released",
                                    "at": event["ts"]}
             out["state"] = "verified_fixed"
+        elif kind == "watchdog.recovered":
+            out["verification"] = {"surface": payload.get("surface"),
+                                   "result": "observed recovered", "at": event["ts"]}
+            out["state"] = "recovered"
         elif kind == "repair.escalated" and payload.get("act_needed"):
             # pre-#300 escalations (prose on an issue) carry no act and are
             # not records; only the structured state counts
@@ -129,19 +136,24 @@ def detect(ledger, signature, source, fault_id=None, now=None):
         raise ValueError("fault signature and source are required")
     now = now if now is not None else time.time()
     with ledger.tx():
-        if fault_id is None:
-            digest = hashlib.sha256(f"{source}\0{signature}".encode()).hexdigest()[:16]
-            base = f"fault_{digest}"
-            fault_id = base
-            generation = 1
+        return _detect_in_tx(ledger, signature, source, fault_id, now)
+
+
+def _detect_in_tx(ledger, signature, source, fault_id, now):
+    """Same transition when the caller also must commit a source observation."""
+    if fault_id is None:
+        digest = hashlib.sha256(f"{source}\0{signature}".encode()).hexdigest()[:16]
+        base = f"fault_{digest}"
+        fault_id = base
+        generation = 1
+        current = record(ledger, fault_id)
+        while current is not None and current["state"] in ("verified_fixed", "escalated", "recovered"):
+            generation += 1
+            fault_id = f"{base}_{generation}"
             current = record(ledger, fault_id)
-            while current is not None and current["state"] in ("verified_fixed", "escalated"):
-                generation += 1
-                fault_id = f"{base}_{generation}"
-                current = record(ledger, fault_id)
-        if not ledger.events(kind="repair.opened", subject=fault_id):
-            ledger._event("repair.opened", fault_id,
-                          {"signature": signature, "source": source}, source, now)
+    if not ledger.events(kind="repair.opened", subject=fault_id):
+        ledger._event("repair.opened", fault_id,
+                      {"signature": signature, "source": source}, source, now)
     return fault_id
 
 
@@ -159,7 +171,7 @@ def escalate(ledger, fault_id, act_needed, kind="hands", source=SOURCE, now=None
             raise ValueError("fault was not detected")
         if prior["state"] == "escalated":
             return prior
-        if prior["state"] == "verified_fixed":
+        if prior["state"] in ("verified_fixed", "recovered"):
             raise ValueError("verified fault cannot be escalated")
         if prior["state"] != "repairing" and not str(prior["signature"]).startswith("mechanism-stopped:"):
             raise ValueError("repair must be attempted before escalation")
@@ -177,8 +189,8 @@ def report(ledger, signature, source, state, fault_id=None, action=None,
     verified_fixed -> records the live surface the fix was verified on
     escalated    -> repair failed and a person must act: act_needed, one line
     """
-    if state not in STATES:
-        raise ValueError(f"state must be one of {STATES}")
+    if state not in REPORT_STATES:
+        raise ValueError(f"state must be one of {REPORT_STATES}")
     now = now if now is not None else time.time()
     fault_id = detect(ledger, signature, source, fault_id=fault_id, now=now)
     if state == "detected":
@@ -188,7 +200,7 @@ def report(ledger, signature, source, state, fault_id=None, action=None,
         return record(ledger, fault_id)
     with ledger.tx():
         prior = record(ledger, fault_id)
-        if prior["state"] in ("verified_fixed", "escalated"):
+        if prior["state"] in ("verified_fixed", "escalated", "recovered"):
             raise ValueError("terminal fault cannot advance")
         if state == "repairing":
             if not action:
