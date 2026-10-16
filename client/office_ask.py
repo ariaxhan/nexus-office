@@ -364,11 +364,11 @@ def models(fresh=False):
 
 def send(body):
     message = body.get('text')
-    requested = body.get('model', DEFAULT_MODEL)
+    requested = body.get('model')
     request_id = body.get('request_id')
     if not isinstance(message, str) or not 1 <= len(message.strip()) <= 8000:
         raise ValueError('Ask needs a message of at most 8000 characters')
-    if not isinstance(requested, str):
+    if requested is not None and not isinstance(requested, str):
         raise ValueError('Ask needs a model')
     # Older cached Office clients send no request ID. Keep those sends working
     # while preserving strict validation and idempotency for current clients.
@@ -378,6 +378,9 @@ def send(body):
         raise ValueError('Ask request_id must be 16 to 80 letters, numbers, underscores, or hyphens')
     message = message.strip()
     with LOCK, connect() as db:
+        if requested is None:
+            # The stored selection is the one writer (#255); the code default only seeds an empty store.
+            requested = _state(db, 'selection') or _state(db, 'model') or DEFAULT_MODEL
         existing = db.execute("SELECT * FROM messages WHERE role='user' AND request_id=?",
                               (request_id,)).fetchone()
         if existing:
