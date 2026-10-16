@@ -1165,7 +1165,8 @@ class TowerFlow(unittest.TestCase):
         work.pending(self.led, fid, {"reason": "exit_124"})
         self.led.event("flight.terminal", fid, {"branch": "aria/held/" + fid}, "work")
         receipt = {"receipt": "landed abc; check passed"}
-        with patch("nexus.lanes.sweep_held", return_value=[{"flight": fid, "branch": "aria/held/" + fid, "sha": "s"}]) as sweep:
+        with patch("nexus.lanes.sweep_held", return_value=[{"flight": fid, "branch": "aria/held/" + fid, "sha": "s"}]) as sweep, \
+                patch("nexus.work.published", return_value=True):
             self.assertEqual("done", work.close_received(self.led, self.entry, self.task, self.issues[0], receipt))
         self.assertEqual((self.entry["path"], [fid]), sweep.call_args[0])
         [swept] = self.led.events(kind="work.held_swept")
