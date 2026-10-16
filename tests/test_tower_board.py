@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'client'))
 import tower_board
@@ -20,6 +21,20 @@ class TowerBoard(unittest.TestCase):
 
     def setUp(self):
         test_work.WorkTests.setUp(self)
+
+    def test_integrity_failure_is_visible_before_issue_rows_are_read(self):
+        class Corrupt:
+            row_factory = None
+            def execute(self, sql):
+                self_test.assertEqual(sql, 'PRAGMA quick_check(1)')
+                return type('Result', (), {'fetchone': lambda self: ('database disk image is malformed',)})()
+            def close(self):
+                pass
+        self_test = self
+        with patch.object(tower_board.sqlite3, 'connect', return_value=Corrupt()):
+            board = tower_board.read(self.root / 'ledger.sqlite')
+        self.assertEqual(board['state'], 'unreadable')
+        self.assertIn('integrity check', board['detail'])
 
     def test_pending_flight_is_retrying_even_if_old_disposition_says_owned(self):
         work.discover(self.led, self.entry)

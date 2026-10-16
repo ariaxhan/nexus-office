@@ -515,6 +515,10 @@ def read(path=None, now=None):
     try:
         with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=2)) as db:
             db.row_factory = sqlite3.Row
+            check = db.execute('PRAGMA quick_check(1)').fetchone()
+            if not check or check[0] != 'ok':
+                return _carded({'state': 'unreadable', 'detail': 'Tower ledger failed integrity check',
+                                'issues': []})
             tasks = db.execute("SELECT id,dedupe_key,title,state,created_at FROM tasks "
                                "WHERE origin='github-work' ORDER BY created_at DESC").fetchall()
             seen, issues, not_queued = set(), [], 0
