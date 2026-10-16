@@ -2416,7 +2416,7 @@ async function githubDetail(repo, item, kind) {
     const statusRead = kind === "issues" ? api(`/api/tasks/issue?repo=${encodeURIComponent(repo)}&number=${item.number}`).catch(() => null) : null;
     const data = await api(`/api/github/detail?${query}`);
     if (kind !== "prs" && data.pull_request) return githubDetail(repo, item, "prs");
-    body.append(el("h2", "", data.title), el("p", "muted", `${data.state} \xB7 ${data.acting_identity} \xB7 observed ${new Date(data.observed_at * 1e3).toLocaleString()}`), markdownView(data.body || ""), link("Open on GitHub", data.html_url));
+    body.append(el("h2", "", data.title), el("p", "muted", `${data.state} \xB7 ${data.acting_identity} \xB7 observed ${new Date(data.observed_at * 1e3).toLocaleString()}`));
     if (kind === "issues") {
       const status = section(body, "Work status");
       const local = await statusRead;
@@ -2435,6 +2435,7 @@ async function githubDetail(repo, item, kind) {
         if (intake.attention?.act_needed) status.append(el("p", "", `Next act: ${intake.attention.act_needed}`));
       }
     }
+    body.append(markdownView(data.body || ""), link("Open on GitHub", data.html_url));
     if (kind === "prs") {
       body.append(el("p", "muted", `Head ${data.head.sha}`));
       const checks = section(body, "Checks");
