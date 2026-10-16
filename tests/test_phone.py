@@ -114,7 +114,15 @@ class PageTest(unittest.TestCase):
         self.assertNotIn("()=>sendSteer()",app)
         self.assertNotIn('() => sendSteer()',bundle)
         self.assertRegex(bundle,r'steerAction\s*=\s*sendSteer\d*;')
-        self.assertIn("nexus-office-shell-v24",worker)
+        self.assertIn("nexus-office-shell-v25",worker)
+
+    def test_ask_uses_the_night_palette_before_and_after_settings_load(self):
+        css=(ROOT/'client/phone/office-v2.css').read_text()
+        ask=[line for line in css.splitlines() if '.ask-status' in line or '.ask-bubble a' in line or '.ask-rating' in line or '.ask-delivery-error' in line]
+        for hard in ('#fffdf7','#292c29','color:#'):
+            self.assertFalse(any(hard in line for line in ask),hard)
+        self.assertIn('body[data-theme=dark]{--ask-working:',css)
+        self.assertIn('@media(prefers-color-scheme:dark){body:not([data-theme]){color-scheme:dark;--bg:#232722;--paper:#2c302a;',css)
 
     def test_watch_page_revalidates_on_data_change_and_on_return(self):
         app=(ROOT/'client/phone/office.js').read_text()
