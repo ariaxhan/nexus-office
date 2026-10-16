@@ -24,6 +24,8 @@
 	<string>Attach a photo to a task running on your Mac.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose photos to attach to your Office tasks.</string>
+	<key>OfficeCloudURL</key>
+	<string>$(OFFICE_CLOUD_URL)</string>
 	<key>OfficeURL</key>
 	<string>$(OFFICE_URL)</string>
 	<key>UIApplicationSceneManifest</key>

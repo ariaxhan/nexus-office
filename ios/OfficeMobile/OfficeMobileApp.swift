@@ -13,6 +13,14 @@ struct OfficeMobileApp: App {
                 } else {
                     OfficeWebView(connection: connection, player: player)
                         .ignoresSafeArea(.container, edges: .bottom)
+                        .safeAreaInset(edge: .top, spacing: 0) {
+                            if CloudSchedule.configured != nil {
+                                HStack {
+                                    Spacer()
+                                    Button("Scheduled work", action: CloudSchedule.open).font(.footnote)
+                                }.padding(.horizontal).padding(.vertical, 4).background(.bar)
+                            }
+                        }
                         .overlay(alignment: .top) {
                             if let error = connection.error {
                                 VStack {
@@ -60,6 +68,12 @@ struct ConnectionView: View {
                 Text("Connect Tailscale on this phone and keep your Mac awake.").font(.footnote)
                 Button("Open Office", action: connection.connect)
                 if let error = connection.error { Text(error).foregroundStyle(.red) }
+            }
+            if CloudSchedule.configured != nil {
+                Section {
+                    Button("Scheduled work", action: CloudSchedule.open)
+                    Text("Works without your Mac. Sign in there to see and change schedules.").font(.footnote)
+                }
             }
         }
     }
