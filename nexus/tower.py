@@ -877,7 +877,7 @@ def _raise_quarantines(ledger, now=None):
     on entry -- each carries its repair from the same transition that
     stopped the plan, and the repair loop works it. This pass watches the
     two states that must never be silent: the repair plan itself stopped,
-    and a quarantine whose repair ended without its human escalation.
+    and a quarantine whose repair ended without its Office escalation.
     Called beside the tick, not in it; nothing here can fail a tick."""
     now = now if now is not None else time.time()
     raised = 0
@@ -886,7 +886,7 @@ def _raise_quarantines(ledger, now=None):
         if plan["quarantined_at"] is None:
             continue
         told = [e for e in ledger.events(kind="repair.escalated", subject=plan["id"])
-                if (loads(e["payload"], {}) or {}).get("tier") == "human"]
+                if (loads(e["payload"], {}) or {}).get("tier") in ("human", "office")]
         if repair is not None and plan["id"] == repair["id"]:
             if not told:
                 sr.escalate_mechanism(
@@ -899,7 +899,7 @@ def _raise_quarantines(ledger, now=None):
         if task["state"] == "abandoned":
             escalated = [e for e in ledger.events(kind="repair.escalated",
                                                   subject=task["id"])
-                         if (loads(e["payload"], {}) or {}).get("tier") == "human"]
+                         if (loads(e["payload"], {}) or {}).get("tier") in ("human", "office")]
             if not escalated and not told:
                 sr.escalate_mechanism(
                     ledger, plan,

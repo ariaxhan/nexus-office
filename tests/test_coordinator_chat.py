@@ -224,6 +224,27 @@ def test_last_skip_is_dropped_once_a_run_starts_after_it(tmp_path):
 
 
 class OverviewTest(Fixture):
+    def test_remote_coordinator_uses_live_host_ledger(self):
+        events = [
+            {"event": "start", "at": chat.now(), "provider": "codex"},
+            {"event": "fallback", "at": chat.now(), "from": "codex", "to": "claude", "rc": 1},
+            {"event": "end", "at": chat.now(), "rc": 1, "provider": "claude", "fallback_from": "codex"},
+        ]
+        response = type("Response", (), {"returncode": 0, "stdout": "\n".join(json.dumps(e) for e in events)})()
+        with patch.object(chat.subprocess, "run", return_value=response) as run:
+            row = chat.summary({"id": "matra", "name": "Matra", "remote_host": "100.87.127.43",
+                                "remote_root": "/Users/slowember/Developer/matra"})
+        self.assertEqual((row["health"], row["provider"], row["fallback_from"]),
+                         ("failing", "claude", "codex"))
+        self.assertIn("BatchMode=yes", run.call_args.args[0])
+
+    def test_unreachable_remote_is_unknown_not_stalled(self):
+        with patch.object(chat.subprocess, "run", side_effect=subprocess.TimeoutExpired("ssh", 5)):
+            row = chat.summary({"id": "matra", "name": "Matra", "remote_host": "100.87.127.43",
+                                "remote_root": "/Users/slowember/Developer/matra"})
+        self.assertEqual(row["health"], "unknown")
+        self.assertEqual(row["error"], "Coordinator host unavailable")
+
     def test_config_lists_tbs_and_matra_and_routes_a_steer_to_the_named_inbox(self):
         ids = [row["id"] for row in chat.configs()]
         self.assertEqual(ids[:2], ["tbs", "matra"])
