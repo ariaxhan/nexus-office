@@ -518,7 +518,12 @@ def _reconcile_orphan_leases(ledger, now):
     registry = os.environ.get("NEXUS_WORK_REGISTRY")
     if registry:
         try:
-            paths.update(row["path"] for row in work.registry(registry) if row["path"])
+            entries = work.registry(registry)
+            excluded = {os.path.realpath(path) for row in entries if work.tower_excluded_repo(row["repo"])
+                        for path in (row.get("path"), row.get("canonical_path")) if path}
+            paths = {path for path in paths if os.path.realpath(path) not in excluded}
+            paths.update(row["path"] for row in entries if row["enabled"] and work.tower_row(row)
+                         and row["path"] and os.path.realpath(row["path"]) not in excluded)
         except (OSError, ValueError, work.WorkError) as exc:
             ledger.event("work.registry_unreadable", None, {"error": str(exc)}, "tower", now)
     released = 0

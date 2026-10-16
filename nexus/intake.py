@@ -31,7 +31,7 @@ import re
 import subprocess
 import time
 
-from . import coordinator, flights
+from . import coordinator, flights, work
 from .ledger import loads
 
 STATES = ("FILED", "CLAIMED", "RECEIPT", "VERIFIED", "CLOSED")
@@ -229,6 +229,9 @@ def walks(ledger, now=None, claims=None):
         " ORDER BY created_at DESC, rowid DESC LIMIT 1)", (SINCE,)).fetchall()
     out = []
     for task in rows:
+        repo = str(task["dedupe_key"]).removeprefix("github:").split("#", 1)[0]
+        if work.tower_excluded_repo(repo):
+            continue
         walk = item(ledger, task, now)
         if str(walk["title"]).startswith(FAULT_PREFIX):
             continue
@@ -239,6 +242,8 @@ def walks(ledger, now=None, claims=None):
     keys = {walk["key"] for walk in out} | {row[0] for row in ledger.conn.execute(
         "SELECT DISTINCT dedupe_key FROM tasks WHERE origin='github-work'")}
     for (repo, number), claim in (claims or {}).items():
+        if work.tower_excluded_repo(repo):
+            continue
         key = f"github:{repo.lower()}#{int(number)}"
         if claim.get("running") and key not in keys:
             walk = _coordinator_walk(ledger, key, int(number), now)
@@ -387,14 +392,13 @@ def coordinator_claims(now=None):
     registry = os.environ.get("NEXUS_WORK_REGISTRY")
     if not registry:
         return {}
-    from . import work
     out = {}
     try:
         entries = work.registry(registry)
     except (OSError, ValueError, work.WorkError):
         return {}
     for entry in entries:
-        if entry.get("path"):
+        if entry["enabled"] and not work.tower_excluded_repo(entry["repo"]) and entry.get("path"):
             out.update(coordinator.published(entry["path"]))
     return out
 
