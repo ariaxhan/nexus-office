@@ -40,3 +40,11 @@ Proposed source row for the supervisor (not installed; old row retained):
 ```
 
 Existing running watcher and deployed registry untouched. No push; no background processes started or left running. Supervisor retains installation responsibility after coverage gaps are resolved.
+
+## Final checkpoint
+
+- Status: **partial; not ready to replace the installed watcher**.
+- Nexus implementation/config/tests/report commit: `721046b` (author `ariaxhan <ariaxhan@gmail.com>`).
+- VaultsInternal registry commit: **none — claim store blocked by sandbox**.
+- Remaining work: comprehensive failed-check input source; nested check pagination; timestamp-saturation reconciliation; claimed source registry addition; external report copy. Installation remains the supervisor's step.
+- Validation: 14/14 unit tests, independent 14/14 rerun, REST/GraphQL read-only schema smoke, isolated first-run proof smoke. Full unrelated product suite not run for this standalone watcher addition.
