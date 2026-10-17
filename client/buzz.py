@@ -41,6 +41,8 @@ import time
 import urllib.error
 import urllib.request
 
+from nexus import standing_gates
+
 # The live workflow: relay + `/hooks/<workflow-id>`, bound to #queue. Overridable
 # whole, by OFFICE_BUZZ_HOOK_URL, so a second tailnet or a test relay needs no
 # code change.
@@ -147,6 +149,12 @@ def notify(kind: str, text: str, subject: str = "") -> bool:
         return False
     line = " ".join((text or "").split())
     if not line:
+        return False
+    # A raised gate is never hidden; every other tap passes the standing
+    # security-topic filter before it can reach the relay (#306).
+    topic = None if kind == "gate_raised" else standing_gates.security_class(line)
+    if topic:
+        _log(f"dropped a {kind} tap: standing exclusion ({topic})")
         return False
     if _throttled(kind, subject):
         return False
