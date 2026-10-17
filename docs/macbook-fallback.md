@@ -36,3 +36,13 @@ requires the exact versioned remote verifier path on each invocation. The
 fallback server reads only `verified-world.json` and becomes unhealthy after
 15 minutes without a fresh delivery. A failed delivery never changes the last
 verified snapshot.
+
+The Studio also runs `scripts/fallback_snapshot_watchdog.py` as a separate
+two-minute launchd job. It reads MacBook HTTPS `/api/health` directly, so a
+publisher timer that simply never starts can still be detected. At 11 minutes
+since the last signed snapshot, or after two consecutive unavailable probes,
+it comments once on Office #269. It comments once on recovery below seven
+minutes, retaining local dedupe state if GitHub is unavailable. This monitor
+never launches the publisher or changes the MacBook snapshot. It shares the
+Studio's availability boundary; a real Studio outage and phone reachability
+remain separate acceptance tests.
