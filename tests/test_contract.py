@@ -85,6 +85,7 @@ class ReviewedChange(unittest.TestCase):
         self.git(root, "init", "-q", "--bare", "-b", "main", str(origin))
         self.git(root, "clone", "-q", str(origin), str(self.repo))
         self.git(self.repo, "config", "user.email", "t@t"), self.git(self.repo, "config", "user.name", "t")
+        self.git(self.repo, "config", "commit.gpgsign", "false")  # a signing key with a passphrase is not this test
         self.commit("a", "1")
         self.base = self.git(self.repo, "rev-parse", "HEAD")
         self.git(self.repo, "switch", "-q", "-c", "pr")
