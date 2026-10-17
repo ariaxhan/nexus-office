@@ -22,6 +22,9 @@ import office_feed
 import office_media
 import office_buzz
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from nexus import standing_gates
+
 VAULT = Path(__file__).resolve().parents[3]
 os.environ.setdefault('OFFICE_RUNTIME_ROOT', str(VAULT))
 SOURCE_DB = VAULT / '_meta/state/editorial-inputs/inputs.sqlite3'
@@ -29,6 +32,10 @@ HARNESS_SRC = VAULT / 'CodingVault/the-tradition-harness/src'
 CANDIDATES = ('qwen2.5:7b-instruct', 'qwen2.5:3b', 'devstral:latest')
 STOPWORDS = {'the', 'and', 'for', 'from', 'with', 'this', 'that', 'about', 'after', 'into', 'over', 'says', 'reports', 'news'}
 CONSEQUENTIAL = re.compile(r'\b(war|strike|missile|attack|killed|death|school|election|vote|court|law|regulation|president|minister|military|medical|health|finance|hurricane|cyclone|tornado|earthquake|flood|wildfire|evacuation|disaster)\b', re.I)
+
+
+class SourceBlocked(Exception):
+    """A source cannot run at all (e.g. a missing login): one legible line, never a traceback."""
 
 
 def words(title):
@@ -225,7 +232,7 @@ def buzz_rows():
     """Buzz supplies source records to the existing editor, never ready-made posts."""
     snapshot = office_buzz.listing()
     if snapshot['errors']:
-        raise RuntimeError('Buzz source incomplete: ' + '; '.join(snapshot['errors']))
+        raise SourceBlocked('Buzz source incomplete: ' + '; '.join(sorted(set(snapshot['errors']))))
     groups = {}
     now = time.time()
     for row in snapshot['items']:
@@ -511,9 +518,22 @@ def post_identity(item, digest):
             else 'source-' + digest[:24]), bool(group)
 
 
+def eligible_sources(rows):
+    """Keep security-class source material out of the editorial evaluator."""
+    return [row for row in rows if not standing_gates.security_class(
+        str(row.get('title', '')) + ' ' + str(row.get('text', '')))]
+
+
+def refuse_security_output(title, body):
+    topic = standing_gates.security_class(title + ' ' + body)
+    if topic:
+        raise ValueError(f'standing security exclusion: {topic}')
+
+
 async def run(limit=4, dry_run=False, only_category=None, retry=False):
     seen = set() if retry else published_hashes()
-    choices = [(cat, items) for cat, items in bundles(source_rows() + podcast_rows() + work_rows() + buzz_rows())
+    choices = [(cat, items) for cat, items in bundles(eligible_sources(
+        source_rows() + podcast_rows() + work_rows() + buzz_rows()))
                if source_hash(items) not in seen and (only_category is None or cat == only_category)]
     # One story per desk before another from the same desk; input volume is not rank.
     order = ('work', 'world', 'ai', 'politics', 'science', 'history', 'business', 'culture', 'listen', 'technology')
@@ -543,6 +563,7 @@ async def run(limit=4, dry_run=False, only_category=None, retry=False):
                     continue
                 report_copy(output, items[0])
                 title, body, quotes = verify(output, items)
+                refuse_security_output(title, body)
                 source_media = next((x.get('media', []) for x in items if x.get('media')), [])
                 media = list({asset['url']: asset for asset in source_media
                               if asset.get('kind') == 'image' and asset.get('url','').startswith('https://')}.values())[:4]
@@ -589,4 +610,8 @@ if __name__ == '__main__':
     parser.add_argument('--category', choices=['world','politics','ai','science','history','business','culture','listen','work','technology'])
     parser.add_argument('--retry', action='store_true', help='Manually reevaluate recent rejected candidates')
     args = parser.parse_args()
-    print(json.dumps(asyncio.run(run(max(1, min(args.limit, 12)), args.dry_run, args.category, args.retry))))
+    try:
+        print(json.dumps(asyncio.run(run(max(1, min(args.limit, 12)), args.dry_run, args.category, args.retry))))
+    except SourceBlocked as blocked:
+        print(f'office-feed blocked: {blocked}', file=sys.stderr)
+        raise SystemExit(1)
