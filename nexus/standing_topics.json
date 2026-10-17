@@ -1,0 +1,11 @@
+{
+  "source": "Aria 2026-09-29: no proactive security alerts of any kind (Muse PROACTIVE_PREFERENCES.md, AGENTS.md). nexus-office#306.",
+  "security": [
+    {"topic": "sign-in notice", "pattern": "\\b(new|unusual|suspicious)\\s+(sign[- ]?in|login|log[- ]?in)\\b|\\bsign[- ]?in (attempt|alert|notice)\\b|\\bsigned in (to|on) (your|a new)\\b"},
+    {"topic": "oauth authorization", "pattern": "\\boauth\\b.*\\b(authori[sz]ed|grant(ed)?|app(lication)?)\\b|\\b(third[- ]party|new) app(lication)? (was |has been )?(authori[sz]ed|connected|granted)\\b"},
+    {"topic": "password reset", "pattern": "\\bpassword (reset|change[ds]?|was changed|expir\\w*)\\b|\\breset (your )?password\\b"},
+    {"topic": "vulnerability report", "pattern": "\\bvulnerabilit(y|ies)\\b|\\bdependabot\\b|\\bcve-\\d{4}-\\d+\\b|\\bsecurity (advisory|alert|update|notice|warning)\\b"},
+    {"topic": "two-factor / verification code", "pattern": "\\b(2fa|two[- ]factor|mfa)\\b|\\bverification code\\b|\\bsecurity code\\b"},
+    {"topic": "credential exposure", "pattern": "\\b(leaked|exposed|compromised) (secret|token|credential|password|key)s?\\b|\\bdata breach\\b"}
+  ]
+}
