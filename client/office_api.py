@@ -33,6 +33,7 @@ import office_github_inventory as inventory
 import coordinator_chat
 import office_buzz
 import office_faults
+import office_fallback_freshness
 import human_asks
 import office_timing
 import office_work
@@ -72,6 +73,7 @@ def get(handler, path, query):
         '/api/ask': lambda: ask.read(q.get('since_revision')),
         '/api/ask/models': ask.models,
         '/api/watch': lambda: watch_snapshot(handler.world, q.get('since')),
+        '/api/system/fallback-freshness': office_fallback_freshness.snapshot,
         '/api/github/collection': lambda: github.collection(handler.world.access(),known,q),
         '/api/github/checks': lambda: github.checks(handler.world.access(),known,q),
         '/api/github/timeline': lambda: github.timeline(handler.world.access(),known,q),
