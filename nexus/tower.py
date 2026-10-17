@@ -31,6 +31,7 @@ from . import flights as fl
 from . import intake
 from . import landing as ld
 from . import selfrepair as sr
+from . import shadow
 from . import terminal
 from .ledger import Ledger, loads
 
@@ -125,6 +126,7 @@ def tick(ledger: Ledger, now=None, root=None, landing_probe=None):
     except Exception as exc:  # noqa: BLE001 - intake judges the fleet; it must never stop it
         _tick_error(ledger, exc, now)
         report["intake"] = {"error": repr(exc)}
+    report["shadow"] = shadow.tick(ledger, now)  # #310: copy only; never read back, never fatal
 
     if is_paused(ledger):
         report["paused"] = True
