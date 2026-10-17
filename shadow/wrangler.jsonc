@@ -1,0 +1,27 @@
+{
+  // nexus-shadow (#310): the Cloudflare shadow of the Office record layer.
+  // Personal "aria" account, same as ../wrangler.jsonc. Every resource is nexus-shadow-*,
+  // so nothing here can collide with Attest's or Office's live resources.
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "nexus-shadow",
+  "account_id": "efe6d9809df58b0c911aa80e484564af",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nexus-shadow-records",
+      "database_id": "70b3fe14-4df1-42c5-8e5c-00a8ba539351",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "RECEIPTS", "bucket_name": "nexus-shadow-receipts" }],
+  "queues": {
+    "producers": [{ "binding": "DISPATCH", "queue": "nexus-shadow-dispatch" }],
+    "consumers": [{ "queue": "nexus-shadow-dispatch", "max_batch_size": 10, "max_retries": 3 }]
+  }
+  // secret: SHADOW_TOKEN (wrangler secret put); the Studio copy is ~/.nexus/shadow-token, 0600.
+}

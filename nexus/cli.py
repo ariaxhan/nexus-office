@@ -17,7 +17,7 @@ import sys
 import time
 
 from . import flights as fl
-from . import intake
+from . import dispatch, intake
 from . import tower
 from . import work
 from .ledger import TERMINAL, Ledger, loads
@@ -100,6 +100,16 @@ def cmd_faults(args):
     return 0
 
 
+def cmd_shadow(args):
+    """Dual-write to / read parity from the Cloudflare shadow (issue #310). Studio stays authoritative."""
+    from . import shadow
+    if args.shadow_cmd == "push":
+        print(json.dumps(shadow.push(_ledger(args), from_id=args.from_id), indent=1, sort_keys=True))
+    else:
+        print(json.dumps(shadow.readout(record_id=args.record_id), indent=1, sort_keys=True))
+    return 0
+
+
 def cmd_watchdog_door_shadow(args):
     from . import watchdog_shadow
     led = _ledger(args)
@@ -114,6 +124,30 @@ def cmd_intake(args):
         print(json.dumps(rows, sort_keys=True, default=str))
     else:
         print(json.dumps(intake.sweep(led, force=True), sort_keys=True))
+    return 0
+
+
+def cmd_dispatch(args):
+    led = _ledger(args)
+    try:
+        if args.dispatch_command == "file":
+            print(dispatch.file_control_request(led, args.queue, args.requester, args.act, args.shell_check,
+                                                args.surface, json.loads(args.verify)))
+        elif args.dispatch_command == "commit":
+            print(dispatch.file_commitment(led, args.key, args.owner, args.act, args.source, args.surface,
+                                           json.loads(args.verify), args.stall_s))
+        elif args.dispatch_command == "receipt":
+            got = dispatch.submit_receipt(led, args.record, {
+                "outcome": args.outcome, "artifacts": args.artifact or [], "verification": args.verification,
+                "evidence": args.evidence or [], "next": args.next})
+            print(json.dumps(got, sort_keys=True))
+        elif args.dispatch_command == "poll":
+            print(json.dumps(dispatch.poll(led, paused=tower.is_paused(led)), sort_keys=True))
+        else:
+            print(json.dumps(dispatch.records(led, states=args.state, queue=args.queue), sort_keys=True))
+    except (dispatch.DispatchError, ValueError, OSError) as exc:  # ReceiptError and bad --verify JSON are ValueErrors
+        print(str(exc), file=sys.stderr)
+        return 1
     return 0
 
 
@@ -384,6 +418,31 @@ def build_parser():
     intake_p.add_argument("--dry", action="store_true", help="print every walk; write and file nothing")
     intake_p.set_defaults(func=cmd_intake)
 
+    dispatch_p = subs.add_parser("dispatch", help="dispatch records: queues code polls (#301)")
+    dispatch_subs = dispatch_p.add_subparsers(dest="dispatch_command", required=True)
+    d_file = dispatch_subs.add_parser("file", help="a control request into a broker queue")
+    d_file.add_argument("--queue", required=True, choices=sorted(dispatch.BROKER_QUEUES))
+    for name in ("requester", "act", "shell-check", "surface"):
+        d_file.add_argument(f"--{name}", required=True)
+    d_file.add_argument("--verify", required=True, help="JSON argv that reads the completion surface; rc 0 = proven")
+    d_commit = dispatch_subs.add_parser("commit", help="an extracted commitment, owner-held (#308)")
+    for name in ("key", "owner", "act", "source", "surface"):
+        d_commit.add_argument(f"--{name}", required=True)
+    d_commit.add_argument("--verify", required=True, help="JSON argv that reads the completion surface; rc 0 = done")
+    d_commit.add_argument("--stall-s", type=float, required=True, help="seconds before a held commitment escalates")
+    d_receipt = dispatch_subs.add_parser("receipt", help="the worker's receipt against its record")
+    d_receipt.add_argument("record")
+    d_receipt.add_argument("--outcome", required=True, choices=["done", "partial", "failed", "blocked"])
+    d_receipt.add_argument("--artifact", action="append")
+    d_receipt.add_argument("--verification", required=True)
+    d_receipt.add_argument("--evidence", action="append")
+    d_receipt.add_argument("--next", default="none")
+    dispatch_subs.add_parser("poll", help="one poller pass")
+    d_list = dispatch_subs.add_parser("list", help="the store, as data")
+    d_list.add_argument("--state", action="append", choices=dispatch.STATES)
+    d_list.add_argument("--queue")
+    dispatch_p.set_defaults(func=cmd_dispatch)
+
     watchdog_p = subs.add_parser("watchdog-door-shadow", help="ingest a local Studio door receipt as shadow fault state")
     watchdog_p.add_argument("--receipt", required=True)
     watchdog_p.set_defaults(func=cmd_watchdog_door_shadow)
@@ -452,6 +511,14 @@ def build_parser():
     faults_list_p.add_argument("--state", choices=("detected", "repairing",
                                                    "verified_fixed", "escalated", "recovered"))
     faults_list_p.set_defaults(func=cmd_faults)
+    shadow_p = subs.add_parser("shadow", help="the Cloudflare shadow of the record layer (#310)")
+    shadow_subs = shadow_p.add_subparsers(dest="shadow_cmd", required=True)
+    shadow_push_p = shadow_subs.add_parser("push", help="send record revisions since the cursor")
+    shadow_push_p.add_argument("--from-id", type=int, default=None, help="restart the cursor at this event id")
+    shadow_push_p.set_defaults(func=cmd_shadow)
+    shadow_parity_p = shadow_subs.add_parser("parity", help="the running parity summary")
+    shadow_parity_p.add_argument("--record-id", default=None, help="one record's pairs")
+    shadow_parity_p.set_defaults(func=cmd_shadow)
     repair_file_p = subs.add_parser(
         "repair-file", help="file a repair from a jobrun preflight refusal")
     repair_file_p.add_argument("--job", required=True)
