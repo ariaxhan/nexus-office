@@ -37,6 +37,14 @@ fallback server reads only `verified-world.json` and becomes unhealthy after
 15 minutes without a fresh delivery. A failed delivery never changes the last
 verified snapshot.
 
+The Studio publisher's reviewed launchd definition is
+`ops/launchd/com.aria.office-fallback-publish.plist`. It runs on five-minute
+calendar marks plus load. This host has missed `StartInterval` invocations;
+the interval definition stopped naturally after 2026-10-17 01:10 UTC even
+though launchd reported exit 0. The installed publisher path is versioned and
+Office-owned. Fleet jobctl protects only the exact reviewed plist hash from
+stray retirement; update that hash as part of any publisher plist change.
+
 The Studio also runs `scripts/fallback_snapshot_watchdog.py` as a separate
 two-minute launchd job. It reads MacBook HTTPS `/api/health` directly, so a
 publisher timer that simply never starts can still be detected. At 11 minutes
