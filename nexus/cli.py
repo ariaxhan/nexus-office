@@ -107,6 +107,25 @@ def cmd_watchdog_door_shadow(args):
     return 0
 
 
+def cmd_watchdog_check(args):
+    """One watchdog occurrence as structured state (#304); --compare adds the Muse shadow verdicts."""
+    from . import watchdog_checks
+    led = _ledger(args)
+    given = {}
+    if args.health_state:
+        with (sys.stdin if args.health_state == "-" else open(args.health_state)) as fh:
+            try:
+                given["health_state"] = json.load(fh)
+            except ValueError:
+                given["health_state"] = {"last_check": None}  # unreadable reads as stale, never as fine
+    state = watchdog_checks.run(led, args.watchdog, probes=not args.no_probe, given=given)
+    if args.compare:
+        with open(args.compare) as fh:
+            state["shadow"] = watchdog_checks.compare(state, json.load(fh))
+    print(json.dumps(state, sort_keys=True, default=str))
+    return 0
+
+
 def cmd_intake(args):
     led = _ledger(args)
     if args.dry:
@@ -387,6 +406,12 @@ def build_parser():
     watchdog_p = subs.add_parser("watchdog-door-shadow", help="ingest a local Studio door receipt as shadow fault state")
     watchdog_p.add_argument("--receipt", required=True)
     watchdog_p.set_defaults(func=cmd_watchdog_door_shadow)
+    check_p = subs.add_parser("watchdog-check", help="run one office watchdog's deterministic checks")
+    check_p.add_argument("--watchdog", required=True, choices=("door", "dispatch", "daemons", "comms"))
+    check_p.add_argument("--no-probe", action="store_true", help="record checks without filing the probe")
+    check_p.add_argument("--health-state", metavar="PATH|-", help="the VM's nexus-health-state.json (dispatch)")
+    check_p.add_argument("--compare", metavar="MUSE_STATE", help="Muse state-<wd>.json to compare verdicts against")
+    check_p.set_defaults(func=cmd_watchdog_check)
 
     for name, func, help_text in (
         ("status", cmd_status, "what nexus knows, as a table"),
