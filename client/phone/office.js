@@ -372,15 +372,33 @@ async function watch(parent){
   let cached=cachedView('watch');
   if(cached?.data)renderWatch(parent,cached.data,cached,'refreshing');
   else parent.append(el('p','muted watch-loading','Checking your office…'));
+  if(cached?.data)void fallbackFreshness(parent);
   try{
    const request=++watchPageRequest;
    const query=!forceViewRefresh&&cached?.revision?`?since=${encodeURIComponent(cached.revision)}`:'';
    const result=await api('/api/watch'+query);if(request!==watchPageRequest||!parent.isConnected)return;
-   if(result.not_modified&&cached){cached=saveView('watch',cached.revision,cached.data,result.checked_at*1000);const state=parent.querySelector('.view-freshness');if(state)cacheState(state,cached);return;}
+   if(result.not_modified&&cached){cached=saveView('watch',cached.revision,cached.data,result.checked_at*1000);const state=parent.querySelector('.view-freshness');if(state)cacheState(state,cached);void fallbackFreshness(parent);return;}
    if(!result.data)throw Error('Watch returned no current data');
    cached=saveView('watch',result.revision,result.data,result.checked_at*1000);
-   const next=el('div');renderWatch(next,cached.data,cached);const y=scrollY;parent.replaceChildren(...next.childNodes);requestAnimationFrame(()=>scrollTo(0,y));
-  }catch(error){if(cached){const next=el('div');renderWatch(next,cached.data,cached,'offline');const y=scrollY;parent.replaceChildren(...next.childNodes);requestAnimationFrame(()=>scrollTo(0,y));}else failure(parent,error);}
+   const next=el('div');renderWatch(next,cached.data,cached);const y=scrollY;parent.replaceChildren(...next.childNodes);void fallbackFreshness(parent);requestAnimationFrame(()=>scrollTo(0,y));
+  }catch(error){if(cached){const next=el('div');renderWatch(next,cached.data,cached,'offline');const y=scrollY;parent.replaceChildren(...next.childNodes);void fallbackFreshness(parent);requestAnimationFrame(()=>scrollTo(0,y));}else failure(parent,error);}
+}
+async function fallbackFreshness(parent){
+ try{
+  const status=await api('/api/system/fallback-freshness');
+  if(!parent.isConnected||status.state==='unconfigured')return;
+  const row=el('p','watch-summary-muted');
+  row.textContent=status.state==='fresh'
+   ?`Cloudflare reports fallback snapshot about ${Math.ceil(status.snapshot_age_seconds/60)}m old`
+   :status.state==='stale'
+    ?`Cloudflare reports fallback stale${status.snapshot_age_seconds===null?'':` · last snapshot about ${Math.ceil(status.snapshot_age_seconds/60)}m old`}`
+    :'External fallback check · unavailable';
+  const overview=parent.querySelector('.watch-overview');
+  if(overview){overview.querySelector('.fallback-freshness-status')?.remove();row.classList.add('fallback-freshness-status');overview.append(row);}
+ }catch{
+  const overview=parent.querySelector('.watch-overview');
+  if(overview){overview.querySelector('.fallback-freshness-status')?.remove();const row=el('p','watch-summary-muted fallback-freshness-status','External fallback check · unavailable');overview.append(row);}
+ }
 }
 function renderWatch(parent,data,cached,state='current'){
   const offline=state==='offline';
@@ -396,7 +414,7 @@ function renderWatch(parent,data,cached,state='current'){
   overview.append(el('div','eyebrow','Watch'));
   const freshness=el('p','view-freshness');cacheState(freshness,cached,state);overview.append(freshness);
   overview.append(el('h1','','Watch'));
-  if(offline)overview.append(el('p','watch-summary-muted','Studio unavailable. The saved activity below may have changed.'));
+  if(offline)overview.append(el('p','watch-summary-muted','Studio unavailable. The saved activity below may have changed. External fallback status cannot be checked through this view.'));
   else if(coordinatorError)overview.append(el('p','watch-summary-muted','I can’t confirm system status right now.'));
   else{
    const summary=[];

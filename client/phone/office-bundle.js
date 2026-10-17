@@ -2849,6 +2849,7 @@ async function watch(parent) {
   let cached = cachedView("watch");
   if (cached?.data) renderWatch(parent, cached.data, cached, "refreshing");
   else parent.append(el("p", "muted watch-loading", "Checking your office\u2026"));
+  if (cached?.data) void fallbackFreshness(parent);
   try {
     const request = ++watchPageRequest;
     const query = !forceViewRefresh && cached?.revision ? `?since=${encodeURIComponent(cached.revision)}` : "";
@@ -2858,6 +2859,7 @@ async function watch(parent) {
       cached = saveView("watch", cached.revision, cached.data, result.checked_at * 1e3);
       const state = parent.querySelector(".view-freshness");
       if (state) cacheState(state, cached);
+      void fallbackFreshness(parent);
       return;
     }
     if (!result.data) throw Error("Watch returned no current data");
@@ -2866,6 +2868,7 @@ async function watch(parent) {
     renderWatch(next, cached.data, cached);
     const y = scrollY;
     parent.replaceChildren(...next.childNodes);
+    void fallbackFreshness(parent);
     requestAnimationFrame(() => scrollTo(0, y));
   } catch (error) {
     if (cached) {
@@ -2873,8 +2876,30 @@ async function watch(parent) {
       renderWatch(next, cached.data, cached, "offline");
       const y = scrollY;
       parent.replaceChildren(...next.childNodes);
+      void fallbackFreshness(parent);
       requestAnimationFrame(() => scrollTo(0, y));
     } else failure(parent, error);
+  }
+}
+async function fallbackFreshness(parent) {
+  try {
+    const status = await api("/api/system/fallback-freshness");
+    if (!parent.isConnected || status.state === "unconfigured") return;
+    const row = el("p", "watch-summary-muted");
+    row.textContent = status.state === "fresh" ? `Cloudflare reports fallback snapshot about ${Math.ceil(status.snapshot_age_seconds / 60)}m old` : status.state === "stale" ? `Cloudflare reports fallback stale${status.snapshot_age_seconds === null ? "" : ` \xB7 last snapshot about ${Math.ceil(status.snapshot_age_seconds / 60)}m old`}` : "External fallback check \xB7 unavailable";
+    const overview = parent.querySelector(".watch-overview");
+    if (overview) {
+      overview.querySelector(".fallback-freshness-status")?.remove();
+      row.classList.add("fallback-freshness-status");
+      overview.append(row);
+    }
+  } catch {
+    const overview = parent.querySelector(".watch-overview");
+    if (overview) {
+      overview.querySelector(".fallback-freshness-status")?.remove();
+      const row = el("p", "watch-summary-muted fallback-freshness-status", "External fallback check \xB7 unavailable");
+      overview.append(row);
+    }
   }
 }
 function renderWatch(parent, data, cached, state = "current") {
@@ -2892,7 +2917,7 @@ function renderWatch(parent, data, cached, state = "current") {
   cacheState(freshness, cached, state);
   overview.append(freshness);
   overview.append(el("h1", "", "Watch"));
-  if (offline) overview.append(el("p", "watch-summary-muted", "Studio unavailable. The saved activity below may have changed."));
+  if (offline) overview.append(el("p", "watch-summary-muted", "Studio unavailable. The saved activity below may have changed. External fallback status cannot be checked through this view."));
   else if (coordinatorError) overview.append(el("p", "watch-summary-muted", "I can\u2019t confirm system status right now."));
   else {
     const summary = [];
