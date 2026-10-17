@@ -25,7 +25,10 @@ struct OfficeWebView: UIViewRepresentable {
         return web
     }
     func updateUIView(_ web: WKWebView, context: Context) {
-        guard let url = connection.url, context.coordinator.loadedURL != url else { return }
+        guard let base = connection.url,
+              let url = URL(string: connection.route, relativeTo: base)?.absoluteURL,
+              url.host == base.host, url.scheme == base.scheme,
+              context.coordinator.loadedURL != url else { return }
         context.coordinator.loadedURL = url; web.load(URLRequest(url: url))
     }
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
