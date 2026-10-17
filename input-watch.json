@@ -1,0 +1,18 @@
+{
+  "repos": {
+    "ariaxhan/nexus-office": [
+      "issue_comments",
+      "issues",
+      "pr_comments",
+      "pr_review_comments",
+      "failed_check_runs"
+    ],
+    "ariaxhan/thinking-brain-school": [
+      "issue_comments",
+      "issues",
+      "pr_comments",
+      "pr_review_comments",
+      "failed_check_runs"
+    ]
+  }
+}
