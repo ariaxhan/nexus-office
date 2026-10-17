@@ -14,7 +14,7 @@ import signal
 import subprocess
 import sys
 
-from . import flights, landing, lanes, lease, remote_review, risk
+from . import claims, flights, landing, lanes, lease, remote_review, risk
 
 ROUTER = os.path.expanduser("~/Developer/Vaults/_meta/services/tbs/account-router.sh")
 
@@ -242,6 +242,7 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
     base = prompt
     if write_set:
         record = lanes.acquire(repo, branch, flight, os.getpid(), timeout_s + 600, write_set, per_repo)
+        record = dict(record, **lanes.claim_write_set(repo, flight, entry, issue, write_set, timeout_s + 600))
         prompt += (f"\n\nWrite set: edit ONLY {', '.join(write_set)}. Other Tower lanes are editing other files in "
                    "this same checkout right now. If the change needs any other path, stop; do not edit it.")
     else:
@@ -249,6 +250,7 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
     env = dict(os.environ, TBS_LANE_OWNER=lease.owner(flight), TBS_LANE_PID=str(os.getpid()), NEXUS_FLIGHT=flight,
                NEXUS_ROAD=road or "", NEXUS_PROMPT=prompt, ACCOUNT_SCOPE=entry.get("account", ""))
     if write_set:
+        env["TBS_LANE_ID"] = record["claim_lane"]
         env["NEXUS_WRITE_SET"] = json.dumps(write_set)
         argv = [prompt if a == base else a for a in argv]
     started = flights.clock()
@@ -271,7 +273,7 @@ def fly(entry, issue, flight, *, pr_create, comment, timeout_s=900, run=subproce
     if write_set:
         result = lanes.land(entry, issue, record, proc, forced, pr_create, comment, run, risk.classify, _lines)
         landing.require_terminal(repo, result)
-        lanes.release(repo, flight)
+        lanes.release(repo, flight, record.get("claim_lane"))
     else:
         result = _land(entry, issue, record, proc, road, forced, pr_create, comment, run)
         landing.require_terminal(repo, result)

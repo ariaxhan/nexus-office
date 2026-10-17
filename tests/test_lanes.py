@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from nexus import executor, landing, lanes, lease  # noqa: E402
+from nexus import claims, executor, landing, lanes, lease  # noqa: E402
 
 landing.GIT_LOCK = "/nonexistent"
 lease.LANE_LOCK = os.environ["NEXUS_LANE_LOCK"] = ""
@@ -172,6 +172,29 @@ class Lanes(unittest.TestCase):
         self.assertEqual(result["state"], "HELD")
         self.assertTrue(result["requeue"])
         self.assertEqual("unfinished", git(self.origin, "show", f"{result['branch']}:a.txt"))
+
+    def test_lane_claims_its_write_set_and_releases_on_landing(self):
+        seen = {}
+        def run(argv, cwd=None, **kw):
+            if cwd == self.repo and kw.get("timeout") != 1800:
+                seen["lane"] = kw["env"]["TBS_LANE_ID"]
+                seen["claims"] = [(r["file"], r["lane_id"]) for r in claims.listing(self.repo)]
+                self.write("a.txt", "claimed edit\n")
+            return Fake()
+        issue = {"number": 7, "title": "t", "labels": []}
+        with unittest.mock.patch("nexus.risk.classify", return_value="direct"):
+            result = executor.fly(self.entry, issue, "flt_claim", pr_create=None, comment=lambda b: "c",
+                                  run=run, write_set=["a.txt"])
+        self.assertEqual("LANDED", result["state"])
+        self.assertEqual(("r#7", [("a.txt", "r#7")]), (seen["lane"], seen["claims"]))
+        self.assertEqual([], claims.listing(self.repo))
+
+    def test_another_lanes_claim_keeps_a_lane_from_starting(self):
+        claims.claim(self.repo, ["a.txt"], "r#300", "o/r#300", 600)
+        with self.assertRaisesRegex(lease.Owned, "claimed:a.txt@r#300"):
+            self.fly(8, ["a.txt"], {"a.txt": "x\n"})
+        self.assertEqual([], lanes.records(self.repo))
+        self.assertEqual("base\n", self.read("a.txt"))
 
     def test_overlapping_write_sets_serialize(self):
         lanes.acquire(self.repo, "main", "flt_a", os.getpid(), 600, ["src"])
