@@ -173,7 +173,9 @@ def escalate(ledger, fault_id, act_needed, kind="hands", source=SOURCE, now=None
             return prior
         if prior["state"] in ("verified_fixed", "recovered"):
             raise ValueError("verified fault cannot be escalated")
-        if prior["state"] != "repairing" and not str(prior["signature"]).startswith("mechanism-stopped:"):
+        # a decision has no repair inside the envelope to attempt first
+        if prior["state"] != "repairing" and kind in ("technical", "hands") \
+                and not str(prior["signature"]).startswith("mechanism-stopped:"):
             raise ValueError("repair must be attempted before escalation")
         ledger._event("repair.escalated", fault_id,
                       {"tier": "office", "act_needed": act[:200], "kind": kind},
