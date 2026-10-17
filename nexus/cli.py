@@ -100,6 +100,16 @@ def cmd_faults(args):
     return 0
 
 
+def cmd_shadow(args):
+    """Dual-write to / read parity from the Cloudflare shadow (issue #310). Studio stays authoritative."""
+    from . import shadow
+    if args.shadow_cmd == "push":
+        print(json.dumps(shadow.push(_ledger(args), from_id=args.from_id), indent=1, sort_keys=True))
+    else:
+        print(json.dumps(shadow.readout(record_id=args.record_id), indent=1, sort_keys=True))
+    return 0
+
+
 def cmd_watchdog_door_shadow(args):
     from . import watchdog_shadow
     led = _ledger(args)
@@ -452,6 +462,14 @@ def build_parser():
     faults_list_p.add_argument("--state", choices=("detected", "repairing",
                                                    "verified_fixed", "escalated", "recovered"))
     faults_list_p.set_defaults(func=cmd_faults)
+    shadow_p = subs.add_parser("shadow", help="the Cloudflare shadow of the record layer (#310)")
+    shadow_subs = shadow_p.add_subparsers(dest="shadow_cmd", required=True)
+    shadow_push_p = shadow_subs.add_parser("push", help="send record revisions since the cursor")
+    shadow_push_p.add_argument("--from-id", type=int, default=None, help="restart the cursor at this event id")
+    shadow_push_p.set_defaults(func=cmd_shadow)
+    shadow_parity_p = shadow_subs.add_parser("parity", help="the running parity summary")
+    shadow_parity_p.add_argument("--record-id", default=None, help="one record's pairs")
+    shadow_parity_p.set_defaults(func=cmd_shadow)
     repair_file_p = subs.add_parser(
         "repair-file", help="file a repair from a jobrun preflight refusal")
     repair_file_p.add_argument("--job", required=True)
