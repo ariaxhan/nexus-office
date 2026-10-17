@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.aria.office-fallback-watchdog</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/slowember/.local/share/nexus-office/fallback-watchdog/current/scripts/fallback_snapshot_watchdog.py</string>
+		<string>--state</string>
+		<string>/Users/slowember/.config/nexus-office-fallback/watchdog-state.json</string>
+		<string>--lock</string>
+		<string>/Users/slowember/.config/nexus-office-fallback/watchdog.lock</string>
+		<string>--status-html</string>
+		<string>/Users/slowember/Developer/Vaults/_meta/reports/scheduled-work/fallback-watchdog-status.html</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/slowember/.config/nexus-office-fallback/watchdog.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/slowember/.config/nexus-office-fallback/watchdog.out.log</string>
+	<key>StartInterval</key>
+	<integer>120</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/slowember/.local/share/nexus-office/fallback-watchdog/current</string>
+</dict>
+</plist>

@@ -1,4 +1,5 @@
 import importlib.util
+from http.client import IncompleteRead
 import json
 from pathlib import Path
 import tempfile
@@ -52,6 +53,23 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual(result["status"], 200)
         with patch.object(module, "urlopen", return_value=Response(b'{"mode":"wrong"}')):
             with self.assertRaises(ValueError): module.probe(now=1792195500)
+
+    def test_partial_http_response_counts_as_bad_probe_and_writes_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(module, "bounded_probe", side_effect=IncompleteRead(b"partial", 100)):
+                state, observation = module.run(root / "state.json", root / "lock",
+                                                status_path=root / "status.html")
+            self.assertIsNone(observation)
+            self.assertEqual(state["bad_probes"], 1)
+            self.assertIn("MacBook health unavailable", (root / "status.html").read_text())
+
+    def test_hard_deadline_is_counted_as_bad_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(module, "bounded_probe", side_effect=TimeoutError("deadline")):
+                state, _ = module.run(root / "state.json", root / "lock")
+            self.assertEqual(state["bad_probes"], 1)
 
 
 if __name__ == "__main__":

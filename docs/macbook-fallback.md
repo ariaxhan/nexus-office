@@ -46,3 +46,14 @@ minutes, retaining local dedupe state if GitHub is unavailable. This monitor
 never launches the publisher or changes the MacBook snapshot. It shares the
 Studio's availability boundary; a real Studio outage and phone reachability
 remain separate acceptance tests.
+
+The exact launchd definition is
+`ops/launchd/com.aria.office-fallback-watchdog.plist`. Install the reviewed
+repository revision under an immutable versioned path and point
+`~/.local/share/nexus-office/fallback-watchdog/current` at that directory.
+The plist's two-minute timer writes a private HTML heartbeat to
+`~/Developer/Vaults/_meta/reports/scheduled-work/fallback-watchdog-status.html`.
+The heartbeat shows `checked_at`; if the launchd timer itself stops, that time
+stops moving. The probe has a 45-second total deadline, including DNS and a
+slow HTTP response. The watchdog never calls `launchctl kickstart` or the
+publisher; it only reports a missed publication.
