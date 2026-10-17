@@ -21,6 +21,8 @@ that outlives its bound -- still sitting in it, or left late -- raises one fault
 MECHANISM: an issue filed on the item's own repo, deduped per (generation, state) in the
 ledger. Never a chat note, never a report line.
 
+Stuck-set records from the pile alarm (nexus/stuck.py, #303) re-dispatch their owner here too.
+
 `sweep` runs from the Tower tick, throttled; `nexus intake` runs the same sweep by hand.
 """
 
@@ -32,7 +34,7 @@ import re
 import subprocess
 import time
 
-from . import coordinator, flights, receipt, work
+from . import coordinator, flights, receipt, stuck, work
 from .ledger import loads
 
 STATES = ("FILED", "CLAIMED", "RECEIPT", "VERIFIED", "CLOSED")
@@ -537,6 +539,7 @@ def sweep(ledger, now=None, gh=_gh, force=False, claims=None, receipt_run=None):
     claims = coordinator_claims() if claims is None else claims
     report = {"items": 0, "transitions": 0, "faults": [], "errors": [], "claims": sync_claims(ledger, claims)}
     report['receipts'] = poll_coordinator_receipts(ledger, now, run=receipt_run)
+    report['stuck'] = stuck.redispatch(ledger, now)  # the pile alarm's records (#303)
     for walk in walks(ledger, now, claims):
         report["items"] += 1
         report["transitions"] += record_transitions(ledger, walk)
