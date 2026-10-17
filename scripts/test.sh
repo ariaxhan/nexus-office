@@ -27,6 +27,11 @@ PYTHON=${OFFICE_TEST_PYTHON:-python3.12}
 TEST_STATE="$(mktemp -d)"
 trap 'rm -rf "$TEST_STATE"' EXIT
 export OFFICE_HUMAN_ASKS_DB="$TEST_STATE/human-asks.sqlite"
+# Fixture repos inherit the host's global git config. A signing key behind a
+# passphrase fails every fixture commit (rc 128) or hangs on the prompt.
+export GIT_CONFIG_COUNT=2 \
+  GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false \
+  GIT_CONFIG_KEY_1=tag.gpgsign GIT_CONFIG_VALUE_1=false
 # Several suites replace process-global environment or module state. Give each
 # file a fresh interpreter so one fixture cannot corrupt later flight tests.
 for test_file in $(find tests -type f -name 'test_*.py' | sort); do
