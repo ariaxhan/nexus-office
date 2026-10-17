@@ -36,3 +36,24 @@ requires the exact versioned remote verifier path on each invocation. The
 fallback server reads only `verified-world.json` and becomes unhealthy after
 15 minutes without a fresh delivery. A failed delivery never changes the last
 verified snapshot.
+
+The Studio also runs `scripts/fallback_snapshot_watchdog.py` as a separate
+two-minute launchd job. It reads MacBook HTTPS `/api/health` directly, so a
+publisher timer that simply never starts can still be detected. At 11 minutes
+since the last signed snapshot, or after two consecutive unavailable probes,
+it comments once on Office #269. It comments once on recovery below seven
+minutes, retaining local dedupe state if GitHub is unavailable. This monitor
+never launches the publisher or changes the MacBook snapshot. It shares the
+Studio's availability boundary; a real Studio outage and phone reachability
+remain separate acceptance tests.
+
+The exact launchd definition is
+`ops/launchd/com.aria.office-fallback-watchdog.plist`. Install the reviewed
+repository revision under an immutable versioned path and point
+`~/.local/share/nexus-office/fallback-watchdog/current` at that directory.
+The plist's two-minute timer writes a private HTML heartbeat to
+`~/Developer/Vaults/_meta/reports/scheduled-work/fallback-watchdog-status.html`.
+The heartbeat shows `checked_at`; if the launchd timer itself stops, that time
+stops moving. The probe has a 45-second total deadline, including DNS and a
+slow HTTP response. The watchdog never calls `launchctl kickstart` or the
+publisher; it only reports a missed publication.
