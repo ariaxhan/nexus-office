@@ -77,9 +77,6 @@ MANAGER_INSTRUCTIONS = (
     'a provider permission prompt as a new user decision. Stop only for a genuinely new irreversible '
     'action or missing decision, and explain that exact boundary. '
     'Do not claim completion from a queued message or a running process. '
-    'Every message arrives with a work brief generated from the Tower flight ledger at a stated read '
-    'time. For anything about running or recent work, answer from that brief, never from recollection; '
-    'the brief is the evidence, so a status answer never needs to say the work cannot be confirmed. '
     'For routine status answers, use at most five short bullets and about 150 words unless asked for depth.'
 )
 
@@ -132,102 +129,6 @@ def connect():
         _set(db, 'ask_revision', revision)
     db.commit()
     return db
-
-
-LEDGER_PATH = Path.home() / 'Library' / 'Application Support' / 'nexus' / 'ledger.sqlite'
-
-
-def work_brief():
-    """Current work state rendered from the Tower flight ledger, by code.
-
-    Returns (text, read_at_epoch); ('', None) when the ledger cannot be read.
-    Read-only: the ask path reports the ledger, it never writes it.
-    """
-    try:
-        db = sqlite3.connect(f'file:{LEDGER_PATH}?mode=ro', uri=True, timeout=5)
-        db.row_factory = sqlite3.Row
-        now = time.time()
-        active = db.execute(
-            """SELECT f.id, f.state, f.started_at, f.attempt, t.title FROM flights f
-               LEFT JOIN tasks t ON t.id = f.task_id
-               WHERE f.state IN ('running','landing','resolving') ORDER BY f.started_at""").fetchall()
-        recent = db.execute(
-            """SELECT f.id, f.state, f.ended_at, f.result, t.title FROM flights f
-               LEFT JOIN tasks t ON t.id = f.task_id
-               WHERE f.ended_at IS NOT NULL AND f.ended_at > ? ORDER BY f.ended_at DESC LIMIT 8""",
-            (now - 6 * 3600,)).fetchall()
-        db.close()
-    except Exception:
-        return '', None
-    lines = []
-    if active:
-        lines.append('Running now:')
-        for r in active:
-            mins = int((now - (r['started_at'] or now)) // 60)
-            lines.append(f"- {r['id']} ({r['state']}, attempt {r['attempt']}, {mins} min in): "
-                         f"{r['title'] or 'untitled task'}")
-    else:
-        lines.append('Running now: nothing.')
-    if recent:
-        lines.append('Finished in the last 6 hours:')
-        for r in recent:
-            ok = None
-            try:
-                ok = json.loads(r['result'] or '{}').get('ok')
-            except Exception:
-                pass
-            mark = '' if ok is None else ('ok' if ok else 'not ok')
-            lines.append(f"- {r['id']} ({r['state']}{', ' + mark if mark else ''}): "
-                         f"{r['title'] or 'untitled task'}")
-    return '\n'.join(lines), now
-
-
-def _brief_block():
-    brief, read_at = work_brief()
-    if not brief:
-        return ''
-    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(read_at))
-    return (f'[Work brief - generated from the Tower flight ledger at {stamp}. '
-            f'Running-work facts below come from the ledger, not from memory.]\n{brief}\n\n')
-
-
-def _with_work_brief(message):
-    block = _brief_block()
-    return block + message if block else message
-
-
-_CANNOT_CONFIRM_WORK = re.compile(
-    r"(can'?t|cannot|can not|unable to|not able to|no way to)\s+"
-    r"(confirm|verify|tell|know|check|see)\b[^.]*"
-    r"|haven'?t\s+(read|checked|looked at)\b[^.]*"
-    r"|don'?t\s+have\s+(access|a way)\s+to\s+(confirm|verify|check|see)\b[^.]*",
-    re.IGNORECASE)
-
-
-def _gate_work_claim(answer):
-    """Publish gate: an answer may not claim the work cannot be confirmed while
-    the flight ledger reads fine. Offending sentences are replaced by the
-    ledger's own contents, rendered by code at publish time."""
-    if not answer or not _CANNOT_CONFIRM_WORK.search(answer):
-        return answer
-    brief, read_at = work_brief()
-    kept = [s for s in re.split(r'(?<=[.!?])\s+', answer.strip())
-            if not _CANNOT_CONFIRM_WORK.search(s)]
-    gated = ' '.join(kept).strip()
-    if brief:
-        stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(read_at))
-        gated = (gated + f'\n\nFrom the flight ledger (read {stamp}):\n{brief}').strip()
-    else:
-        gated = (gated + '\n\n(The flight ledger could not be read just now, so current '
-                         'work state is unavailable from the record.)').strip()
-    try:
-        with connect() as db:
-            count = int(_state(db, 'work_gate_count', '0') or 0) + 1
-            _set(db, 'work_gate_count', str(count))
-            _set(db, 'work_gate_last_at', str(time.time()))
-    except Exception:
-        pass
-    return gated
 
 
 def _state(db, key, default=None):
@@ -605,8 +506,6 @@ def _claim():
 
 
 def _finish(turn, answer, status):
-    if status == 'completed':
-        answer = _gate_work_claim(answer)
     with LOCK, connect() as db:
         now = time.time()
         if db.execute("SELECT status FROM messages WHERE id=?", (turn['user_id'],)).fetchone()['status'] == 'working':
@@ -902,7 +801,6 @@ def _recovered_answer(client, thread_id, user_id, message, user):
 
 
 def _answer_turn(message, model, reply_id):
-    message = _with_work_brief(message)
     client = None
     answer = ''
     try:
