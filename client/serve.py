@@ -10,6 +10,7 @@ button finishes moving.
   serve.py --port 8791     somewhere else
   serve.py --once          build one snapshot, print it, exit
   serve.py --root DIR      the agent runtime root (OFFICE_RUNTIME_ROOT)
+  serve.py --readonly      passive fallback (also OFFICE_READONLY=1): see PASSIVE
 
 The security model is the bind address. The socket is loopback only, never
 0.0.0.0, so the door is the machine and there is nothing to log in to. Reaching
@@ -49,9 +50,11 @@ if __name__ == "__main__" and "--read-only-fallback" in _fallback_sys.argv:
 import argparse
 import importlib.util
 import json
+import math
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 import threading
@@ -160,7 +163,40 @@ OUR_LOGINS = ({o.strip().lower() for o in office_sync.OWNERS if o.strip()}
                  for b in os.environ.get("OFFICE_BOT_LOGINS", "").split(",") if b.strip()})
 
 
+# PASSIVE. A second copy of the office (the MacBook fallback) must never be a
+# second writer: one execution owner, and it is the Studio. Passive serves the
+# page and one snapshot file it is handed, and nothing else. No poll, no buzz,
+# no webhook mailbox or drainer, no chatroom, no write of any kind, and every
+# GET that is not on this list is refused before it reaches a module, because
+# several GETs here are not reads (a fresh build, a keychain lookup, a desktop
+# socket, a timing ledger write, a GitHub fetch with a token).
+PASSIVE_GET = {"/api/health", "/api/world"}
+PASSIVE_OFF = "passive office: read-only fallback, this route is off"
+PASSIVE_SNAPSHOT = "snapshot.json"
+# The handoff file is read once, bounded, from a regular file that is not a
+# symlink: a FIFO would hang startup and a link would let the producer pick any
+# readable JSON. A real 70-desk snapshot is well under a megabyte.
+PASSIVE_MAX_BYTES = 16 * 1024 * 1024
+# How far ahead of this clock a stamp may be before it is a wrong clock rather
+# than skew. A future stamp is never fresh beyond this, or a file loaded once
+# would stay "fresh" until the date it claims.
+PASSIVE_SKEW_S = 60
+SHARED_STATE = pathlib.Path.home() / ".local/state/nexus-office"
+
+
+def passive_state() -> pathlib.Path:
+    """The fallback's own directory. Never the shared default, never unset."""
+    raw = os.environ.get("OFFICE_STATE", "").strip()
+    if not raw:
+        raise SystemExit("passive mode needs OFFICE_STATE set to a fallback-only directory")
+    state = pathlib.Path(raw).expanduser().resolve()
+    if state == SHARED_STATE.resolve():
+        raise SystemExit(f"passive mode refuses the shared writer state {SHARED_STATE}")
+    return state
+
+
 def _loopback_hosts(port: int) -> set[str]:
+
     return {f"127.0.0.1:{port}", f"localhost:{port}"}
 
 # Every write is small enough to be a decision typed by a person, except one: a
@@ -237,8 +273,31 @@ class World:
         self.seq = 0
         self._access = None
         self.fresh_at = None  # monotonic stamp of the last `?fresh=1` build
+        self.source = "github"  # passive: the file the snapshot was read from
+
+    def load(self, path: pathlib.Path) -> bool:
+        """Passive: take a snapshot from a file, once. Never GitHub, never a build.
+
+        Nothing is installed unless it has the shape the room reads: a stamp in
+        ISO and at least one station with a real repo and issue/PR lists. A bad
+        file leaves the room empty and says why, so the page still loads and
+        health can tell the truth about it.
+        """
+        self.source = str(path)
+        try:
+            snap = passive_snapshot(read_handoff(path))
+        except (OSError, ValueError) as exc:
+            with self.lock:
+                self.error = f"{type(exc).__name__}: {exc}"[:300]
+            return False
+        with self.lock:
+            self.snapshot = snap
+            self.at = snap["generated"]
+            self.error = None
+        return True
 
     def access(self):
+
         with self.lock:
             if self._access is None:
                 self._access = office_sync.Access()
@@ -424,6 +483,68 @@ class World:
         return out
 
 
+def read_handoff(path: pathlib.Path) -> str:
+    """One bounded read of a regular file, checked on the descriptor it reads."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError("snapshot is not a regular file")
+        if st.st_size > PASSIVE_MAX_BYTES:
+            raise ValueError("snapshot is larger than PASSIVE_MAX_BYTES")
+        chunks, left = [], PASSIVE_MAX_BYTES + 1
+        while left > 0:
+            chunk = os.read(fd, min(left, 1024 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+        if left <= 0:
+            raise ValueError("snapshot is larger than PASSIVE_MAX_BYTES")
+        return b"".join(chunks).decode("utf-8")
+    finally:
+        os.close(fd)
+
+
+def _no_constant(token):
+    raise ValueError(f"snapshot carries non-JSON number {token}")
+
+
+def _finite_float(text):
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError(f"snapshot carries a number out of range: {text[:40]}")
+    return value
+
+
+def passive_snapshot(raw: str) -> dict:
+    """The handoff, or ValueError naming what is wrong with it."""
+    try:
+        # NaN/Infinity tokens and literals that overflow to inf (1e400) are not
+        # JSON a browser can read back, so a file carrying one is refused here
+        # rather than installed and re-served as invalid JSON from /api/world.
+        snap = json.loads(raw, parse_constant=_no_constant, parse_float=_finite_float)
+    except RecursionError:
+        # Under the byte cap a file can still nest deeper than the decoder
+        # recurses. That is a bad handoff, not a reason for no server.
+        raise ValueError("snapshot nests too deeply to decode") from None
+    if not isinstance(snap, dict):
+        raise ValueError("snapshot is not an object")
+    stamp = snap.get("generated")
+    if not isinstance(stamp, str):
+        raise ValueError("snapshot has no generated stamp")
+    datetime.strptime(stamp, ISO)  # ValueError on any other shape or zone
+    stations = snap.get("stations")
+    if not isinstance(stations, list) or not stations:
+        raise ValueError("snapshot has no stations")
+    for st in stations:
+        if not (isinstance(st, dict) and isinstance(st.get("repo"), str)
+                and office_sync.NWO_RE.match(st["repo"])
+                and isinstance(st.get("issues"), list) and isinstance(st.get("prs"), list)):
+            raise ValueError("snapshot has a station without a repo and issue/PR lists")
+    return snap
+
+
 def validate(body: dict):
     """Exactly the Worker's validation, restated. A bad decision is refused here,
     before anything is applied, and says the same words it always did.
@@ -486,6 +607,7 @@ class Handler(BaseHTTPRequestHandler):
     chatroom = None
     mailbox = None
     trigger = None
+    passive = False
     # Said once, not once per delivery. A hook pointed at a door with no secret
     # gets retried by GitHub for days, and one log line an hour is a note while
     # one per delivery is a wall.
@@ -656,8 +778,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({'error': 'wrong host'}, 403)
         if not self._identity_ok():
             return self._json({'error': 'not you'}, 403)
+        if self.passive and path.startswith('/api/') and path not in PASSIVE_GET:
+            return self._json({'error': PASSIVE_OFF, 'passive': True}, 503)
         try:
+            if self.passive and path in PASSIVE_GET:
+                return {'/api/world': self._get_world, '/api/health': self._get_health}[path](query)
             if desktops.get(self, path):
+
                 return
             if office_api.get(self, path, query):
                 return
@@ -708,7 +835,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _get_world(self, query):
         fresh = False
+        if self.passive:
+            return self._json({"at": self.world.at, "world": self.world.snapshot,
+                               "decisions": [], "fresh": False, "passive": True,
+                               "source": self.world.source, "error": self.world.error,
+                               "server_time": now_iso()})
         if urllib.parse.parse_qs(query).get("fresh"):
+
             fresh = self.world.fresh_build()
         return self._json({"at": self.world.at, "world": self.world.snapshot,
                            "decisions": self.world.recent(),
@@ -831,7 +964,42 @@ class Handler(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(query)
         return self._json(search.run((q.get("q") or [""])[0]))
 
+    def _passive_health(self):
+        """A file nobody refreshes is only as good as its own stamp.
+
+        Missing, invalid, future (past PASSIVE_SKEW_S) or stale is never ok,
+        and nothing here is ever authoritative. Live health is untouched.
+        """
+        snap = self.world.snapshot
+        budget = 2 * POLL_S
+        age_s, problem = None, self.world.error or ("no snapshot" if snap is None else None)
+        if not (math.isfinite(budget) and budget > 0):
+            # NaN compares false both ways, so `age > NaN` would call a year-old
+            # file fresh. A budget that is not a positive number is a fault.
+            problem, budget = "OFFICE_POLL_S is not a positive finite number", None
+        elif snap is not None:
+            stamp = datetime.strptime(self.world.at, ISO).replace(tzinfo=timezone.utc)
+            age_s = (datetime.now(timezone.utc) - stamp).total_seconds()
+            if age_s < -PASSIVE_SKEW_S:
+                problem = "snapshot is stamped in the future"
+            elif age_s > budget:
+                problem = "snapshot is stale"
+        ok = problem is None
+        return self._json({"ok": ok, "mode": "passive", "authoritative": False,
+                           "controls": "off", "snapshot_fresh": ok, "problem": problem,
+                           "snapshot_missing": snap is None,
+                           "snapshot_stations": len(snap["stations"]) if snap else 0,
+                           "snapshot_age_s": round(age_s) if age_s is not None else None,
+                           "max_snapshot_age_s": budget, "max_future_skew_s": PASSIVE_SKEW_S,
+                           "snapshot_at": self.world.at,
+                           "snapshot_source": self.world.source,
+                           "snapshot_error": self.world.error,
+                           "server_time": now_iso(), "revision": SERVER_REVISION},
+                          200 if ok else 503)
+
     def _get_health(self, query):
+        if self.passive:
+            return self._passive_health()
         try:
             stamp = datetime.strptime(self.world.at, ISO).replace(tzinfo=timezone.utc)
             age_s = max(0, (datetime.now(timezone.utc) - stamp).total_seconds())
@@ -851,6 +1019,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.partition("?")[0]
+        if self.passive:
+            # Every write, the public webhook included. The body is drained so
+            # the socket stays in step, and nothing in it is ever read.
+            n = int(self.headers.get("content-length") or 0)
+            if n <= DRAIN_LIMIT:
+                self._drain(n)
+            else:
+                self.close_connection = True
+            return self._json({"error": PASSIVE_OFF, "passive": True}, 405)
         # THE ONE EXEMPTION FROM `_identity_ok` AND `_write_ok`, AND WHY.
         #
         # This is the single path Tailscale Funnel puts on the public internet.
@@ -1200,15 +1377,23 @@ class Handler(BaseHTTPRequestHandler):
         })
 
 
-def make_server(world: World, port: int = 8790):
+def make_server(world: World, port: int = 8790, passive: bool = False):
     """Loopback only. Never 0.0.0.0: the bind address IS the security model.
 
     The one path that is reachable from outside this machine, `/webhook`, is
     still served on this same loopback socket. Tailscale Funnel is what puts it
     on the internet, and Funnel forwards to 127.0.0.1 like everything else, so
     there is still no wider bind anywhere in this program.
+
+    Passive builds no mailbox (a state write), no trigger (a drainer thread
+    that replays owed work) and no chatroom.
     """
+    if passive:
+        handler = type("PassiveHandler", (Handler,),
+                       {"world": world, "rbufsize": 0, "passive": True})
+        return ThreadingHTTPServer(("127.0.0.1", port), handler)
     mailbox = webhook.Mailbox(webhook.STATE)
+
     trigger = webhook.Trigger(mailbox,
                               refresh=world.refresh_desk,
                               receipts=office_sync.RECEIPTS)
@@ -1224,12 +1409,32 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=int(os.environ.get("OFFICE_PORT", 8790)))
     ap.add_argument("--once", action="store_true", help="one snapshot as JSON, then exit")
     ap.add_argument("--root", help="the agent runtime root (sets OFFICE_RUNTIME_ROOT)")
+    ap.add_argument("--readonly", action="store_true",
+                    default=os.environ.get("OFFICE_READONLY", "").strip() == "1",
+                    help="passive fallback: one snapshot file, no writes, no threads")
     a = ap.parse_args(argv)
     if a.root:
         os.environ["OFFICE_RUNTIME_ROOT"] = str(pathlib.Path(a.root).expanduser())
 
     world = World()
+    if a.readonly:
+        if a.once:
+            log("--once builds from GitHub; passive mode never does")
+            return 2
+        state = passive_state()
+        world.load(state / PASSIVE_SNAPSHOT)
+        httpd = make_server(world, a.port, passive=True)
+        log(f"PASSIVE http://127.0.0.1:{a.port}/  snapshot {world.source}"
+            f" ({world.at or 'missing: ' + str(world.error)}); no poll, no buzz, no webhook, no writes")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            log("closing")
+        finally:
+            httpd.server_close()
+        return 0
     if a.once:
+
         if not world.build(wait=BUILD_WAIT_S) or world.snapshot is None:
             log(world.error or "could not build a snapshot")
             return 1
