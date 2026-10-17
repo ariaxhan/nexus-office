@@ -100,6 +100,28 @@ def cmd_faults(args):
     return 0
 
 
+def cmd_converge(args):
+    """Reconcile plists <-> registries <-> fields; divergences are fault records (#305)."""
+    from . import converger
+    led = _ledger(args)
+    report = converger.converge(led, sync=None if args.check else converger.jobctl_sync)
+    text = json.dumps(report, sort_keys=True, indent=1)
+    if args.report:
+        tmp = args.report + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(text + "\n")
+        os.replace(tmp, args.report)
+    print(text)
+    return 0
+
+
+def cmd_converge_migrate(args):
+    from . import converger
+    moved = converger.migrate_file(args.registry, args.before, write=args.write)
+    print(json.dumps({"moved": moved, "written": bool(args.write and moved)}, sort_keys=True))
+    return 0
+
+
 def cmd_watchdog_door_shadow(args):
     from . import watchdog_shadow
     led = _ledger(args)
@@ -383,6 +405,17 @@ def build_parser():
     intake_p = subs.add_parser("intake", help="the intake state machine: record transitions, fault overruns")
     intake_p.add_argument("--dry", action="store_true", help="print every walk; write and file nothing")
     intake_p.set_defaults(func=cmd_intake)
+
+    converge_p = subs.add_parser("converge", help="reconcile launchd plists, registries and fields")
+    converge_p.add_argument("--check", action="store_true", help="detect only; never run jobctl sync")
+    converge_p.add_argument("--report", default=os.environ.get("NEXUS_CONVERGER_REPORT"),
+                            help="also write the report JSON here")
+    converge_p.set_defaults(func=cmd_converge)
+    migrate_p = subs.add_parser("converge-migrate", help="lift cadence prose out of registry notes")
+    migrate_p.add_argument("--registry", required=True)
+    migrate_p.add_argument("--before", required=True, help="a registry from before the conversion")
+    migrate_p.add_argument("--write", action="store_true")
+    migrate_p.set_defaults(func=cmd_converge_migrate)
 
     watchdog_p = subs.add_parser("watchdog-door-shadow", help="ingest a local Studio door receipt as shadow fault state")
     watchdog_p.add_argument("--receipt", required=True)

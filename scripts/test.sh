@@ -27,6 +27,11 @@ PYTHON=${OFFICE_TEST_PYTHON:-python3.12}
 TEST_STATE="$(mktemp -d)"
 trap 'rm -rf "$TEST_STATE"' EXIT
 export OFFICE_HUMAN_ASKS_DB="$TEST_STATE/human-asks.sqlite"
+# Fixture repos must not inherit the operator's git config: a global
+# commit.gpgsign with a passphrase key fails every fixture commit (rc=128,
+# flight flt_6f6090618499 HELD on it). Identity only, nothing else.
+printf '[user]\n\tname = office-test\n\temail = test@localhost\n' > "$TEST_STATE/gitconfig"
+export GIT_CONFIG_GLOBAL="$TEST_STATE/gitconfig" GIT_CONFIG_NOSYSTEM=1
 # Several suites replace process-global environment or module state. Give each
 # file a fresh interpreter so one fixture cannot corrupt later flight tests.
 for test_file in $(find tests -type f -name 'test_*.py' | sort); do
