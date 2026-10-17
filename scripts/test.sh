@@ -27,6 +27,10 @@ PYTHON=${OFFICE_TEST_PYTHON:-python3.12}
 TEST_STATE="$(mktemp -d)"
 trap 'rm -rf "$TEST_STATE"' EXIT
 export OFFICE_HUMAN_ASKS_DB="$TEST_STATE/human-asks.sqlite"
+# The host's work registry and lease index stay out: with them every tower tick runs
+# git across every registered repo, and the crash/radio deadlines fail (#303).
+unset NEXUS_WORK_REGISTRY
+export NEXUS_LEASE_INDEX="$TEST_STATE/lease-repos.json"
 # Several suites replace process-global environment or module state. Give each
 # file a fresh interpreter so one fixture cannot corrupt later flight tests.
 for test_file in $(find tests -type f -name 'test_*.py' | sort); do
