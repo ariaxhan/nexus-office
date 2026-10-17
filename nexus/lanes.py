@@ -20,7 +20,7 @@ import subprocess
 import time
 from datetime import datetime
 
-from . import landing, lease
+from . import claims, landing, lease
 
 PLAN = os.environ.get("NEXUS_EXECUTION_PLAN", os.path.expanduser(
     "~/Developer/Vaults/CodingVault/thinking-brain-school/_meta/state/execution-plan.json"))
@@ -169,9 +169,30 @@ def read(repo, flight):
     return next((r for r in records(repo) if r["flight"] == flight), None)
 
 
-def release(repo, flight):
+def release(repo, flight, claim_lane=None):
     with contextlib.suppress(OSError):
         os.remove(os.path.join(_dir(repo), f"{flight}.json"))
+    if claim_lane:
+        claims.touch(repo, claim_lane, release=True)
+
+
+def claim_lane(entry, issue):
+    """The claim registry's lane id is the work order, so a claim registered before dispatch is this lane's."""
+    return f"{entry['repo'].split('/')[-1]}#{issue['number']}"
+
+
+def claim_write_set(repo, flight, entry, issue, write_set, ttl_s):
+    """Claim the write set's literal files before the lane edits (#311). Globs and directories are
+    claimed file by file at landing. Another lane's live claim means this lane cannot run now."""
+    lane = claim_lane(entry, issue)
+    literal = [w for w in write_set if not any(c in w for c in "*?[") and not w.endswith("/")]
+    try:
+        if literal:
+            claims.claim(repo, literal, lane, f"{entry['repo']}#{issue['number']}", ttl_s)
+    except claims.Refused as exc:
+        release(repo, flight)
+        raise lease.Owned("claimed:" + ",".join(f"{r['file']}@{r['lane_id']}" for r in exc.rows[:5]))
+    return {"claim_lane": lane, "work_order": f"{entry['repo']}#{issue['number']}"}
 
 
 def flight_paths(repo, record):
@@ -334,6 +355,17 @@ def _bounded(run, budget):
     return bounded
 
 
+def claim_landing(repo, record, mine):
+    """Claim every landed file (globs were not claimable up front); the refusal when another live lane holds one."""
+    if not record.get("claim_lane"):
+        return None
+    try:
+        claims.claim(repo, mine, record["claim_lane"], record["work_order"])
+    except claims.Refused as exc:
+        return "; ".join(f"{r['file']} claimed by {r['lane_id']}" for r in exc.rows[:20])
+    return None
+
+
 def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, lines):
     """Enforce the write set, catch up to origin, re-check, commit only own paths, push."""
     repo, branch = entry["path"], record["branch"]
@@ -357,6 +389,9 @@ def land(entry, issue, record, proc, forced, pr_create, comment, run, classify, 
                 entry["check"], repo, _bounded(run, check_budget(repo, record)))
             if failed:
                 return hold(repo, record, mine, "check_failed", comment, failed)
+            refused = claim_landing(repo, record, mine)
+            if refused:
+                return hold(repo, record, mine, "claim_refused", comment, refused)
             mode = forced or classify(entry.get("risk"), labels, mine, lines(repo, mine), entry.get("first_road", False))
             head = landing._git(repo, "rev-parse", "HEAD").stdout.strip()
             if mode != "direct":
